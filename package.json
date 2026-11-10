@@ -1,0 +1,12 @@
+{
+  "name": "advisers-workspace",
+  "private": true,
+  "version": "0.0.0",
+  "description": "Monorepo for Advisers: a staff of AI advisers built on cordis.",
+  "packageManager": "pnpm@12.16.1",
+  "scripts": {
+    "build": "pnpm -r run build",
+    "typecheck": "pnpm -r run typecheck",
+    "test": "pnpm -r run test"
+  }
+}

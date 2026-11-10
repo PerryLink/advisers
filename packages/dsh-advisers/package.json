@@ -1,0 +1,39 @@
+{
+  "name": "dsh-advisers",
+  "version": "0.0.1",
+  "description": "DeepSeek Harness distribution of Advisers: mount the cordis-native secretary core as a DSH plugin bundle.",
+  "keywords": [
+    "dsh",
+    "dsh-plugin",
+    "deepseek-harness",
+    "cordis",
+    "advisers",
+    "secretary",
+    "memory"
+  ],
+  "author": "PerryLink contributors",
+  "license": "MIT",
+  "type": "module",
+  "main": "./index.js",
+  "exports": {
+    ".": "./index.js",
+    "./package.json": "./package.json"
+  },
+  "files": [
+    "index.js",
+    "README.md",
+    "LICENSE"
+  ],
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/PerryLink/advisers.git",
+    "directory": "packages/dsh-advisers"
+  },
+  "homepage": "https://github.com/PerryLink/advisers#readme",
+  "bugs": {
+    "url": "https://github.com/PerryLink/advisers/issues"
+  },
+  "publishConfig": {
+    "access": "public"
+  }
+}
