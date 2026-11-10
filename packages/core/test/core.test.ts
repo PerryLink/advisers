@@ -167,3 +167,32 @@ test('audience-scoped preference only appears for that audience', () => {
   assert.ok(forClient.preferences.some((p) => p.statement.includes('先给结论')))
   assert.ok(!forFriend.preferences.some((p) => p.statement.includes('先给结论')))
 })
+
+test('soul is slot #1 before the context block', async () => {
+  const soul = {
+    id: 'soul_1',
+    version: 1,
+    content: 'You are my adviser. Be direct.',
+    updatedAt: '2026-11-10T00:00:00.000Z',
+    updatedBy: 'human' as const,
+  }
+  const runtime = new AdvisersRuntime({
+    ports: {
+      clock: { now: () => '2026-11-10T00:00:00.000Z' },
+      ids: { next: (prefix) => `${prefix}_x` },
+      soul: { load: () => soul, save: () => {} },
+    },
+  })
+  const ctx = await runtime.handleInbound({
+    linkId: 'cli',
+    accountId: 'me',
+    conversationId: 'c1',
+    messageId: 'm1',
+    sender: { id: 'me' },
+    text: '你好',
+    timestamp: '2026-11-10T00:00:00.000Z',
+  })
+  assert.ok(ctx.prompt.indexOf('<soul') >= 0)
+  assert.ok(ctx.prompt.indexOf('<soul') < ctx.prompt.indexOf('<advisers-context>'))
+  assert.match(ctx.prompt, /Be direct/)
+})

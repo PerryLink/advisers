@@ -1,4 +1,4 @@
-import type { Id, IsoDate } from './types.ts'
+import type { Id, IsoDate, SoulDocument } from './types.ts'
 
 /** Injectable time source; tests can freeze it. */
 export interface Clock {
@@ -8,6 +8,12 @@ export interface Clock {
 /** Injectable id source; tests can make ids deterministic. */
 export interface Ids {
   next(prefix: string): Id
+}
+
+/** Human-owned identity document. The agent may propose, never write. */
+export interface SoulStore {
+  load(): SoulDocument | undefined
+  save(doc: SoulDocument): void
 }
 
 /** Persistence port. The in-memory skeleton ignores it. */
@@ -28,6 +34,7 @@ export interface ModelPort {
 export interface HostPorts {
   clock: Clock
   ids: Ids
+  soul?: SoulStore
   store?: Store
   model?: ModelPort
 }

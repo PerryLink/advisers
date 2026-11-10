@@ -19,10 +19,17 @@ export class AdvisersRuntime implements LinkHost {
   private readonly conversationMatter = new Map<string, string>()
   private readonly seen = new Set<string>()
   private readonly budget: number
+  private readonly ports?: HostPorts
 
   constructor(options: AdvisersOptions = {}) {
     this.budget = options.budget ?? 1200
+    this.ports = options.ports
     this.ledger = new Ledger(options.ports)
+  }
+
+  /** Soul is human-owned; the runtime only reads it. */
+  readSoul() {
+    return this.ports?.soul?.load()
   }
 
   registerLink(link: LinkProvider): void {
@@ -83,7 +90,12 @@ export class AdvisersRuntime implements LinkHost {
       })
     }
 
-    return assembleContext({ matter, ledger: this.ledger, budget: this.budget })
+    return assembleContext({
+      matter,
+      ledger: this.ledger,
+      budget: this.budget,
+      soul: this.readSoul(),
+    })
   }
 
   async send(linkId: string, message: OutboundMessage): Promise<DeliveryResult> {
