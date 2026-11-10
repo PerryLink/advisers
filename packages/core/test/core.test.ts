@@ -196,3 +196,37 @@ test('soul is slot #1 before the context block', async () => {
   assert.ok(ctx.prompt.indexOf('<soul') < ctx.prompt.indexOf('<advisers-context>'))
   assert.match(ctx.prompt, /Be direct/)
 })
+
+test('ledger snapshot round-trips matters, preferences, links, and updates', () => {
+  const ledger = new Ledger()
+  const a = ledger.addMatter({ title: 'A' })
+  const b = ledger.addMatter({ title: 'B' })
+  ledger.addPreference({ kind: 'preference', statement: '先结论' })
+  ledger.proposeLink({ fromMatter: a.id, toMatter: b.id, type: 'impact' })
+  ledger.proposeUpdate({ sourceMatter: a.id, targetMatter: b.id, change: 'B 改期' })
+  const restored = Ledger.fromJSON(JSON.parse(JSON.stringify(ledger.toJSON())))
+  assert.equal(restored.listMatters().length, 2)
+  assert.equal(restored.listPreferences().length, 1)
+  assert.equal(restored.listLinks().length, 1)
+  assert.equal(restored.listUpdates().length, 1)
+})
+
+test('one principal has one thread across conversations; another account does not', async () => {
+  const runtime = new AdvisersRuntime()
+  const base = { linkId: 'email', accountId: 'me', sender: { id: 'me' }, timestamp: new Date().toISOString() }
+  const a = await runtime.handleInbound({ ...base, conversationId: 'c1', messageId: 'm1', text: 'one' })
+  const b = await runtime.handleInbound({ ...base, conversationId: 'c2', messageId: 'm2', text: 'two' })
+  const c = await runtime.handleInbound({ ...base, accountId: 'other', conversationId: 'c3', messageId: 'm3', text: 'three' })
+  assert.equal(a.threadId, b.threadId)
+  assert.notEqual(a.threadId, c.threadId)
+  assert.equal(runtime.listEpisodes(a.threadId).length, 2)
+})
+
+test('secrecy above clearance is denied', () => {
+  const ledger = new Ledger()
+  const matter = ledger.addMatter({ title: 'health', secrecy: 2 })
+  assert.throws(
+    () => assembleContext({ matter, ledger, clearance: 1 }),
+    /requires secrecy 2/,
+  )
+})

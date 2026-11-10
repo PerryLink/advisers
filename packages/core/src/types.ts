@@ -178,6 +178,7 @@ export interface Episode {
 
 export interface TurnContext {
   matter: Matter
+  threadId?: Id
   prompt: string
   hints: AssociationHint[]
   usedTokens: number

@@ -1,12 +1,16 @@
 import { assembleContext } from './context.ts'
 import { Ledger } from './ledger.ts'
 import type { HostPorts } from './ports.ts'
+import { systemPorts } from './ports.ts'
 import type { InboundEvent, IngestResult, LinkHost, LinkProvider, OutboundMessage, DeliveryResult } from './link.ts'
-import type { TurnContext } from './types.ts'
+import type { Episode, Thread, TurnContext } from './types.ts'
 
 export interface AdvisersOptions {
   budget?: number
   ports?: HostPorts
+  ledger?: Ledger
+  /** 0..3; the local owner normally has 3. */
+  clearance?: number
 }
 
 /**
@@ -16,20 +20,53 @@ export interface AdvisersOptions {
 export class AdvisersRuntime implements LinkHost {
   readonly ledger: Ledger
   private readonly links = new Map<string, LinkProvider>()
-  private readonly conversationMatter = new Map<string, string>()
+  private readonly threads = new Map<string, Thread>()
+  private readonly episodes = new Map<string, Episode>()
   private readonly seen = new Set<string>()
   private readonly budget: number
+  private readonly clearance: number
   private readonly ports?: HostPorts
+  private readonly clock: HostPorts['clock']
+  private readonly ids: HostPorts['ids']
 
   constructor(options: AdvisersOptions = {}) {
+    const ports = options.ports ?? systemPorts()
     this.budget = options.budget ?? 1200
+    this.clearance = options.clearance ?? 3
     this.ports = options.ports
-    this.ledger = new Ledger(options.ports)
+    this.clock = ports.clock
+    this.ids = ports.ids
+    this.ledger = options.ledger ?? new Ledger(ports)
   }
 
   /** Soul is human-owned; the runtime only reads it. */
   readSoul() {
     return this.ports?.soul?.load()
+  }
+
+  ensureThread(principalId: string): Thread {
+    const existing = this.threads.get(principalId)
+    if (existing) return existing
+    const now = this.clock.now()
+    // Deterministic so a CLI restart does not create a new relationship id.
+    let hash = 0
+    for (let i = 0; i < principalId.length; i++) hash = (hash * 31 + principalId.charCodeAt(i)) | 0
+    const thread: Thread = {
+      id: `thread_${Math.abs(hash).toString(36)}`,
+      principalId,
+      createdAt: now,
+      updatedAt: now,
+    }
+    this.threads.set(principalId, thread)
+    return thread
+  }
+
+  listThreads(): Thread[] {
+    return [...this.threads.values()]
+  }
+
+  listEpisodes(threadId?: string): Episode[] {
+    return [...this.episodes.values()].filter((e) => (threadId ? e.threadId === threadId : true))
   }
 
   registerLink(link: LinkProvider): void {
@@ -67,18 +104,28 @@ export class AdvisersRuntime implements LinkHost {
   }
 
   handleInbound(event: InboundEvent): TurnContext {
-    const key = `${event.linkId}:${event.conversationId}`
-    let matterId = this.conversationMatter.get(key)
+    const principalId = `${event.linkId}:${event.accountId}`
+    const thread = this.ensureThread(principalId)
+    const key = `${thread.id}:${event.conversationId}`
+    let matterId = this.ledger.getRoute(key)
     if (!matterId) {
       const matter = this.ledger.addMatter({
         title: event.text?.slice(0, 60) || `conversation ${event.conversationId}`,
         summary: event.text?.slice(0, 200),
       })
       matterId = matter.id
-      this.conversationMatter.set(key, matterId)
+      this.ledger.setRoute(key, matterId)
     }
     const matter = this.ledger.getMatter(matterId)
     if (!matter) throw new Error(`matter disappeared: ${matterId}`)
+
+    const context = assembleContext({
+      matter,
+      ledger: this.ledger,
+      budget: this.budget,
+      clearance: this.clearance,
+      soul: this.readSoul(),
+    })
 
     if (event.text) {
       this.ledger.remember({
@@ -88,14 +135,21 @@ export class AdvisersRuntime implements LinkHost {
         matterId,
         source: { quote: event.text, ref: event.messageId },
       })
+      matter.summary = event.text.slice(0, 200)
+      matter.updatedAt = this.clock.now()
+      thread.updatedAt = matter.updatedAt
     }
 
-    return assembleContext({
-      matter,
-      ledger: this.ledger,
-      budget: this.budget,
-      soul: this.readSoul(),
-    })
+    const episode: Episode = {
+      id: this.ids.next('ep'),
+      threadId: thread.id,
+      matterId,
+      startedAt: event.timestamp,
+      summary: event.text?.slice(0, 120),
+    }
+    this.episodes.set(episode.id, episode)
+
+    return { ...context, threadId: thread.id }
   }
 
   async send(linkId: string, message: OutboundMessage): Promise<DeliveryResult> {

@@ -69,6 +69,7 @@ export class Ledger {
   private readonly preferences = new Map<Id, UserPreference>()
   private readonly links = new Map<Id, MatterLink>()
   private readonly updates = new Map<Id, UpdateProposal>()
+  private readonly routes = new Map<string, Id>()
 
   constructor(ports: HostPorts = systemPorts()) {
     this.clock = ports.clock
@@ -277,4 +278,52 @@ export class Ledger {
     if (rollback) proposal.rollback = rollback
     return proposal
   }
+
+  findPreference(id: Id): UserPreference | undefined {
+    return this.preferences.get(id)
+  }
+
+  getRoute(key: string): Id | undefined {
+    return this.routes.get(key)
+  }
+
+  setRoute(key: string, matterId: Id): void {
+    this.routes.set(key, matterId)
+  }
+
+  toJSON(): LedgerSnapshot {
+    return {
+      version: 1,
+      matters: [...this.matters.values()],
+      facts: [...this.facts.values()],
+      commitments: [...this.commitments.values()],
+      preferences: [...this.preferences.values()],
+      links: [...this.links.values()],
+      updates: [...this.updates.values()],
+      routes: Object.fromEntries(this.routes),
+    }
+  }
+
+  static fromJSON(snapshot: LedgerSnapshot, ports: HostPorts = systemPorts()): Ledger {
+    const ledger = new Ledger(ports)
+    for (const m of snapshot.matters ?? []) ledger.matters.set(m.id, m)
+    for (const f of snapshot.facts ?? []) ledger.facts.set(f.id, f)
+    for (const c of snapshot.commitments ?? []) ledger.commitments.set(c.id, c)
+    for (const p of snapshot.preferences ?? []) ledger.preferences.set(p.id, p)
+    for (const l of snapshot.links ?? []) ledger.links.set(l.id, l)
+    for (const u of snapshot.updates ?? []) ledger.updates.set(u.id, u)
+    for (const [k, v] of Object.entries(snapshot.routes ?? {})) ledger.routes.set(k, v)
+    return ledger
+  }
+}
+
+export interface LedgerSnapshot {
+  version: 1
+  matters: Matter[]
+  facts: Fact[]
+  commitments: Commitment[]
+  preferences: UserPreference[]
+  links: MatterLink[]
+  updates: UpdateProposal[]
+  routes: Record<string, Id>
 }

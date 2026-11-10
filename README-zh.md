@@ -19,7 +19,20 @@ IM 是 **Link SPI**，不是硬依赖。Email、Satori/Koishi、`dsh-im`、OpenC
 
 ## 状态
 
-启动阶段。npm 名字 `advisers` 与 `dsh-advisers` 已占位；runtime 骨架正在本仓实现。
+`0.1.0-preview.1` 在 npm `next` tag：
+
+- `advisers` CLI：`soul init`、`chat`、`ls`、`why`、`forget`、`export`；
+- soul 位于 `~/.advisers/soul.md`（人类独占，slot #1）；
+- JSON 账本位于 `~/.advisers/state.json`；
+- 不调模型、不用 SQLite、不接真实 IM、不含 DSH bundle。
+
+```sh
+npm i -g advisers@next
+advisers soul init
+advisers chat "周五前把报价发给王工"
+```
+
+在预览版转正前，`latest` 仍是占位版 `0.0.3`。
 
 ## 许可
 

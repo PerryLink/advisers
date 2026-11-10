@@ -15,6 +15,15 @@ export interface AssembleInput {
   budget?: number
   audience?: string
   soul?: SoulDocument
+  /** 0..3; the local owner normally has 3. */
+  clearance?: number
+}
+
+export class SecrecyError extends Error {
+  constructor(matterId: string, secrecy: number, clearance: number) {
+    super(`matter ${matterId} requires secrecy ${secrecy}, clearance is ${clearance}`)
+    this.name = 'SecrecyError'
+  }
 }
 
 /**
@@ -26,6 +35,10 @@ export interface AssembleInput {
  * - other matters are hints only (title + why), never body text.
  */
 export function assembleContext(input: AssembleInput): TurnContext {
+  const clearance = input.clearance ?? 3
+  if (input.matter.secrecy > clearance) {
+    throw new SecrecyError(input.matter.id, input.matter.secrecy, clearance)
+  }
   const commitments = input.ledger.openCommitments(input.matter.id)
   const preferences = input.ledger.listPreferences({
     matterId: input.matter.id,

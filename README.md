@@ -24,8 +24,21 @@ them.
 
 ## Status
 
-Bootstrapping. The npm names `advisers` and `dsh-advisers` are reserved; the
-runtime skeleton is being implemented in this repository.
+`0.1.0-preview.1` is on the npm `next` tag:
+
+- `advisers` CLI: `soul init`, `chat`, `ls`, `why`, `forget`, `export`;
+- soul at `~/.advisers/soul.md` (human-owned, slot #1);
+- JSON ledger at `~/.advisers/state.json`;
+- no LLM call, no SQLite, no real IM link, no DSH bundle yet.
+
+```sh
+npm i -g advisers@next
+advisers soul init
+advisers chat "周五前把报价发给王工"
+```
+
+The `latest` tag stays on the stable placeholder `0.0.3` until the preview is
+promoted.
 
 ## License
 

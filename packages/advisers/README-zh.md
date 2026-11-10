@@ -2,17 +2,30 @@
 
 **Advisers** 的 cordis-only 发行：一个连续对话 + 用户账 + 承诺账 + 可审阅的流程账。
 
-本包处于启动阶段，runtime 核心在仓库：
+## 安装
 
-https://github.com/PerryLink/advisers
+```sh
+npm i -g advisers@next
+advisers soul init
+advisers chat "周五前把报价发给王工"
+advisers ls
+advisers export
+```
+
+CLI 目前是**context 预览**，不是聊天 UI：它记录消息、生成 FocusFrame，并打印将要发给模型的上下文。模型调用是下一个里程碑。
 
 ## 状态
 
-`0.0.1` 用于占位。首个可用版本将提供：
+`0.1.0-preview.1` 是预览版：
 
-- `createAdvisers()` —— headless runtime；
-- `advisers` CLI —— 第一个 adapter；
-- Link SPI —— email / Satori / dsh-im / gateway provider。
+- 内存/JSON 账本，位于 `~/.advisers/state.json`；
+- soul 位于 `~/.advisers/soul.md`，人类独占；
+- 命令：`soul`、`chat`、`ls`、`why`、`forget`、`export`；
+- 不调模型、不用 SQLite、不接真实 IM、不含 DSH bundle。
+
+核心与架构：
+
+https://github.com/PerryLink/advisers
 
 ## 许可
 
