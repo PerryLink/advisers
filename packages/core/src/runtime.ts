@@ -17,6 +17,7 @@ export class AdvisersRuntime implements LinkHost {
   readonly ledger: Ledger
   private readonly links = new Map<string, LinkProvider>()
   private readonly conversationMatter = new Map<string, string>()
+  private readonly seen = new Set<string>()
   private readonly budget: number
 
   constructor(options: AdvisersOptions = {}) {
@@ -46,6 +47,12 @@ export class AdvisersRuntime implements LinkHost {
    * The real runtime will feed the returned context to the host's LLM.
    */
   async ingest(event: InboundEvent): Promise<void> {
+    const key = `${event.linkId}:${event.dedupeKey ?? event.messageId}`
+    if (this.seen.has(key)) return
+    this.seen.add(key)
+    // A group message that is not addressed to the adviser is observed by the
+    // link but is not a user instruction.
+    if (event.conversationType === 'group' && event.addressed === false) return
     this.handleInbound(event)
   }
 

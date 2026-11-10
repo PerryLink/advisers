@@ -98,3 +98,21 @@ test('runtime creates a matter per conversation and returns a focus context', as
   assert.match(ctx.prompt, /周五前把报价发给王工/)
   assert.ok(estimateTokens(ctx.prompt) > 0)
 })
+
+test('ingest is idempotent by dedupeKey', async () => {
+  const runtime = new AdvisersRuntime()
+  const event = {
+    linkId: 'email',
+    accountId: 'me',
+    conversationId: 'thread-2',
+    messageId: 'm2',
+    dedupeKey: 'mail-2',
+    sender: { id: 'me' },
+    text: '同一封邮件重投两次',
+    timestamp: new Date().toISOString(),
+  }
+  await runtime.ingest(event)
+  await runtime.ingest(event)
+  assert.equal(runtime.ledger.listFacts().length, 1)
+  assert.equal(runtime.ledger.listMatters().length, 1)
+})

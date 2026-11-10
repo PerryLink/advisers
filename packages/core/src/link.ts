@@ -16,11 +16,25 @@ export interface LinkCapabilities {
   cards: boolean
   media: boolean
   approvals: boolean
+  /** Optional, for rendering and for choosing a fallback. */
+  maxTextLength?: number
+  maxAttachments?: number
+  mentions?: boolean
+  proactiveWindow?: string
+  approvalMode?: 'none' | 'text' | 'card'
 }
 
 export interface LinkSender {
   id: string
   name?: string
+}
+
+export type ConversationType = 'dm' | 'group' | 'channel' | 'email'
+
+export interface QuoteRef {
+  messageId: string
+  text?: string
+  authorId?: string
 }
 
 export interface InboundEvent {
@@ -29,10 +43,16 @@ export interface InboundEvent {
   conversationId: string
   threadId?: string
   messageId: string
+  /** Defaults to messageId when omitted. Used for idempotent ingest. */
+  dedupeKey?: string
+  conversationType?: ConversationType
+  /** In a group, whether this message is addressed to the adviser. */
+  addressed?: boolean
+  mentions?: string[]
   sender: LinkSender
   text?: string
   attachments?: Attachment[]
-  quote?: string
+  quote?: string | QuoteRef
   timestamp: string
   raw?: unknown
 }
@@ -48,11 +68,17 @@ export interface DeliveryResult {
   ok: boolean
   messageId?: string
   error?: string
+  /** The transport cannot prove whether the message was delivered. */
+  uncertain?: boolean
 }
 
 export interface OutboundMessage {
   conversationId: string
   threadId?: string
+  /** Which linked account sends this message; avoids cross-account leaks. */
+  accountId?: string
+  /** Stable key so a retry does not double-send. */
+  idempotencyKey?: string
   text: string
   cards?: Array<{ title: string; body: string }>
   attachments?: Attachment[]
@@ -69,4 +95,5 @@ export interface LinkProvider {
   start(host: LinkHost): Promise<void>
   send(message: OutboundMessage): Promise<DeliveryResult>
   stop(): Promise<void>
+  health?(): Promise<{ ok: boolean; detail?: string }>
 }
