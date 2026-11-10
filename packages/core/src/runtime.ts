@@ -1,7 +1,7 @@
 import { assembleContext } from './context.ts'
 import { Ledger } from './ledger.ts'
 import type { HostPorts } from './ports.ts'
-import type { InboundEvent, LinkHost, LinkProvider, OutboundMessage, DeliveryResult } from './link.ts'
+import type { InboundEvent, IngestResult, LinkHost, LinkProvider, OutboundMessage, DeliveryResult } from './link.ts'
 import type { TurnContext } from './types.ts'
 
 export interface AdvisersOptions {
@@ -46,14 +46,17 @@ export class AdvisersRuntime implements LinkHost {
    * LinkHost.ingest: normalize one inbound event.
    * The real runtime will feed the returned context to the host's LLM.
    */
-  async ingest(event: InboundEvent): Promise<void> {
+  async ingest(event: InboundEvent): Promise<IngestResult> {
     const key = `${event.linkId}:${event.dedupeKey ?? event.messageId}`
-    if (this.seen.has(key)) return
+    if (this.seen.has(key)) return { accepted: false, reason: 'duplicate' }
     this.seen.add(key)
     // A group message that is not addressed to the adviser is observed by the
     // link but is not a user instruction.
-    if (event.conversationType === 'group' && event.addressed === false) return
+    if (event.conversationType === 'group' && event.addressed === false) {
+      return { accepted: false, reason: 'ignored' }
+    }
     this.handleInbound(event)
+    return { accepted: true }
   }
 
   handleInbound(event: InboundEvent): TurnContext {

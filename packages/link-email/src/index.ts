@@ -1,6 +1,7 @@
 import type {
   DeliveryResult,
   InboundEvent,
+  IngestResult,
   LinkCapabilities,
   LinkHost,
   LinkProvider,
@@ -67,7 +68,7 @@ export class EmailLink implements LinkProvider {
   }
 
   /** Called by the email poller/webhook after it has parsed a message. */
-  async receive(message: EmailMessage): Promise<void> {
+  async receive(message: EmailMessage): Promise<IngestResult> {
     if (!this.host) throw new Error('email link is not started')
     const event: InboundEvent = {
       linkId: this.id,
@@ -75,11 +76,14 @@ export class EmailLink implements LinkProvider {
       conversationId: message.from,
       threadId: message.threadId,
       messageId: message.messageId,
+      dedupeKey: message.messageId,
+      conversationType: 'email',
+      addressed: true,
       sender: { id: message.from, name: message.fromName },
       text: `${message.subject}\n\n${message.body}`,
       timestamp: new Date().toISOString(),
       raw: message,
     }
-    await this.host.ingest(event)
+    return this.host.ingest(event)
   }
 }

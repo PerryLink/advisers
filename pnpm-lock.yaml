@@ -173,16 +173,32 @@ importers:
         specifier: ^5.9.3
         version: 5.9.3
 
-  packages/advisers: {}
+  packages/advisers:
+    dependencies:
+      advisers-core:
+        specifier: 0.0.2
+        version: 0.0.2
 
   packages/core: {}
 
-  packages/dsh-advisers: {}
+  packages/dsh-advisers:
+    dependencies:
+      advisers-core:
+        specifier: ^0.0.1
+        version: 0.0.1
+
+  packages/link-email: {}
 
 packages:
 
   '@types/node@22.20.5':
     resolution: {integrity: sha512-U2+DNr+wSjpsTS/wZGYHq7GcwfuSmKiKvoPvK22zwTlRhU91yOniN4qRR5KhIjvif7ysw/dz/hKmfDH0Ris4aA==}
+
+  advisers-core@0.0.1:
+    resolution: {integrity: sha512-AmUOekAmJZqizX88iDQJolaV8B5pffKGApLAj22bQpkRg8JpXNaxcUk21NZ3HsCaW3MXsEuSnuY1iunFdc/y+g==}
+
+  advisers-core@0.0.2:
+    resolution: {integrity: sha512-hXVWHTYcVcn4Ya3NKhBJbPiC0RUPQNUcQzUgWCZXOoyLhcgbELXwXmY8kf3OvggasxnnmKchMjJsg7ZLCK82Fg==}
 
   typescript@5.9.3:
     resolution: {integrity: sha512-jl1vZzPDinLr9eUt3J/t7V6FgNEw9QjvBPdysz9KfQDD41fQrC2Y4vKQdiaUpFT4bXlb1RHhLpp8wtm6M5TgSw==}
@@ -197,6 +213,10 @@ snapshots:
   '@types/node@22.20.5':
     dependencies:
       undici-types: 6.21.0
+
+  advisers-core@0.0.1: {}
+
+  advisers-core@0.0.2: {}
 
   typescript@5.9.3: {}
 

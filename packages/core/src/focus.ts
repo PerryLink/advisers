@@ -25,9 +25,20 @@ export interface FocusFrame {
  */
 export function buildFocusFrame(input: FocusInput): FocusFrame {
   const budget = input.budget ?? 1200
-  const hard = input.preferences.filter((p) => p.scope.level === 'global' && p.priority === 'hard')
-  const rest = input.preferences.filter((p) => p.scope.level === 'global' && p.priority !== 'hard')
-  const scoped = input.preferences.filter(
+  const now = Date.now()
+  const visible = (p: UserPreference): boolean => {
+    if (p.expiresAt && Date.parse(p.expiresAt) < now) return false
+    if (p.scope.level === 'audience') return !!input.audience && p.scope.value === input.audience
+    return true
+  }
+  const candidates = input.preferences.filter(visible)
+  const hard = candidates.filter((p) => p.scope.level === 'global' && p.priority === 'hard')
+  const rest = candidates.filter(
+    (p) =>
+      (p.scope.level === 'global' && p.priority !== 'hard') ||
+      p.scope.level === 'audience',
+  )
+  const scoped = candidates.filter(
     (p) => p.scope.level === 'matter' && p.scope.value === input.matter.id,
   )
   return {

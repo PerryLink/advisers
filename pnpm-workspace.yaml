@@ -1,2 +1,4 @@
 packages:
   - 'packages/*'
+minimumReleaseAgeExclude:
+  - advisers-core@0.0.1 || 0.0.2

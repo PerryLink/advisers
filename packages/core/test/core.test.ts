@@ -116,3 +116,54 @@ test('ingest is idempotent by dedupeKey', async () => {
   assert.equal(runtime.ledger.listFacts().length, 1)
   assert.equal(runtime.ledger.listMatters().length, 1)
 })
+
+test('association links and cross-matter updates stay proposals', () => {
+  const ledger = new Ledger()
+  const a = ledger.addMatter({ title: '客户 A' })
+  const b = ledger.addMatter({ title: '项目 B' })
+
+  const link = ledger.proposeLink({
+    fromMatter: a.id,
+    toMatter: b.id,
+    type: 'impact',
+    confidence: 0.7,
+    evidence: ['A 的签约在周五'],
+  })
+  assert.equal(link.status, 'candidate')
+  assert.equal(ledger.listLinks(a.id, false).length, 0)
+  ledger.confirmLink(link.id)
+  assert.equal(ledger.listLinks(a.id, false).length, 1)
+
+  const update = ledger.proposeUpdate({
+    sourceMatter: a.id,
+    targetMatter: b.id,
+    change: 'B 的联调提前 3 天',
+  })
+  assert.equal(update.status, 'pending')
+  ledger.resolveUpdate(update.id, 'applied', 'revert: revert B 的联调')
+  assert.equal(ledger.listUpdates('applied').length, 1)
+})
+
+test('audience-scoped preference only appears for that audience', () => {
+  const ledger = new Ledger()
+  const matter = ledger.addMatter({ title: '客户 A' })
+  ledger.addPreference({
+    kind: 'relationship',
+    statement: '对客户说话先给结论',
+    scope: { level: 'audience', value: 'client' },
+  })
+  const forClient = buildFocusFrame({
+    matter,
+    commitments: [],
+    preferences: ledger.listPreferences({ matterId: matter.id, audience: 'client' }),
+    audience: 'client',
+  })
+  const forFriend = buildFocusFrame({
+    matter,
+    commitments: [],
+    preferences: ledger.listPreferences({ matterId: matter.id, audience: 'friend' }),
+    audience: 'friend',
+  })
+  assert.ok(forClient.preferences.some((p) => p.statement.includes('先给结论')))
+  assert.ok(!forFriend.preferences.some((p) => p.statement.includes('先给结论')))
+})

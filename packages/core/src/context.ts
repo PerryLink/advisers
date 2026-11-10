@@ -1,6 +1,6 @@
 import { buildFocusFrame, estimateTokens, renderFocusFrame } from './focus.ts'
 import type { Ledger } from './ledger.ts'
-import type { LinkCard, Matter, TurnContext } from './types.ts'
+import type { AssociationHint, Matter, TurnContext } from './types.ts'
 
 export interface RelatedCardInput {
   matterId?: string
@@ -26,7 +26,10 @@ export interface AssembleInput {
  */
 export function assembleContext(input: AssembleInput): TurnContext {
   const commitments = input.ledger.openCommitments(input.matter.id)
-  const preferences = input.ledger.listPreferences({ matterId: input.matter.id })
+  const preferences = input.ledger.listPreferences({
+    matterId: input.matter.id,
+    audience: input.audience,
+  })
   const frame = buildFocusFrame({
     matter: input.matter,
     commitments,
@@ -42,7 +45,7 @@ export function assembleContext(input: AssembleInput): TurnContext {
     '</advisers-context>',
   ].join('\n')
 
-  const hints: LinkCard[] = (input.related ?? []).slice(0, 3).map((r) => ({
+  const hints: AssociationHint[] = (input.related ?? []).slice(0, 3).map((r) => ({
     title: r.title,
     why: r.why,
     matterId: r.matterId,

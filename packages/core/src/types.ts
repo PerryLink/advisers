@@ -108,15 +108,77 @@ export interface UserPreference {
   priority: PreferencePriority
 }
 
-export interface LinkCard {
+export interface AssociationHint {
   title: string
   why: string
   matterId?: Id
 }
 
+/** @deprecated Use AssociationHint; "LinkCard" collides with IM cards. */
+export type LinkCard = AssociationHint
+
+export type MatterLinkType =
+  | 'same_entity'
+  | 'part_of'
+  | 'depends_on'
+  | 'conflicts'
+  | 'similar'
+  | 'temporal'
+  | 'document'
+  | 'impact'
+
+export interface MatterLink {
+  id: Id
+  fromMatter: Id
+  toMatter: Id
+  type: MatterLinkType
+  confidence: number
+  evidence: string[]
+  status: 'candidate' | 'confirmed' | 'rejected'
+  createdBy: 'user' | 'agent'
+  createdAt: IsoDate
+}
+
+export interface UpdateProposal {
+  id: Id
+  sourceMatter: Id
+  targetMatter: Id
+  change: string
+  status: 'pending' | 'applied' | 'rejected'
+  createdAt: IsoDate
+  rollback?: string
+}
+
+/** Human-owned identity document. The agent may propose, never write. */
+export interface SoulDocument {
+  id: Id
+  version: number
+  content: string
+  updatedAt: IsoDate
+  updatedBy: 'human'
+}
+
+/** One continuous relationship; a thread can contain many matters/episodes. */
+export interface Thread {
+  id: Id
+  principalId: string
+  title?: string
+  createdAt: IsoDate
+  updatedAt: IsoDate
+}
+
+export interface Episode {
+  id: Id
+  threadId: Id
+  matterId?: Id
+  startedAt: IsoDate
+  endedAt?: IsoDate
+  summary?: string
+}
+
 export interface TurnContext {
   matter: Matter
   prompt: string
-  hints: LinkCard[]
+  hints: AssociationHint[]
   usedTokens: number
 }

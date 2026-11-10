@@ -8,6 +8,7 @@ test('email link normalizes a forwarded message into an InboundEvent', async () 
   const host = {
     async ingest(event: InboundEvent) {
       received.push(event)
+      return { accepted: true as const }
     },
     async resolvePrincipal() {
       return 'principal:me'

@@ -1,6 +1,6 @@
 {
   "name": "advisers",
-  "version": "0.0.2",
+  "version": "0.0.3",
   "description": "A staff of AI advisers: a cordis-native personal secretary runtime with scoped memory, commitments, and reviewable routines.",
   "keywords": [
     "cordis",
@@ -15,18 +15,22 @@
   "license": "MIT",
   "type": "module",
   "main": "./index.js",
+  "bin": {
+    "advisers": "./bin/advisers.js"
+  },
   "exports": {
     ".": "./index.js",
     "./package.json": "./package.json"
   },
   "files": [
     "index.js",
+    "bin/advisers.js",
     "README.md",
     "README-zh.md",
     "LICENSE"
   ],
   "dependencies": {
-    "advisers-core": "^0.0.1"
+    "advisers-core": "0.0.3"
   },
   "repository": {
     "type": "git",

@@ -82,9 +82,11 @@ pagination, and media download.
 | `advisers` | upstream `cordis` | email/share, Satori | 0.1 |
 | `dsh-advisers` | `@deepseek-ai/cordis` + DSH | `dsh-im-union` or `@xmanrui/dsh-im` | 0.3 |
 
-The same `packages/core` source is built twice (build-time alias for
-`cordis` → `@deepseek-ai/cordis` in the DSH build). The core must not use
-fork-specific APIs such as `FiberState` runtime exports.
+The same `packages/core` source is used by two thin adapters. **Do not alias
+`cordis` to `@deepseek-ai/cordis`**: the two packages are symbol-level breaking
+(`ctx.root`, `Service.config`, `FiberState` erasure), and a runtime alias leaves
+`import 'cordis'` in the published artifact. The core imports neither host; each
+distribution owns its adapter and its peer dependency.
 
 ## 6. What is deliberately not here
 
@@ -92,3 +94,42 @@ fork-specific APIs such as `FiberState` runtime exports.
   sending are out of scope until the three-ledger loop is proven.
 - A vector database is not required at the start: FTS5 plus scope/entity
   filters is enough for the first few hundred facts.
+
+## 7. Soul, thread, routines, association
+
+These four are part of the original product thesis; they are **not** 1.0
+afterthoughts.
+
+| Concept | Rule | Status |
+|---|---|---|
+| **Soul** | Human-owned, versioned, slot #1; the agent may propose a diff, never write it. | Type `SoulDocument`; store port in `HostPorts.soul` |
+| **Thread** | One continuous relationship per principal; a thread contains many matters/episodes. `conversation` is a link concept, not the relationship. | Types `Thread`/`Episode`; runtime still routes by conversation |
+| **Routine** | Proposed from a successful task; needs a diff, regression case, and human approval; never auto-activated. | Type exists in the roadmap; not implemented |
+| **Association** | `MatterLink` (8 closed types) + `UpdateProposal`; cross-matter writes are proposals, never direct writes. | Types + in-memory ledger methods |
+
+The association schema exists from day one even though the UI/logic ships later:
+adding a `MatterLink` table after the fact is a migration, adding it now is free.
+
+## 8. Revised sequence (after the self-audit)
+
+| Version | Must prove |
+|---|---|
+| 0.1 | Soul slot + user ledger + commitment ledger + teaching receipt + **30 probes** + SQLite + CLI |
+| 0.2 | Routine capture + diff + approval (manual first) + email/share link + eval harness |
+| 0.3 | Association hints (`same_entity`/`depends_on`/`conflicts`) + DSH preview (`next`) |
+| 0.4 | DSH full + Feishu + cross-matter proposals |
+| 1.0 | SPI frozen + 20 users × 30 days metrics + two external links |
+
+The earlier plan put routines at 1.0; that makes the product a commitment
+tracker for a year. Routines must appear by 0.2 to keep the "intern" promise.
+
+## 9. Current limits (0.0.x)
+
+- The ledger is in-memory; SQLite is 0.1.
+- `advisers` has a CLI that prints the focus frame; it does not call a model.
+- `dsh-advisers` is a placeholder: no `apply`, no `cordis.patch.yml`, no
+  `dsh.bundle`.
+- `secrecy` is stored but not yet a hard retrieval gate; audience scoping is
+  enforced for preferences only.
+- Egress permits, deletion cascade, and the five CI security tests are
+  specified in `SECURITY.md` but not implemented.

@@ -53,3 +53,23 @@ private GitHub security advisory. We will acknowledge within 72 hours.
 - **In scope:** the runtime core, link providers, storage, egress, CLI.
 - **Out of scope:** platform-side vulnerabilities; personal WeChat automation
   is prohibited and will not be merged.
+
+## Enforcement status (0.0.x)
+
+This policy is the target, not a claim about the current skeleton.
+
+| Rule | Status |
+|---|---|
+| 1 no evidence, no entry | **enforced** for commitments; facts still accept optional source |
+| 2 memory does not authorize | **not implemented** |
+| 3 external content never becomes instruction | **not implemented** (taint tracking is 0.1) |
+| 4 three powers separate | **interface only**; single process today |
+| 5 egress permit | **not implemented** |
+| 6 credentials never enter context | **not implemented** |
+| 7 delete cascades | **partial** (soft delete; no deletion registry) |
+| 8 metadata mandatory | **not implemented** |
+| 9 fail closed | **not implemented** |
+| 10 supply-chain gate | **not implemented** (no CI yet) |
+
+The five CI tests (T1–T5) are not yet in the repository. Do not describe the
+project as "secure" until they are green; the skeleton is a design artifact.

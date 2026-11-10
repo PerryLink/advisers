@@ -57,9 +57,16 @@ export interface InboundEvent {
   raw?: unknown
 }
 
+export type IngestReason = 'duplicate' | 'stale' | 'unauthorized' | 'ignored'
+
+export interface IngestResult {
+  accepted: boolean
+  reason?: IngestReason
+}
+
 export interface LinkHost {
-  /** Normalize one inbound event into the runtime. Must be idempotent by messageId. */
-  ingest(event: InboundEvent): Promise<void>
+  /** Normalize one inbound event into the runtime. Must be idempotent by dedupeKey. */
+  ingest(event: InboundEvent): Promise<IngestResult>
   /** Map a platform account to the runtime principal. */
   resolvePrincipal(account: { linkId: string; accountId: string }): Promise<Id>
 }

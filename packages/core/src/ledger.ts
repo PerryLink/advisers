@@ -6,8 +6,11 @@ import type {
   Fact,
   Id,
   Matter,
+  MatterLink,
+  MatterLinkType,
   PreferenceKind,
   PreferenceScope,
+  UpdateProposal,
   UserPreference,
 } from './types.ts'
 
@@ -64,6 +67,8 @@ export class Ledger {
   private readonly facts = new Map<Id, Fact>()
   private readonly commitments = new Map<Id, Commitment>()
   private readonly preferences = new Map<Id, UserPreference>()
+  private readonly links = new Map<Id, MatterLink>()
+  private readonly updates = new Map<Id, UpdateProposal>()
 
   constructor(ports: HostPorts = systemPorts()) {
     this.clock = ports.clock
@@ -147,12 +152,13 @@ export class Ledger {
     return pref
   }
 
-  listPreferences(filter: { matterId?: Id; includeCandidates?: boolean } = {}): UserPreference[] {
+  listPreferences(filter: { matterId?: Id; audience?: string; includeCandidates?: boolean } = {}): UserPreference[] {
     return [...this.preferences.values()].filter((p) => {
       if (p.status === 'deprecated') return false
       if (!filter.includeCandidates && p.status !== 'confirmed') return false
       if (p.scope.level === 'global') return true
       if (p.scope.level === 'matter') return p.scope.value === filter.matterId
+      if (p.scope.level === 'audience') return !!filter.audience && p.scope.value === filter.audience
       return false
     })
   }
@@ -204,5 +210,71 @@ export class Ledger {
     if (!pref) return false
     pref.status = 'deprecated'
     return true
+  }
+
+  /** Association is a proposal first; only a human or a verified rule confirms it. */
+  proposeLink(input: {
+    fromMatter: Id
+    toMatter: Id
+    type: MatterLinkType
+    confidence?: number
+    evidence?: string[]
+    createdBy?: MatterLink['createdBy']
+  }): MatterLink {
+    const link: MatterLink = {
+      id: this.ids.next('link'),
+      fromMatter: input.fromMatter,
+      toMatter: input.toMatter,
+      type: input.type,
+      confidence: input.confidence ?? 0.5,
+      evidence: input.evidence ?? [],
+      status: 'candidate',
+      createdBy: input.createdBy ?? 'agent',
+      createdAt: this.clock.now(),
+    }
+    this.links.set(link.id, link)
+    return link
+  }
+
+  listLinks(matterId?: Id, includeCandidates = true): MatterLink[] {
+    return [...this.links.values()].filter((l) => {
+      if (!includeCandidates && l.status !== 'confirmed') return false
+      if (l.status === 'rejected') return false
+      if (!matterId) return true
+      return l.fromMatter === matterId || l.toMatter === matterId
+    })
+  }
+
+  confirmLink(id: Id): MatterLink {
+    const link = this.links.get(id)
+    if (!link) throw new Error(`unknown link: ${id}`)
+    link.status = 'confirmed'
+    return link
+  }
+
+  /** Cross-matter writes are queued, never applied by the chat model. */
+  proposeUpdate(input: { sourceMatter: Id; targetMatter: Id; change: string }): UpdateProposal {
+    const proposal: UpdateProposal = {
+      id: this.ids.next('upd'),
+      sourceMatter: input.sourceMatter,
+      targetMatter: input.targetMatter,
+      change: input.change,
+      status: 'pending',
+      createdAt: this.clock.now(),
+    }
+    this.updates.set(proposal.id, proposal)
+    return proposal
+  }
+
+  listUpdates(status?: UpdateProposal['status']): UpdateProposal[] {
+    return [...this.updates.values()].filter((u) => (status ? u.status === status : true))
+  }
+
+  resolveUpdate(id: Id, status: 'applied' | 'rejected', rollback?: string): UpdateProposal {
+    const proposal = this.updates.get(id)
+    if (!proposal) throw new Error(`unknown update proposal: ${id}`)
+    proposal.status = status
+    if (rollback) proposal.rollback = rollback
+    return proposal
   }
 }
