@@ -1,10 +1,12 @@
 import { assembleContext } from './context.ts'
 import { Ledger } from './ledger.ts'
+import type { HostPorts } from './ports.ts'
 import type { InboundEvent, LinkHost, LinkProvider, OutboundMessage, DeliveryResult } from './link.ts'
 import type { TurnContext } from './types.ts'
 
 export interface AdvisersOptions {
   budget?: number
+  ports?: HostPorts
 }
 
 /**
@@ -12,13 +14,14 @@ export interface AdvisersOptions {
  * Today the ledger and the reply are in-memory stubs; the interfaces are the point.
  */
 export class AdvisersRuntime implements LinkHost {
-  readonly ledger = new Ledger()
+  readonly ledger: Ledger
   private readonly links = new Map<string, LinkProvider>()
   private readonly conversationMatter = new Map<string, string>()
   private readonly budget: number
 
   constructor(options: AdvisersOptions = {}) {
     this.budget = options.budget ?? 1200
+    this.ledger = new Ledger(options.ports)
   }
 
   registerLink(link: LinkProvider): void {

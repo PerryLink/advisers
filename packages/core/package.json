@@ -1,16 +1,43 @@
 {
   "name": "advisers-core",
-  "version": "0.0.1",
-  "private": true,
+  "version": "0.0.2",
   "description": "Core types and runtime for Advisers: matters, scoped ledgers, focus frames, and the Link SPI.",
+  "keywords": [
+    "advisers",
+    "cordis",
+    "secretary",
+    "memory",
+    "commitments",
+    "link"
+  ],
+  "author": "PerryLink contributors",
+  "license": "MIT",
   "type": "module",
-  "main": "./src/index.ts",
+  "main": "./dist/index.js",
+  "types": "./dist/index.d.ts",
   "exports": {
-    ".": "./src/index.ts"
+    ".": {
+      "types": "./dist/index.d.ts",
+      "default": "./dist/index.js"
+    },
+    "./package.json": "./package.json"
   },
+  "files": [
+    "dist",
+    "README.md",
+    "LICENSE"
+  ],
   "scripts": {
+    "build": "tsc -p tsconfig.build.json",
     "typecheck": "tsc -p tsconfig.json --noEmit",
     "test": "node --experimental-strip-types --test test/*.test.ts"
   },
-  "license": "MIT"
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/PerryLink/advisers.git",
+    "directory": "packages/core"
+  },
+  "publishConfig": {
+    "access": "public"
+  }
 }

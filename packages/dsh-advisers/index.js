@@ -1,4 +1,5 @@
-export const name = 'dsh-advisers'
-export const version = '0.0.1'
-export const status = 'bootstrapping'
+export * from 'advisers-core'
+
+export const version = '0.0.2'
 export const distribution = 'dsh'
+export const status = 'bootstrapping'

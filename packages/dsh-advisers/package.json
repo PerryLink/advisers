@@ -1,6 +1,6 @@
 {
   "name": "dsh-advisers",
-  "version": "0.0.1",
+  "version": "0.0.2",
   "description": "DeepSeek Harness distribution of Advisers: mount the cordis-native secretary core as a DSH plugin bundle.",
   "keywords": [
     "dsh",
@@ -24,6 +24,9 @@
     "README.md",
     "LICENSE"
   ],
+  "dependencies": {
+    "advisers-core": "^0.0.1"
+  },
   "repository": {
     "type": "git",
     "url": "git+https://github.com/PerryLink/advisers.git",

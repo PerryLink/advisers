@@ -1,3 +1,5 @@
+import type { HostPorts } from './ports.ts'
+import { systemPorts } from './ports.ts'
 import type {
   Commitment,
   CommitmentEvidence,
@@ -8,9 +10,6 @@ import type {
   PreferenceScope,
   UserPreference,
 } from './types.ts'
-
-let seq = 0
-const nextId = (prefix: string): Id => `${prefix}_${Date.now().toString(36)}_${++seq}`
 
 export interface MatterInput {
   title: string
@@ -59,15 +58,22 @@ export interface CommitmentInput {
  * Production storage will be SQLite + FTS5, with this interface.
  */
 export class Ledger {
-  private matters = new Map<Id, Matter>()
-  private facts = new Map<Id, Fact>()
-  private commitments = new Map<Id, Commitment>()
-  private preferences = new Map<Id, UserPreference>()
+  private readonly clock: HostPorts['clock']
+  private readonly ids: HostPorts['ids']
+  private readonly matters = new Map<Id, Matter>()
+  private readonly facts = new Map<Id, Fact>()
+  private readonly commitments = new Map<Id, Commitment>()
+  private readonly preferences = new Map<Id, UserPreference>()
+
+  constructor(ports: HostPorts = systemPorts()) {
+    this.clock = ports.clock
+    this.ids = ports.ids
+  }
 
   addMatter(input: MatterInput): Matter {
-    const now = new Date().toISOString()
+    const now = this.clock.now()
     const matter: Matter = {
-      id: nextId('matter'),
+      id: this.ids.next('matter'),
       title: input.title,
       status: 'active',
       domain: input.domain ?? 'general',
@@ -102,12 +108,12 @@ export class Ledger {
     if (existing) return existing
 
     const fact: Fact = {
-      id: nextId('fact'),
+      id: this.ids.next('fact'),
       matterId: input.matterId,
       subject: input.subject,
       predicate: input.predicate,
       object: input.object,
-      recordedAt: new Date().toISOString(),
+      recordedAt: this.clock.now(),
       authority: input.authority ?? 'user',
       confidence: input.confidence ?? 0.9,
       source: input.source,
@@ -125,7 +131,7 @@ export class Ledger {
 
   addPreference(input: PreferenceInput): UserPreference {
     const pref: UserPreference = {
-      id: nextId('pref'),
+      id: this.ids.next('pref'),
       kind: input.kind,
       statement: input.statement,
       scope: input.scope ?? { level: 'global' },
@@ -133,7 +139,7 @@ export class Ledger {
       evidence: [],
       confidence: input.confidence ?? 0.9,
       status: input.status ?? 'confirmed',
-      validFrom: new Date().toISOString(),
+      validFrom: this.clock.now(),
       expiresAt: input.expiresAt,
       priority: input.priority ?? (input.kind === 'taboo' ? 'hard' : 'soft'),
     }
@@ -156,7 +162,7 @@ export class Ledger {
       throw new Error('a commitment requires at least one evidence item')
     }
     const commitment: Commitment = {
-      id: nextId('cm'),
+      id: this.ids.next('cm'),
       matterId: input.matterId,
       debtor: input.debtor,
       creditor: input.creditor,

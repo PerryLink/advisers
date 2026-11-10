@@ -1,6 +1,6 @@
 {
   "name": "advisers",
-  "version": "0.0.1",
+  "version": "0.0.2",
   "description": "A staff of AI advisers: a cordis-native personal secretary runtime with scoped memory, commitments, and reviewable routines.",
   "keywords": [
     "cordis",
@@ -25,9 +25,13 @@
     "README-zh.md",
     "LICENSE"
   ],
+  "dependencies": {
+    "advisers-core": "^0.0.1"
+  },
   "repository": {
     "type": "git",
-    "url": "git+https://github.com/PerryLink/advisers.git"
+    "url": "git+https://github.com/PerryLink/advisers.git",
+    "directory": "packages/advisers"
   },
   "homepage": "https://github.com/PerryLink/advisers#readme",
   "bugs": {
