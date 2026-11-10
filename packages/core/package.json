@@ -1,0 +1,16 @@
+{
+  "name": "advisers-core",
+  "version": "0.0.1",
+  "private": true,
+  "description": "Core types and runtime for Advisers: matters, scoped ledgers, focus frames, and the Link SPI.",
+  "type": "module",
+  "main": "./src/index.ts",
+  "exports": {
+    ".": "./src/index.ts"
+  },
+  "scripts": {
+    "typecheck": "tsc -p tsconfig.json --noEmit",
+    "test": "node --experimental-strip-types --test test/*.test.ts"
+  },
+  "license": "MIT"
+}
