@@ -1,7 +1,7 @@
 {
   "name": "dsh-advisers",
-  "version": "0.2.0-preview.1",
-  "description": "DSH distribution placeholder for Advisers: the DSH bundle and cordis.patch.yml arrive in 0.3. This package currently re-exports advisers-core.",
+  "version": "0.2.0-preview.4",
+  "description": "DSH bundle for Advisers: registers the advisers service and the read-only advisers_brief tool.",
   "keywords": [
     "dsh",
     "dsh-plugin",
@@ -21,12 +21,10 @@
   },
   "files": [
     "index.js",
+    "cordis.patch.yml",
     "README.md",
     "LICENSE"
   ],
-  "dependencies": {
-    "advisers-core": "0.2.0-preview.1"
-  },
   "repository": {
     "type": "git",
     "url": "git+https://github.com/PerryLink/advisers.git",
@@ -38,5 +36,21 @@
   },
   "publishConfig": {
     "access": "public"
+  },
+  "dsh": {
+    "bundle": {
+      "patch": "./cordis.patch.yml"
+    }
+  },
+  "engines": {
+    "dsh": ">=0.2.1-rc.5 <0.3.0"
+  },
+  "peerDependencies": {
+    "@deepseek-ai/cordis": "^4.1.0",
+    "@deepseek-ai/dsh-tools": ">=0.2.1-rc.5 <0.3.0"
+  },
+  "peerDependenciesMeta": {},
+  "dependencies": {
+    "advisers-core": "0.2.0-preview.4"
   }
 }

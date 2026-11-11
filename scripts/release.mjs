@@ -1,8 +1,10 @@
 #!/usr/bin/env node
 /**
- * Publish packages in dependency order and wait until npm actually serves the
- * tarball before moving to the next package. npm returns 202 long before the
- * tarball is available; publishing a dependent too early creates a broken tag.
+ * Publish via npm staged publishing. Direct `npm publish` now stages versions
+ * that need an OTP; approving them is a separate, human step.
+ *
+ *   node scripts/release.mjs            # stage all packages, print IDs
+ *   NPM_OTP=123456 node scripts/release.mjs  # stage + approve (if the token allows)
  */
 import { execFileSync } from 'node:child_process'
 import { mkdtempSync, rmSync, writeFileSync } from 'node:fs'
@@ -17,6 +19,7 @@ const packages = [
   ['packages/dsh-advisers', 'dsh-advisers'],
 ]
 const tag = process.env.RELEASE_TAG || 'next'
+const otp = process.env.NPM_OTP
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms))
 
 let rcDir
@@ -28,18 +31,19 @@ if (process.env.NPM_TOKEN) {
   env = { ...env, NPM_CONFIG_USERCONFIG: rc }
 }
 
-async function version(cwd) {
-  return JSON.parse(execFileSync('node', ['-p', "JSON.stringify(require('./package.json'))"], { cwd, encoding: 'utf8' })).version
-}
+const version = (cwd) => JSON.parse(execFileSync('node', ['-p', "JSON.stringify(require('./package.json'))"], { cwd, encoding: 'utf8' })).version
 
 async function tarballOk(name, ver) {
-  const url = `https://registry.npmjs.org/${name}/-/${name}-${ver}.tgz`
   try {
-    const r = await fetch(url, { method: 'HEAD' })
+    const r = await fetch(`https://registry.npmjs.org/${name}/-/${name}-${ver}.tgz`, { method: 'HEAD', signal: AbortSignal.timeout(15_000) })
     return r.status === 200
   } catch {
     return false
   }
+}
+
+function stagedId(text) {
+  return /staged with id ([0-9a-f-]{36})/i.exec(text)?.[1]
 }
 
 try {
@@ -47,24 +51,32 @@ try {
     const cwd = join(root, dir)
     const ver = await version(cwd)
     console.log(`\n== ${name}@${ver} (${tag})`)
+    let id
     try {
-      const out = execFileSync('npm', ['publish', '--access', 'public', '--tag', tag], { cwd, env, encoding: 'utf8' })
-      console.log(out.trim().split('\n').slice(-2).join(' | '))
+      const out = execFileSync('npm', ['stage', 'publish', '--tag', tag], { cwd, env, encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'] })
+      id = stagedId(out)
+      console.log(out.trim().split('\n').slice(-1)[0])
     } catch (error) {
-      const text = String(error.stderr || error.stdout || error.message)
-      if (!/E409|previously published|over previously/.test(text)) throw error
-      console.log('already published; verifying tarball')
+      const text = `${error.stdout || ''}\n${error.stderr || ''}`
+      if (!/E409|previously published|already staged/.test(text)) throw error
+      console.log('already published or staged; locate the stage id with `npm stage list`')
     }
+    if (!id) continue
+    if (!otp) {
+      console.log(`  staged: ${id}`)
+      console.log(`  approve: npm stage approve ${id}   (then complete the browser OTP)`)
+      continue
+    }
+    execFileSync('npm', ['stage', 'approve', id, '--otp', otp], { cwd, env, encoding: 'utf8' })
     let ok = false
-    for (let i = 0; i < 120; i++) {
+    for (let i = 0; i < 60; i++) {
       if (await tarballOk(name, ver)) { ok = true; break }
-      if (i % 6 === 0) console.log(`  waiting for tarball... ${i * 5}s`)
-      await sleep(5000)
+      await sleep(3000)
     }
-    if (!ok) throw new Error(`${name}@${ver} tarball is still 404 after 10 minutes`)
-    console.log(`  tarball ok: ${name}@${ver}`)
+    if (!ok) throw new Error(`${name}@${ver} staged but tarball is still 404`)
+    console.log(`  approved and verified: ${name}@${ver}`)
   }
-  console.log('\nall packages published and verified')
+  if (!otp) console.log('\nAll packages staged. Approve each ID in npm (OTP required); tags move on approval.')
 } finally {
   if (rcDir) rmSync(rcDir, { recursive: true, force: true })
 }

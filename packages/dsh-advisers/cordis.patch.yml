@@ -1,0 +1,5 @@
+- insert:
+    - id: advisers
+      name: dsh-advisers
+      config:
+        stage: probation

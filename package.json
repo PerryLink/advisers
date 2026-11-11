@@ -9,7 +9,9 @@
     "build": "pnpm -r run build",
     "typecheck": "pnpm -r run typecheck",
     "test": "pnpm -r run test",
-    "demo": "node --experimental-strip-types examples/demo.ts"
+    "demo": "node --experimental-strip-types examples/demo.ts",
+    "verify:office": "node scripts/verify-office.mjs",
+    "release": "node scripts/release.mjs"
   },
   "devDependencies": {
     "@types/node": "^22.20.5",

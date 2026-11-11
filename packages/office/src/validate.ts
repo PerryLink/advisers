@@ -3,6 +3,12 @@ import path from 'node:path'
 
 export type OfficeKind = 'docx' | 'xlsx' | 'pptx'
 
+const CONTENT_TYPE: Record<OfficeKind, string> = {
+  docx: 'wordprocessingml.document.main+xml',
+  xlsx: 'spreadsheetml.sheet.main+xml',
+  pptx: 'presentationml.presentation.main+xml',
+}
+
 const REQUIRED: Record<OfficeKind, string[]> = {
   docx: ['[Content_Types].xml', 'word/document.xml'],
   xlsx: ['[Content_Types].xml', 'xl/workbook.xml'],
@@ -38,6 +44,8 @@ async function brokenRelationships(zip: JSZip): Promise<string[]> {
 export async function validateOffice(buffer: Buffer, kind: OfficeKind): Promise<ValidationResult> {
   const zip = await JSZip.loadAsync(buffer)
   const missing = REQUIRED[kind].filter((name) => !zip.file(name))
+  const contentTypes = await zip.file('[Content_Types].xml')?.async('string')
+  if (!contentTypes?.includes(CONTENT_TYPE[kind])) missing.push(`content-type: ${CONTENT_TYPE[kind]}`)
   const broken = await brokenRelationships(zip)
   for (const item of broken) missing.push(`rel: ${item}`)
   return { ok: missing.length === 0, missing }

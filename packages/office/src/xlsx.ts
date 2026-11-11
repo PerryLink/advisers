@@ -29,7 +29,7 @@ export async function buildXlsx(spec: XlsxSpec): Promise<Buffer> {
     header: c.header,
     key: c.key,
     width: c.width ?? 18,
-    style: c.numFmt ? { numFmt: c.numFmt } : undefined,
+    style: { font: { name: 'Microsoft YaHei', size: 11 }, ...(c.numFmt ? { numFmt: c.numFmt } : {}) },
   }))
   sheet.addRows(spec.rows)
   sheet.getRow(1).font = { bold: true, name: 'Microsoft YaHei', size: 11 }

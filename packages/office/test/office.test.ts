@@ -154,3 +154,14 @@ test('templates produce the right shapes', () => {
   const m = mindmap({ title: '规划', branches: [{ label: '目标', children: ['增长'] }] })
   assert.equal(m.kind, 'mindmap')
 })
+
+test('validator rejects a missing content-type declaration', async () => {
+  const JSZip = (await import('jszip')).default
+  const buffer = await buildDocx({ title: 'content-type', sections: [{ paragraphs: ['x'] }] })
+  const zip = await JSZip.loadAsync(buffer)
+  zip.file('[Content_Types].xml', '<?xml version="1.0"?><Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types"></Types>')
+  const broken = await zip.generateAsync({ type: 'nodebuffer' })
+  const result = await validateOffice(broken, 'docx')
+  assert.equal(result.ok, false)
+  assert.ok(result.missing.some((item) => item.startsWith('content-type:')))
+})

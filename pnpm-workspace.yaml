@@ -2,3 +2,6 @@ packages:
   - 'packages/*'
 minimumReleaseAgeExclude:
   - advisers-core@0.0.1 || 0.0.2 || 0.1.0-preview.1
+  - mailparser@3.14.3
+  - nodemailer@10.5.0
+linkWorkspacePackages: true

@@ -24,7 +24,7 @@ them.
 
 ## Status
 
-`0.2.0-preview.1` is on the npm `next` tag:
+`0.2.0-preview.4` is staged on npm (`next` still points at the verified preview.2 until the staged packages are approved):
 
 - `advisers` CLI: `soul`, `brief`, `chat`, `office`, `template`, `routine`, `link`, `ls`, `why`, `forget`, `export`;
 - SQLite at `~/.advisers/state.db` (JSON fallback with `ADVISERS_STORE=json`);
@@ -32,7 +32,8 @@ them.
 - `advisers-office`: DOCX/XLSX/PPTX/Mermaid/draw.io/XMind + 5 templates;
 - routine v0 (draft/approve/archive + patch/diff/apply);
 - optional model call with `ADVISERS_API_KEY`;
-- no real IM Link, no DSH bundle yet.
+- DSH bundle (`dsh-advisers`) with `advisers_brief`; email IMAP/draft; Feishu webhook; strict policy pack;
+- real-account/WS/Office-L3 validation still pending.
 
 ```sh
 npm i -g advisers@next advisers-office@next

@@ -22,7 +22,7 @@ next milestone.
 
 ## Status
 
-`0.2.0-preview.1` is a preview:
+`0.2.0-preview.4` is staged (approval pending):
 
 - SQLite ledger at `~/.advisers/state.db` (JSON fallback with `ADVISERS_STORE=json`);
 - soul at `~/.advisers/soul.md`, human-owned;
@@ -31,7 +31,8 @@ next milestone.
 - DOCX/XLSX/PPTX/Mermaid/draw.io/XMind builders and 5 templates in `advisers-office`;
 - routine v0 (draft/approve/archive + patch/diff/apply) and confirmed link hints;
 - optional model call with `ADVISERS_API_KEY` / `ADVISERS_BASE_URL` / `ADVISERS_MODEL`;
-- no real IM Link, no DSH bundle yet.
+- DSH bundle, email IMAP/draft, Feishu webhook, strict policy pack;
+- real-account/WS/Office-L3 validation still pending.
 
 Shared core and architecture:
 

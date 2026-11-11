@@ -12,5 +12,9 @@
     "typecheck": "tsc -p tsconfig.json --noEmit",
     "test": "node --experimental-strip-types --test test/*.test.ts"
   },
-  "license": "MIT"
+  "license": "MIT",
+  "dependencies": {
+    "imapflow": "^2.11.0",
+    "mailparser": "^3.14.3"
+  }
 }

@@ -9,6 +9,8 @@ import {
   buildIntentBrief,
   assertAffectAllowed,
   DEFAULT_AFFECT_POLICY,
+  StrictPolicyPack,
+  assessDependency,
 } from '../src/index.ts'
 
 test('focus frame carries global + active matter preferences, never another matter', () => {
@@ -545,3 +547,19 @@ test('routine patch is a diff; version changes only after apply', () => {
 })
 
 
+
+test('strict policy pack denies companion but assesses crisis separately', () => {
+  const pack = new StrictPolicyPack()
+  assert.equal(pack.resolve({ use: 'understanding' }).allowed, true)
+  assert.equal(pack.resolve({ use: 'companion', age: 25, consent: true }).allowed, false)
+  const crisis = pack.assessCrisis('我不想活了')
+  assert.equal(crisis.crisis, true)
+  assert.match(crisis.script, /12356/)
+  assert.equal(pack.resolve({ use: 'understanding', crisis: true }).action, 'crisis')
+})
+
+test('dependency guard escalates replacement of human contact', () => {
+  assert.equal(assessDependency({ minutesToday: 10, sessionsToday: 1 }).level, 'ok')
+  assert.equal(assessDependency({ minutesToday: 180, sessionsToday: 2 }).level, 'warn')
+  assert.equal(assessDependency({ minutesToday: 10, sessionsToday: 1, substitutesHumanContact: true }).level, 'limit')
+})

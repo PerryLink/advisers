@@ -1,16 +1,45 @@
 # dsh-advisers
 
-**Placeholder package.** The DSH distribution of **Advisers** will ship a
-`cordis.patch.yml` bundle that mounts the shared `advisers-core` on DSH's
-session/agent/LLM/tool services and binds `dsh-im` links.
+DSH bundle for **Advisers**. It registers:
 
-`0.0.x` only re-exports `advisers-core`; it is **not yet a mountable DSH
-bundle** (no `dsh.bundle`, no `apply`). The first real DSH preview is planned
-for `0.1.0-dsh.1` on the `next` tag, after the cordis-only 0.1.0 release.
+- a cordis service `advisers` (an `AdvisersRuntime`);
+- a read-only tool `advisers_brief` that turns a request into an `IntentBrief`
+  (goal, deliverable, risk, at most one question, two-line readback).
 
-Shared core and architecture:
+It does **not** send messages, write the ledger, or call a model. The first DSH
+slice is deliberately read-only; chat/office/link tools come next.
 
-https://github.com/PerryLink/advisers
+## Install
+
+```sh
+dsh plugin --profile main add dsh-advisers advisers-core
+dsh --profile main --dump-config   # should show a "# == dsh-advisers" layer
+```
+
+`advisers-core` must be resolvable next to the bundle in the profile. For a
+local checkout:
+
+```sh
+dsh plugin --profile smoke add /path/to/advisers/packages/core /path/to/advisers/packages/dsh-advisers
+```
+
+## Manifest
+
+- `dsh.bundle.patch = ./cordis.patch.yml`
+- `engines.dsh = >=0.2.1-rc.5 <0.3.0`
+- peer deps: `@deepseek-ai/cordis`, `@deepseek-ai/dsh-tools`, `advisers-core`
+
+## Smoke
+
+```sh
+TMP=$(mktemp -d)
+DSH_HOME="$TMP" dsh plugin --profile smoke add \
+  ./packages/core ./packages/dsh-advisers
+DSH_HOME="$TMP" dsh --profile smoke --dump-config | grep -A4 dsh-advisers
+```
+
+The bundle installs and composes. A full boot starts the Web UI and needs a
+model key; it is not part of CI.
 
 ## License
 
