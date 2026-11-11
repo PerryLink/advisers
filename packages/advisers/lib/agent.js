@@ -63,6 +63,9 @@ export const LOCAL_TOOLS = [
   tool('routine_view', 'Read one active routine by id. Use the routine index in context to choose.', {
     id: { type: 'string' },
   }, ['id']),
+  tool('search_turns', 'Search older conversation turns by keyword when the current window is insufficient.', {
+    query: { type: 'string' },
+  }, ['query']),
 ]
 
 function validateTemplate(name, data) {
@@ -130,7 +133,7 @@ function writeTarget(name, args, cwd) {
   return null
 }
 
-export async function executeTool(name, args, { cwd = process.cwd(), ledger, backupDir } = {}) {
+export async function executeTool(name, args, { cwd = process.cwd(), ledger, backupDir, store } = {}) {
   if (name === 'office_build' || name === 'office_template') return runOfficeTool(name, args, cwd, backupDir)
   if (name === 'file_write') {
     if (typeof args.content !== 'string' || Buffer.byteLength(args.content) > MAX_FILE_BYTES) throw new Error('content is missing or too large')
@@ -145,6 +148,10 @@ export async function executeTool(name, args, { cwd = process.cwd(), ledger, bac
     const content = await readFile(path, 'utf8')
     if (Buffer.byteLength(content) > MAX_FILE_BYTES) throw new Error('file is too large')
     return { ok: true, artifact: false, path, content }
+  }
+  if (name === 'search_turns') {
+    const rows = store?.searchTurns(args.query, { limit: 6 }) ?? []
+    return { ok: true, artifact: false, results: rows.map((r) => ({ seq: r.seq, role: r.role, content: r.content.slice(0, 300) })) }
   }
   if (name === 'routine_view') {
     const routine = ledger?.listRoutines().find((r) => r.id === args.id && (r.status === 'active' || r.status === 'stale'))
@@ -181,6 +188,7 @@ export async function runAgent({
   confirm,
   force = false,
   backupDir,
+  store,
   history = [],
   summary = '',
   ledger,
@@ -211,7 +219,7 @@ export async function runAgent({
             return { reply: `未覆盖 ${target}。如需覆盖，请确认或设置 ADVISERS_FORCE=1。`, artifacts: [...new Set(artifacts)], toolLog, declined: true, steps: step + 1 }
           }
         }
-        payload = await executeTool(name, args, { cwd, ledger, backupDir })
+        payload = await executeTool(name, args, { cwd, ledger, backupDir, store })
         if (payload.artifact && payload.path) artifacts.push(payload.path)
       } catch (error) {
         payload = { ok: false, error: error instanceof Error ? error.message : String(error) }

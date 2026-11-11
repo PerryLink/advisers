@@ -80,6 +80,11 @@ CREATE TRIGGER IF NOT EXISTS turns_au AFTER UPDATE ON turns BEGIN
   INSERT INTO turns_fts(turns_fts, rowid, content) VALUES ('delete', old.rowid, old.content);
   INSERT INTO turns_fts(rowid, content) VALUES (new.rowid, new.content);
 END;
+CREATE TABLE IF NOT EXISTS summary_versions (
+  conversation_id TEXT NOT NULL, version INTEGER NOT NULL, summary TEXT NOT NULL,
+  through_seq INTEGER NOT NULL, pins TEXT, created_at TEXT NOT NULL,
+  PRIMARY KEY (conversation_id, version)
+);
 CREATE TABLE IF NOT EXISTS task_runs (
   id TEXT PRIMARY KEY, conversation_id TEXT NOT NULL, task TEXT NOT NULL,
   tools TEXT NOT NULL, artifacts TEXT NOT NULL, outcome TEXT NOT NULL, created_at TEXT NOT NULL
@@ -109,7 +114,7 @@ export class SqliteStore {
   migrate() {
     const row = this.db.prepare('SELECT value FROM meta WHERE key = ?').get('schema_version')
     const current = row ? Number(row.value) : 0
-    if (current >= 14) return
+    if (current >= 15) return
     this.db.exec('BEGIN')
     try {
       this.db.exec(`CREATE TABLE IF NOT EXISTS seen_events (
@@ -160,7 +165,12 @@ export class SqliteStore {
       for (const [name, type] of [['valid_from','TEXT'],['valid_to','TEXT'],['expired_at','TEXT'],['evidence','TEXT'],['supersedes','TEXT'],['superseded_by','TEXT'],['shadowed_by','TEXT'],['last_seen_at','TEXT'],['deleted_at','TEXT'],['deleted_reason','TEXT']]) {
         if (!factCols.includes(name)) this.db.exec(`ALTER TABLE facts ADD COLUMN ${name} ${type}`)
       }
-      this.db.exec(`CREATE TABLE IF NOT EXISTS task_runs (
+      this.db.exec(`CREATE TABLE IF NOT EXISTS summary_versions (
+  conversation_id TEXT NOT NULL, version INTEGER NOT NULL, summary TEXT NOT NULL,
+  through_seq INTEGER NOT NULL, pins TEXT, created_at TEXT NOT NULL,
+  PRIMARY KEY (conversation_id, version)
+);
+CREATE TABLE IF NOT EXISTS task_runs (
   id TEXT PRIMARY KEY, conversation_id TEXT NOT NULL, task TEXT NOT NULL,
   tools TEXT NOT NULL, artifacts TEXT NOT NULL, outcome TEXT NOT NULL, created_at TEXT NOT NULL
 );
@@ -171,11 +181,21 @@ CREATE TABLE IF NOT EXISTS nudges (
       const nudgeCols = this.db.prepare('PRAGMA table_info(nudges)').all().map((c) => c.name)
       if (!nudgeCols.includes('outcome')) this.db.exec("ALTER TABLE nudges ADD COLUMN outcome TEXT NOT NULL DEFAULT 'pending'")
       if (!nudgeCols.includes('outcome_at')) this.db.exec('ALTER TABLE nudges ADD COLUMN outcome_at TEXT')
-      this.db.exec(`CREATE TABLE IF NOT EXISTS task_runs (
+      this.db.exec(`CREATE TABLE IF NOT EXISTS summary_versions (
+  conversation_id TEXT NOT NULL, version INTEGER NOT NULL, summary TEXT NOT NULL,
+  through_seq INTEGER NOT NULL, pins TEXT, created_at TEXT NOT NULL,
+  PRIMARY KEY (conversation_id, version)
+);
+CREATE TABLE IF NOT EXISTS task_runs (
         id TEXT PRIMARY KEY, conversation_id TEXT NOT NULL, task TEXT NOT NULL,
         tools TEXT NOT NULL, artifacts TEXT NOT NULL, outcome TEXT NOT NULL, created_at TEXT NOT NULL
       )`)
-      this.db.prepare('INSERT OR REPLACE INTO meta(key,value) VALUES(?,?)').run('schema_version', '14')
+      this.db.exec(`CREATE TABLE IF NOT EXISTS summary_versions (
+        conversation_id TEXT NOT NULL, version INTEGER NOT NULL, summary TEXT NOT NULL,
+        through_seq INTEGER NOT NULL, pins TEXT, created_at TEXT NOT NULL,
+        PRIMARY KEY (conversation_id, version)
+      )`)
+      this.db.prepare('INSERT OR REPLACE INTO meta(key,value) VALUES(?,?)').run('schema_version', '15')
       this.db.exec('COMMIT')
     } catch (error) {
       this.db.exec('ROLLBACK')
@@ -312,10 +332,21 @@ CREATE TABLE IF NOT EXISTS nudges (
     return r ? { conversationId: r.conversation_id, summary: r.summary, throughSeq: r.through_seq, updatedAt: r.updated_at } : undefined
   }
 
-  upsertSessionSummary({ conversationId, summary, throughSeq }) {
+  upsertSessionSummary({ conversationId, summary, throughSeq, pins }) {
+    const max = this.db.prepare('SELECT MAX(version) AS v FROM summary_versions WHERE conversation_id = ?').get(conversationId)?.v ?? 0
+    const version = max + 1
+    const at = new Date().toISOString()
+    this.db.prepare('INSERT INTO summary_versions(conversation_id,version,summary,through_seq,pins,created_at) VALUES(?,?,?,?,?,?)')
+      .run(conversationId, version, summary, throughSeq, pins ?? null, at)
     this.db.prepare(`INSERT INTO session_summaries(conversation_id,summary,through_seq,updated_at) VALUES(?,?,?,?)
       ON CONFLICT(conversation_id) DO UPDATE SET summary=excluded.summary, through_seq=excluded.through_seq, updated_at=excluded.updated_at`)
-      .run(conversationId, summary, throughSeq, new Date().toISOString())
+      .run(conversationId, summary, throughSeq, at)
+    return { version, summary, throughSeq, createdAt: at }
+  }
+
+  listSummaryVersions(conversationId) {
+    return this.db.prepare('SELECT * FROM summary_versions WHERE conversation_id = ? ORDER BY version DESC').all(conversationId)
+      .map((r) => ({ conversationId: r.conversation_id, version: r.version, summary: r.summary, throughSeq: r.through_seq, pins: r.pins ?? undefined, createdAt: r.created_at }))
   }
 
   countDeliveries() {

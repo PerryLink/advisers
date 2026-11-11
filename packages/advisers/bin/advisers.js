@@ -10,7 +10,7 @@ import { applyPreferenceDecay, buildRoutineCandidate, correctionStatement } from
 import { checkRoutine } from '../lib/routine.js'
 import { diffLatest, listBackups, undoLatest } from '../lib/undo.js'
 import { lintReview, materializeReview, reviewRun } from '../lib/review.js'
-import { buildHistory, buildOpening, buildPins, continuityProbes, ensurePins, shouldSummarize, summarizeTurns } from '../lib/context-window.js'
+import { buildHistory, buildOpening, buildPins, continuityProbes, ensurePins, fitHistory, shouldSummarize, summarizeTurns } from '../lib/context-window.js'
 
 let core
 if (process.env.ADVISERS_CORE_LOCAL === '1') {
@@ -193,6 +193,7 @@ Usage:
   advisers status             home/store/model/counts
   advisers history            recent conversations
   advisers search <text>       full-text search old turns
+  advisers compact ls|rollback summary versions
   advisers tick               due commitments within 24h
   advisers week               last 7 days
   advisers diff                show the last changed file
@@ -501,7 +502,7 @@ async function maybeSummarize(conversationId, { apiKey, baseUrl, model, ledger }
     }
     summary = ensurePins(summary, pins)
     if (pins && !continuityProbes({ summary, pins, turns: fresh }).ok) return
-    store.upsertSessionSummary({ conversationId, summary, throughSeq: cutoff })
+    store.upsertSessionSummary({ conversationId, summary, throughSeq: cutoff, pins })
   } catch {}
 }
 
@@ -576,14 +577,17 @@ async function runTurn({ runtime, ledger, text, conversationId, debug = false, c
     commitments: ledger.openCommitments(context.matter.id),
   })
   const prompt = pins ? `${context.prompt}\n<session-pins>\n${pins}\n</session-pins>` : context.prompt
+  const fitted = fitHistory({ system: prompt, summary: history.summary, history: history.turns, current: agentText, maxTokens: Number(process.env.ADVISERS_CONTEXT_TOKENS || 12000) })
+  if (fitted.trimmed) console.log(`[compact] 裁剪 ${fitted.trimmed} 轮旧历史`)
   const { reply, artifacts, toolLog } = await runAgent({
     runtime,
     text: agentText,
     context: { ...context, prompt },
-    history: history.turns,
+    history: fitted.history,
     summary: history.summary,
     ledger,
     backupDir: join(HOME, 'undo'),
+    store: dbStore(),
     apiKey,
     baseUrl: process.env.ADVISERS_BASE_URL || 'https://api.deepseek.com',
     model: process.env.ADVISERS_MODEL || 'deepseek-chat',
@@ -1612,6 +1616,17 @@ if (!command) {
     console.log(result.ok ? `已回滚：${result.path}` : `撤销失败：${result.error}`)
     if (!result.ok) process.exitCode = 1
   }
+} else if (command === 'compact') {
+  const store = dbStore()
+  const conversationId = latestConversationId()
+  if (args[0] === 'ls') {
+    for (const v of store?.listSummaryVersions(conversationId) ?? []) console.log(`${v.version}\t${v.throughSeq}\t${v.summary.slice(0, 100)}`)
+  } else if (args[0] === 'rollback') {
+    const version = Number(args[1])
+    const old = store?.listSummaryVersions(conversationId).find((v) => v.version === version)
+    if (!old) { console.error('usage: advisers compact rollback <version>'); process.exitCode = 1 }
+    else { store.upsertSessionSummary({ conversationId, summary: old.summary, throughSeq: old.throughSeq, pins: old.pins }); console.log(`restored summary v${version}`) }
+  } else { console.error('usage: advisers compact ls|rollback <version>'); process.exitCode = 1 }
 } else if (command === 'search') {
   const q = args.join(' ').trim()
   if (!q) { console.error('usage: advisers search <text>'); process.exitCode = 1 }

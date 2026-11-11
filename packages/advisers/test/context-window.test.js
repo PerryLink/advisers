@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict'
 import test from 'node:test'
-import { buildHistory, buildOpening, buildPins, continuityProbes, ensurePins, selectTurns, shouldSummarize, summarizeTurns } from '../lib/context-window.js'
+import { buildHistory, buildOpening, buildPins, continuityProbes, ensurePins, fitHistory, selectTurns, shouldSummarize, summarizeTurns } from '../lib/context-window.js'
 
 const turns = Array.from({ length: 30 }, (_, i) => ({ seq: i + 1, role: i % 2 ? 'assistant' : 'user', content: `turn ${i + 1}` }))
 
@@ -78,4 +78,12 @@ test('200-turn compaction keeps 20 turns and pins', () => {
   assert.equal(history.turns[0].seq, 181)
   assert.equal(history.turns.at(-1).seq, 200)
   assert.equal(continuityProbes({ summary, pins, turns: history.turns }).ok, true)
+})
+
+test('fitHistory drops oldest turns and throws when pins/system alone overflow', () => {
+  const history = Array.from({ length: 20 }, (_, i) => ({ seq: i + 1, role: 'user', content: 'x'.repeat(400) }))
+  const fit = fitHistory({ system: 's', current: 'c', history, maxTokens: 1000 })
+  assert.ok(fit.history.length < history.length)
+  assert.ok(fit.usedTokens <= 1000)
+  assert.throws(() => fitHistory({ system: 'x'.repeat(10000), history: [], maxTokens: 100 }), /budget exceeded/)
 })

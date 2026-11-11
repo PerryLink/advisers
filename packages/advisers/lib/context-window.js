@@ -97,3 +97,27 @@ export function ensurePins(summary, pins) {
   const missing = pins.split('\n').filter((line) => line.trim() && !summary.includes(line.replace(/^(hard|due):\s*/, '')))
   return missing.length ? `${pins}\n${summary}` : summary
 }
+
+export class BudgetOverflowError extends Error {
+  constructor(used, max) {
+    super(`context budget exceeded: ${used} > ${max} estimated tokens`)
+    this.name = 'BudgetOverflowError'
+    this.used = used
+    this.max = max
+  }
+}
+
+/** Keep history inside a hard budget; never silently truncate the system/pins. */
+export function fitHistory({ system = '', summary = '', history = [], current = '', maxTokens = 12000 } = {}) {
+  const kept = [...history]
+  const fixed = estimateTokens(system) + estimateTokens(summary) + estimateTokens(current)
+  let used = fixed + kept.reduce((n, t) => n + estimateTokens(t.content) + 4, 0)
+  let trimmed = 0
+  while (used > maxTokens && kept.length > 0) {
+    const removed = kept.shift()
+    used -= estimateTokens(removed.content) + 4
+    trimmed++
+  }
+  if (used > maxTokens) throw new BudgetOverflowError(used, maxTokens)
+  return { history: kept, usedTokens: used, trimmed }
+}
