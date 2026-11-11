@@ -30,17 +30,17 @@ export function applyPreferenceDecay(preferences, now = new Date(), days = 30) {
 }
 
 /** A successful multi-tool task becomes a draft routine, never auto-active. */
-export function buildRoutineCandidate({ text, toolLog = [] }) {
+export function buildRoutineCandidate({ text, toolLog = [], artifacts = [] }) {
   const tools = [...new Set(toolLog.map((t) => t.name).filter(Boolean))]
-  if (tools.length < 2) return null
+  if (tools.length < 3 || artifacts.length === 0) return null
   return {
-    name: text.slice(0, 60),
-    description: '从本地任务沉淀的流程草稿',
+    name: text.replace(/\s+/g, ' ').slice(0, 60),
+    description: '从一次多工具任务沉淀的流程草稿',
     trigger: [],
     steps: tools,
     preferences: [],
     pitfalls: [],
-    verification: ['产物已生成并记录 delivery'],
+    verification: artifacts.map((file) => `file:${file}`),
     createdBy: 'agent',
   }
 }

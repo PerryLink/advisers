@@ -22,9 +22,10 @@ test('preference decays every 30 days and deprecates below 0.3', () => {
 
 test('routine candidate requires at least two tools', () => {
   assert.equal(buildRoutineCandidate({ text: 'x', toolLog: [{ name: 'file_write' }] }), null)
-  const routine = buildRoutineCandidate({ text: '周报流程', toolLog: [{ name: 'office_template' }, { name: 'file_read' }, { name: 'office_template' }] })
+  const routine = buildRoutineCandidate({ text: '周报流程', artifacts: ['out/week.docx'], toolLog: [{ name: 'office_template' }, { name: 'file_read' }, { name: 'file_write' }] })
   assert.equal(routine.name, '周报流程')
-  assert.deepEqual(routine.steps, ['office_template', 'file_read'])
+  assert.deepEqual(routine.steps, ['office_template', 'file_read', 'file_write'])
+  assert.deepEqual(routine.verification, ['file:out/week.docx'])
   assert.equal(routine.createdBy, 'agent')
 })
 

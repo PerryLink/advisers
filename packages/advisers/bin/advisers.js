@@ -368,8 +368,9 @@ function tick(ledger, asJson = false) {
       store?.deleteMeta(`snooze:${c.id}`)
     }
     if (!c.dueAt || Date.parse(c.dueAt) > now + 86400_000) continue
-    const level = Date.parse(c.dueAt) < now ? 'L2' : 'L2'
-    if (store && store.countNudges(localDay, level) >= 3) continue
+    const dueDay = new Intl.DateTimeFormat('en-CA', { timeZone: 'Asia/Shanghai' }).format(new Date(c.dueAt))
+    let level = (Date.parse(c.dueAt) < now || dueDay === localDay) ? 'L2' : 'L1'
+    if (level === 'L2' && store && store.countNudges(localDay, 'L2') >= 3) level = 'L1'
     const nudge = store?.addNudge({ localDay, level, commitmentId: c.id, body: c.action })
     if (store && !nudge) continue
     due.push({ ...c, level })
@@ -380,7 +381,7 @@ function tick(ledger, asJson = false) {
     return
   }
   if (!due.length) { console.log('今天到期：无'); return }
-  for (const c of due) console.log(`${Date.parse(c.dueAt) < now ? '逾期' : '今天到期'}：${c.action}（${c.dueAt}）`)
+  for (const c of due) console.log(`[${c.level}] ${Date.parse(c.dueAt) < now ? '逾期' : '今天到期'}：${c.action}（${c.dueAt}）`)
 }
 
 function printAudit() {
@@ -602,7 +603,7 @@ async function runTurn({ runtime, ledger, text, conversationId, debug = false, c
       dbStore()?.appendAudit({ actor: 'local', action: 'delivery', allowed: true, reason: artifacts.join(',') })
     } catch {}
   }
-  const candidate = artifacts.length && toolLog.length >= 3 ? buildRoutineCandidate({ text, toolLog }) : null
+  const candidate = buildRoutineCandidate({ text, toolLog, artifacts })
   if (candidate && !ledger.listRoutines().some((r) => r.name === candidate.name)) {
     try {
       const routine = ledger.addRoutine(candidate)
@@ -657,10 +658,7 @@ async function repl() {
   }
   try {
     const latest = dbStore()?.listSessions(1)[0]
-    if (latest) {
-      console.log(`resume: ${latest.title} [${latest.conversationId}]`)
-      printOpening(latest.conversationId)
-    }
+    if (latest) printOpening(latest.conversationId)
   } catch {}
   console.log('/help for commands, /quit to leave')
 
@@ -1036,7 +1034,8 @@ function routine(sub, arg, arg2) {
       if (!pending) { console.error(`unknown or closed routine patch: ${arg}`); process.exitCode = 1; return }
       const routine = ledger.listRoutines().find((r) => r.id === pending.routineId)
       if (!routine) { console.error(`unknown routine: ${pending.routineId}`); process.exitCode = 1; return }
-      const check = checkRoutine(routine)
+      const candidate = { ...routine, ...pending.changes }
+      const check = checkRoutine(candidate)
       if (!check.ok) {
         console.error('routine checks failed; patch not applied')
         for (const item of check.results.filter((r) => !r.ok)) console.error(`FAIL ${item.entry}`)
@@ -1483,9 +1482,13 @@ if (!command) {
     const evidence = flags.evidence
     if (!id || !evidence) { console.error('usage: advisers commit done <id> --evidence "<证据/原话>"'); process.exitCode = 1 }
     else {
-      ledger.completeCommitment(id, [{ sessionId: latestConversationId(), turnId: 'cli', quote: String(evidence) }])
-      saveLedger(ledger)
-      console.log(`done: ${id}`)
+      if (String(evidence).startsWith('file:') && !existsSync(String(evidence).slice(5))) {
+        console.error(`evidence file not found: ${String(evidence).slice(5)}`); process.exitCode = 1
+      } else {
+        ledger.completeCommitment(id, [{ sessionId: latestConversationId(), turnId: 'cli', quote: String(evidence) }])
+        saveLedger(ledger)
+        console.log(`done: ${id}`)
+      }
     }
   } else { console.error('usage: advisers commit add|ls|done'); process.exitCode = 1 }
 } else if (command === 'search') {
