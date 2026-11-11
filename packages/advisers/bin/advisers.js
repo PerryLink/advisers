@@ -181,6 +181,11 @@ function brief(text) {
 
 function routine(sub, arg) {
   const ledger = loadLedger()
+  if (typeof ledger.addRoutine !== 'function') {
+    console.error('routine requires advisers-core@0.1.0-preview.3 or newer')
+    process.exitCode = 1
+    return
+  }
   if (sub === 'ls' || !sub) {
     const rows = ledger.listRoutines()
     if (!rows.length) {
