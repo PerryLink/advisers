@@ -27,3 +27,10 @@ test('routine candidate requires at least two tools', () => {
   assert.deepEqual(routine.steps, ['office_template', 'file_read'])
   assert.equal(routine.createdBy, 'agent')
 })
+
+test('hard constraints never decay or get deprecated', () => {
+  const prefs = [{ priority: 'hard', status: 'confirmed', confidence: 0.9, validFrom: '2024-01-01T00:00:00Z' }]
+  applyPreferenceDecay(prefs, new Date('2026-11-11T00:00:00Z'))
+  assert.equal(prefs[0].confidence, 0.9)
+  assert.equal(prefs[0].status, 'confirmed')
+})

@@ -120,3 +120,45 @@ test('turns and session summaries persist across reopen', () => {
     rmSync(dir, { recursive: true, force: true })
   }
 })
+
+test('turn search handles Chinese short queries and purge removes FTS rows', () => {
+  const dir = mkdtempSync(join(tmpdir(), 'advisers-fts-'))
+  const db = join(dir, 'state.db')
+  try {
+    const store = new SqliteStore(db)
+    store.addTurn({ conversationId: 'c1', role: 'user', content: '预算总额是420' })
+    store.addTurn({ conversationId: 'c1', role: 'assistant', content: '收到' })
+    assert.equal(store.searchTurns('预算', { conversationId: 'c1' }).length, 1)
+    assert.equal(store.searchTurns('总额是', { conversationId: 'c1' }).length, 1)
+    store.purgeMatterData('missing')
+    store.close()
+  } finally {
+    rmSync(dir, { recursive: true, force: true })
+  }
+})
+
+test('fact temporal/authority fields survive SQLite round-trip', () => {
+  const dir = mkdtempSync(join(tmpdir(), 'advisers-facts-'))
+  const db = join(dir, 'state.db')
+  try {
+    const store = new SqliteStore(db)
+    const ledger = new Ledger()
+    const matter = ledger.addMatter({ title: 'm' })
+    const first = ledger.remember({ matterId: matter.id, subject: 'u', predicate: 'city', object: '上海' })
+    const second = ledger.remember({ matterId: matter.id, subject: 'u', predicate: 'city', object: '北京', evidence: [{ quote: '改到北京' }] })
+    store.save(ledger.toJSON())
+    store.close()
+    const again = new SqliteStore(db)
+    const loaded = Ledger.fromJSON(again.load())
+    const facts = loaded.listFacts(matter.id, true)
+    assert.equal(facts.length, 2)
+    const current = loaded.listFacts(matter.id)
+    assert.equal(current.length, 1)
+    assert.equal(current[0].object, '北京')
+    assert.equal(current[0].evidence?.[0]?.quote, '改到北京')
+    assert.equal(loaded.factHistory(current[0].id).length, 2)
+    again.close()
+  } finally {
+    rmSync(dir, { recursive: true, force: true })
+  }
+})

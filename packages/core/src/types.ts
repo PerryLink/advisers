@@ -24,7 +24,7 @@ export interface Matter {
   updatedAt: IsoDate
 }
 
-export type Authority = 'user' | 'tool' | 'inferred'
+export type Authority = 'user' | 'tool' | 'inferred' | 'import'
 export type FactStatus = 'candidate' | 'confirmed' | 'superseded' | 'deleted'
 
 export interface SourceRef {
@@ -41,11 +41,18 @@ export interface Fact {
   validFrom?: IsoDate
   validTo?: IsoDate
   recordedAt: IsoDate
+  expiredAt?: IsoDate
   authority: Authority
   confidence: number
   source?: SourceRef
+  evidence?: SourceRef[]
   status: FactStatus
   supersedes?: Id
+  supersededBy?: Id
+  shadowedBy?: Id
+  lastSeenAt?: IsoDate
+  deletedAt?: IsoDate
+  deletedReason?: string
 }
 
 export type Debtor = 'user' | 'agent' | `third:${string}`
@@ -70,6 +77,7 @@ export interface Commitment {
   evidence: CommitmentEvidence[]
   capability: Capability
   supersedes?: Id
+  doneAt?: IsoDate
 }
 
 export type PreferenceKind =

@@ -8,7 +8,7 @@ import { chatCompletion } from '../lib/model.js'
 import { extractAttachment } from '../lib/attachments.js'
 import { applyPreferenceDecay, buildRoutineCandidate, correctionStatement } from '../lib/learning.js'
 import { checkRoutine } from '../lib/routine.js'
-import { buildHistory, buildOpening, shouldSummarize, summarizeTurns } from '../lib/context-window.js'
+import { buildHistory, buildOpening, buildPins, shouldSummarize, summarizeTurns } from '../lib/context-window.js'
 
 let core
 if (process.env.ADVISERS_CORE_LOCAL === '1') {
@@ -190,6 +190,11 @@ Usage:
                               one-shot task, or start the local conversation
   advisers status             home/store/model/counts
   advisers history            recent conversations
+  advisers search <text>       full-text search old turns
+  advisers tick               due commitments within 24h
+  advisers week               last 7 days
+  advisers memory             what I remember
+  advisers commit add|ls|done commitments
   advisers deliveries         recent generated files
   advisers ls                 list matters
   advisers why <pref-id>      explain a preference
@@ -250,7 +255,7 @@ function modelLabel() {
   return `${process.env.ADVISERS_MODEL || 'deepseek-chat'} @ ${process.env.ADVISERS_BASE_URL || 'https://api.deepseek.com'}`
 }
 
-function learnPreference(ledger, statement, quote) {
+function learnPreference(ledger, statement, quote, { explicit = false } = {}) {
   const existing = ledger.listPreferences({ includeCandidates: true }).find((p) => p.statement === statement)
   if (existing) {
     existing.confidence = Math.min(1, existing.confidence + 0.2)
@@ -261,9 +266,9 @@ function learnPreference(ledger, statement, quote) {
   const pref = ledger.addPreference({
     kind: 'preference',
     statement,
-    source: { type: 'inferred', quote },
-    confidence: 0.5,
-    status: 'candidate',
+    source: { type: explicit ? 'user_explicit' : 'inferred', quote },
+    confidence: explicit ? 0.8 : 0.5,
+    status: explicit ? 'confirmed' : 'candidate',
   })
   return { preference: pref, promoted: false }
 }
@@ -288,6 +293,76 @@ function purgeMatter(id, confirmed) {
   dbStore()?.appendAudit({ actor: 'local', action: 'matter.purge', allowed: true, reason: `${id} ${JSON.stringify(counts)}` })
   saveLedger(ledger)
   console.log(`purged: ${JSON.stringify(counts)} sqlite=${JSON.stringify(sqlite ?? {})}`)
+}
+
+function parseFlags(args) {
+  const flags = {}
+  const positional = []
+  for (let i = 0; i < args.length; i++) {
+    if (args[i].startsWith('--')) {
+      const key = args[i].slice(2)
+      flags[key] = args[i + 1] && !args[i + 1].startsWith('--') ? args[++i] : true
+    } else positional.push(args[i])
+  }
+  return { flags, positional }
+}
+
+function activeMatterId(ledger, explicit) {
+  if (explicit) return explicit
+  try {
+    const latest = dbStore()?.listSessions(1)[0]
+    if (latest) return latest.matterId
+  } catch {}
+  return ledger.listMatters()[0]?.id ?? ledger.addMatter({ title: '默认事项' }).id
+}
+
+function printCommitments(ledger) {
+  const rows = ledger.listCommitments()
+  if (!rows.length) { console.log('没有承诺'); return }
+  for (const c of rows) console.log(`${c.id}\t${c.status}\t${c.dueAt ?? '无截止'}\t${c.action}`)
+}
+
+function printMemory(ledger) {
+  const prefs = ledger.listPreferences({ includeCandidates: true })
+  const commitments = ledger.listCommitments()
+  const routines = ledger.listRoutines()
+  console.log('记忆 · 我这边存了什么')
+  console.log(`关于你（${prefs.length}）`)
+  for (const p of prefs.slice(0, 6)) console.log(`  ${p.id}  ${p.statement}  [${p.status}/${p.priority}]`)
+  console.log(`承诺（${commitments.filter((c) => c.status === 'open').length} 未完成 / ${commitments.length} 总数）`)
+  for (const c of commitments.slice(0, 6)) console.log(`  ${c.id}  ${c.status}  ${c.action}${c.dueAt ? `  ${c.dueAt}` : ''}`)
+  console.log(`流程（${routines.filter((r) => r.status === 'active').length} 生效 / ${routines.length} 总数）`)
+  for (const r of routines.slice(0, 6)) console.log(`  ${r.id}  ${r.status}  ${r.name}`)
+  console.log('输入 /why <pref-id> 看依据；/forget <pref-id> 删除；/audit 看审计。')
+}
+
+function printWeek(ledger) {
+  const now = Date.now()
+  const weekAgo = now - 7 * 86400_000
+  const commitments = ledger.listCommitments()
+  const due = commitments.filter((c) => c.dueAt && Date.parse(c.dueAt) >= weekAgo)
+  const done = due.filter((c) => c.status === 'done')
+  const open = due.filter((c) => c.status === 'open')
+  const overdue = open.filter((c) => Date.parse(c.dueAt) < now)
+  let deliveries = []
+  try { deliveries = dbStore()?.listDeliveries(100) ?? [] } catch {}
+  const weekDeliveries = deliveries.filter((d) => Date.parse(d.createdAt) >= weekAgo)
+  console.log(`本周（${new Date(weekAgo).toISOString().slice(0, 10)} – ${new Date(now).toISOString().slice(0, 10)}）`)
+  console.log(`承诺：到期 ${due.length} 件，完成 ${done.length} 件，未完成 ${open.length} 件，逾期 ${overdue.length} 件。`)
+  for (const c of due.slice(0, 5)) console.log(`  ${c.status === 'done' ? '✓' : '○'} ${c.action}${c.dueAt ? `（${c.dueAt.slice(0, 10)}）` : ''}`)
+  console.log(`交付：${weekDeliveries.length} 个文件。`)
+  console.log('下周一件：' + (open[0]?.action ?? '先定一个承诺或交付。'))
+}
+
+function tick(ledger, asJson = false) {
+  const now = Date.now()
+  const due = ledger.openCommitments().filter((c) => c.dueAt && Date.parse(c.dueAt) <= now + 86400_000)
+  if (asJson) {
+    console.log(JSON.stringify({ now: new Date(now).toISOString(), due }, null, 2))
+    return
+  }
+  if (!due.length) { console.log('今天到期：无'); return }
+  for (const c of due) console.log(`${Date.parse(c.dueAt) < now ? '逾期' : '今天到期'}：${c.action}（${c.dueAt}）`)
 }
 
 function printAudit() {
@@ -361,10 +436,13 @@ async function maybeSummarize(conversationId, { apiKey, baseUrl, model } = {}) {
   try {
     const store = dbStore()
     if (!store) return
-    const turns = store.listTurns(conversationId, 200)
+    const turns = store.listTurns(conversationId, 500)
     const old = store.getSessionSummary(conversationId)
-    if (!shouldSummarize(turns, old?.throughSeq ?? 0, 10)) return
-    const fresh = turns.filter((t) => t.seq > (old?.throughSeq ?? 0))
+    if (!shouldSummarize(turns, old?.throughSeq ?? 0, 10, 20)) return
+    const latest = turns.at(-1).seq
+    const cutoff = Math.max(0, latest - 20)
+    const fresh = turns.filter((t) => t.seq > (old?.throughSeq ?? 0) && t.seq <= cutoff)
+    if (!fresh.length) return
     let summary = summarizeTurns(fresh, old?.summary ?? '')
     if (apiKey && process.env.ADVISERS_LLM_SUMMARY !== '0') {
       try {
@@ -381,7 +459,7 @@ async function maybeSummarize(conversationId, { apiKey, baseUrl, model } = {}) {
         if (response.content?.trim()) summary = response.content.trim()
       } catch {}
     }
-    store.upsertSessionSummary({ conversationId, summary, throughSeq: turns.at(-1).seq })
+    store.upsertSessionSummary({ conversationId, summary, throughSeq: cutoff })
   } catch {}
 }
 
@@ -451,13 +529,18 @@ async function runTurn({ runtime, ledger, text, conversationId, debug = false, c
     return intent?.questions?.[0]
   }
   const history = loadHistory(conversationId)
+  const pins = buildPins({
+    preferences: ledger.listPreferences({ matterId: context.matter.id }),
+    commitments: ledger.openCommitments(context.matter.id),
+  })
+  const prompt = pins ? `${context.prompt}\n<session-pins>\n${pins}\n</session-pins>` : context.prompt
   const { reply, artifacts, toolLog } = await runAgent({
     runtime,
     text: agentText,
+    context: { ...context, prompt },
     history: history.turns,
     summary: history.summary,
     ledger,
-    context,
     apiKey,
     baseUrl: process.env.ADVISERS_BASE_URL || 'https://api.deepseek.com',
     model: process.env.ADVISERS_MODEL || 'deepseek-chat',
@@ -485,7 +568,7 @@ async function runTurn({ runtime, ledger, text, conversationId, debug = false, c
       dbStore()?.appendAudit({ actor: 'local', action: 'delivery', allowed: true, reason: artifacts.join(',') })
     } catch {}
   }
-  const candidate = buildRoutineCandidate({ text, toolLog })
+  const candidate = artifacts.length && toolLog.length >= 3 ? buildRoutineCandidate({ text, toolLog }) : null
   if (candidate && !ledger.listRoutines().some((r) => r.name === candidate.name)) {
     try {
       const routine = ledger.addRoutine(candidate)
@@ -534,8 +617,10 @@ async function repl() {
   let pendingFiles = []
   let lastTask
   console.log('advisers · local')
-  console.log(`model: ${modelLabel()}`)
-  console.log(`home:  ${HOME}`)
+  if (process.env.ADVISERS_DEBUG === '1') {
+    console.log(`model: ${modelLabel()}`)
+    console.log(`home:  ${HOME}`)
+  }
   try {
     const latest = dbStore()?.listSessions(1)[0]
     if (latest) {
@@ -556,10 +641,10 @@ async function repl() {
       console.log(`${path} 已存在`)
       return askYesNo(rl, '覆盖？[y/N] ', false)
     }
+    lastTask = { text: taskText, files: [...files] }
     try {
       const question = await runTurn({ runtime, ledger, text: taskText, conversationId, debug, confirm, attachments: files })
       saveLedger(ledger)
-      lastTask = { text: taskText, files: [...files] }
       pendingFiles = []
       if (question) {
         let answer
@@ -596,6 +681,13 @@ async function repl() {
       console.log('  /clear          clear pending attachments')
       console.log('  /retry          rerun the last task')
       console.log('  /correct <text>  record a correction; 2nd time promotes it')
+      console.log('  /memory         what I remember')
+      console.log('  /commit add <action> --quote <text> [--due ISO]')
+      console.log('  /commit ls')
+      console.log('  /done <id> --evidence <text>')
+      console.log('  /search <text>  full-text search old turns')
+      console.log('  /tick           due within 24h')
+      console.log('  /week           last 7 days')
       console.log('  /links          list candidate/confirmed links')
       console.log('  /forget <id>    forget a preference')
       console.log('  /prefs          list preferences (incl. candidates)')
@@ -631,6 +723,38 @@ async function repl() {
     }
     if (text === '/prefs') { printPreferences(); continue }
     if (text === '/links') { printLinks(); continue }
+    if (text === '/memory') { printMemory(ledger); continue }
+    if (text === '/tick') { tick(ledger); continue }
+    if (text.startsWith('/search ')) {
+      const q = text.slice(8).trim()
+      const rows = dbStore()?.searchTurns(q, { limit: 10 }) ?? []
+      if (!rows.length) console.log('没有匹配')
+      for (const r of rows) console.log(`${r.seq}\t${r.role}\t${r.content.replace(/\s+/g, ' ').slice(0, 160)}`)
+      continue
+    }
+    if (text === '/week') { printWeek(ledger); continue }
+    if (text.startsWith('/commit ')) {
+      const { flags, positional } = parseFlags(text.slice(8).trim().split(/\s+/))
+      if (positional[0] === 'ls') { printCommitments(ledger); continue }
+      if (positional[0] === 'add') {
+        const action = positional.slice(1).join(' ')
+        if (!action || !flags.quote) { console.log('用法：/commit add <action> --quote <原话> [--due ISO]'); continue }
+        const c = ledger.addCommitment({ matterId: activeMatterId(ledger), debtor: flags.debtor ?? 'user', creditor: flags.creditor ?? 'me', action, dueAt: flags.due, capability: 'todo', evidence: [{ sessionId: conversationId, turnId: 'cli', quote: String(flags.quote) }] })
+        saveLedger(ledger)
+        console.log(`${c.id} open ${c.action}`)
+        continue
+      }
+      console.log('用法：/commit add ... 或 /commit ls'); continue
+    }
+    if (text.startsWith('/done ')) {
+      const { flags, positional } = parseFlags(text.slice(6).trim().split(/\s+/))
+      const id = positional[0]
+      if (!id || !flags.evidence) { console.log('用法：/done <id> --evidence <证据>'); continue }
+      ledger.completeCommitment(id, [{ sessionId: conversationId, turnId: 'cli', quote: String(flags.evidence) }])
+      saveLedger(ledger)
+      console.log(`done: ${id}`)
+      continue
+    }
     if (text.startsWith('/forget ')) {
       const id = text.slice(8).trim()
       const ok = ledger.forget('preference', id)
@@ -692,7 +816,7 @@ async function repl() {
     if (text.startsWith('/')) { console.log(`unknown command: ${text}; /help`); continue }
     const feedback = correctionStatement(text)
     if (feedback) {
-      const result = learnPreference(ledger, feedback, text)
+      const result = learnPreference(ledger, feedback, text, { explicit: /^(以后|记住|每次)/.test(text) })
       dbStore()?.appendAudit({ actor: 'local', action: 'correct', allowed: true, reason: feedback })
       saveLedger(ledger)
       console.log(`[learn] ${result.preference.id} conf=${result.preference.confidence.toFixed(2)} ${result.promoted ? '(confirmed)' : '(candidate; repeat to promote)'}`)
@@ -1285,6 +1409,52 @@ if (!command) {
   printHistory()
 } else if (command === 'deliveries') {
   printDeliveries()
+} else if (command === 'commit') {
+  const sub = args[0]
+  const ledger = loadLedger()
+  const { flags, positional } = parseFlags(args.slice(1))
+  if (sub === 'add') {
+    const action = positional.join(' ').trim()
+    if (!action || !flags.quote) { console.error('usage: advisers commit add "<action>" --quote "<原话>" [--due ISO] [--debtor user|agent] [--creditor name] [--matter id]'); process.exitCode = 1 }
+    else {
+      const c = ledger.addCommitment({
+        matterId: activeMatterId(ledger, flags.matter),
+        debtor: flags.debtor ?? 'user',
+        creditor: flags.creditor ?? 'me',
+        action,
+        dueAt: flags.due,
+        timezone: flags.tz ?? 'Asia/Shanghai',
+        capability: flags.capability ?? 'todo',
+        evidence: [{ sessionId: latestConversationId(), turnId: 'cli', quote: String(flags.quote) }],
+      })
+      saveLedger(ledger)
+      console.log(`${c.id} open ${c.action}${c.dueAt ? ` due ${c.dueAt}` : ''}`)
+    }
+  } else if (sub === 'ls') printCommitments(ledger)
+  else if (sub === 'done') {
+    const id = positional[0]
+    const evidence = flags.evidence
+    if (!id || !evidence) { console.error('usage: advisers commit done <id> --evidence "<证据/原话>"'); process.exitCode = 1 }
+    else {
+      ledger.completeCommitment(id, [{ sessionId: latestConversationId(), turnId: 'cli', quote: String(evidence) }])
+      saveLedger(ledger)
+      console.log(`done: ${id}`)
+    }
+  } else { console.error('usage: advisers commit add|ls|done'); process.exitCode = 1 }
+} else if (command === 'search') {
+  const q = args.join(' ').trim()
+  if (!q) { console.error('usage: advisers search <text>'); process.exitCode = 1 }
+  else {
+    const rows = dbStore()?.searchTurns(q, { limit: 10 }) ?? []
+    if (!rows.length) console.log('没有匹配')
+    for (const r of rows) console.log(`${r.seq}\t${r.role}\t${r.content.replace(/\s+/g, ' ').slice(0, 160)}`)
+  }
+} else if (command === 'tick') {
+  tick(loadLedger(), args.includes('--json'))
+} else if (command === 'memory') {
+  printMemory(loadLedger())
+} else if (command === 'week') {
+  printWeek(loadLedger())
 } else if (command === 'prefs') {
   printPreferences()
 } else if (command === 'audit') {
@@ -1301,7 +1471,7 @@ if (!command) {
   if (!statement) { console.error('usage: advisers correct <statement>'); process.exitCode = 1 }
   else {
     const ledger = loadLedger()
-    const result = learnPreference(ledger, statement, statement)
+    const result = learnPreference(ledger, statement, statement, { explicit: true })
     dbStore()?.appendAudit({ actor: 'local', action: 'correct', allowed: true, reason: statement })
     saveLedger(ledger)
     console.log(`[learn] ${result.preference.id} conf=${result.preference.confidence.toFixed(2)}${result.promoted ? ' confirmed' : ' candidate'}`)

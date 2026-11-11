@@ -17,6 +17,7 @@ export function applyPreferenceDecay(preferences, now = new Date(), days = 30) {
   const changed = []
   for (const pref of preferences) {
     if (pref.status === 'deprecated') continue
+    if (pref.priority === 'hard') continue
     const last = new Date(pref.lastConfirmed ?? pref.validFrom).getTime()
     const ageDays = (now.getTime() - last) / 86_400_000
     if (!Number.isFinite(ageDays) || ageDays < days) continue

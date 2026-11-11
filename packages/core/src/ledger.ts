@@ -10,6 +10,7 @@ import type {
   MatterLinkType,
   Routine,
   RoutinePatch,
+  SourceRef,
   PreferenceKind,
   PreferenceScope,
   UpdateProposal,
@@ -34,6 +35,9 @@ export interface FactInput {
   authority?: Fact['authority']
   confidence?: number
   source?: Fact['source']
+  evidence?: SourceRef[]
+  validFrom?: string
+  validTo?: string
 }
 
 export interface PreferenceInput {
@@ -107,36 +111,79 @@ export class Ledger {
     return [...this.matters.values()].filter((m) => m.status === status)
   }
 
-  remember(input: FactInput): Fact {
-    const existing = [...this.facts.values()].find(
-      (f) =>
-        f.status !== 'deleted' &&
-        f.subject === input.subject &&
-        f.predicate === input.predicate &&
-        f.object === input.object,
-    )
-    if (existing) return existing
+  private authorityRank(authority: Fact['authority']): number {
+    return authority === 'user' ? 100 : authority === 'import' ? 60 : authority === 'tool' ? 60 : 40
+  }
 
-    const fact: Fact = {
-      id: this.ids.next('fact'),
-      matterId: input.matterId,
-      subject: input.subject,
-      predicate: input.predicate,
-      object: input.object,
-      recordedAt: this.clock.now(),
-      authority: input.authority ?? 'user',
-      confidence: input.confidence ?? 0.9,
-      source: input.source,
-      status: 'confirmed',
+  remember(input: FactInput): Fact {
+    const key = (f: Fact): boolean =>
+      f.status === 'confirmed' &&
+      !f.expiredAt &&
+      f.subject === input.subject &&
+      f.predicate === input.predicate &&
+      (f.matterId ?? '') === (input.matterId ?? '')
+    const current = [...this.facts.values()].find(key)
+    const incomingRank = this.authorityRank(input.authority ?? 'user')
+    const now = this.clock.now()
+    if (current && current.object === input.object) {
+      current.evidence = [...(current.evidence ?? []), ...(input.evidence ?? (input.source ? [input.source] : []))]
+      if (!current.source && input.source) current.source = input.source
+      if (incomingRank > this.authorityRank(current.authority)) current.authority = input.authority ?? current.authority
+      current.lastSeenAt = now
+      return current
     }
+    if (current && incomingRank < this.authorityRank(current.authority)) {
+      const shadow: Fact = {
+        id: this.ids.next('fact'), matterId: input.matterId, subject: input.subject, predicate: input.predicate,
+        object: input.object, recordedAt: now, authority: input.authority ?? 'inferred',
+        confidence: input.confidence ?? 0.6, source: input.source, evidence: input.evidence,
+        status: 'candidate', shadowedBy: current.id, validFrom: input.validFrom, validTo: input.validTo,
+      }
+      this.facts.set(shadow.id, shadow)
+      return shadow
+    }
+    if (current) {
+      current.status = 'superseded'
+      current.validTo = input.validFrom ?? now
+      current.expiredAt = now
+    }
+    const fact: Fact = {
+      id: this.ids.next('fact'), matterId: input.matterId, subject: input.subject, predicate: input.predicate,
+      object: input.object, recordedAt: now, authority: input.authority ?? 'user',
+      confidence: input.confidence ?? 0.9, source: input.source, evidence: input.evidence ?? (input.source ? [input.source] : []),
+      status: (input.authority ?? 'user') === 'inferred' ? 'candidate' : 'confirmed',
+      validFrom: input.validFrom ?? now, validTo: input.validTo,
+      supersedes: current?.id,
+    }
+    if (current) current.supersededBy = fact.id
     this.facts.set(fact.id, fact)
     return fact
   }
 
-  listFacts(matterId?: Id): Fact[] {
+  listFacts(matterId?: Id, includeHistory = false): Fact[] {
     return [...this.facts.values()].filter(
-      (f) => f.status !== 'deleted' && (matterId ? f.matterId === matterId : true),
+      (f) =>
+        (includeHistory || (f.status === 'confirmed' && !f.expiredAt && !f.deletedAt)) &&
+        (matterId ? f.matterId === matterId : true),
     )
+  }
+
+  factHistory(id: Id): Fact[] {
+    const chain: Fact[] = []
+    let current = this.facts.get(id)
+    while (current) {
+      chain.unshift(current)
+      current = current.supersedes ? this.facts.get(current.supersedes) : undefined
+    }
+    return chain
+  }
+
+  searchFacts(query: string, { matterId, limit = 3 }: { matterId?: Id; limit?: number } = {}): Fact[] {
+    const terms = String(query).toLowerCase().split(/\s+/).filter(Boolean)
+    return this.listFacts(matterId).filter((f) => {
+      const text = `${f.subject} ${f.predicate} ${f.object}`.toLowerCase()
+      return terms.every((t) => text.includes(t))
+    }).sort((a, b) => this.authorityRank(b.authority) - this.authorityRank(a.authority) || b.recordedAt.localeCompare(a.recordedAt)).slice(0, limit)
   }
 
   addPreference(input: PreferenceInput): UserPreference {
@@ -194,11 +241,16 @@ export class Ledger {
     )
   }
 
+  listCommitments(matterId?: Id): Commitment[] {
+    return [...this.commitments.values()].filter((c) => (matterId ? c.matterId === matterId : true))
+  }
+
   completeCommitment(id: Id, evidence: CommitmentEvidence[]): Commitment {
     if (evidence.length === 0) throw new Error('done requires external evidence; model self-report is not evidence')
     const commitment = this.commitments.get(id)
     if (!commitment) throw new Error(`unknown commitment: ${id}`)
     commitment.status = 'done'
+    commitment.doneAt = this.clock.now()
     commitment.evidence.push(...evidence)
     return commitment
   }
@@ -209,6 +261,7 @@ export class Ledger {
       const fact = this.facts.get(id)
       if (!fact) return false
       fact.status = 'deleted'
+      fact.deletedAt = this.clock.now()
       return true
     }
     const pref = this.preferences.get(id)

@@ -144,15 +144,20 @@ export class AdvisersRuntime implements LinkHost {
       const other = this.ledger.getMatter(otherId)
       return other ? [{ matterId: other.id, title: other.title, why: `${link.type} link` }] : []
     })
+    const audience = event.conversationType === 'email' || event.conversationType === 'dm'
+      ? `${event.linkId}:${event.sender.id}`
+      : undefined
     const context = assembleContext({
       matter,
       ledger: this.ledger,
       budget: this.budget,
       clearance: this.clearance,
+      audience,
       soul: this.readSoul(),
       intent,
       related,
       routines: this.ledger.listRoutines(),
+      facts: this.ledger.searchFacts(event.text ?? '', { matterId }),
     })
 
     if (event.text) {

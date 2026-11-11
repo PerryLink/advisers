@@ -10,12 +10,14 @@ CREATE TABLE IF NOT EXISTS matters (
 CREATE TABLE IF NOT EXISTS facts (
   id TEXT PRIMARY KEY, matter_id TEXT, subject TEXT NOT NULL, predicate TEXT NOT NULL,
   object TEXT NOT NULL, recorded_at TEXT NOT NULL, authority TEXT NOT NULL, confidence REAL NOT NULL,
-  source TEXT, status TEXT NOT NULL
+  source TEXT, status TEXT NOT NULL,
+  valid_from TEXT, valid_to TEXT, expired_at TEXT, evidence TEXT, supersedes TEXT,
+  superseded_by TEXT, shadowed_by TEXT, last_seen_at TEXT, deleted_at TEXT, deleted_reason TEXT
 );
 CREATE TABLE IF NOT EXISTS commitments (
   id TEXT PRIMARY KEY, matter_id TEXT NOT NULL, debtor TEXT NOT NULL, creditor TEXT NOT NULL,
   action TEXT NOT NULL, due_at TEXT, timezone TEXT NOT NULL, status TEXT NOT NULL,
-  evidence TEXT NOT NULL, capability TEXT NOT NULL
+  evidence TEXT NOT NULL, capability TEXT NOT NULL, done_at TEXT
 );
 CREATE TABLE IF NOT EXISTS preferences (
   id TEXT PRIMARY KEY, kind TEXT NOT NULL, statement TEXT NOT NULL, scope TEXT NOT NULL,
@@ -67,6 +69,17 @@ CREATE TABLE IF NOT EXISTS session_summaries (
   conversation_id TEXT PRIMARY KEY, summary TEXT NOT NULL,
   through_seq INTEGER NOT NULL, updated_at TEXT NOT NULL
 );
+CREATE VIRTUAL TABLE IF NOT EXISTS turns_fts USING fts5(content, content='turns', content_rowid='rowid');
+CREATE TRIGGER IF NOT EXISTS turns_ai AFTER INSERT ON turns BEGIN
+  INSERT INTO turns_fts(rowid, content) VALUES (new.rowid, new.content);
+END;
+CREATE TRIGGER IF NOT EXISTS turns_ad AFTER DELETE ON turns BEGIN
+  INSERT INTO turns_fts(turns_fts, rowid, content) VALUES ('delete', old.rowid, old.content);
+END;
+CREATE TRIGGER IF NOT EXISTS turns_au AFTER UPDATE ON turns BEGIN
+  INSERT INTO turns_fts(turns_fts, rowid, content) VALUES ('delete', old.rowid, old.content);
+  INSERT INTO turns_fts(rowid, content) VALUES (new.rowid, new.content);
+END;
 CREATE TABLE IF NOT EXISTS meta (key TEXT PRIMARY KEY, value TEXT NOT NULL);
 `
 
@@ -87,7 +100,7 @@ export class SqliteStore {
   migrate() {
     const row = this.db.prepare('SELECT value FROM meta WHERE key = ?').get('schema_version')
     const current = row ? Number(row.value) : 0
-    if (current >= 8) return
+    if (current >= 11) return
     this.db.exec('BEGIN')
     try {
       this.db.exec(`CREATE TABLE IF NOT EXISTS seen_events (
@@ -120,7 +133,25 @@ export class SqliteStore {
         conversation_id TEXT PRIMARY KEY, summary TEXT NOT NULL,
         through_seq INTEGER NOT NULL, updated_at TEXT NOT NULL
       )`)
-      this.db.prepare('INSERT OR REPLACE INTO meta(key,value) VALUES(?,?)').run('schema_version', '8')
+      this.db.exec(`CREATE VIRTUAL TABLE IF NOT EXISTS turns_fts USING fts5(content, content='turns', content_rowid='rowid')`)
+      this.db.exec(`CREATE TRIGGER IF NOT EXISTS turns_ai AFTER INSERT ON turns BEGIN
+        INSERT INTO turns_fts(rowid, content) VALUES (new.rowid, new.content);
+      END`)
+      this.db.exec(`CREATE TRIGGER IF NOT EXISTS turns_ad AFTER DELETE ON turns BEGIN
+        INSERT INTO turns_fts(turns_fts, rowid, content) VALUES ('delete', old.rowid, old.content);
+      END`)
+      this.db.exec(`CREATE TRIGGER IF NOT EXISTS turns_au AFTER UPDATE ON turns BEGIN
+        INSERT INTO turns_fts(turns_fts, rowid, content) VALUES ('delete', old.rowid, old.content);
+        INSERT INTO turns_fts(rowid, content) VALUES (new.rowid, new.content);
+      END`)
+      try { this.db.exec("INSERT INTO turns_fts(turns_fts) VALUES('rebuild')") } catch {}
+      const commitmentCols = this.db.prepare('PRAGMA table_info(commitments)').all().map((c) => c.name)
+      if (!commitmentCols.includes('done_at')) this.db.exec('ALTER TABLE commitments ADD COLUMN done_at TEXT')
+      const factCols = this.db.prepare('PRAGMA table_info(facts)').all().map((c) => c.name)
+      for (const [name, type] of [['valid_from','TEXT'],['valid_to','TEXT'],['expired_at','TEXT'],['evidence','TEXT'],['supersedes','TEXT'],['superseded_by','TEXT'],['shadowed_by','TEXT'],['last_seen_at','TEXT'],['deleted_at','TEXT'],['deleted_reason','TEXT']]) {
+        if (!factCols.includes(name)) this.db.exec(`ALTER TABLE facts ADD COLUMN ${name} ${type}`)
+      }
+      this.db.prepare('INSERT OR REPLACE INTO meta(key,value) VALUES(?,?)').run('schema_version', '11')
       this.db.exec('COMMIT')
     } catch (error) {
       this.db.exec('ROLLBACK')
@@ -182,6 +213,22 @@ export class SqliteStore {
     return this.db.prepare('SELECT * FROM turns WHERE conversation_id = ? ORDER BY seq DESC LIMIT ?').all(conversationId, limit)
       .map((r) => ({ id: r.id, conversationId: r.conversation_id, seq: r.seq, role: r.role, content: r.content, createdAt: r.created_at }))
       .reverse()
+  }
+
+  searchTurns(query, { conversationId, limit = 8 } = {}) {
+    const q = String(query ?? '').trim()
+    if (!q) return []
+    const where = conversationId ? ' AND t.conversation_id = ?' : ''
+    const args = conversationId ? [q, conversationId, limit] : [q, limit]
+    try {
+      if (q.length >= 3) {
+        const rows = this.db.prepare(`SELECT t.* FROM turns_fts f JOIN turns t ON t.rowid = f.rowid WHERE turns_fts MATCH ?${where} ORDER BY rank LIMIT ?`).all(...args)
+        if (rows.length) return rows.map((r) => ({ id: r.id, conversationId: r.conversation_id, seq: r.seq, role: r.role, content: r.content, createdAt: r.created_at }))
+      }
+    } catch {}
+    const likeArgs = conversationId ? [`%${q}%`, conversationId, limit] : [`%${q}%`, limit]
+    const rows = this.db.prepare(`SELECT t.* FROM turns t WHERE t.content LIKE ?${where.replace('t.', 't.')} ORDER BY t.seq DESC LIMIT ?`).all(...likeArgs)
+    return rows.reverse().map((r) => ({ id: r.id, conversationId: r.conversation_id, seq: r.seq, role: r.role, content: r.content, createdAt: r.created_at }))
   }
 
   getSessionSummary(conversationId) {
@@ -269,13 +316,19 @@ export class SqliteStore {
       })),
       facts: all('SELECT * FROM facts').map((r) => ({
         id: r.id, matterId: r.matter_id ?? undefined, subject: r.subject, predicate: r.predicate,
-        object: r.object, recordedAt: r.recorded_at, authority: r.authority, confidence: r.confidence,
-        source: r.source ? parse(r.source, undefined) : undefined, status: r.status,
+        object: r.object, recordedAt: r.recorded_at, expiredAt: r.expired_at ?? undefined,
+        authority: r.authority, confidence: r.confidence,
+        source: r.source ? parse(r.source, undefined) : undefined,
+        evidence: r.evidence ? parse(r.evidence, undefined) : undefined,
+        status: r.status, validFrom: r.valid_from ?? undefined, validTo: r.valid_to ?? undefined,
+        supersedes: r.supersedes ?? undefined, supersededBy: r.superseded_by ?? undefined,
+        shadowedBy: r.shadowed_by ?? undefined, lastSeenAt: r.last_seen_at ?? undefined,
+        deletedAt: r.deleted_at ?? undefined, deletedReason: r.deleted_reason ?? undefined,
       })),
       commitments: all('SELECT * FROM commitments').map((r) => ({
         id: r.id, matterId: r.matter_id, debtor: r.debtor, creditor: r.creditor, action: r.action,
         dueAt: r.due_at ?? undefined, timezone: r.timezone, status: r.status,
-        evidence: parse(r.evidence), capability: r.capability,
+        evidence: parse(r.evidence), capability: r.capability, doneAt: r.done_at ?? undefined,
       })),
       preferences: all('SELECT * FROM preferences').map((r) => ({
         id: r.id, kind: r.kind, statement: r.statement, scope: parse(r.scope, {}),
@@ -317,13 +370,14 @@ export class SqliteStore {
       for (const x of snapshot.matters ?? []) {
         m.run(x.id, x.title, x.status, x.domain, x.secrecy, x.summary ?? null, json(x.participants), json(x.deadlines), json(x.openQuestions), x.createdAt, x.updatedAt)
       }
-      const f = db.prepare('INSERT INTO facts VALUES (?,?,?,?,?,?,?,?,?,?)')
+      const f = db.prepare(`INSERT INTO facts(id,matter_id,subject,predicate,object,recorded_at,expired_at,authority,confidence,source,evidence,status,valid_from,valid_to,supersedes,superseded_by,shadowed_by,last_seen_at,deleted_at,deleted_reason)
+        VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`)
       for (const x of snapshot.facts ?? []) {
-        f.run(x.id, x.matterId ?? null, x.subject, x.predicate, x.object, x.recordedAt, x.authority, x.confidence, x.source ? json(x.source) : null, x.status)
+        f.run(x.id, x.matterId ?? null, x.subject, x.predicate, x.object, x.recordedAt, x.expiredAt ?? null, x.authority, x.confidence, x.source ? json(x.source) : null, x.evidence ? json(x.evidence) : null, x.status, x.validFrom ?? null, x.validTo ?? null, x.supersedes ?? null, x.supersededBy ?? null, x.shadowedBy ?? null, x.lastSeenAt ?? null, x.deletedAt ?? null, x.deletedReason ?? null)
       }
-      const c = db.prepare('INSERT INTO commitments VALUES (?,?,?,?,?,?,?,?,?,?)')
+      const c = db.prepare('INSERT INTO commitments VALUES (?,?,?,?,?,?,?,?,?,?,?)')
       for (const x of snapshot.commitments ?? []) {
-        c.run(x.id, x.matterId, x.debtor, x.creditor, x.action, x.dueAt ?? null, x.timezone, x.status, json(x.evidence), x.capability)
+        c.run(x.id, x.matterId, x.debtor, x.creditor, x.action, x.dueAt ?? null, x.timezone, x.status, json(x.evidence), x.capability, x.doneAt ?? null)
       }
       const p = db.prepare('INSERT INTO preferences VALUES (?,?,?,?,?,?,?,?,?,?,?,?)')
       for (const x of snapshot.preferences ?? []) {
