@@ -8,6 +8,7 @@ import { chatCompletion } from '../lib/model.js'
 import { extractAttachment } from '../lib/attachments.js'
 import { applyPreferenceDecay, buildRoutineCandidate, correctionStatement } from '../lib/learning.js'
 import { checkRoutine } from '../lib/routine.js'
+import { listBackups, undoLatest } from '../lib/undo.js'
 import { buildHistory, buildOpening, buildPins, continuityProbes, ensurePins, shouldSummarize, summarizeTurns } from '../lib/context-window.js'
 
 let core
@@ -193,6 +194,7 @@ Usage:
   advisers search <text>       full-text search old turns
   advisers tick               due commitments within 24h
   advisers week               last 7 days
+  advisers undo [--list]      restore the last file write
   advisers memory             what I remember
   advisers commit add|ls|done|snooze commitments
   advisers deliveries         recent generated files
@@ -216,6 +218,8 @@ Usage:
   advisers routine reject <patch-id>
   advisers routine revert <patch-id>  restore the pre-apply values
   advisers routine check <id>         run file/manual verification
+  advisers routine curate [--apply]   mark stale/deprecated routines
+  advisers routine restore <id>       restore an archived routine to draft
   advisers template <weekly|budget|presentation|flow|mindmap> <data.json> <out>
                               build a template into docx/xlsx/pptx/mmd/drawio/xmind
   advisers link ls            list matter links
@@ -575,6 +579,7 @@ async function runTurn({ runtime, ledger, text, conversationId, debug = false, c
     history: history.turns,
     summary: history.summary,
     ledger,
+    backupDir: join(HOME, 'undo'),
     apiKey,
     baseUrl: process.env.ADVISERS_BASE_URL || 'https://api.deepseek.com',
     model: process.env.ADVISERS_MODEL || 'deepseek-chat',
@@ -733,6 +738,7 @@ async function repl() {
       console.log('  /search <text>  full-text search old turns')
       console.log('  /tick           due within 24h')
       console.log('  /week           last 7 days')
+      console.log('  /undo           restore the last overwritten/created file')
       console.log('  /links          list candidate/confirmed links')
       console.log('  /forget <id>    forget a preference')
       console.log('  /prefs          list preferences (incl. candidates)')
@@ -778,6 +784,11 @@ async function repl() {
       continue
     }
     if (text === '/week') { printWeek(ledger); continue }
+    if (text === '/undo') {
+      const result = await undoLatest({ cwd: process.cwd(), backupDir: join(HOME, 'undo') })
+      console.log(result.ok ? `已回滚：${result.path}` : `撤销失败：${result.error}`)
+      continue
+    }
     if (text.startsWith('/commit ')) {
       const { flags, positional } = parseFlags(text.slice(8).trim().split(/\s+/))
       if (positional[0] === 'ls') { printCommitments(ledger); continue }
@@ -1011,21 +1022,29 @@ function routine(sub, arg, arg2) {
     if (!patch) process.exitCode = 1
     return
   }
-  if (sub === 'rollback') {
-    if (!from) { console.error('usage: advisers link rollback <id>'); process.exitCode = 1; return }
-    const proposal = ledger.listUpdates().find((u) => u.id === from)
-    if (!proposal || proposal.status !== 'applied' || !proposal.rollback?.startsWith('fact:')) {
-      console.error(`no applied update with a rollback fact: ${from}`)
-      process.exitCode = 1
-      return
+  if (sub === 'curate') {
+    const apply = arg === '--apply'
+    const now = Date.now()
+    let changed = 0
+    for (const r of ledger.listRoutines().filter((x) => x.status === 'active')) {
+      const idleDays = (now - Date.parse(r.updatedAt)) / 86_400_000
+      if (idleDays >= 90) {
+        console.log(`${r.id}\tarchive candidate\t${Math.floor(idleDays)}d\t${r.name}`)
+        if (apply) { ledger.deprecateRoutine(r.id); changed++ }
+      } else if (idleDays >= 30) {
+        console.log(`${r.id}\tstale\t${Math.floor(idleDays)}d\t${r.name}`)
+        if (apply) { ledger.staleRoutine(r.id); changed++ }
+      }
     }
-    const factId = proposal.rollback.slice(5)
-    const ok = ledger.forget('fact', factId)
-    proposal.rollback = `rolledback:${factId}`
-    dbStore()?.appendAudit({ actor: 'local', action: 'link.rollback', allowed: true, reason: factId })
+    if (!changed && !apply) console.log('no stale routines (dry-run; use --apply)')
+    if (apply) { saveLedger(ledger); console.log(`curated: ${changed}`) }
+    return
+  }
+  if (sub === 'restore') {
+    if (!arg) { console.error('usage: advisers routine restore <id>'); process.exitCode = 1; return }
+    const r = ledger.restoreRoutine(arg)
     saveLedger(ledger)
-    console.log(ok ? `rolled back: ${factId}` : `fact not found: ${factId}`)
-    if (!ok) process.exitCode = 1
+    console.log(`restored to draft: ${r.id}`)
     return
   }
   if (sub === 'revert') {
@@ -1225,6 +1244,31 @@ function link(sub, from, to, type) {
     saveLedger(ledger)
     console.log(ok ? `rolled back: ${factId}` : `fact not found: ${factId}`)
     if (!ok) process.exitCode = 1
+    return
+  }
+  if (sub === 'curate') {
+    const apply = arg === '--apply'
+    const now = Date.now()
+    let changed = 0
+    for (const r of ledger.listRoutines().filter((x) => x.status === 'active')) {
+      const idleDays = (now - Date.parse(r.updatedAt)) / 86_400_000
+      if (idleDays >= 90) {
+        console.log(`${r.id}\tarchive candidate\t${Math.floor(idleDays)}d\t${r.name}`)
+        if (apply) { ledger.deprecateRoutine(r.id); changed++ }
+      } else if (idleDays >= 30) {
+        console.log(`${r.id}\tstale\t${Math.floor(idleDays)}d\t${r.name}`)
+        if (apply) { ledger.staleRoutine(r.id); changed++ }
+      }
+    }
+    if (!changed && !apply) console.log('no stale routines (dry-run; use --apply)')
+    if (apply) { saveLedger(ledger); console.log(`curated: ${changed}`) }
+    return
+  }
+  if (sub === 'restore') {
+    if (!arg) { console.error('usage: advisers routine restore <id>'); process.exitCode = 1; return }
+    const r = ledger.restoreRoutine(arg)
+    saveLedger(ledger)
+    console.log(`restored to draft: ${r.id}`)
     return
   }
   if (sub === 'revert') {
@@ -1503,6 +1547,14 @@ if (!command) {
       }
     }
   } else { console.error('usage: advisers commit add|ls|done'); process.exitCode = 1 }
+} else if (command === 'undo') {
+  if (args.includes('--list')) {
+    for (const row of await listBackups(join(HOME, 'undo'))) console.log(`${row.id}\t${row.path}\t${row.existed ? 'overwrite' : 'create'}`)
+  } else {
+    const result = await undoLatest({ cwd: process.cwd(), backupDir: join(HOME, 'undo') })
+    console.log(result.ok ? `已回滚：${result.path}` : `撤销失败：${result.error}`)
+    if (!result.ok) process.exitCode = 1
+  }
 } else if (command === 'search') {
   const q = args.join(' ').trim()
   if (!q) { console.error('usage: advisers search <text>'); process.exitCode = 1 }

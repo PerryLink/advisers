@@ -68,3 +68,14 @@ test('100-turn compaction keeps a 20-turn window and the pin', () => {
   assert.equal(history.turns[0].seq, 81)
   assert.equal(continuityProbes({ summary, pins, turns: history.turns }).ok, true)
 })
+
+test('200-turn compaction keeps 20 turns and pins', () => {
+  const many = Array.from({ length: 200 }, (_, i) => ({ seq: i + 1, role: i % 2 ? 'assistant' : 'user', content: `turn ${i + 1}` }))
+  const pins = 'hard: 称呼我老板'
+  const summary = ensurePins(summarizeTurns(many.slice(0, 180), ''), pins)
+  const history = buildHistory({ turns: many, summary, throughSeq: 180 })
+  assert.equal(history.turns.length, 20)
+  assert.equal(history.turns[0].seq, 181)
+  assert.equal(history.turns.at(-1).seq, 200)
+  assert.equal(continuityProbes({ summary, pins, turns: history.turns }).ok, true)
+})

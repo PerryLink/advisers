@@ -3,6 +3,7 @@ import { mkdir, readFile, readdir, writeFile } from 'node:fs/promises'
 import { existsSync } from 'node:fs'
 import { dirname, isAbsolute, relative, resolve } from 'node:path'
 import { chatCompletion } from './model.js'
+import { backupBeforeWrite } from './undo.js'
 
 const OFFICE_KINDS = ['docx', 'xlsx', 'pptx', 'xmind', 'mermaid', 'drawio']
 const TEMPLATE_NAMES = ['weekly', 'budget', 'presentation', 'flow', 'mindmap']
@@ -73,7 +74,7 @@ function validateTemplate(name, data) {
   if (name === 'mindmap' && (!data.title || !Array.isArray(data.branches) || data.branches.length === 0)) throw new Error('mindmap data requires title and non-empty branches[]')
 }
 
-async function runOfficeTool(name, args, cwd) {
+async function runOfficeTool(name, args, cwd, backupDir) {
   const office = await loadOffice()
   const out = safePath(cwd, args.out)
   await mkdir(dirname(out), { recursive: true })
@@ -114,6 +115,7 @@ async function runOfficeTool(name, args, cwd) {
   else if (kind === 'xmind') { buffer = await office.buildXmind(spec); result = await office.validateXmind(buffer) }
   else if (kind === 'drawio') { buffer = Buffer.from(office.buildDrawio(spec)); result = { ok: true, missing: [] } }
   else { buffer = Buffer.from(office.buildMermaid(spec)); result = { ok: true, missing: [] } }
+  await backupBeforeWrite(out, { cwd, backupDir })
   await writeFile(out, buffer)
   return { ok: result.ok, artifact: true, path: out, bytes: buffer.length, missing: result.missing ?? [] }
 }
@@ -128,12 +130,13 @@ function writeTarget(name, args, cwd) {
   return null
 }
 
-export async function executeTool(name, args, { cwd = process.cwd(), ledger } = {}) {
-  if (name === 'office_build' || name === 'office_template') return runOfficeTool(name, args, cwd)
+export async function executeTool(name, args, { cwd = process.cwd(), ledger, backupDir } = {}) {
+  if (name === 'office_build' || name === 'office_template') return runOfficeTool(name, args, cwd, backupDir)
   if (name === 'file_write') {
     if (typeof args.content !== 'string' || Buffer.byteLength(args.content) > MAX_FILE_BYTES) throw new Error('content is missing or too large')
     const path = safePath(cwd, args.path)
     await mkdir(dirname(path), { recursive: true })
+    await backupBeforeWrite(path, { cwd, backupDir })
     await writeFile(path, args.content)
     return { ok: true, artifact: true, path, bytes: Buffer.byteLength(args.content) }
   }
@@ -144,7 +147,7 @@ export async function executeTool(name, args, { cwd = process.cwd(), ledger } = 
     return { ok: true, artifact: false, path, content }
   }
   if (name === 'routine_view') {
-    const routine = ledger?.listRoutines().find((r) => r.id === args.id)
+    const routine = ledger?.listRoutines().find((r) => r.id === args.id && (r.status === 'active' || r.status === 'stale'))
     if (!routine) throw new Error(`unknown routine: ${args.id}`)
     return { ok: true, artifact: false, routine }
   }
@@ -177,6 +180,7 @@ export async function runAgent({
   onTool,
   confirm,
   force = false,
+  backupDir,
   history = [],
   summary = '',
   ledger,
@@ -207,7 +211,7 @@ export async function runAgent({
             return { reply: `未覆盖 ${target}。如需覆盖，请确认或设置 ADVISERS_FORCE=1。`, artifacts: [...new Set(artifacts)], toolLog, declined: true, steps: step + 1 }
           }
         }
-        payload = await executeTool(name, args, { cwd, ledger })
+        payload = await executeTool(name, args, { cwd, ledger, backupDir })
         if (payload.artifact && payload.path) artifacts.push(payload.path)
       } catch (error) {
         payload = { ok: false, error: error instanceof Error ? error.message : String(error) }

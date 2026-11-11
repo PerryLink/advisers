@@ -195,7 +195,7 @@ export interface TurnContext {
   usedTokens: number
 }
 
-export type RoutineStatus = 'draft' | 'active' | 'archived'
+export type RoutineStatus = 'draft' | 'active' | 'stale' | 'deprecated' | 'archived'
 
 /** A procedure learned from a successful task; proposal first, human approves. */
 export interface Routine {

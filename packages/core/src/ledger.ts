@@ -392,9 +392,35 @@ export class Ledger {
     return [...this.routines.values()].filter((r) => (status ? r.status === status : true))
   }
 
+  staleRoutine(id: Id): Routine {
+    const routine = this.routines.get(id)
+    if (!routine) throw new Error(`unknown routine: ${id}`)
+    if (routine.status !== 'active') throw new Error(`only active routines can go stale: ${id}`)
+    routine.status = 'stale'
+    routine.updatedAt = this.clock.now()
+    return routine
+  }
+
+  deprecateRoutine(id: Id): Routine {
+    const routine = this.routines.get(id)
+    if (!routine) throw new Error(`unknown routine: ${id}`)
+    routine.status = 'deprecated'
+    routine.updatedAt = this.clock.now()
+    return routine
+  }
+
+  restoreRoutine(id: Id): Routine {
+    const routine = this.routines.get(id)
+    if (!routine) throw new Error(`unknown routine: ${id}`)
+    routine.status = 'draft'
+    routine.updatedAt = this.clock.now()
+    return routine
+  }
+
   approveRoutine(id: Id): Routine {
     const routine = this.routines.get(id)
     if (!routine) throw new Error(`unknown routine: ${id}`)
+    if (routine.status !== 'draft') throw new Error(`only draft routines can be approved: ${id}`)
     routine.status = 'active'
     routine.updatedAt = this.clock.now()
     return routine
