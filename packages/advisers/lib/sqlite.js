@@ -80,6 +80,10 @@ CREATE TRIGGER IF NOT EXISTS turns_au AFTER UPDATE ON turns BEGIN
   INSERT INTO turns_fts(turns_fts, rowid, content) VALUES ('delete', old.rowid, old.content);
   INSERT INTO turns_fts(rowid, content) VALUES (new.rowid, new.content);
 END;
+CREATE TABLE IF NOT EXISTS nudges (
+  id TEXT PRIMARY KEY, at TEXT NOT NULL, local_day TEXT NOT NULL, level TEXT NOT NULL,
+  commitment_id TEXT NOT NULL, dedupe_key TEXT NOT NULL UNIQUE, body TEXT NOT NULL
+);
 CREATE TABLE IF NOT EXISTS meta (key TEXT PRIMARY KEY, value TEXT NOT NULL);
 `
 
@@ -100,7 +104,7 @@ export class SqliteStore {
   migrate() {
     const row = this.db.prepare('SELECT value FROM meta WHERE key = ?').get('schema_version')
     const current = row ? Number(row.value) : 0
-    if (current >= 11) return
+    if (current >= 12) return
     this.db.exec('BEGIN')
     try {
       this.db.exec(`CREATE TABLE IF NOT EXISTS seen_events (
@@ -151,7 +155,11 @@ export class SqliteStore {
       for (const [name, type] of [['valid_from','TEXT'],['valid_to','TEXT'],['expired_at','TEXT'],['evidence','TEXT'],['supersedes','TEXT'],['superseded_by','TEXT'],['shadowed_by','TEXT'],['last_seen_at','TEXT'],['deleted_at','TEXT'],['deleted_reason','TEXT']]) {
         if (!factCols.includes(name)) this.db.exec(`ALTER TABLE facts ADD COLUMN ${name} ${type}`)
       }
-      this.db.prepare('INSERT OR REPLACE INTO meta(key,value) VALUES(?,?)').run('schema_version', '11')
+      this.db.exec(`CREATE TABLE IF NOT EXISTS nudges (
+        id TEXT PRIMARY KEY, at TEXT NOT NULL, local_day TEXT NOT NULL, level TEXT NOT NULL,
+        commitment_id TEXT NOT NULL, dedupe_key TEXT NOT NULL UNIQUE, body TEXT NOT NULL
+      )`)
+      this.db.prepare('INSERT OR REPLACE INTO meta(key,value) VALUES(?,?)').run('schema_version', '12')
       this.db.exec('COMMIT')
     } catch (error) {
       this.db.exec('ROLLBACK')
@@ -187,6 +195,38 @@ export class SqliteStore {
   listDeliveries(limit = 20) {
     return this.db.prepare('SELECT * FROM deliveries ORDER BY created_at DESC LIMIT ?').all(limit)
       .map((r) => ({ id: r.id, matterId: r.matter_id, conversationId: r.conversation_id, files: parse(r.files), tool: r.tool ?? undefined, title: r.title ?? undefined, validation: r.validation ?? undefined, createdAt: r.created_at }))
+  }
+
+  getMeta(key) {
+    return this.db.prepare('SELECT value FROM meta WHERE key = ?').get(key)?.value
+  }
+
+  setMeta(key, value) {
+    this.db.prepare('INSERT OR REPLACE INTO meta(key,value) VALUES(?,?)').run(key, String(value))
+  }
+
+  deleteMeta(key) {
+    this.db.prepare('DELETE FROM meta WHERE key = ?').run(key)
+  }
+
+  addNudge({ localDay, level, commitmentId, body }) {
+    const key = `${localDay}:${level}:${commitmentId}`
+    const id = `nudge_${randomUUID().replace(/-/g, '').slice(0, 16)}`
+    try {
+      this.db.prepare('INSERT INTO nudges(id,at,local_day,level,commitment_id,dedupe_key,body) VALUES(?,?,?,?,?,?,?)')
+        .run(id, new Date().toISOString(), localDay, level, commitmentId, key, body)
+      return { id, dedupeKey: key }
+    } catch {
+      return null
+    }
+  }
+
+  countNudges(localDay, level) {
+    return this.db.prepare('SELECT COUNT(*) AS n FROM nudges WHERE local_day = ? AND level = ?').get(localDay, level).n
+  }
+
+  listNudges(limit = 20) {
+    return this.db.prepare('SELECT * FROM nudges ORDER BY at DESC LIMIT ?').all(limit)
   }
 
   purgeMatterData(matterId) {

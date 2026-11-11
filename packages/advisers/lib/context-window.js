@@ -85,3 +85,15 @@ export function buildPins({ preferences = [], commitments = [], now = new Date()
   const text = lines.join('\n')
   return text.length > 2000 ? `${text.slice(0, 2000)}\n…[pins truncated]` : text
 }
+
+export function continuityProbes({ summary = '', pins = '', turns = [] } = {}) {
+  const haystack = `${summary}\n${turns.map((t) => t.content).join('\n')}`
+  const missing = pins.split('\n').map((line) => line.trim()).filter((line) => line && !haystack.includes(line.replace(/^(hard|due):\s*/, '')))
+  return { ok: missing.length === 0, missing }
+}
+
+export function ensurePins(summary, pins) {
+  if (!pins) return summary
+  const missing = pins.split('\n').filter((line) => line.trim() && !summary.includes(line.replace(/^(hard|due):\s*/, '')))
+  return missing.length ? `${pins}\n${summary}` : summary
+}

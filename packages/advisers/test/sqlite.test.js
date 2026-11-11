@@ -162,3 +162,17 @@ test('fact temporal/authority fields survive SQLite round-trip', () => {
     rmSync(dir, { recursive: true, force: true })
   }
 })
+
+test('nudge ledger dedupes per day/level and counts budget', () => {
+  const dir = mkdtempSync(join(tmpdir(), 'advisers-nudge-'))
+  const db = join(dir, 'state.db')
+  try {
+    const store = new SqliteStore(db)
+    assert.ok(store.addNudge({ localDay: '2026-11-11', level: 'L2', commitmentId: 'cm1', body: '发报价' }))
+    assert.equal(store.addNudge({ localDay: '2026-11-11', level: 'L2', commitmentId: 'cm1', body: '发报价' }), null)
+    assert.equal(store.countNudges('2026-11-11', 'L2'), 1)
+    store.close()
+  } finally {
+    rmSync(dir, { recursive: true, force: true })
+  }
+})

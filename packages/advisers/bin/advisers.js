@@ -8,7 +8,7 @@ import { chatCompletion } from '../lib/model.js'
 import { extractAttachment } from '../lib/attachments.js'
 import { applyPreferenceDecay, buildRoutineCandidate, correctionStatement } from '../lib/learning.js'
 import { checkRoutine } from '../lib/routine.js'
-import { buildHistory, buildOpening, buildPins, shouldSummarize, summarizeTurns } from '../lib/context-window.js'
+import { buildHistory, buildOpening, buildPins, continuityProbes, ensurePins, shouldSummarize, summarizeTurns } from '../lib/context-window.js'
 
 let core
 if (process.env.ADVISERS_CORE_LOCAL === '1') {
@@ -194,7 +194,7 @@ Usage:
   advisers tick               due commitments within 24h
   advisers week               last 7 days
   advisers memory             what I remember
-  advisers commit add|ls|done commitments
+  advisers commit add|ls|done|snooze commitments
   advisers deliveries         recent generated files
   advisers ls                 list matters
   advisers why <pref-id>      explain a preference
@@ -356,9 +356,27 @@ function printWeek(ledger) {
 
 function tick(ledger, asJson = false) {
   const now = Date.now()
-  const due = ledger.openCommitments().filter((c) => c.dueAt && Date.parse(c.dueAt) <= now + 86400_000)
+  const store = dbStore()
+  const localDay = new Intl.DateTimeFormat('en-CA', { timeZone: 'Asia/Shanghai' }).format(new Date(now))
+  const due = []
+  for (const c of ledger.listCommitments()) {
+    if (c.status === 'done' || c.status === 'dropped') continue
+    if (c.status === 'snoozed') {
+      const until = store?.getMeta(`snooze:${c.id}`)
+      if (until && Date.parse(until) > now) continue
+      c.status = 'open'
+      store?.deleteMeta(`snooze:${c.id}`)
+    }
+    if (!c.dueAt || Date.parse(c.dueAt) > now + 86400_000) continue
+    const level = Date.parse(c.dueAt) < now ? 'L2' : 'L2'
+    if (store && store.countNudges(localDay, level) >= 3) continue
+    const nudge = store?.addNudge({ localDay, level, commitmentId: c.id, body: c.action })
+    if (store && !nudge) continue
+    due.push({ ...c, level })
+  }
+  saveLedger(ledger)
   if (asJson) {
-    console.log(JSON.stringify({ now: new Date(now).toISOString(), due }, null, 2))
+    console.log(JSON.stringify({ now: new Date(now).toISOString(), localDay, due }, null, 2))
     return
   }
   if (!due.length) { console.log('今天到期：无'); return }
@@ -432,7 +450,7 @@ function recordTurn(conversationId, role, content) {
   try { dbStore()?.addTurn({ conversationId, role, content }) } catch {}
 }
 
-async function maybeSummarize(conversationId, { apiKey, baseUrl, model } = {}) {
+async function maybeSummarize(conversationId, { apiKey, baseUrl, model, ledger } = {}) {
   try {
     const store = dbStore()
     if (!store) return
@@ -443,6 +461,7 @@ async function maybeSummarize(conversationId, { apiKey, baseUrl, model } = {}) {
     const cutoff = Math.max(0, latest - 20)
     const fresh = turns.filter((t) => t.seq > (old?.throughSeq ?? 0) && t.seq <= cutoff)
     if (!fresh.length) return
+    const pins = buildPins({ preferences: ledger?.listPreferences({ includeCandidates: false }) ?? [], commitments: ledger?.openCommitments() ?? [] })
     let summary = summarizeTurns(fresh, old?.summary ?? '')
     if (apiKey && process.env.ADVISERS_LLM_SUMMARY !== '0') {
       try {
@@ -459,6 +478,8 @@ async function maybeSummarize(conversationId, { apiKey, baseUrl, model } = {}) {
         if (response.content?.trim()) summary = response.content.trim()
       } catch {}
     }
+    summary = ensurePins(summary, pins)
+    if (pins && !continuityProbes({ summary, pins, turns: fresh }).ok) return
     store.upsertSessionSummary({ conversationId, summary, throughSeq: cutoff })
   } catch {}
 }
@@ -524,7 +545,7 @@ async function runTurn({ runtime, ledger, text, conversationId, debug = false, c
     const local = intent?.questions?.[0] ?? ''
     recordTurn(conversationId, 'user', text)
     if (local) recordTurn(conversationId, 'assistant', local)
-    await maybeSummarize(conversationId, { apiKey, baseUrl: process.env.ADVISERS_BASE_URL, model: process.env.ADVISERS_MODEL })
+    await maybeSummarize(conversationId, { apiKey, baseUrl: process.env.ADVISERS_BASE_URL, model: process.env.ADVISERS_MODEL, ledger })
     if (!intent?.questions?.length) console.log('[local] 未配置模型；已记录到事项账本。用 /office 或 advisors office 直接生成文件。')
     return intent?.questions?.[0]
   }
@@ -552,9 +573,22 @@ async function runTurn({ runtime, ledger, text, conversationId, debug = false, c
   lastRun = { artifacts: [...new Set(artifacts)], toolLog }
   recordTurn(conversationId, 'user', text)
   recordTurn(conversationId, 'assistant', reply || '')
-  await maybeSummarize(conversationId, { apiKey, baseUrl: process.env.ADVISERS_BASE_URL, model: process.env.ADVISERS_MODEL })
+  await maybeSummarize(conversationId, { apiKey, baseUrl: process.env.ADVISERS_BASE_URL, model: process.env.ADVISERS_MODEL, ledger })
   if (reply) console.log(reply)
-  for (const file of [...new Set(artifacts)]) console.log(`[file] ${file}`)
+  const uniqueArtifacts = [...new Set(artifacts)]
+  if (uniqueArtifacts.length) {
+    for (const file of uniqueArtifacts) {
+      let bytes = 0
+      try { bytes = statSync(file).size } catch {}
+      console.log(`[完成] ${text.replace(/\s+/g, ' ').slice(0, 48)} -> ${file}（${bytes} B）`)
+    }
+    const structural = toolLog.filter((t) => t.name === 'office_build' || t.name === 'office_template')
+    if (structural.length && structural.every((t) => t.ok && !(t.payload?.missing?.length))) console.log('校验：结构通过（内容未逐字核对）')
+    else if (structural.length) console.log('校验：未通过，文件保留但未记成完成')
+    else console.log('校验：文本已保存')
+    console.log('下一步：打开确认；要改哪段直接说')
+    for (const file of uniqueArtifacts) console.log(`[file] ${file}`)
+  }
   if (artifacts.length) {
     try {
       dbStore()?.addDelivery({
@@ -577,7 +611,7 @@ async function runTurn({ runtime, ledger, text, conversationId, debug = false, c
     } catch {}
   }
   const failed = toolLog.filter((t) => !t.ok)
-  if (failed.length && (debug || artifacts.length === 0)) console.log(`[warn] ${failed.length} 个工具调用失败，详见上一步输出`)
+  if (failed.length) console.log(`[没做成] ${failed.length} 个步骤失败；已完成 ${uniqueArtifacts.length} 个文件，原文件未丢。下一步：/retry 或告诉我换一种做法。`)
 }
 
 function parseChatArgs(args) {
@@ -659,7 +693,8 @@ async function repl() {
         }
       }
     } catch (error) {
-      console.error(`error: ${error.message}`)
+      console.error(`[没做成] ${error.message}`)
+      console.error('已保留：任务和会话；没有丢文件。下一步：/retry 重试。')
     }
   }
 
@@ -1431,6 +1466,18 @@ if (!command) {
       console.log(`${c.id} open ${c.action}${c.dueAt ? ` due ${c.dueAt}` : ''}`)
     }
   } else if (sub === 'ls') printCommitments(ledger)
+  else if (sub === 'snooze') {
+    const id = positional[0]
+    const hours = Number(positional[1] ?? 24)
+    const c = ledger.listCommitments().find((x) => x.id === id)
+    if (!c || !Number.isFinite(hours) || hours <= 0) { console.error('usage: advisers commit snooze <id> <hours>'); process.exitCode = 1 }
+    else {
+      c.status = 'snoozed'
+      dbStore()?.setMeta(`snooze:${id}`, new Date(Date.now() + hours * 3600_000).toISOString())
+      saveLedger(ledger)
+      console.log(`snoozed: ${id} for ${hours}h`)
+    }
+  }
   else if (sub === 'done') {
     const id = positional[0]
     const evidence = flags.evidence

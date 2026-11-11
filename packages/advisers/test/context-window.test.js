@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict'
 import test from 'node:test'
-import { buildHistory, buildOpening, buildPins, selectTurns, shouldSummarize, summarizeTurns } from '../lib/context-window.js'
+import { buildHistory, buildOpening, buildPins, continuityProbes, ensurePins, selectTurns, shouldSummarize, summarizeTurns } from '../lib/context-window.js'
 
 const turns = Array.from({ length: 30 }, (_, i) => ({ seq: i + 1, role: i % 2 ? 'assistant' : 'user', content: `turn ${i + 1}` }))
 
@@ -48,4 +48,23 @@ test('pins keep hard constraints and near due commitments, bounded', () => {
   assert.match(pins, /hard: 不要提健身/)
   assert.match(pins, /due: 发报价/)
   assert.ok(pins.length <= 2000)
+})
+
+test('compaction probes catch lost pins and ensurePins repairs them', () => {
+  const pins = 'hard: 不要提健身\ndue: 发报价'
+  const bad = continuityProbes({ summary: '普通摘要', pins })
+  assert.equal(bad.ok, false)
+  assert.equal(bad.missing.length, 2)
+  const repaired = ensurePins('普通摘要', pins)
+  assert.equal(continuityProbes({ summary: repaired, pins }).ok, true)
+})
+
+test('100-turn compaction keeps a 20-turn window and the pin', () => {
+  const many = Array.from({ length: 100 }, (_, i) => ({ seq: i + 1, role: i % 2 ? 'assistant' : 'user', content: `turn ${i + 1}` }))
+  const pins = 'hard: 称呼我老板'
+  const summary = ensurePins(summarizeTurns(many.slice(0, 80), ''), pins)
+  const history = buildHistory({ turns: many, summary, throughSeq: 80 })
+  assert.equal(history.turns.length, 20)
+  assert.equal(history.turns[0].seq, 81)
+  assert.equal(continuityProbes({ summary, pins, turns: history.turns }).ok, true)
 })
