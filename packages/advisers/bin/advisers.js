@@ -6,6 +6,7 @@ import { SqliteStore } from '../lib/sqlite.js'
 import { runAgent } from '../lib/agent.js'
 import { extractAttachment } from '../lib/attachments.js'
 import { applyPreferenceDecay, buildRoutineCandidate, correctionStatement } from '../lib/learning.js'
+import { checkRoutine } from '../lib/routine.js'
 
 let core
 if (process.env.ADVISERS_CORE_LOCAL === '1') {
@@ -207,6 +208,7 @@ Usage:
   advisers routine apply <patch-id>
   advisers routine reject <patch-id>
   advisers routine revert <patch-id>  restore the pre-apply values
+  advisers routine check <id>         run file/manual verification
   advisers template <weekly|budget|presentation|flow|mindmap> <data.json> <out>
                               build a template into docx/xlsx/pptx/mmd/drawio/xmind
   advisers link ls            list matter links
@@ -216,6 +218,7 @@ Usage:
   advisers link updates       list cross-matter proposals
   advisers link propose-update <source> <target> <change>
   advisers link apply <id>    write to target only, then mark applied
+  advisers link diff <id>     show the pending/applied change
   advisers link reject <id>
   advisers link rollback <id> delete the fact written by an applied update
   advisers bridge --dir <path> [--name advisers]
@@ -746,6 +749,15 @@ function routine(sub, arg, arg2) {
     console.log(`approve with \`advisers routine apply ${patch.id}\``)
     return
   }
+  if (sub === 'check') {
+    if (!arg) { console.error('usage: advisers routine check <id>'); process.exitCode = 1; return }
+    const routine = ledger.listRoutines().find((r) => r.id === arg)
+    if (!routine) { console.error(`unknown routine: ${arg}`); process.exitCode = 1; return }
+    const result = checkRoutine(routine)
+    for (const item of result.results) console.log(`${item.ok ? 'ok' : 'FAIL'}\t${item.kind}\t${item.entry}`)
+    if (!result.ok) process.exitCode = 1
+    return
+  }
   if (sub === 'diff') {
     if (!arg) {
       console.error('usage: advisers routine diff <patch-id>')
@@ -786,6 +798,19 @@ function routine(sub, arg, arg2) {
       console.error(`usage: advisers routine ${sub} <patch-id>`)
       process.exitCode = 1
       return
+    }
+    if (sub === 'apply') {
+      const pending = ledger.listRoutinePatches('pending').find((p) => p.id === arg)
+      if (!pending) { console.error(`unknown or closed routine patch: ${arg}`); process.exitCode = 1; return }
+      const routine = ledger.listRoutines().find((r) => r.id === pending.routineId)
+      if (!routine) { console.error(`unknown routine: ${pending.routineId}`); process.exitCode = 1; return }
+      const check = checkRoutine(routine)
+      if (!check.ok) {
+        console.error('routine checks failed; patch not applied')
+        for (const item of check.results.filter((r) => !r.ok)) console.error(`FAIL ${item.entry}`)
+        process.exitCode = 1
+        return
+      }
     }
     const patch = sub === 'apply' ? ledger.applyRoutinePatch(arg) : ledger.rejectRoutinePatch(arg)
     saveLedger(ledger)
@@ -907,6 +932,16 @@ function link(sub, from, to, type) {
     }
     saveLedger(ledger)
     if (!count) console.log('no suggestions')
+    return
+  }
+  if (sub === 'diff') {
+    if (!from) { console.error('usage: advisers link diff <update-id>'); process.exitCode = 1; return }
+    const u = ledger.listUpdates().find((x) => x.id === from)
+    if (!u) { console.error(`unknown update: ${from}`); process.exitCode = 1; return }
+    console.log(`${u.id}\t${u.status}`)
+    console.log(`${u.sourceMatter} -> ${u.targetMatter}`)
+    console.log(`change: ${u.change}`)
+    if (u.rollback) console.log(`rollback: ${u.rollback}`)
     return
   }
   if (sub === 'updates') {

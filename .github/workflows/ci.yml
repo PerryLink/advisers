@@ -24,4 +24,5 @@ jobs:
       - run: pnpm -r --if-present run build
       - run: pnpm -r --if-present run test
       - run: node scripts/verify-office.mjs
+      - run: node scripts/security-suite.mjs
       - run: node --experimental-strip-types --test packages/core/test/*.test.ts packages/link-email/test/*.test.ts packages/link-feishu/test/*.test.ts packages/advisers/test/*.test.js packages/office/test/*.test.ts
