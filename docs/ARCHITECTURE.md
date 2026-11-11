@@ -133,3 +133,25 @@ tracker for a year. Routines must appear by 0.2 to keep the "intern" promise.
   enforced for preferences only.
 - Egress permits, deletion cascade, and the five CI security tests are
   specified in `SECURITY.md` but not implemented.
+
+## 10. Intent, Office, and Affect policy
+
+These are first-class layers, not prompt tricks.
+
+- **Intent** (`core/intent.ts`): a `IntentBrief` with `verbatim`, `goal`,
+  `deliverable`, `audience`, `due`, `constraints`, `assumptions`, `unknowns`,
+  `risk`, `confidence`, `action`, at most one question, and a two-line
+  `readback`. It is injected as a compact `<intent>` block between `<soul>` and
+  `<advisers-context>`; the full brief is not re-injected every turn.
+- **Office** (`advisers-office`): an independent package with `buildDocx`,
+  `buildXlsx`, `buildPptx`, `buildMermaid`, `buildDrawio`, `buildXmind`, and
+  `validateOffice` (OPC required parts + relationship targets). The core never
+  imports it; the CLI loads it dynamically.
+- **Affect policy** (`core/policy.ts`): `understanding` is always allowed;
+  `companion` and `roleplay` are off by default and require an explicit
+  `AffectPolicy`. Policy packs, crisis scripts, and dependency guards live
+  outside the core, so enabling a future policy does not change core code.
+
+The chief-of-staff protocol (receive → clarify → plan → execute → report →
+review) is the interaction contract; the current runtime implements the
+`IntentBrief` half and leaves the full state machine for 0.2.
