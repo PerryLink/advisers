@@ -206,6 +206,7 @@ Usage:
   advisers routine diff <patch-id>
   advisers routine apply <patch-id>
   advisers routine reject <patch-id>
+  advisers routine revert <patch-id>  restore the pre-apply values
   advisers template <weekly|budget|presentation|flow|mindmap> <data.json> <out>
                               build a template into docx/xlsx/pptx/mmd/drawio/xmind
   advisers link ls            list matter links
@@ -773,6 +774,13 @@ function routine(sub, arg, arg2) {
     if (!ok) process.exitCode = 1
     return
   }
+  if (sub === 'revert') {
+    if (!arg) { console.error('usage: advisers routine revert <patch-id>'); process.exitCode = 1; return }
+    const patch = ledger.revertRoutinePatch(arg)
+    saveLedger(ledger)
+    console.log(`rolled_back: ${patch.id}`)
+    return
+  }
   if (sub === 'apply' || sub === 'reject') {
     if (!arg) {
       console.error(`usage: advisers routine ${sub} <patch-id>`)
@@ -939,6 +947,13 @@ function link(sub, from, to, type) {
     saveLedger(ledger)
     console.log(ok ? `rolled back: ${factId}` : `fact not found: ${factId}`)
     if (!ok) process.exitCode = 1
+    return
+  }
+  if (sub === 'revert') {
+    if (!arg) { console.error('usage: advisers routine revert <patch-id>'); process.exitCode = 1; return }
+    const patch = ledger.revertRoutinePatch(arg)
+    saveLedger(ledger)
+    console.log(`rolled_back: ${patch.id}`)
     return
   }
   if (sub === 'apply' || sub === 'reject') {

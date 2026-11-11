@@ -364,11 +364,15 @@ export class Ledger {
     const diff = Object.entries(changes)
       .map(([key, value]) => `- ${key}: ${JSON.stringify((routine as unknown as Record<string, unknown>)[key])}\n+ ${key}: ${JSON.stringify(value)}`)
       .join('\n')
+    const before = Object.fromEntries(
+      Object.keys(changes).map((key) => [key, (routine as unknown as Record<string, unknown>)[key]]),
+    ) as RoutinePatch['before']
     const patch: RoutinePatch = {
       id: this.ids.next('rpatch'),
       routineId,
       baseVersion: routine.version,
       changes,
+      before,
       diff,
       status: 'pending',
       createdAt: this.clock.now(),
@@ -392,6 +396,20 @@ export class Ledger {
     routine.version = Math.max(routine.version, patch.baseVersion) + 1
     routine.updatedAt = this.clock.now()
     patch.status = 'applied'
+    return patch
+  }
+
+  revertRoutinePatch(id: Id): RoutinePatch {
+    const patch = this.routinePatches.get(id)
+    if (!patch || patch.status !== 'applied') throw new Error(`no applied routine patch: ${id}`)
+    const routine = this.routines.get(patch.routineId)
+    if (!routine) throw new Error(`unknown routine: ${patch.routineId}`)
+    for (const [key, value] of Object.entries(patch.before)) {
+      ;(routine as unknown as Record<string, unknown>)[key] = value
+    }
+    routine.version += 1
+    routine.updatedAt = this.clock.now()
+    patch.status = 'rolled_back'
     return patch
   }
 

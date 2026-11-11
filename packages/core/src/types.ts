@@ -212,7 +212,9 @@ export interface RoutinePatch {
   routineId: Id
   baseVersion: number
   changes: Partial<Pick<Routine, 'name' | 'description' | 'trigger' | 'steps' | 'preferences' | 'pitfalls' | 'verification' | 'scope'>>
+  /** Values before apply; used for rollback. */
+  before: Partial<Pick<Routine, 'name' | 'description' | 'trigger' | 'steps' | 'preferences' | 'pitfalls' | 'verification' | 'scope'>>
   diff: string
-  status: 'pending' | 'applied' | 'rejected'
+  status: 'pending' | 'applied' | 'rejected' | 'rolled_back'
   createdAt: IsoDate
 }

@@ -39,7 +39,7 @@ CREATE TABLE IF NOT EXISTS routines (
 );
 CREATE TABLE IF NOT EXISTS routine_patches (
   id TEXT PRIMARY KEY, routine_id TEXT NOT NULL, base_version INTEGER NOT NULL,
-  changes TEXT NOT NULL, diff TEXT NOT NULL, status TEXT NOT NULL, created_at TEXT NOT NULL
+  changes TEXT NOT NULL, before TEXT, diff TEXT NOT NULL, status TEXT NOT NULL, created_at TEXT NOT NULL
 );
 CREATE TABLE IF NOT EXISTS routes (key TEXT PRIMARY KEY, matter_id TEXT NOT NULL);
 CREATE TABLE IF NOT EXISTS seen_events (
@@ -78,7 +78,7 @@ export class SqliteStore {
   migrate() {
     const row = this.db.prepare('SELECT value FROM meta WHERE key = ?').get('schema_version')
     const current = row ? Number(row.value) : 0
-    if (current >= 6) return
+    if (current >= 7) return
     this.db.exec('BEGIN')
     try {
       this.db.exec(`CREATE TABLE IF NOT EXISTS seen_events (
@@ -100,7 +100,9 @@ export class SqliteStore {
         seq INTEGER PRIMARY KEY AUTOINCREMENT, at TEXT NOT NULL, actor TEXT NOT NULL,
         action TEXT NOT NULL, allowed INTEGER NOT NULL, reason TEXT, prev_hash TEXT, hash TEXT NOT NULL
       )`)
-      this.db.prepare('INSERT OR REPLACE INTO meta(key,value) VALUES(?,?)').run('schema_version', '6')
+      const patchCols = this.db.prepare('PRAGMA table_info(routine_patches)').all().map((c) => c.name)
+      if (!patchCols.includes('before')) this.db.exec('ALTER TABLE routine_patches ADD COLUMN before TEXT')
+      this.db.prepare('INSERT OR REPLACE INTO meta(key,value) VALUES(?,?)').run('schema_version', '7')
       this.db.exec('COMMIT')
     } catch (error) {
       this.db.exec('ROLLBACK')
@@ -249,7 +251,7 @@ export class SqliteStore {
       })),
       routinePatches: all('SELECT * FROM routine_patches').map((r) => ({
         id: r.id, routineId: r.routine_id, baseVersion: r.base_version,
-        changes: parse(r.changes, {}), diff: r.diff, status: r.status, createdAt: r.created_at,
+        changes: parse(r.changes, {}), before: parse(r.before, {}), diff: r.diff, status: r.status, createdAt: r.created_at,
       })),
       routes: Object.fromEntries(all('SELECT * FROM routes').map((r) => [r.key, r.matter_id])),
     }
@@ -290,9 +292,9 @@ export class SqliteStore {
       for (const x of snapshot.routines ?? []) {
         r.run(x.id, x.name, x.description, json(x.trigger), json(x.steps), json(x.preferences), json(x.pitfalls), json(x.verification), x.scope ?? null, x.version, x.status, x.createdBy, x.createdAt, x.updatedAt)
       }
-      const rp = db.prepare('INSERT INTO routine_patches VALUES (?,?,?,?,?,?,?)')
+      const rp = db.prepare('INSERT INTO routine_patches VALUES (?,?,?,?,?,?,?,?)')
       for (const x of snapshot.routinePatches ?? []) {
-        rp.run(x.id, x.routineId, x.baseVersion, json(x.changes), x.diff, x.status, x.createdAt)
+        rp.run(x.id, x.routineId, x.baseVersion, json(x.changes), json(x.before), x.diff, x.status, x.createdAt)
       }
       const rt = db.prepare('INSERT INTO routes VALUES (?,?)')
       for (const [key, matterId] of Object.entries(snapshot.routes ?? {})) rt.run(key, matterId)

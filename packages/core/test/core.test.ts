@@ -305,6 +305,9 @@ test('routine patch is a diff; version changes only after apply', () => {
   ledger.applyRoutinePatch(patch.id)
   assert.equal(ledger.listRoutines()[0]?.version, 2)
   assert.equal(ledger.listRoutines()[0]?.description, 'v2')
+  ledger.revertRoutinePatch(patch.id)
+  assert.equal(ledger.listRoutines()[0]?.version, 3)
+  assert.equal(ledger.listRoutines()[0]?.description, 'v1')
 })
 
 test('confirmed matter links become hints, not injected bodies', async () => {
@@ -543,6 +546,9 @@ test('routine patch is a diff; version changes only after apply', () => {
   ledger.applyRoutinePatch(patch.id)
   assert.equal(ledger.listRoutines()[0]?.version, 2)
   assert.equal(ledger.listRoutines()[0]?.description, 'v2')
+  ledger.revertRoutinePatch(patch.id)
+  assert.equal(ledger.listRoutines()[0]?.version, 3)
+  assert.equal(ledger.listRoutines()[0]?.description, 'v1')
 })
 
 

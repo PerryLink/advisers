@@ -11,7 +11,8 @@
     "test": "pnpm -r run test",
     "demo": "node --experimental-strip-types examples/demo.ts",
     "verify:office": "node scripts/verify-office.mjs",
-    "release": "node scripts/release.mjs"
+    "release": "node scripts/release.mjs",
+    "test:security": "node scripts/security-suite.mjs"
   },
   "devDependencies": {
     "@types/node": "^22.20.5",
