@@ -3,6 +3,7 @@ import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs'
 import { homedir } from 'node:os'
 import { join } from 'node:path'
 import { SqliteStore } from '../lib/sqlite.js'
+import { runAgent } from '../lib/agent.js'
 
 let core
 if (process.env.ADVISERS_CORE_LOCAL === '1') {
@@ -109,7 +110,9 @@ function help() {
   console.log(`advisers — a staff of AI advisers
 
 Usage:
-  advisers chat <text>        record a message and print the focus context
+  advisers                    start the local conversation (TTY)
+  advisers chat [text]        one-shot task, or start the local conversation
+  advisers status             home/store/model/counts
   advisers ls                 list matters
   advisers why <pref-id>      explain a preference
   advisers forget <pref-id>   forget a preference (tombstone)
@@ -148,19 +151,32 @@ Environment:
 `)
 }
 
-async function chat(text) {
-  if (!text) {
-    console.error('usage: advisers chat <text>')
-    process.exitCode = 1
-    return
-  }
+let cliSeq = 0
+
+function modelLabel() {
+  if (!process.env.ADVISERS_API_KEY) return 'not configured (local mode)'
+  if (process.env.ADVISERS_NO_MODEL === '1') return 'disabled (ADVISERS_NO_MODEL=1)'
+  return `${process.env.ADVISERS_MODEL || 'deepseek-chat'} @ ${process.env.ADVISERS_BASE_URL || 'https://api.deepseek.com'}`
+}
+
+function printStatus() {
   const ledger = loadLedger()
-  const runtime = runtimeFor(ledger)
+  console.log(`home      ${HOME}`)
+  console.log(`store     ${mode}${mode === 'sqlite' ? ` (${DB})` : ` (${STATE})`}`)
+  console.log(`model     ${modelLabel()}`)
+  console.log(`matters   ${ledger.listMatters().length}`)
+  console.log(`prefs     ${ledger.listPreferences().length}`)
+  console.log(`routines  ${ledger.listRoutines().length}`)
+  console.log(`links     ${ledger.listLinks().length}`)
+  console.log(`soul      ${existsSync(SOUL) ? 'present' : 'not initialized'}`)
+}
+
+async function runTurn({ runtime, ledger, text, conversationId, debug = false }) {
   const result = await runtime.ingest({
     linkId: 'cli',
     accountId: 'local',
-    conversationId: 'cli',
-    messageId: `cli_${Date.now()}`,
+    conversationId,
+    messageId: `cli_${Date.now()}_${++cliSeq}`,
     sender: { id: 'local' },
     text,
     timestamp: now(),
@@ -171,29 +187,105 @@ async function chat(text) {
   }
   const context = runtime.lastContext
   if (!context) throw new Error('runtime did not produce a context')
-  let reply
+  const intent = context.intent
+  if (debug) {
+    console.log('[context]')
+    console.log(context.prompt)
+    console.log('[/context]')
+  }
+  const noisy = debug || process.env.ADVISERS_VERBOSE === '1'
+  if (intent && (noisy || intent.action !== 'execute')) {
+    console.log(intent.readback)
+    if (intent.questions?.length) console.log(`问：${intent.questions[0]}`)
+  }
+  if (intent?.action === 'ask' && intent.questions?.length) return intent.questions[0]
   const apiKey = process.env.ADVISERS_API_KEY
-  if (apiKey && process.env.ADVISERS_NO_MODEL !== '1') {
+  if (!apiKey || process.env.ADVISERS_NO_MODEL === '1') {
+    if (!intent?.questions?.length) console.log('[local] 未配置模型；已记录到事项账本。用 /office 或 advisors office 直接生成文件。')
+    return intent?.questions?.[0]
+  }
+  const { reply, artifacts, toolLog } = await runAgent({
+    runtime,
+    text,
+    context,
+    apiKey,
+    baseUrl: process.env.ADVISERS_BASE_URL || 'https://api.deepseek.com',
+    model: process.env.ADVISERS_MODEL || 'deepseek-chat',
+    cwd: process.cwd(),
+    onTool: (name) => { if (debug) console.log(`[tool] ${name}`) },
+  })
+  if (reply) console.log(reply)
+  for (const file of artifacts) console.log(`[file] ${file}`)
+  const failed = toolLog.filter((t) => !t.ok)
+  if (failed.length) console.log(`[warn] ${failed.length} 个工具调用失败，详见上一步输出`)
+}
+
+async function chat(text) {
+  if (!text) {
+    if (process.stdin.isTTY) { await repl(); return }
+    console.error('usage: advisers chat <text>')
+    process.exitCode = 1
+    return
+  }
+  const ledger = loadLedger()
+  const runtime = runtimeFor(ledger)
+  await runTurn({ runtime, ledger, text, conversationId: 'local' })
+  saveLedger(ledger)
+}
+
+async function repl() {
+  const readline = await import('node:readline/promises')
+  const rl = readline.createInterface({ input: process.stdin, output: process.stdout, historySize: 100 })
+  const ledger = loadLedger()
+  const runtime = runtimeFor(ledger)
+  let conversationId = 'local'
+  let debug = process.env.ADVISERS_DEBUG === '1'
+  console.log('advisers · local')
+  console.log(`model: ${modelLabel()}`)
+  console.log(`home:  ${HOME}`)
+  console.log('/help for commands, /quit to leave')
+  for (;;) {
+    let line
+    try { line = await rl.question('› ') } catch { break }
+    const text = line.trim()
+    if (!text) continue
+    if (text === '/quit' || text === '/exit') break
+    if (text === '/help') {
+      console.log('  /help           this help')
+      console.log('  /status         home/store/model/counts')
+      console.log('  /new            start a new conversation')
+      console.log('  /brief <text>   print the IntentBrief without calling the model')
+      console.log('  /debug          toggle full context')
+      console.log('  /quit           leave')
+      continue
+    }
+    if (text === '/status') { printStatus(); continue }
+    if (text === '/new') { conversationId = `local_${Date.now()}`; console.log('new conversation'); continue }
+    if (text === '/debug') { debug = !debug; console.log(`debug ${debug ? 'on' : 'off'}`); continue }
+    if (text.startsWith('/brief ')) {
+      const brief = runtime.brief(text.slice(7).trim())
+      console.log(core.renderIntentBrief(brief))
+      console.log(core.renderReadback(brief))
+      continue
+    }
+    if (text.startsWith('/')) { console.log(`unknown command: ${text}; /help`); continue }
     try {
-      const { complete } = await import('../lib/model.js')
-      reply = await complete({
-        prompt: `${context.prompt}\n\n[user]\n${text}`,
-        apiKey,
-        baseUrl: process.env.ADVISERS_BASE_URL || 'https://api.deepseek.com',
-        model: process.env.ADVISERS_MODEL || 'deepseek-chat',
-      })
+      const question = await runTurn({ runtime, ledger, text, conversationId, debug })
+      saveLedger(ledger)
+      if (question) {
+        let answer
+        try { answer = await rl.question('? ') } catch { break }
+        if (answer.trim()) {
+          await runTurn({ runtime, ledger, text: `${text}\n补充：${answer.trim()}`, conversationId, debug })
+          saveLedger(ledger)
+        }
+      }
     } catch (error) {
-      console.error(`model call failed: ${error.message}`)
+      console.error(`error: ${error.message}`)
     }
   }
+  rl.close()
   saveLedger(ledger)
-  console.log(`[thread] ${context.threadId}`)
-  console.log(context.prompt)
-  if (context.hints.length) {
-    console.log('\nhints:')
-    for (const hint of context.hints) console.log(`- ${hint.title}: ${hint.why}`)
-  }
-  console.log(reply ? `\n[reply]\n${reply}` : '\n[no model: set ADVISERS_API_KEY]')
 }
 
 function ls() {
@@ -604,10 +696,15 @@ function soul(sub, file) {
   process.exitCode = 1
 }
 
-if (!command || command === 'help' || command === '--help') {
+if (!command) {
+  if (process.stdin.isTTY) await repl()
+  else help()
+} else if (command === 'help' || command === '--help') {
   help()
 } else if (command === 'chat') {
   await chat(args.join(' ').trim())
+} else if (command === 'status') {
+  printStatus()
 } else if (command === 'ls') {
   ls()
 } else if (command === 'why') {

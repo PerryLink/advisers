@@ -22,15 +22,15 @@ next milestone.
 
 ## Status
 
-`0.2.0-preview.6` is staged (approval pending):
+`0.2.0-preview.8` is staged (approval pending):
 
 - SQLite ledger at `~/.advisers/state.db` (JSON fallback with `ADVISERS_STORE=json`);
 - soul at `~/.advisers/soul.md`, human-owned;
-- `soul`, `brief`, `chat`, `office`, `template`, `routine`, `link`, `bridge`, `ls`, `why`, `forget`, `export`;
+- local REPL, `chat`, `office`, `template`, `routine`, `link`, `bridge`, `soul`, `ls`, `why`, `forget`, `export`;
 - IntentBrief + clarification policy + readback;
 - DOCX/XLSX/PPTX/Mermaid/draw.io/XMind builders and 5 templates in `advisers-office`;
 - routine v0 (draft/approve/archive + patch/diff/apply) and confirmed link hints;
-- optional model call with `ADVISERS_API_KEY` / `ADVISERS_BASE_URL` / `ADVISERS_MODEL`;
+- local agent loop with Office/file tools; optional model via `ADVISERS_API_KEY` / `ADVISERS_BASE_URL` / `ADVISERS_MODEL`;
 - DSH bundle, email IMAP/draft, Feishu webhook, Hermes bridge; strict policy pack;
 - real-account/WS/Office-L3 validation still pending.
 

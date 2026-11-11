@@ -24,26 +24,30 @@ them.
 
 ## Status
 
-`0.2.0-preview.6` is staged on npm (`next` still points at the verified preview.2 until the staged packages are approved):
+`0.2.0-preview.6/8` is staged on npm (`next` still points at the verified preview.2 until the staged packages are approved):
 
-- `advisers` CLI: `soul`, `brief`, `chat`, `office`, `template`, `routine`, `link`, `bridge`, `ls`, `why`, `forget`, `export`;
+- `advisers` CLI: local REPL, `chat`, `office`, `template`, `routine`, `link`, `bridge`, `soul`, `ls`, `why`, `forget`, `export`;
 - SQLite at `~/.advisers/state.db` (JSON fallback with `ADVISERS_STORE=json`);
 - `IntentBrief` + clarification policy + readback;
 - `advisers-office`: DOCX/XLSX/PPTX/Mermaid/draw.io/XMind + 5 templates;
 - routine v0 (draft/approve/archive + patch/diff/apply);
-- optional model call with `ADVISERS_API_KEY`;
+- local agent loop with tools (`office_build`, `office_template`, `file_read/write/list`); optional model with `ADVISERS_API_KEY`;
 - DSH bundle (`dsh-advisers`) with `advisers_brief`; email IMAP/draft; Feishu webhook; strict policy pack;
 - Hermes bridge (`advisers-bridge-hermes`) for 20+ platforms through Hermes gateway;
 - real-account/WS/Office-L3 validation still pending.
 
 ```sh
 npm i -g advisers@next advisers-office@next advisers-bridge-hermes@next
-advisers soul init
+advisers
+# or one-shot:
+advisers chat "做一份 Q4 汇报 PPT，放到 out/q4.pptx"
 advisers brief "做一份 Q4 预算 Excel，周五前给老板"
 advisers template weekly data.json weekly.docx
 advisers office docx spec.json out.docx
 advisers bridge --dir "$BRIDGE_DIR"   # Hermes gateway bridge
 ```
+
+Local interaction: `advisers` starts a REPL; `/help`, `/status`, `/new`, `/brief`, `/debug`, `/quit`. With an API key the model can call local Office/file tools and report the generated paths.
 
 The `latest` tag stays on the stable placeholder `0.0.4` until the preview is
 promoted.
