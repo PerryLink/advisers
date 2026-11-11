@@ -5,8 +5,11 @@ import {
   buildDrawio,
   buildMermaid,
   buildPptx,
+  buildXmind,
   buildXlsx,
   containsText,
+  excelDate,
+  validateXmind,
   validateOffice,
 } from '../src/index.ts'
 
@@ -88,4 +91,40 @@ test('drawio XML has vertices and edges', () => {
   assert.match(xml, /<mxGraphModel/)
   assert.match(xml, /value="开始"/)
   assert.match(xml, /edge="1"/)
+})
+
+test('excelDate is timezone-safe (UTC, not local midnight)', () => {
+  const d = excelDate(2026, 11, 10)
+  assert.equal(d.toISOString().slice(0, 10), '2026-11-10')
+  assert.equal(d.getUTCHours(), 0)
+})
+
+test('xmind zip has content, metadata, manifest, and the title', async () => {
+  const buffer = await buildXmind({
+    kind: 'mindmap',
+    title: 'Q4 规划',
+    branches: [{ label: '目标', children: ['增长', '利润'] }],
+  })
+  assert.equal((await validateXmind(buffer)).ok, true)
+  assert.equal(await containsText(buffer, 'Q4 规划'), true)
+  assert.equal(await containsText(buffer, '增长'), true)
+})
+
+test('validator catches a broken OOXML relationship target', async () => {
+  const JSZip = (await import('jszip')).default
+  const buffer = await buildDocx({ title: '断链测试', sections: [{ paragraphs: ['hello'] }] })
+  const zip = await JSZip.loadAsync(buffer)
+  const rels = await zip.file('word/_rels/document.xml.rels')?.async('string')
+  assert.ok(rels)
+  const match = [...rels.matchAll(/<Relationship\b[^>]*>/g)]
+    .map((m) => m[0])
+    .find((tag) => !/TargetMode="External"/.test(tag))
+  const target = match && /Target="([^"]+)"/.exec(match)?.[1]
+  assert.ok(target)
+  const resolved = target.startsWith('/') ? target.slice(1) : 'word/' + target
+  zip.remove(resolved)
+  const broken = await zip.generateAsync({ type: 'nodebuffer' })
+  const result = await validateOffice(broken, 'docx')
+  assert.equal(result.ok, false)
+  assert.ok(result.missing.some((item) => item.startsWith('rel:')))
 })

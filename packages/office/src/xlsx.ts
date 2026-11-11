@@ -1,5 +1,9 @@
 import ExcelJS from 'exceljs'
 
+export function excelDate(year: number, month: number, day: number): Date {
+  return new Date(Date.UTC(year, month - 1, day))
+}
+
 export interface XlsxColumnSpec {
   header: string
   key: string

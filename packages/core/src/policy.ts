@@ -15,15 +15,18 @@ export interface AffectPolicy {
   /** Warn on heavy use / replacement of human relationships. */
   dependencyGuard: boolean
   region?: string
+  /** e.g. cn-2026, eu-ai-act, us-ca, strict; companion packs load outside core. */
+  policyPack?: string
 }
 
 export const DEFAULT_AFFECT_POLICY: AffectPolicy = {
-  mode: 'understanding',
+  mode: 'off',
   roleplay: false,
   ageGate: 'none',
   disclosure: true,
   crisisEscalation: 'off',
   dependencyGuard: true,
+  policyPack: 'strict',
 }
 
 export class AffectPolicyError extends Error {

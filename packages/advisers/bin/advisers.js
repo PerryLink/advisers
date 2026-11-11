@@ -78,7 +78,7 @@ Usage:
   advisers export             export the ledger as JSON
   advisers brief <text>       print the IntentBrief for a request
   advisers office <kind> <spec.json> <out>
-                              build docx/xlsx/pptx/mermaid/drawio
+                              build docx/xlsx/pptx/xmind/mermaid/drawio
   advisers routine ls         list routines
   advisers routine add <spec.json>
                               add a draft routine
@@ -228,9 +228,9 @@ function routine(sub, arg) {
 }
 
 async function office(kind, specFile, outFile) {
-  const kinds = ['docx', 'xlsx', 'pptx', 'mermaid', 'drawio']
+  const kinds = ['docx', 'xlsx', 'pptx', 'xmind', 'mermaid', 'drawio']
   if (!kinds.includes(kind) || !specFile || !outFile) {
-    console.error('usage: advisers office <docx|xlsx|pptx|mermaid|drawio> <spec.json> <out>')
+    console.error('usage: advisers office <docx|xlsx|pptx|xmind|mermaid|drawio> <spec.json> <out>')
     process.exitCode = 1
     return
   }
@@ -257,10 +257,10 @@ async function office(kind, specFile, outFile) {
     console.log(`wrote ${outFile}`)
     return
   }
-  const builder = kind === 'docx' ? mod.buildDocx : kind === 'xlsx' ? mod.buildXlsx : mod.buildPptx
+  const builder = kind === 'docx' ? mod.buildDocx : kind === 'xlsx' ? mod.buildXlsx : kind === 'xmind' ? mod.buildXmind : mod.buildPptx
   const buffer = await builder(spec)
   writeFileSync(outFile, buffer)
-  const result = await mod.validateOffice(buffer, kind)
+  const result = kind === 'xmind' ? await mod.validateXmind(buffer) : await mod.validateOffice(buffer, kind)
   console.log(result.ok ? `wrote ${outFile} (${buffer.length} bytes)` : `wrote ${outFile}, missing: ${result.missing.join(', ')}`)
   if (!result.ok) process.exitCode = 1
 }
