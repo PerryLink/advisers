@@ -186,3 +186,23 @@ export interface TurnContext {
   hints: AssociationHint[]
   usedTokens: number
 }
+
+export type RoutineStatus = 'draft' | 'active' | 'archived'
+
+/** A procedure learned from a successful task; proposal first, human approves. */
+export interface Routine {
+  id: Id
+  name: string
+  description: string
+  trigger: string[]
+  steps: string[]
+  preferences: string[]
+  pitfalls: string[]
+  verification: string[]
+  scope?: string
+  version: number
+  status: RoutineStatus
+  createdBy: 'user' | 'agent'
+  createdAt: IsoDate
+  updatedAt: IsoDate
+}

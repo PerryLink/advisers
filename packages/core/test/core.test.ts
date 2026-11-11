@@ -269,3 +269,23 @@ test('intent block sits between soul and context', async () => {
   assert.ok(ctx.prompt.indexOf('<intent>') < ctx.prompt.indexOf('<advisers-context>'))
   assert.equal(ctx.intent?.deliverable, 'xlsx')
 })
+
+test('routine is a draft until a human approves it', () => {
+  const ledger = new Ledger()
+  const routine = ledger.addRoutine({
+    name: '周报',
+    description: '每周五给老板的周报',
+    trigger: ['周五'],
+    steps: ['汇总本周', '写风险', '给结论'],
+    preferences: ['先结论'],
+    pitfalls: ['不要流水账'],
+    verification: ['老板 1 分钟内能读完'],
+    createdBy: 'user',
+  })
+  assert.equal(routine.status, 'draft')
+  assert.equal(ledger.listRoutines('active').length, 0)
+  ledger.approveRoutine(routine.id)
+  assert.equal(ledger.listRoutines('active').length, 1)
+  const restored = Ledger.fromJSON(JSON.parse(JSON.stringify(ledger.toJSON())))
+  assert.equal(restored.listRoutines('active').length, 1)
+})

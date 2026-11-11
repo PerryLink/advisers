@@ -79,6 +79,12 @@ Usage:
   advisers brief <text>       print the IntentBrief for a request
   advisers office <kind> <spec.json> <out>
                               build docx/xlsx/pptx/mermaid/drawio
+  advisers routine ls         list routines
+  advisers routine add <spec.json>
+                              add a draft routine
+  advisers routine approve <id>
+                              activate a routine (human action)
+  advisers routine archive <id>
   advisers soul show          print soul.md
   advisers soul set <file>    set soul.md from a file (human action)
   advisers soul init          write a minimal starter soul.md
@@ -171,6 +177,54 @@ function brief(text) {
   const brief = core.buildIntentBrief(text, { stage })
   console.log(core.renderIntentBrief(brief))
   console.log('\n' + core.renderReadback(brief))
+}
+
+function routine(sub, arg) {
+  const ledger = loadLedger()
+  if (sub === 'ls' || !sub) {
+    const rows = ledger.listRoutines()
+    if (!rows.length) {
+      console.log('no routines yet')
+      return
+    }
+    for (const r of rows) console.log(`${r.id}\t${r.status}\tv${r.version}\t${r.name}`)
+    return
+  }
+  if (sub === 'add') {
+    if (!arg) {
+      console.error('usage: advisers routine add <spec.json>')
+      process.exitCode = 1
+      return
+    }
+    const spec = JSON.parse(readFileSync(arg, 'utf8'))
+    const routine = ledger.addRoutine({
+      name: spec.name,
+      description: spec.description ?? '',
+      trigger: spec.trigger ?? [],
+      steps: spec.steps ?? [],
+      preferences: spec.preferences ?? [],
+      pitfalls: spec.pitfalls ?? [],
+      verification: spec.verification ?? [],
+      scope: spec.scope,
+      createdBy: spec.createdBy ?? 'user',
+    })
+    saveLedger(ledger)
+    console.log(`draft routine ${routine.id}: ${routine.name}; approve with \`advisers routine approve ${routine.id}\``)
+    return
+  }
+  if (sub === 'approve' || sub === 'archive') {
+    if (!arg) {
+      console.error(`usage: advisers routine ${sub} <id>`)
+      process.exitCode = 1
+      return
+    }
+    const routine = sub === 'approve' ? ledger.approveRoutine(arg) : ledger.archiveRoutine(arg)
+    saveLedger(ledger)
+    console.log(`${routine.status}: ${routine.id}`)
+    return
+  }
+  console.error(`unknown routine subcommand: ${sub}`)
+  process.exitCode = 1
 }
 
 async function office(kind, specFile, outFile) {
@@ -286,6 +340,8 @@ if (!command || command === 'help' || command === '--help') {
 } else if (command === 'office') {
   await office(args[0], args[1], args[2])
   process.exit(process.exitCode || 0)
+} else if (command === 'routine') {
+  routine(args[0], args[1])
 } else if (command === 'soul') {
   soul(args[0], args[1])
 } else {

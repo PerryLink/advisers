@@ -8,6 +8,7 @@ import type {
   Matter,
   MatterLink,
   MatterLinkType,
+  Routine,
   PreferenceKind,
   PreferenceScope,
   UpdateProposal,
@@ -70,6 +71,7 @@ export class Ledger {
   private readonly links = new Map<Id, MatterLink>()
   private readonly updates = new Map<Id, UpdateProposal>()
   private readonly routes = new Map<string, Id>()
+  private readonly routines = new Map<Id, Routine>()
 
   constructor(ports: HostPorts = systemPorts()) {
     this.clock = ports.clock
@@ -283,6 +285,40 @@ export class Ledger {
     return this.preferences.get(id)
   }
 
+  addRoutine(input: Omit<Routine, 'id' | 'version' | 'status' | 'createdAt' | 'updatedAt'>): Routine {
+    const now = this.clock.now()
+    const routine: Routine = {
+      ...input,
+      id: this.ids.next('routine'),
+      version: 1,
+      status: 'draft',
+      createdAt: now,
+      updatedAt: now,
+    }
+    this.routines.set(routine.id, routine)
+    return routine
+  }
+
+  listRoutines(status?: Routine['status']): Routine[] {
+    return [...this.routines.values()].filter((r) => (status ? r.status === status : true))
+  }
+
+  approveRoutine(id: Id): Routine {
+    const routine = this.routines.get(id)
+    if (!routine) throw new Error(`unknown routine: ${id}`)
+    routine.status = 'active'
+    routine.updatedAt = this.clock.now()
+    return routine
+  }
+
+  archiveRoutine(id: Id): Routine {
+    const routine = this.routines.get(id)
+    if (!routine) throw new Error(`unknown routine: ${id}`)
+    routine.status = 'archived'
+    routine.updatedAt = this.clock.now()
+    return routine
+  }
+
   getRoute(key: string): Id | undefined {
     return this.routes.get(key)
   }
@@ -301,6 +337,7 @@ export class Ledger {
       links: [...this.links.values()],
       updates: [...this.updates.values()],
       routes: Object.fromEntries(this.routes),
+      routines: [...this.routines.values()],
     }
   }
 
@@ -313,6 +350,7 @@ export class Ledger {
     for (const l of snapshot.links ?? []) ledger.links.set(l.id, l)
     for (const u of snapshot.updates ?? []) ledger.updates.set(u.id, u)
     for (const [k, v] of Object.entries(snapshot.routes ?? {})) ledger.routes.set(k, v)
+    for (const r of snapshot.routines ?? []) ledger.routines.set(r.id, r)
     return ledger
   }
 }
@@ -326,4 +364,5 @@ export interface LedgerSnapshot {
   links: MatterLink[]
   updates: UpdateProposal[]
   routes: Record<string, Id>
+  routines: Routine[]
 }
