@@ -22,14 +22,16 @@ next milestone.
 
 ## Status
 
-`0.1.0-preview.3` is a preview:
+`0.2.0-preview.1` is a preview:
 
-- in-memory/JSON ledger at `~/.advisers/state.json`;
+- SQLite ledger at `~/.advisers/state.db` (JSON fallback with `ADVISERS_STORE=json`);
 - soul at `~/.advisers/soul.md`, human-owned;
-- `soul`, `brief`, `chat`, `office`, `ls`, `why`, `forget`, `export` commands;
+- `soul`, `brief`, `chat`, `office`, `template`, `routine`, `link`, `ls`, `why`, `forget`, `export`;
 - IntentBrief + clarification policy + readback;
-- DOCX/XLSX/PPTX/Mermaid/draw.io builders in `advisers-office`;
-- no LLM call, no SQLite, no real IM Link, no DSH bundle.
+- DOCX/XLSX/PPTX/Mermaid/draw.io/XMind builders and 5 templates in `advisers-office`;
+- routine v0 (draft/approve/archive + patch/diff/apply) and confirmed link hints;
+- optional model call with `ADVISERS_API_KEY` / `ADVISERS_BASE_URL` / `ADVISERS_MODEL`;
+- no real IM Link, no DSH bundle yet.
 
 Shared core and architecture:
 

@@ -18,13 +18,13 @@ CLI 目前是**context 预览**，不是聊天 UI：它记录消息、生成 Foc
 
 ## 状态
 
-`0.1.0-preview.3` 是预览版：
+`0.2.0-preview.1` 是预览版：
 
 - 内存/JSON 账本，位于 `~/.advisers/state.json`；
 - soul 位于 `~/.advisers/soul.md`，人类独占；
 - 命令：`soul`、`brief`、`chat`、`office`、`ls`、`why`、`forget`、`export`；
 - IntentBrief + 澄清策略 + readback；
-- `advisers-office` 提供 DOCX/XLSX/PPTX/Mermaid/draw.io builder；
+- `advisers-office` 提供 DOCX/XLSX/PPTX/Mermaid/draw.io/XMind builder 与 5 个模板；
 - 不调模型、不用 SQLite、不接真实 IM、不含 DSH bundle。
 
 核心与架构：

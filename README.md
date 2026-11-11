@@ -24,21 +24,25 @@ them.
 
 ## Status
 
-`0.1.0-preview.3` is on the npm `next` tag:
+`0.2.0-preview.1` is on the npm `next` tag:
 
-- `advisers` CLI: `soul init`, `brief`, `chat`, `office`, `ls`, `why`, `forget`, `export`;
-- soul at `~/.advisers/soul.md` (human-owned, slot #1);
-- JSON ledger at `~/.advisers/state.json`;
-- `advisers-office`: DOCX/XLSX/PPTX/Mermaid/draw.io builders;
-- no LLM call, no SQLite, no real IM link, no DSH bundle yet.
+- `advisers` CLI: `soul`, `brief`, `chat`, `office`, `template`, `routine`, `link`, `ls`, `why`, `forget`, `export`;
+- SQLite at `~/.advisers/state.db` (JSON fallback with `ADVISERS_STORE=json`);
+- `IntentBrief` + clarification policy + readback;
+- `advisers-office`: DOCX/XLSX/PPTX/Mermaid/draw.io/XMind + 5 templates;
+- routine v0 (draft/approve/archive + patch/diff/apply);
+- optional model call with `ADVISERS_API_KEY`;
+- no real IM Link, no DSH bundle yet.
 
 ```sh
-npm i -g advisers@next
+npm i -g advisers@next advisers-office@next
 advisers soul init
-advisers chat "周五前把报价发给王工"
+advisers brief "做一份 Q4 预算 Excel，周五前给老板"
+advisers template weekly data.json weekly.docx
+advisers office docx spec.json out.docx
 ```
 
-The `latest` tag stays on the stable placeholder `0.0.3` until the preview is
+The `latest` tag stays on the stable placeholder `0.0.4` until the preview is
 promoted.
 
 ## License
