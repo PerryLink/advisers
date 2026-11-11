@@ -3,7 +3,7 @@ import { AdvisersRuntime } from 'advisers-core'
 
 export const name = 'advisers'
 export const inject = ['tools']
-export const version = '0.2.0-preview.5'
+export const version = '0.2.0-preview.6'
 
 /**
  * DSH bundle entry point. The first slice is deliberately one read-only tool:

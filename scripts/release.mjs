@@ -15,6 +15,7 @@ const root = new URL('..', import.meta.url).pathname
 const packages = [
   ['packages/core', 'advisers-core'],
   ['packages/office', 'advisers-office'],
+  ['packages/bridge-hermes', 'advisers-bridge-hermes'],
   ['packages/advisers', 'advisers'],
   ['packages/dsh-advisers', 'dsh-advisers'],
 ]

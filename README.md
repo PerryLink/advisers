@@ -24,23 +24,25 @@ them.
 
 ## Status
 
-`0.2.0-preview.5` is staged on npm (`next` still points at the verified preview.2 until the staged packages are approved):
+`0.2.0-preview.6` is staged on npm (`next` still points at the verified preview.2 until the staged packages are approved):
 
-- `advisers` CLI: `soul`, `brief`, `chat`, `office`, `template`, `routine`, `link`, `ls`, `why`, `forget`, `export`;
+- `advisers` CLI: `soul`, `brief`, `chat`, `office`, `template`, `routine`, `link`, `bridge`, `ls`, `why`, `forget`, `export`;
 - SQLite at `~/.advisers/state.db` (JSON fallback with `ADVISERS_STORE=json`);
 - `IntentBrief` + clarification policy + readback;
 - `advisers-office`: DOCX/XLSX/PPTX/Mermaid/draw.io/XMind + 5 templates;
 - routine v0 (draft/approve/archive + patch/diff/apply);
 - optional model call with `ADVISERS_API_KEY`;
 - DSH bundle (`dsh-advisers`) with `advisers_brief`; email IMAP/draft; Feishu webhook; strict policy pack;
+- Hermes bridge (`advisers-bridge-hermes`) for 20+ platforms through Hermes gateway;
 - real-account/WS/Office-L3 validation still pending.
 
 ```sh
-npm i -g advisers@next advisers-office@next
+npm i -g advisers@next advisers-office@next advisers-bridge-hermes@next
 advisers soul init
 advisers brief "做一份 Q4 预算 Excel，周五前给老板"
 advisers template weekly data.json weekly.docx
 advisers office docx spec.json out.docx
+advisers bridge --dir "$BRIDGE_DIR"   # Hermes gateway bridge
 ```
 
 The `latest` tag stays on the stable placeholder `0.0.4` until the preview is

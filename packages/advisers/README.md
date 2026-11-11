@@ -7,7 +7,7 @@ routines.
 ## Install
 
 ```sh
-npm i -g advisers@next advisers-office@next
+npm i -g advisers@next advisers-office@next advisers-bridge-hermes@next
 advisers soul init
 advisers brief "做一份 Q4 预算 Excel，周五前给老板"
 advisers chat "周五前把报价发给王工"
@@ -22,16 +22,16 @@ next milestone.
 
 ## Status
 
-`0.2.0-preview.5` is staged (approval pending):
+`0.2.0-preview.6` is staged (approval pending):
 
 - SQLite ledger at `~/.advisers/state.db` (JSON fallback with `ADVISERS_STORE=json`);
 - soul at `~/.advisers/soul.md`, human-owned;
-- `soul`, `brief`, `chat`, `office`, `template`, `routine`, `link`, `ls`, `why`, `forget`, `export`;
+- `soul`, `brief`, `chat`, `office`, `template`, `routine`, `link`, `bridge`, `ls`, `why`, `forget`, `export`;
 - IntentBrief + clarification policy + readback;
 - DOCX/XLSX/PPTX/Mermaid/draw.io/XMind builders and 5 templates in `advisers-office`;
 - routine v0 (draft/approve/archive + patch/diff/apply) and confirmed link hints;
 - optional model call with `ADVISERS_API_KEY` / `ADVISERS_BASE_URL` / `ADVISERS_MODEL`;
-- DSH bundle, email IMAP/draft, Feishu webhook, strict policy pack;
+- DSH bundle, email IMAP/draft, Feishu webhook, Hermes bridge; strict policy pack;
 - real-account/WS/Office-L3 validation still pending.
 
 Shared core and architecture:

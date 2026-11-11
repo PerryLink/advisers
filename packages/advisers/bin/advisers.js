@@ -133,6 +133,8 @@ Usage:
   advisers link ls            list matter links
   advisers link add <from> <to> <type>
   advisers link confirm <id>
+  advisers bridge --dir <path> [--name advisers]
+                              expose Advisers to the Hermes messaging gateway
   advisers soul show          print soul.md
   advisers soul set <file>    set soul.md from a file (human action)
   advisers soul init          write a minimal starter soul.md
@@ -432,6 +434,80 @@ function link(sub, from, to, type) {
   process.exitCode = 1
 }
 
+async function bridge(args) {
+  let dir
+  let name = 'advisers'
+  for (let i = 0; i < args.length; i++) {
+    if (args[i] === '--dir') dir = args[++i]
+    else if (args[i] === '--name') name = args[++i]
+  }
+  dir = dir || process.env.HERMES_BRIDGE_DIR
+  if (!dir) {
+    console.error('usage: advisers bridge --dir <BRIDGE_DIR> [--name advisers]')
+    process.exitCode = 1
+    return
+  }
+  let mod
+  if (process.env.ADVISERS_BRIDGE_LOCAL === '1') {
+    mod = await import('../../bridge-hermes/dist/index.js')
+  } else {
+    try {
+      mod = await import('advisers-bridge-hermes')
+    } catch {
+      console.error('advisers-bridge-hermes is not installed; run `npm i -g advisers-bridge-hermes@next`')
+      process.exitCode = 1
+      return
+    }
+  }
+  const ledger = loadLedger()
+  const runtime = runtimeFor(ledger)
+  const link = new mod.HermesBridgeLink({ bridgeDir: dir, name })
+  const host = {
+    async ingest(event) {
+      const result = await runtime.ingest(event)
+      if (result.accepted && runtime.lastContext) {
+        const context = runtime.lastContext
+        let reply
+        const key = process.env.ADVISERS_API_KEY
+        if (key && process.env.ADVISERS_NO_MODEL !== '1') {
+          try {
+            const { complete } = await import('../lib/model.js')
+            reply = await complete({
+              prompt: `${context.prompt}\n\n[user]\n${event.text ?? ''}`,
+              apiKey: key,
+              baseUrl: process.env.ADVISERS_BASE_URL || 'https://api.deepseek.com',
+              model: process.env.ADVISERS_MODEL || 'deepseek-chat',
+            })
+          } catch (error) {
+            reply = `模型调用失败：${error.message}`
+          }
+        } else {
+          reply = context.intent?.readback ?? '[advisers] received'
+        }
+        await link.send({
+          conversationId: event.conversationId,
+          threadId: event.threadId,
+          replyTo: event.messageId,
+          text: reply,
+          idempotencyKey: event.dedupeKey ?? event.messageId,
+        })
+        saveLedger(ledger)
+      }
+      return result
+    },
+    async resolvePrincipal(account) {
+      return `${account.linkId}:${account.accountId}`
+    },
+  }
+  await link.start(host)
+  console.log(`[bridge] ${name} listening at ${dir}`)
+  const keepalive = setInterval(() => {}, 60_000)
+  const shutdown = async () => { clearInterval(keepalive); await link.stop(); process.exit(0) }
+  process.once('SIGINT', shutdown)
+  process.once('SIGTERM', shutdown)
+  await new Promise(() => {})
+}
+
 async function office(kind, specFile, outFile) {
   const kinds = ['docx', 'xlsx', 'pptx', 'xmind', 'mermaid', 'drawio']
   if (!kinds.includes(kind) || !specFile || !outFile) {
@@ -552,6 +628,8 @@ if (!command || command === 'help' || command === '--help') {
   process.exit(process.exitCode || 0)
 } else if (command === 'link') {
   link(args[0], args[1], args[2], args[3])
+} else if (command === 'bridge') {
+  await bridge(args)
 } else if (command === 'soul') {
   soul(args[0], args[1])
 } else {

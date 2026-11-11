@@ -19,7 +19,7 @@ IM 是 **Link SPI**，不是硬依赖。Email、Satori/Koishi、`dsh-im`、OpenC
 
 ## 状态
 
-`0.2.0-preview.5` 已 staged（待 OTP 批准；`next` 仍是已验证的 preview.2）：
+`0.2.0-preview.6` 已 staged（待 OTP 批准；`next` 仍是已验证的 preview.2）：
 
 - `advisers` CLI：`soul init`、`brief`、`chat`、`office`、`ls`、`why`、`forget`、`export`；
 - soul 位于 `~/.advisers/soul.md`（人类独占，slot #1）；
