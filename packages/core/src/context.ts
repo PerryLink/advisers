@@ -1,4 +1,6 @@
 import { buildFocusFrame, estimateTokens, renderFocusFrame } from './focus.ts'
+import { renderIntentBrief } from './intent.ts'
+import type { IntentBrief } from './intent.ts'
 import type { Ledger } from './ledger.ts'
 import type { AssociationHint, Matter, SoulDocument, TurnContext } from './types.ts'
 
@@ -15,6 +17,7 @@ export interface AssembleInput {
   budget?: number
   audience?: string
   soul?: SoulDocument
+  intent?: IntentBrief
   /** 0..3; the local owner normally has 3. */
   clearance?: number
 }
@@ -56,6 +59,11 @@ export function assembleContext(input: AssembleInput): TurnContext {
   if (input.soul) {
     // Soul is slot #1: it is the identity layer, not a matter fact.
     parts.push(`<soul version="${input.soul.version}">`, input.soul.content, '</soul>')
+  }
+  if (input.intent) {
+    // The brief is the "prompt understanding" layer: what the user meant,
+    // what we assume, and whether we need to ask.
+    parts.push(renderIntentBrief(input.intent))
   }
   parts.push(
     '<advisers-context>',

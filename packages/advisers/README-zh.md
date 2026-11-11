@@ -5,9 +5,11 @@
 ## 安装
 
 ```sh
-npm i -g advisers@next
+npm i -g advisers@next advisers-office@next
 advisers soul init
+advisers brief "做一份 Q4 预算 Excel，周五前给老板"
 advisers chat "周五前把报价发给王工"
+advisers office xlsx spec.json out.xlsx
 advisers ls
 advisers export
 ```
@@ -16,11 +18,13 @@ CLI 目前是**context 预览**，不是聊天 UI：它记录消息、生成 Foc
 
 ## 状态
 
-`0.1.0-preview.1` 是预览版：
+`0.1.0-preview.2` 是预览版：
 
 - 内存/JSON 账本，位于 `~/.advisers/state.json`；
 - soul 位于 `~/.advisers/soul.md`，人类独占；
-- 命令：`soul`、`chat`、`ls`、`why`、`forget`、`export`；
+- 命令：`soul`、`brief`、`chat`、`office`、`ls`、`why`、`forget`、`export`；
+- IntentBrief + 澄清策略 + readback；
+- `advisers-office` 提供 DOCX/XLSX/PPTX/Mermaid/draw.io builder；
 - 不调模型、不用 SQLite、不接真实 IM、不含 DSH bundle。
 
 核心与架构：

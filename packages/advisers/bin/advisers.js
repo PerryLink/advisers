@@ -76,6 +76,9 @@ Usage:
   advisers why <pref-id>      explain a preference
   advisers forget <pref-id>   forget a preference (tombstone)
   advisers export             export the ledger as JSON
+  advisers brief <text>       print the IntentBrief for a request
+  advisers office <kind> <spec.json> <out>
+                              build docx/xlsx/pptx/mermaid/drawio
   advisers soul show          print soul.md
   advisers soul set <file>    set soul.md from a file (human action)
   advisers soul init          write a minimal starter soul.md
@@ -158,6 +161,56 @@ function exportLedger() {
   console.log(JSON.stringify(loadLedger().toJSON(), null, 2))
 }
 
+function brief(text) {
+  if (!text) {
+    console.error('usage: advisers brief <text>')
+    process.exitCode = 1
+    return
+  }
+  const stage = process.env.ADVISERS_STAGE === 'trusted' ? 'trusted' : 'probation'
+  const brief = core.buildIntentBrief(text, { stage })
+  console.log(core.renderIntentBrief(brief))
+  console.log('\n' + core.renderReadback(brief))
+}
+
+async function office(kind, specFile, outFile) {
+  const kinds = ['docx', 'xlsx', 'pptx', 'mermaid', 'drawio']
+  if (!kinds.includes(kind) || !specFile || !outFile) {
+    console.error('usage: advisers office <docx|xlsx|pptx|mermaid|drawio> <spec.json> <out>')
+    process.exitCode = 1
+    return
+  }
+  let mod
+  if (process.env.ADVISERS_OFFICE_LOCAL === '1') {
+    mod = await import('../../office/dist/index.js')
+  } else {
+    try {
+      mod = await import('advisers-office')
+    } catch {
+      console.error('advisers-office is not installed; run `npm i -g advisers-office@next`')
+      process.exitCode = 1
+      return
+    }
+  }
+  const spec = JSON.parse(readFileSync(specFile, 'utf8'))
+  if (kind === 'mermaid') {
+    writeFileSync(outFile, mod.buildMermaid(spec))
+    console.log(`wrote ${outFile}`)
+    return
+  }
+  if (kind === 'drawio') {
+    writeFileSync(outFile, mod.buildDrawio(spec))
+    console.log(`wrote ${outFile}`)
+    return
+  }
+  const builder = kind === 'docx' ? mod.buildDocx : kind === 'xlsx' ? mod.buildXlsx : mod.buildPptx
+  const buffer = await builder(spec)
+  writeFileSync(outFile, buffer)
+  const result = await mod.validateOffice(buffer, kind)
+  console.log(result.ok ? `wrote ${outFile} (${buffer.length} bytes)` : `wrote ${outFile}, missing: ${result.missing.join(', ')}`)
+  if (!result.ok) process.exitCode = 1
+}
+
 function soul(sub, file) {
   if (sub === 'show') {
     const doc = loadSoul()
@@ -228,6 +281,11 @@ if (!command || command === 'help' || command === '--help') {
   forget(args[0])
 } else if (command === 'export') {
   exportLedger()
+} else if (command === 'brief') {
+  brief(args.join(' ').trim())
+} else if (command === 'office') {
+  await office(args[0], args[1], args[2])
+  process.exit(process.exitCode || 0)
 } else if (command === 'soul') {
   soul(args[0], args[1])
 } else {

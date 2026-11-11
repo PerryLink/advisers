@@ -1,6 +1,6 @@
 {
   "name": "dsh-advisers",
-  "version": "0.1.0-preview.1",
+  "version": "0.1.0-preview.2",
   "description": "DSH distribution placeholder for Advisers: the DSH bundle and cordis.patch.yml arrive in 0.3. This package currently re-exports advisers-core.",
   "keywords": [
     "dsh",
@@ -25,7 +25,7 @@
     "LICENSE"
   ],
   "dependencies": {
-    "advisers-core": "0.1.0-preview.1"
+    "advisers-core": "0.1.0-preview.2"
   },
   "repository": {
     "type": "git",

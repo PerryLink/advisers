@@ -6,6 +6,9 @@ import {
   assembleContext,
   buildFocusFrame,
   estimateTokens,
+  buildIntentBrief,
+  assertAffectAllowed,
+  DEFAULT_AFFECT_POLICY,
 } from '../src/index.ts'
 
 test('focus frame carries global + active matter preferences, never another matter', () => {
@@ -229,4 +232,40 @@ test('secrecy above clearance is denied', () => {
     () => assembleContext({ matter, ledger, clearance: 1 }),
     /requires secrecy 2/,
   )
+})
+
+test('intent brief asks when the request is vague, executes when it is clear', () => {
+  const vague = buildIntentBrief('那个搞一下')
+  assert.equal(vague.action, 'ask')
+  assert.ok(vague.questions.length > 0)
+
+  const clear = buildIntentBrief('做一份 Q4 预算 Excel，周五前给老板，包含三张表')
+  assert.equal(clear.deliverable, 'xlsx')
+  assert.equal(clear.risk, 'high')
+  assert.notEqual(clear.action, 'ask')
+
+  const probation = buildIntentBrief('整理一下客户反馈', { stage: 'probation' })
+  const trusted = buildIntentBrief('整理一下客户反馈', { stage: 'trusted' })
+  assert.ok(probation.action !== 'execute' || trusted.action === 'execute')
+})
+
+test('affect policy separates understanding from companion/roleplay', () => {
+  assert.doesNotThrow(() => assertAffectAllowed(DEFAULT_AFFECT_POLICY, 'understanding'))
+  assert.throws(() => assertAffectAllowed(DEFAULT_AFFECT_POLICY, 'companion'))
+  assert.throws(() => assertAffectAllowed(DEFAULT_AFFECT_POLICY, 'roleplay'))
+  const companion = { ...DEFAULT_AFFECT_POLICY, mode: 'companion' as const, roleplay: true, ageGate: '18+' as const }
+  assert.doesNotThrow(() => assertAffectAllowed(companion, 'companion'))
+  assert.doesNotThrow(() => assertAffectAllowed(companion, 'roleplay'))
+})
+
+test('intent block sits between soul and context', async () => {
+  const runtime = new AdvisersRuntime()
+  const ctx = await runtime.handleInbound({
+    linkId: 'cli', accountId: 'me', conversationId: 'c1', messageId: 'm1',
+    sender: { id: 'me' }, text: '做一份 Q4 预算 Excel，周五前给老板',
+    timestamp: new Date().toISOString(),
+  })
+  assert.match(ctx.prompt, /<intent>/)
+  assert.ok(ctx.prompt.indexOf('<intent>') < ctx.prompt.indexOf('<advisers-context>'))
+  assert.equal(ctx.intent?.deliverable, 'xlsx')
 })

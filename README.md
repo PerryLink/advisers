@@ -24,11 +24,12 @@ them.
 
 ## Status
 
-`0.1.0-preview.1` is on the npm `next` tag:
+`0.1.0-preview.2` is on the npm `next` tag:
 
-- `advisers` CLI: `soul init`, `chat`, `ls`, `why`, `forget`, `export`;
+- `advisers` CLI: `soul init`, `brief`, `chat`, `office`, `ls`, `why`, `forget`, `export`;
 - soul at `~/.advisers/soul.md` (human-owned, slot #1);
 - JSON ledger at `~/.advisers/state.json`;
+- `advisers-office`: DOCX/XLSX/PPTX/Mermaid/draw.io builders;
 - no LLM call, no SQLite, no real IM link, no DSH bundle yet.
 
 ```sh

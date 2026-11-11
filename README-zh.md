@@ -19,16 +19,18 @@ IM 是 **Link SPI**，不是硬依赖。Email、Satori/Koishi、`dsh-im`、OpenC
 
 ## 状态
 
-`0.1.0-preview.1` 在 npm `next` tag：
+`0.1.0-preview.2` 在 npm `next` tag：
 
-- `advisers` CLI：`soul init`、`chat`、`ls`、`why`、`forget`、`export`；
+- `advisers` CLI：`soul init`、`brief`、`chat`、`office`、`ls`、`why`、`forget`、`export`；
 - soul 位于 `~/.advisers/soul.md`（人类独占，slot #1）；
 - JSON 账本位于 `~/.advisers/state.json`；
+- `advisers-office` 提供 DOCX/XLSX/PPTX/Mermaid/draw.io builder；
 - 不调模型、不用 SQLite、不接真实 IM、不含 DSH bundle。
 
 ```sh
-npm i -g advisers@next
+npm i -g advisers@next advisers-office@next
 advisers soul init
+advisers brief "做一份 Q4 预算 Excel，周五前给老板"
 advisers chat "周五前把报价发给王工"
 ```
 

@@ -7,9 +7,11 @@ routines.
 ## Install
 
 ```sh
-npm i -g advisers@next
+npm i -g advisers@next advisers-office@next
 advisers soul init
+advisers brief "做一份 Q4 预算 Excel，周五前给老板"
 advisers chat "周五前把报价发给王工"
+advisers office xlsx spec.json out.xlsx
 advisers ls
 advisers export
 ```
@@ -20,11 +22,13 @@ next milestone.
 
 ## Status
 
-`0.1.0-preview.1` is a preview:
+`0.1.0-preview.2` is a preview:
 
 - in-memory/JSON ledger at `~/.advisers/state.json`;
 - soul at `~/.advisers/soul.md`, human-owned;
-- `soul`, `chat`, `ls`, `why`, `forget`, `export` commands;
+- `soul`, `brief`, `chat`, `office`, `ls`, `why`, `forget`, `export` commands;
+- IntentBrief + clarification policy + readback;
+- DOCX/XLSX/PPTX/Mermaid/draw.io builders in `advisers-office`;
 - no LLM call, no SQLite, no real IM Link, no DSH bundle.
 
 Shared core and architecture:

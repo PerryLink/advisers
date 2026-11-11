@@ -1,3 +1,5 @@
+import type { IntentBrief } from './intent.ts'
+
 export type Id = string
 export type IsoDate = string
 
@@ -179,6 +181,7 @@ export interface Episode {
 export interface TurnContext {
   matter: Matter
   threadId?: Id
+  intent?: IntentBrief
   prompt: string
   hints: AssociationHint[]
   usedTokens: number

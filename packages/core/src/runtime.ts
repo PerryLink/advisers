@@ -1,4 +1,8 @@
 import { assembleContext } from './context.ts'
+import { buildIntentBrief } from './intent.ts'
+import type { IntentBrief } from './intent.ts'
+import { DEFAULT_AFFECT_POLICY } from './policy.ts'
+import type { AffectPolicy } from './policy.ts'
 import { Ledger } from './ledger.ts'
 import type { HostPorts } from './ports.ts'
 import { systemPorts } from './ports.ts'
@@ -11,6 +15,8 @@ export interface AdvisersOptions {
   ledger?: Ledger
   /** 0..3; the local owner normally has 3. */
   clearance?: number
+  stage?: 'probation' | 'trusted'
+  policy?: AffectPolicy
 }
 
 /**
@@ -25,6 +31,8 @@ export class AdvisersRuntime implements LinkHost {
   private readonly seen = new Set<string>()
   private readonly budget: number
   private readonly clearance: number
+  private readonly stage: 'probation' | 'trusted'
+  readonly policy: AffectPolicy
   private readonly ports?: HostPorts
   private readonly clock: HostPorts['clock']
   private readonly ids: HostPorts['ids']
@@ -33,10 +41,17 @@ export class AdvisersRuntime implements LinkHost {
     const ports = options.ports ?? systemPorts()
     this.budget = options.budget ?? 1200
     this.clearance = options.clearance ?? 3
+    this.stage = options.stage ?? 'probation'
+    this.policy = options.policy ?? DEFAULT_AFFECT_POLICY
     this.ports = options.ports
     this.clock = ports.clock
     this.ids = ports.ids
     this.ledger = options.ledger ?? new Ledger(ports)
+  }
+
+  /** Build the intent brief without recording a turn. */
+  brief(text: string): IntentBrief {
+    return buildIntentBrief(text, { stage: this.stage })
   }
 
   /** Soul is human-owned; the runtime only reads it. */
@@ -119,12 +134,14 @@ export class AdvisersRuntime implements LinkHost {
     const matter = this.ledger.getMatter(matterId)
     if (!matter) throw new Error(`matter disappeared: ${matterId}`)
 
+    const intent = buildIntentBrief(event.text ?? '', { stage: this.stage })
     const context = assembleContext({
       matter,
       ledger: this.ledger,
       budget: this.budget,
       clearance: this.clearance,
       soul: this.readSoul(),
+      intent,
     })
 
     if (event.text) {
@@ -149,7 +166,7 @@ export class AdvisersRuntime implements LinkHost {
     }
     this.episodes.set(episode.id, episode)
 
-    return { ...context, threadId: thread.id }
+    return { ...context, threadId: thread.id, intent }
   }
 
   async send(linkId: string, message: OutboundMessage): Promise<DeliveryResult> {
