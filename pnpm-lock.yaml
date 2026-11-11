@@ -178,6 +178,9 @@ importers:
       advisers-core:
         specifier: 0.2.0-preview.6
         version: link:../core
+      jszip:
+        specifier: ^3.10.2
+        version: 3.10.2
 
   packages/bridge-hermes:
     dependencies:

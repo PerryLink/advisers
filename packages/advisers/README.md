@@ -22,7 +22,7 @@ next milestone.
 
 ## Status
 
-`0.2.0-preview.11` is staged (approval pending):
+`0.2.0-preview.13` is staged (approval pending):
 
 - SQLite ledger at `~/.advisers/state.db` (JSON fallback with `ADVISERS_STORE=json`);
 - soul at `~/.advisers/soul.md`, human-owned;

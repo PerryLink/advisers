@@ -52,7 +52,7 @@ CREATE TABLE IF NOT EXISTS sessions (
 );
 CREATE TABLE IF NOT EXISTS deliveries (
   id TEXT PRIMARY KEY, matter_id TEXT NOT NULL, conversation_id TEXT NOT NULL,
-  files TEXT NOT NULL, tool TEXT, created_at TEXT NOT NULL
+  files TEXT NOT NULL, tool TEXT, title TEXT, created_at TEXT NOT NULL
 );
 CREATE TABLE IF NOT EXISTS meta (key TEXT PRIMARY KEY, value TEXT NOT NULL);
 `
@@ -74,7 +74,7 @@ export class SqliteStore {
   migrate() {
     const row = this.db.prepare('SELECT value FROM meta WHERE key = ?').get('schema_version')
     const current = row ? Number(row.value) : 0
-    if (current >= 3) return
+    if (current >= 4) return
     this.db.exec('BEGIN')
     try {
       this.db.exec(`CREATE TABLE IF NOT EXISTS seen_events (
@@ -87,9 +87,11 @@ export class SqliteStore {
       )`)
       this.db.exec(`CREATE TABLE IF NOT EXISTS deliveries (
         id TEXT PRIMARY KEY, matter_id TEXT NOT NULL, conversation_id TEXT NOT NULL,
-        files TEXT NOT NULL, tool TEXT, created_at TEXT NOT NULL
+        files TEXT NOT NULL, tool TEXT, title TEXT, created_at TEXT NOT NULL
       )`)
-      this.db.prepare('INSERT OR REPLACE INTO meta(key,value) VALUES(?,?)').run('schema_version', '3')
+      const cols = this.db.prepare('PRAGMA table_info(deliveries)').all().map((c) => c.name)
+      if (!cols.includes('title')) this.db.exec('ALTER TABLE deliveries ADD COLUMN title TEXT')
+      this.db.prepare('INSERT OR REPLACE INTO meta(key,value) VALUES(?,?)').run('schema_version', '4')
       this.db.exec('COMMIT')
     } catch (error) {
       this.db.exec('ROLLBACK')
@@ -115,16 +117,16 @@ export class SqliteStore {
     return r ? { conversationId: r.conversation_id, matterId: r.matter_id, title: r.title, createdAt: r.created_at, updatedAt: r.updated_at } : undefined
   }
 
-  addDelivery({ matterId, conversationId, files, tool }) {
+  addDelivery({ matterId, conversationId, files, tool, title }) {
     const id = `del_${randomUUID().replace(/-/g, '').slice(0, 16)}`
-    this.db.prepare('INSERT INTO deliveries VALUES(?,?,?,?,?,?)')
-      .run(id, matterId, conversationId, JSON.stringify(files ?? []), tool ?? null, new Date().toISOString())
+    this.db.prepare('INSERT INTO deliveries(id,matter_id,conversation_id,files,tool,title,created_at) VALUES(?,?,?,?,?,?,?)')
+      .run(id, matterId, conversationId, JSON.stringify(files ?? []), tool ?? null, title ?? null, new Date().toISOString())
     return id
   }
 
   listDeliveries(limit = 20) {
     return this.db.prepare('SELECT * FROM deliveries ORDER BY created_at DESC LIMIT ?').all(limit)
-      .map((r) => ({ id: r.id, matterId: r.matter_id, conversationId: r.conversation_id, files: parse(r.files), tool: r.tool ?? undefined, createdAt: r.created_at }))
+      .map((r) => ({ id: r.id, matterId: r.matter_id, conversationId: r.conversation_id, files: parse(r.files), tool: r.tool ?? undefined, title: r.title ?? undefined, createdAt: r.created_at }))
   }
 
   countDeliveries() {

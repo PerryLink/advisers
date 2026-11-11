@@ -1,9 +1,10 @@
 #!/usr/bin/env node
-import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs'
+import { existsSync, mkdirSync, readFileSync, statSync, writeFileSync } from 'node:fs'
 import { homedir } from 'node:os'
-import { join } from 'node:path'
+import { basename, dirname, join } from 'node:path'
 import { SqliteStore } from '../lib/sqlite.js'
 import { runAgent } from '../lib/agent.js'
+import { extractAttachment } from '../lib/attachments.js'
 
 let core
 if (process.env.ADVISERS_CORE_LOCAL === '1') {
@@ -136,10 +137,19 @@ function printDeliveries() {
     console.log('no deliveries yet')
     return
   }
+  let matters = []
+  try { matters = loadLedger().listMatters() } catch {}
+  const title = new Map(matters.map((m) => [m.id, m.title]))
   for (const row of rows) {
-    console.log(`${row.createdAt}  ${row.files.join(', ') || '(no files)'}`)
+    console.log(`${row.createdAt.slice(0, 19)}  ${row.title ?? title.get(row.matterId) ?? row.matterId}  [${row.tool ?? 'tool'}]`)
+    for (const file of row.files) {
+      let size = 0
+      try { size = statSync(file).size } catch {}
+      console.log(`  ${file}  ${size} B`)
+    }
   }
 }
+
 
 function shouldPlan(text, brief) {
   if (process.env.ADVISERS_YES === '1') return false
@@ -172,7 +182,8 @@ function help() {
 
 Usage:
   advisers                    start the local conversation (TTY)
-  advisers chat [text]        one-shot task, or start the local conversation
+  advisers chat [--file <path>] [text]
+                              one-shot task, or start the local conversation
   advisers status             home/store/model/counts
   advisers history            recent conversations
   advisers deliveries         recent generated files
@@ -242,7 +253,7 @@ function printStatus() {
   console.log(`soul      ${existsSync(SOUL) ? 'present' : 'not initialized'}`)
 }
 
-async function runTurn({ runtime, ledger, text, conversationId, debug = false, confirm }) {
+async function runTurn({ runtime, ledger, text, conversationId, debug = false, confirm, attachments = [] }) {
   const result = await runtime.ingest({
     linkId: 'cli',
     accountId: 'local',
@@ -259,6 +270,20 @@ async function runTurn({ runtime, ledger, text, conversationId, debug = false, c
   const context = runtime.lastContext
   if (!context) throw new Error('runtime did not produce a context')
   const intent = context.intent
+  let agentText = text
+  const extracted = []
+  for (const file of attachments) {
+    try {
+      const attachment = await extractAttachment(file, { cwd: process.cwd() })
+      extracted.push(attachment)
+      console.log(`[attach] ${attachment.name} (${attachment.text.length} chars${attachment.truncated ? ', truncated' : ''})`)
+    } catch (error) {
+      console.log(`[attach] ${file}: ${error.message}`)
+    }
+  }
+  if (extracted.length) {
+    agentText = `${text}\n\n[attachments]\n` + extracted.map((a) => `<file name="${a.name}">\n${a.text}\n</file>`).join('\n\n')
+  }
   try {
     dbStore()?.upsertSession({ conversationId, matterId: context.matter.id, title: text.slice(0, 80) })
   } catch {}
@@ -280,7 +305,7 @@ async function runTurn({ runtime, ledger, text, conversationId, debug = false, c
   }
   const { reply, artifacts, toolLog } = await runAgent({
     runtime,
-    text,
+    text: agentText,
     context,
     apiKey,
     baseUrl: process.env.ADVISERS_BASE_URL || 'https://api.deepseek.com',
@@ -299,6 +324,7 @@ async function runTurn({ runtime, ledger, text, conversationId, debug = false, c
         conversationId,
         files: artifacts,
         tool: toolLog.map((t) => t.name).join(','),
+        title: text.slice(0, 80),
       })
     } catch {}
   }
@@ -306,16 +332,30 @@ async function runTurn({ runtime, ledger, text, conversationId, debug = false, c
   if (failed.length && (debug || artifacts.length === 0)) console.log(`[warn] ${failed.length} 个工具调用失败，详见上一步输出`)
 }
 
-async function chat(text) {
+function parseChatArgs(args) {
+  const files = []
+  const words = []
+  for (let i = 0; i < args.length; i++) {
+    if (args[i] === '--file' || args[i] === '-f') {
+      if (args[i + 1]) files.push(args[++i])
+    } else {
+      words.push(args[i])
+    }
+  }
+  return { text: words.join(' ').trim(), files }
+}
+
+async function chat(args) {
+  const { text, files } = parseChatArgs(args)
   if (!text) {
     if (process.stdin.isTTY) { await repl(); return }
-    console.error('usage: advisers chat <text>')
+    console.error('usage: advisers chat [--file <path>] <text>')
     process.exitCode = 1
     return
   }
   const ledger = loadLedger()
   const runtime = runtimeFor(ledger)
-  await runTurn({ runtime, ledger, text, conversationId: latestConversationId() })
+  await runTurn({ runtime, ledger, text, conversationId: latestConversationId(), attachments: files })
   saveLedger(ledger)
 }
 
@@ -326,6 +366,8 @@ async function repl() {
   const runtime = runtimeFor(ledger)
   let conversationId = latestConversationId()
   let debug = process.env.ADVISERS_DEBUG === '1'
+  let pendingFiles = []
+  let lastTask
   console.log('advisers · local')
   console.log(`model: ${modelLabel()}`)
   console.log(`home:  ${HOME}`)
@@ -334,6 +376,36 @@ async function repl() {
     if (latest) console.log(`resume: ${latest.title} [${latest.conversationId}]`)
   } catch {}
   console.log('/help for commands, /quit to leave')
+
+  const runTask = async (taskText, files = [], { skipPlan = false } = {}) => {
+    const brief = runtime.brief(taskText)
+    if (!skipPlan && shouldPlan(taskText, brief)) {
+      console.log('计划：')
+      for (const step of planLines(brief)) console.log(`  ${step}`)
+      if (!(await askYesNo(rl, '按这个计划执行？[Y/n] ', true))) { console.log('已取消'); return }
+    }
+    const confirm = async ({ path }) => {
+      console.log(`${path} 已存在`)
+      return askYesNo(rl, '覆盖？[y/N] ', false)
+    }
+    try {
+      const question = await runTurn({ runtime, ledger, text: taskText, conversationId, debug, confirm, attachments: files })
+      saveLedger(ledger)
+      lastTask = { text: taskText, files: [...files] }
+      pendingFiles = []
+      if (question) {
+        let answer
+        try { answer = await rl.question('? ') } catch { return }
+        if (answer.trim()) {
+          await runTurn({ runtime, ledger, text: `${taskText}\n补充：${answer.trim()}`, conversationId, debug, confirm, attachments: files })
+          saveLedger(ledger)
+        }
+      }
+    } catch (error) {
+      console.error(`error: ${error.message}`)
+    }
+  }
+
   for (;;) {
     let line
     try { line = await rl.question('› ') } catch { break }
@@ -347,6 +419,10 @@ async function repl() {
       console.log('  /resume <n|id>  resume a conversation')
       console.log('  /deliveries     recent generated files')
       console.log('  /new            start a new conversation')
+      console.log('  /file <path>    attach a file to the next task')
+      console.log('  /files          list pending attachments')
+      console.log('  /clear          clear pending attachments')
+      console.log('  /retry          rerun the last task')
       console.log('  /brief <text>   print the IntentBrief without calling the model')
       console.log('  /debug          toggle full context')
       console.log('  /quit           leave')
@@ -355,8 +431,22 @@ async function repl() {
     if (text === '/status') { printStatus(); continue }
     if (text === '/history') { printHistory(); continue }
     if (text === '/deliveries') { printDeliveries(); continue }
-    if (text === '/new') { conversationId = `local_${Date.now()}`; console.log('new conversation'); continue }
+    if (text === '/new') { conversationId = `local_${Date.now()}`; pendingFiles = []; console.log('new conversation'); continue }
     if (text === '/debug') { debug = !debug; console.log(`debug ${debug ? 'on' : 'off'}`); continue }
+    if (text === '/files') { console.log(pendingFiles.length ? pendingFiles.join('\n') : 'no pending attachments'); continue }
+    if (text === '/clear') { pendingFiles = []; console.log('attachments cleared'); continue }
+    if (text === '/retry') {
+      if (!lastTask) { console.log('nothing to retry'); continue }
+      await runTask(lastTask.text, lastTask.files, { skipPlan: true })
+      continue
+    }
+    if (text.startsWith('/file ')) {
+      const path = text.slice(6).trim()
+      if (!path) { console.log('usage: /file <path>'); continue }
+      pendingFiles.push(path)
+      console.log(`attached: ${path} (${pendingFiles.length} pending)`)
+      continue
+    }
     if (text.startsWith('/resume ')) {
       const arg = text.slice(8).trim()
       try {
@@ -364,6 +454,7 @@ async function repl() {
         const pick = /^\d+$/.test(arg) ? rows[Number(arg) - 1] : rows.find((r) => r.conversationId === arg)
         if (!pick) { console.log(`unknown session: ${arg}`); continue }
         conversationId = pick.conversationId
+        pendingFiles = []
         console.log(`resumed: ${pick.title} [${pick.conversationId}]`)
       } catch { console.log('history is not available') }
       continue
@@ -375,35 +466,11 @@ async function repl() {
       continue
     }
     if (text.startsWith('/')) { console.log(`unknown command: ${text}; /help`); continue }
-    const brief = runtime.brief(text)
-    if (shouldPlan(text, brief)) {
-      console.log('计划：')
-      for (const step of planLines(brief)) console.log(`  ${step}`)
-      if (!(await askYesNo(rl, '按这个计划执行？[Y/n] ', true))) { console.log('已取消'); continue }
-    }
-    const confirm = async ({ path }) => {
-      console.log(`${path} 已存在`)
-      return askYesNo(rl, '覆盖？[y/N] ', false)
-    }
-    try {
-      const question = await runTurn({ runtime, ledger, text, conversationId, debug, confirm })
-      saveLedger(ledger)
-      if (question) {
-        let answer
-        try { answer = await rl.question('? ') } catch { break }
-        if (answer.trim()) {
-          await runTurn({ runtime, ledger, text: `${text}\n补充：${answer.trim()}`, conversationId, debug, confirm })
-          saveLedger(ledger)
-        }
-      }
-    } catch (error) {
-      console.error(`error: ${error.message}`)
-    }
+    await runTask(text, pendingFiles)
   }
   rl.close()
   saveLedger(ledger)
 }
-
 
 function ls() {
   const matters = loadLedger().listMatters()
@@ -585,6 +652,7 @@ async function template(name, dataFile, outFile) {
     : name === 'presentation' ? mod.presentation(data)
     : name === 'flow' ? mod.flow(data)
     : mod.mindmap(data)
+  mkdirSync(dirname(outFile), { recursive: true })
   const ext = outFile.split('.').pop()
   let buffer
   let result
@@ -737,6 +805,7 @@ async function office(kind, specFile, outFile) {
     }
   }
   const spec = JSON.parse(readFileSync(specFile, 'utf8'))
+  mkdirSync(dirname(outFile), { recursive: true })
   if (kind === 'mermaid') {
     writeFileSync(outFile, mod.buildMermaid(spec))
     console.log(`wrote ${outFile}`)
@@ -819,7 +888,7 @@ if (!command) {
 } else if (command === 'help' || command === '--help') {
   help()
 } else if (command === 'chat') {
-  await chat(args.join(' ').trim())
+  await chat(args)
 } else if (command === 'status') {
   printStatus()
 } else if (command === 'history') {

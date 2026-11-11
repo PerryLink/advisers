@@ -90,7 +90,6 @@ export async function buildDocx(spec: DocxSpec): Promise<Buffer> {
     for (const b of section.bullets ?? []) {
       children.push(
         new Paragraph({
-          text: b,
           bullet: { level: 0 },
           children: [new TextRun({ text: b, font: FONT, size: 22 })],
         }),

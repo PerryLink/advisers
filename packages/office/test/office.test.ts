@@ -165,3 +165,11 @@ test('validator rejects a missing content-type declaration', async () => {
   assert.equal(result.ok, false)
   assert.ok(result.missing.some((item) => item.startsWith('content-type:')))
 })
+
+test('docx bullet text is not duplicated', async () => {
+  const JSZip = (await import('jszip')).default
+  const buffer = await buildDocx({ title: 't', sections: [{ bullets: ['alpha'] }] })
+  const zip = await JSZip.loadAsync(buffer)
+  const xml = await zip.file('word/document.xml')?.async('string')
+  assert.equal((xml?.match(/alpha/g) ?? []).length, 1)
+})

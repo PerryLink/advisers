@@ -72,12 +72,13 @@ test('sessions and deliveries persist for local history', () => {
   try {
     const store = new SqliteStore(db)
     store.upsertSession({ conversationId: 'local', matterId: 'm1', title: 'Q4 周报' })
-    const id = store.addDelivery({ matterId: 'm1', conversationId: 'local', files: ['out/weekly.docx'], tool: 'office_build' })
+    const id = store.addDelivery({ matterId: 'm1', conversationId: 'local', files: ['out/weekly.docx'], tool: 'office_build', title: 'Q4 周报' })
     assert.match(id, /^del_/)
     store.close()
     const reopened = new SqliteStore(db)
     assert.equal(reopened.listSessions()[0].conversationId, 'local')
     assert.deepEqual(reopened.listDeliveries()[0].files, ['out/weekly.docx'])
+    assert.equal(reopened.listDeliveries()[0].title, 'Q4 周报')
     assert.equal(reopened.countDeliveries(), 1)
     reopened.close()
   } finally {
