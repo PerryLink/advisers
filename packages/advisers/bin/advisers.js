@@ -210,6 +210,10 @@ Usage:
   advisers link ls            list matter links
   advisers link add <from> <to> <type>
   advisers link confirm <id>
+  advisers link updates       list cross-matter proposals
+  advisers link propose-update <source> <target> <change>
+  advisers link apply <id>    write to target only, then mark applied
+  advisers link reject <id>
   advisers bridge --dir <path> [--name advisers]
                               expose Advisers to the Hermes messaging gateway
   advisers soul show          print soul.md
@@ -229,11 +233,39 @@ Environment:
 }
 
 let cliSeq = 0
+let lastRun
 
 function modelLabel() {
   if (!process.env.ADVISERS_API_KEY) return 'not configured (local mode)'
   if (process.env.ADVISERS_NO_MODEL === '1') return 'disabled (ADVISERS_NO_MODEL=1)'
   return `${process.env.ADVISERS_MODEL || 'deepseek-chat'} @ ${process.env.ADVISERS_BASE_URL || 'https://api.deepseek.com'}`
+}
+
+function learnPreference(ledger, statement, quote) {
+  const existing = ledger.listPreferences({ includeCandidates: true }).find((p) => p.statement === statement)
+  if (existing) {
+    existing.confidence = Math.min(1, existing.confidence + 0.2)
+    existing.lastConfirmed = now()
+    if (existing.confidence >= 0.7) existing.status = 'confirmed'
+    return { preference: existing, promoted: existing.status === 'confirmed' }
+  }
+  const pref = ledger.addPreference({
+    kind: 'preference',
+    statement,
+    source: { type: 'inferred', quote },
+    confidence: 0.5,
+    status: 'candidate',
+  })
+  return { preference: pref, promoted: false }
+}
+
+function printPreferences() {
+  const ledger = loadLedger()
+  const rows = ledger.listPreferences({ includeCandidates: true })
+  if (!rows.length) { console.log('no preferences yet'); return }
+  for (const p of rows) {
+    console.log(`${p.id}\t${p.status}\tconf=${p.confidence.toFixed(2)}\t${p.statement}`)
+  }
 }
 
 function printStatus() {
@@ -315,6 +347,7 @@ async function runTurn({ runtime, ledger, text, conversationId, debug = false, c
     confirm,
     onTool: (name) => { if (debug || process.env.ADVISERS_PROGRESS !== '0') console.log(`[tool] ${name}`) },
   })
+  lastRun = { artifacts: [...new Set(artifacts)], toolLog }
   if (reply) console.log(reply)
   for (const file of [...new Set(artifacts)]) console.log(`[file] ${file}`)
   if (artifacts.length) {
@@ -396,6 +429,10 @@ async function repl() {
       if (question) {
         let answer
         try { answer = await rl.question('? ') } catch { return }
+        if (answer.trim().startsWith('/')) {
+          console.log('已取消补充，请重新输入命令')
+          return
+        }
         if (answer.trim()) {
           await runTurn({ runtime, ledger, text: `${taskText}\n补充：${answer.trim()}`, conversationId, debug, confirm, attachments: files })
           saveLedger(ledger)
@@ -423,6 +460,10 @@ async function repl() {
       console.log('  /files          list pending attachments')
       console.log('  /clear          clear pending attachments')
       console.log('  /retry          rerun the last task')
+      console.log('  /correct <text>  record a correction; 2nd time promotes it')
+      console.log('  /prefs          list preferences (incl. candidates)')
+      console.log('  /why <pref-id>  explain a preference')
+      console.log('  /routine save   save the last task as a draft routine')
       console.log('  /brief <text>   print the IntentBrief without calling the model')
       console.log('  /debug          toggle full context')
       console.log('  /quit           leave')
@@ -435,6 +476,34 @@ async function repl() {
     if (text === '/debug') { debug = !debug; console.log(`debug ${debug ? 'on' : 'off'}`); continue }
     if (text === '/files') { console.log(pendingFiles.length ? pendingFiles.join('\n') : 'no pending attachments'); continue }
     if (text === '/clear') { pendingFiles = []; console.log('attachments cleared'); continue }
+    if (text.startsWith('/correct ')) {
+      const statement = text.slice(9).trim()
+      if (!statement) { console.log('usage: /correct <statement>'); continue }
+      const result = learnPreference(ledger, statement, statement)
+      saveLedger(ledger)
+      console.log(`[learn] ${result.preference.id} conf=${result.preference.confidence.toFixed(2)} ${result.promoted ? '(promoted to confirmed)' : '(candidate; repeat to promote)'}`)
+      continue
+    }
+    if (text === '/prefs') { printPreferences(); continue }
+    if (text.startsWith('/why ')) { why(text.slice(5).trim()); continue }
+    if (text === '/routine save') {
+      if (!lastTask) { console.log('nothing to save'); continue }
+      const tools = lastRun?.toolLog?.map((t) => t.name) ?? []
+      const routine = ledger.addRoutine({
+        name: lastTask.text.slice(0, 60),
+        description: '从本地任务沉淀的流程草稿',
+        trigger: [],
+        steps: tools.length ? tools : ['执行任务'],
+        preferences: [],
+        pitfalls: [],
+        verification: ['产物已生成并记录 delivery'],
+        createdBy: 'agent',
+      })
+      saveLedger(ledger)
+      console.log(`draft routine ${routine.id}: ${routine.name}`)
+      console.log(`approve with \`advisers routine approve ${routine.id}\``)
+      continue
+    }
     if (text === '/retry') {
       if (!lastTask) { console.log('nothing to retry'); continue }
       await runTask(lastTask.text, lastTask.files, { skipPlan: true })
@@ -466,6 +535,12 @@ async function repl() {
       continue
     }
     if (text.startsWith('/')) { console.log(`unknown command: ${text}; /help`); continue }
+    if (/^(以后|记住|每次)/.test(text) && text.length < 100) {
+      const result = learnPreference(ledger, text, text)
+      saveLedger(ledger)
+      console.log(`[learn] ${result.preference.id} conf=${result.preference.confidence.toFixed(2)} ${result.promoted ? '(confirmed)' : '(candidate; repeat to promote)'}`)
+      continue
+    }
     await runTask(text, pendingFiles)
   }
   rl.close()
@@ -707,6 +782,54 @@ function link(sub, from, to, type) {
     console.log(`confirmed: ${l.id}`)
     return
   }
+  if (sub === 'updates') {
+    const rows = ledger.listUpdates()
+    if (!rows.length) { console.log('no update proposals'); return }
+    for (const u of rows) console.log(`${u.id}\t${u.status}\t${u.sourceMatter} -> ${u.targetMatter}\t${u.change}`)
+    return
+  }
+  if (sub === 'propose-update') {
+    if (!from || !to || !type) {
+      console.error('usage: advisers link propose-update <source> <target> <change>')
+      process.exitCode = 1
+      return
+    }
+    const u = ledger.proposeUpdate({ sourceMatter: from, targetMatter: to, change: type })
+    saveLedger(ledger)
+    console.log(`${u.id} pending; apply with \`advisers link apply ${u.id}\``)
+    return
+  }
+  if (sub === 'apply' || sub === 'reject') {
+    if (!from) {
+      console.error(`usage: advisers link ${sub} <id>`)
+      process.exitCode = 1
+      return
+    }
+    const proposal = ledger.listUpdates().find((u) => u.id === from)
+    if (!proposal || proposal.status !== 'pending') {
+      console.error(`unknown or closed update: ${from}`)
+      process.exitCode = 1
+      return
+    }
+    if (sub === 'reject') {
+      ledger.resolveUpdate(from, 'rejected')
+      saveLedger(ledger)
+      console.log(`rejected: ${from}`)
+      return
+    }
+    const fact = ledger.remember({
+      matterId: proposal.targetMatter,
+      subject: 'update',
+      predicate: 'from',
+      object: proposal.change,
+      authority: 'user',
+      source: { type: 'import', ref: proposal.id },
+    })
+    ledger.resolveUpdate(from, 'applied', `fact:${fact.id}`)
+    saveLedger(ledger)
+    console.log(`applied: ${from} -> target fact ${fact.id}`)
+    return
+  }
   console.error(`unknown link subcommand: ${sub}`)
   process.exitCode = 1
 }
@@ -895,6 +1018,17 @@ if (!command) {
   printHistory()
 } else if (command === 'deliveries') {
   printDeliveries()
+} else if (command === 'prefs') {
+  printPreferences()
+} else if (command === 'correct') {
+  const statement = args.join(' ').trim()
+  if (!statement) { console.error('usage: advisers correct <statement>'); process.exitCode = 1 }
+  else {
+    const ledger = loadLedger()
+    const result = learnPreference(ledger, statement, statement)
+    saveLedger(ledger)
+    console.log(`[learn] ${result.preference.id} conf=${result.preference.confidence.toFixed(2)}${result.promoted ? ' confirmed' : ' candidate'}`)
+  }
 } else if (command === 'ls') {
   ls()
 } else if (command === 'why') {
