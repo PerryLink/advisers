@@ -16,6 +16,12 @@ export interface SoulStore {
   save(doc: SoulDocument): void
 }
 
+/** Idempotency port; links must persist this so a restart does not replay. */
+export interface SeenStore {
+  has(key: string): boolean
+  add(key: string): void
+}
+
 /** Persistence port. The in-memory skeleton ignores it. */
 export interface Store {
   load(): unknown | undefined

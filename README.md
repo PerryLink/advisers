@@ -24,7 +24,7 @@ them.
 
 ## Status
 
-`0.2.0-preview.4` is staged on npm (`next` still points at the verified preview.2 until the staged packages are approved):
+`0.2.0-preview.5` is staged on npm (`next` still points at the verified preview.2 until the staged packages are approved):
 
 - `advisers` CLI: `soul`, `brief`, `chat`, `office`, `template`, `routine`, `link`, `ls`, `why`, `forget`, `export`;
 - SQLite at `~/.advisers/state.db` (JSON fallback with `ADVISERS_STORE=json`);

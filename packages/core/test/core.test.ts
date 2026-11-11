@@ -563,3 +563,16 @@ test('dependency guard escalates replacement of human contact', () => {
   assert.equal(assessDependency({ minutesToday: 180, sessionsToday: 2 }).level, 'warn')
   assert.equal(assessDependency({ minutesToday: 10, sessionsToday: 1, substitutesHumanContact: true }).level, 'limit')
 })
+
+test('seen store makes ingest idempotent across runtime instances', async () => {
+  const seen = new Set<string>()
+  const store = { has: (key: string) => seen.has(key), add: (key: string) => { seen.add(key) } }
+  const event = {
+    linkId: 'email', accountId: 'me', conversationId: 'c', messageId: 'm1',
+    sender: { id: 'me' }, text: '同一封邮件', timestamp: new Date().toISOString(),
+  }
+  const first = new AdvisersRuntime({ seen: store })
+  assert.equal((await first.ingest(event)).accepted, true)
+  const second = new AdvisersRuntime({ seen: store })
+  assert.equal((await second.ingest(event)).accepted, false)
+})

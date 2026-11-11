@@ -4,7 +4,7 @@ import type { IntentBrief } from './intent.ts'
 import { DEFAULT_AFFECT_POLICY } from './policy.ts'
 import type { AffectPolicy } from './policy.ts'
 import { Ledger } from './ledger.ts'
-import type { HostPorts } from './ports.ts'
+import type { HostPorts, SeenStore } from './ports.ts'
 import { systemPorts } from './ports.ts'
 import type { InboundEvent, IngestResult, LinkHost, LinkProvider, OutboundMessage, DeliveryResult } from './link.ts'
 import type { Episode, Thread, TurnContext } from './types.ts'
@@ -17,6 +17,7 @@ export interface AdvisersOptions {
   clearance?: number
   stage?: 'probation' | 'trusted'
   policy?: AffectPolicy
+  seen?: SeenStore
 }
 
 /**
@@ -28,11 +29,12 @@ export class AdvisersRuntime implements LinkHost {
   private readonly links = new Map<string, LinkProvider>()
   private readonly threads = new Map<string, Thread>()
   private readonly episodes = new Map<string, Episode>()
-  private readonly seen = new Set<string>()
+  private readonly seen: SeenStore
   private readonly budget: number
   private readonly clearance: number
   private readonly stage: 'probation' | 'trusted'
   readonly policy: AffectPolicy
+  lastContext?: TurnContext
   private readonly ports?: HostPorts
   private readonly clock: HostPorts['clock']
   private readonly ids: HostPorts['ids']
@@ -43,6 +45,8 @@ export class AdvisersRuntime implements LinkHost {
     this.clearance = options.clearance ?? 3
     this.stage = options.stage ?? 'probation'
     this.policy = options.policy ?? DEFAULT_AFFECT_POLICY
+    const memory = new Set<string>()
+    this.seen = options.seen ?? { has: (key) => memory.has(key), add: (key) => { memory.add(key) } }
     this.ports = options.ports
     this.clock = ports.clock
     this.ids = ports.ids
@@ -106,7 +110,7 @@ export class AdvisersRuntime implements LinkHost {
    * The real runtime will feed the returned context to the host's LLM.
    */
   async ingest(event: InboundEvent): Promise<IngestResult> {
-    const key = `${event.linkId}:${event.dedupeKey ?? event.messageId}`
+    const key = `${event.linkId}:${event.accountId}:${event.dedupeKey ?? event.messageId}`
     if (this.seen.has(key)) return { accepted: false, reason: 'duplicate' }
     this.seen.add(key)
     // A group message that is not addressed to the adviser is observed by the
@@ -114,7 +118,7 @@ export class AdvisersRuntime implements LinkHost {
     if (event.conversationType === 'group' && event.addressed === false) {
       return { accepted: false, reason: 'ignored' }
     }
-    this.handleInbound(event)
+    this.lastContext = this.handleInbound(event)
     return { accepted: true }
   }
 

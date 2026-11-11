@@ -49,3 +49,19 @@ test('sqlite store round-trips ledger snapshot across reopen', () => {
     rmSync(dir, { recursive: true, force: true })
   }
 })
+
+test('seen store persists dedupe keys across reopen', () => {
+  const dir = mkdtempSync(join(tmpdir(), 'advisers-seen-'))
+  const db = join(dir, 'state.db')
+  try {
+    const a = new SqliteStore(db)
+    assert.equal(a.seenStore().has('email:me:m1'), false)
+    a.seenStore().add('email:me:m1')
+    a.close()
+    const b = new SqliteStore(db)
+    assert.equal(b.seenStore().has('email:me:m1'), true)
+    b.close()
+  } finally {
+    rmSync(dir, { recursive: true, force: true })
+  }
+})

@@ -1,6 +1,6 @@
 {
   "name": "advisers-core",
-  "version": "0.2.0-preview.4",
+  "version": "0.2.0-preview.5",
   "description": "Core types and runtime for Advisers: matters, scoped ledgers, focus frames, and the Link SPI.",
   "keywords": [
     "advisers",

@@ -96,7 +96,7 @@ const soulStore = { load: loadSoul, save: saveSoul }
 
 function runtimeFor(ledger) {
   const ports = { ...systemPorts(), soul: soulStore }
-  return createAdvisers({ ledger, ports })
+  return createAdvisers({ ledger, ports, seen: mode === 'sqlite' ? openStore().seenStore() : undefined })
 }
 
 function now() {
@@ -154,7 +154,7 @@ async function chat(text) {
   }
   const ledger = loadLedger()
   const runtime = runtimeFor(ledger)
-  const context = runtime.handleInbound({
+  const result = await runtime.ingest({
     linkId: 'cli',
     accountId: 'local',
     conversationId: 'cli',
@@ -163,6 +163,12 @@ async function chat(text) {
     text,
     timestamp: now(),
   })
+  if (!result.accepted) {
+    console.log(`[ignored: ${result.reason}]`)
+    return
+  }
+  const context = runtime.lastContext
+  if (!context) throw new Error('runtime did not produce a context')
   let reply
   const apiKey = process.env.ADVISERS_API_KEY
   if (apiKey && process.env.ADVISERS_NO_MODEL !== '1') {
