@@ -1,5 +1,5 @@
 import { DatabaseSync } from 'node:sqlite'
-import { randomUUID } from 'node:crypto'
+import { createHash, randomUUID } from 'node:crypto'
 
 const SCHEMA = `
 CREATE TABLE IF NOT EXISTS matters (
@@ -52,7 +52,11 @@ CREATE TABLE IF NOT EXISTS sessions (
 );
 CREATE TABLE IF NOT EXISTS deliveries (
   id TEXT PRIMARY KEY, matter_id TEXT NOT NULL, conversation_id TEXT NOT NULL,
-  files TEXT NOT NULL, tool TEXT, title TEXT, created_at TEXT NOT NULL
+  files TEXT NOT NULL, tool TEXT, title TEXT, validation TEXT, created_at TEXT NOT NULL
+);
+CREATE TABLE IF NOT EXISTS audit (
+  seq INTEGER PRIMARY KEY AUTOINCREMENT, at TEXT NOT NULL, actor TEXT NOT NULL,
+  action TEXT NOT NULL, allowed INTEGER NOT NULL, reason TEXT, prev_hash TEXT, hash TEXT NOT NULL
 );
 CREATE TABLE IF NOT EXISTS meta (key TEXT PRIMARY KEY, value TEXT NOT NULL);
 `
@@ -74,7 +78,7 @@ export class SqliteStore {
   migrate() {
     const row = this.db.prepare('SELECT value FROM meta WHERE key = ?').get('schema_version')
     const current = row ? Number(row.value) : 0
-    if (current >= 4) return
+    if (current >= 6) return
     this.db.exec('BEGIN')
     try {
       this.db.exec(`CREATE TABLE IF NOT EXISTS seen_events (
@@ -87,11 +91,16 @@ export class SqliteStore {
       )`)
       this.db.exec(`CREATE TABLE IF NOT EXISTS deliveries (
         id TEXT PRIMARY KEY, matter_id TEXT NOT NULL, conversation_id TEXT NOT NULL,
-        files TEXT NOT NULL, tool TEXT, title TEXT, created_at TEXT NOT NULL
+        files TEXT NOT NULL, tool TEXT, title TEXT, validation TEXT, created_at TEXT NOT NULL
       )`)
       const cols = this.db.prepare('PRAGMA table_info(deliveries)').all().map((c) => c.name)
       if (!cols.includes('title')) this.db.exec('ALTER TABLE deliveries ADD COLUMN title TEXT')
-      this.db.prepare('INSERT OR REPLACE INTO meta(key,value) VALUES(?,?)').run('schema_version', '4')
+      if (!cols.includes('validation')) this.db.exec('ALTER TABLE deliveries ADD COLUMN validation TEXT')
+      this.db.exec(`CREATE TABLE IF NOT EXISTS audit (
+        seq INTEGER PRIMARY KEY AUTOINCREMENT, at TEXT NOT NULL, actor TEXT NOT NULL,
+        action TEXT NOT NULL, allowed INTEGER NOT NULL, reason TEXT, prev_hash TEXT, hash TEXT NOT NULL
+      )`)
+      this.db.prepare('INSERT OR REPLACE INTO meta(key,value) VALUES(?,?)').run('schema_version', '6')
       this.db.exec('COMMIT')
     } catch (error) {
       this.db.exec('ROLLBACK')
@@ -117,20 +126,48 @@ export class SqliteStore {
     return r ? { conversationId: r.conversation_id, matterId: r.matter_id, title: r.title, createdAt: r.created_at, updatedAt: r.updated_at } : undefined
   }
 
-  addDelivery({ matterId, conversationId, files, tool, title }) {
+  addDelivery({ matterId, conversationId, files, tool, title, validation }) {
     const id = `del_${randomUUID().replace(/-/g, '').slice(0, 16)}`
-    this.db.prepare('INSERT INTO deliveries(id,matter_id,conversation_id,files,tool,title,created_at) VALUES(?,?,?,?,?,?,?)')
-      .run(id, matterId, conversationId, JSON.stringify(files ?? []), tool ?? null, title ?? null, new Date().toISOString())
+    this.db.prepare('INSERT INTO deliveries(id,matter_id,conversation_id,files,tool,title,validation,created_at) VALUES(?,?,?,?,?,?,?,?)')
+      .run(id, matterId, conversationId, JSON.stringify(files ?? []), tool ?? null, title ?? null, validation ?? null, new Date().toISOString())
     return id
   }
 
   listDeliveries(limit = 20) {
     return this.db.prepare('SELECT * FROM deliveries ORDER BY created_at DESC LIMIT ?').all(limit)
-      .map((r) => ({ id: r.id, matterId: r.matter_id, conversationId: r.conversation_id, files: parse(r.files), tool: r.tool ?? undefined, title: r.title ?? undefined, createdAt: r.created_at }))
+      .map((r) => ({ id: r.id, matterId: r.matter_id, conversationId: r.conversation_id, files: parse(r.files), tool: r.tool ?? undefined, title: r.title ?? undefined, validation: r.validation ?? undefined, createdAt: r.created_at }))
   }
 
   countDeliveries() {
     return this.db.prepare('SELECT COUNT(*) AS n FROM deliveries').get().n
+  }
+
+  appendAudit({ actor, action, allowed, reason }) {
+    const last = this.db.prepare('SELECT hash FROM audit ORDER BY seq DESC LIMIT 1').get()
+    const prev = last?.hash ?? ''
+    const at = new Date().toISOString()
+    const material = `${prev}\n${at}\n${actor}\n${action}\n${allowed ? 1 : 0}\n${reason ?? ''}`
+    const hash = createHash('sha256').update(material).digest('hex')
+    const info = this.db.prepare('INSERT INTO audit(at,actor,action,allowed,reason,prev_hash,hash) VALUES(?,?,?,?,?,?,?)')
+      .run(at, actor, action, allowed ? 1 : 0, reason ?? null, prev, hash)
+    return { seq: Number(info.lastInsertRowid), at, actor, action, allowed: Boolean(allowed), reason, prevHash: prev, hash }
+  }
+
+  listAudit(limit = 50) {
+    return this.db.prepare('SELECT * FROM audit ORDER BY seq DESC LIMIT ?').all(limit)
+      .map((r) => ({ seq: r.seq, at: r.at, actor: r.actor, action: r.action, allowed: Boolean(r.allowed), reason: r.reason ?? undefined, prevHash: r.prev_hash ?? undefined, hash: r.hash }))
+  }
+
+  verifyAudit() {
+    const rows = this.db.prepare('SELECT * FROM audit ORDER BY seq ASC').all()
+    let prev = ''
+    for (const row of rows) {
+      const material = `${prev}\n${row.at}\n${row.actor}\n${row.action}\n${row.allowed}\n${row.reason ?? ''}`
+      const expected = createHash('sha256').update(material).digest('hex')
+      if (row.prev_hash !== prev || row.hash !== expected) return { ok: false, seq: row.seq }
+      prev = row.hash
+    }
+    return { ok: true, count: rows.length }
   }
 
   hasSeen(linkId, accountId, dedupeKey, ttlDays = 7) {

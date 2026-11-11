@@ -85,3 +85,19 @@ test('sessions and deliveries persist for local history', () => {
     rmSync(dir, { recursive: true, force: true })
   }
 })
+
+test('audit log hash chain detects tampering', () => {
+  const dir = mkdtempSync(join(tmpdir(), 'advisers-audit-'))
+  const db = join(dir, 'state.db')
+  try {
+    const store = new SqliteStore(db)
+    store.appendAudit({ actor: 'local', action: 'correct', allowed: true, reason: 'user correction' })
+    store.appendAudit({ actor: 'local', action: 'link.apply', allowed: true, reason: 'one-side write' })
+    assert.deepEqual(store.verifyAudit(), { ok: true, count: 2 })
+    store.db.prepare("UPDATE audit SET reason = 'tampered' WHERE seq = 1").run()
+    assert.equal(store.verifyAudit().ok, false)
+    store.close()
+  } finally {
+    rmSync(dir, { recursive: true, force: true })
+  }
+})

@@ -5,6 +5,7 @@ import { basename, dirname, join } from 'node:path'
 import { SqliteStore } from '../lib/sqlite.js'
 import { runAgent } from '../lib/agent.js'
 import { extractAttachment } from '../lib/attachments.js'
+import { applyPreferenceDecay, buildRoutineCandidate, correctionStatement } from '../lib/learning.js'
 
 let core
 if (process.env.ADVISERS_CORE_LOCAL === '1') {
@@ -141,7 +142,7 @@ function printDeliveries() {
   try { matters = loadLedger().listMatters() } catch {}
   const title = new Map(matters.map((m) => [m.id, m.title]))
   for (const row of rows) {
-    console.log(`${row.createdAt.slice(0, 19)}  ${row.title ?? title.get(row.matterId) ?? row.matterId}  [${row.tool ?? 'tool'}]`)
+    console.log(`${row.createdAt.slice(0, 19)}  ${row.title ?? title.get(row.matterId) ?? row.matterId}  [${row.tool ?? 'tool'}] ${row.validation ?? ''}`)
     for (const file of row.files) {
       let size = 0
       try { size = statSync(file).size } catch {}
@@ -259,6 +260,16 @@ function learnPreference(ledger, statement, quote) {
   return { preference: pref, promoted: false }
 }
 
+function printAudit() {
+  const store = dbStore()
+  if (!store) { console.log('audit requires SQLite store'); return }
+  const verify = store.verifyAudit()
+  console.log(`audit: ${verify.ok ? 'verified' : `BROKEN at seq ${verify.seq}`} (${verify.count ?? 0} entries)`)
+  for (const row of store.listAudit(20)) {
+    console.log(`${row.seq}\t${row.at.slice(0, 19)}\t${row.action}\t${row.allowed ? 'allow' : 'deny'}\t${row.reason ?? ''}`)
+  }
+}
+
 function printPreferences() {
   const ledger = loadLedger()
   const rows = ledger.listPreferences({ includeCandidates: true })
@@ -358,7 +369,17 @@ async function runTurn({ runtime, ledger, text, conversationId, debug = false, c
         files: artifacts,
         tool: toolLog.map((t) => t.name).join(','),
         title: text.slice(0, 80),
+        validation: toolLog.every((t) => t.ok !== false) ? 'ok' : 'failed',
       })
+      dbStore()?.appendAudit({ actor: 'local', action: 'delivery', allowed: true, reason: artifacts.join(',') })
+    } catch {}
+  }
+  const candidate = buildRoutineCandidate({ text, toolLog })
+  if (candidate && !ledger.listRoutines().some((r) => r.name === candidate.name)) {
+    try {
+      const routine = ledger.addRoutine(candidate)
+      console.log(`[routine] draft ${routine.id} (${routine.steps.length} steps); approve with \`advisers routine approve ${routine.id}\``)
+      saveLedger(ledger)
     } catch {}
   }
   const failed = toolLog.filter((t) => !t.ok)
@@ -462,6 +483,8 @@ async function repl() {
       console.log('  /retry          rerun the last task')
       console.log('  /correct <text>  record a correction; 2nd time promotes it')
       console.log('  /prefs          list preferences (incl. candidates)')
+      console.log('  /audit          verify and show the audit hash chain')
+      console.log('  /decay          apply 30-day preference decay')
       console.log('  /why <pref-id>  explain a preference')
       console.log('  /routine save   save the last task as a draft routine')
       console.log('  /brief <text>   print the IntentBrief without calling the model')
@@ -484,7 +507,14 @@ async function repl() {
       console.log(`[learn] ${result.preference.id} conf=${result.preference.confidence.toFixed(2)} ${result.promoted ? '(promoted to confirmed)' : '(candidate; repeat to promote)'}`)
       continue
     }
+    if (text === '/decay') {
+      const changed = applyPreferenceDecay(ledger.listPreferences({ includeCandidates: true }))
+      saveLedger(ledger)
+      console.log(`[decay] ${changed.length} preference(s) updated`)
+      continue
+    }
     if (text === '/prefs') { printPreferences(); continue }
+    if (text === '/audit') { printAudit(); continue }
     if (text.startsWith('/why ')) { why(text.slice(5).trim()); continue }
     if (text === '/routine save') {
       if (!lastTask) { console.log('nothing to save'); continue }
@@ -535,8 +565,10 @@ async function repl() {
       continue
     }
     if (text.startsWith('/')) { console.log(`unknown command: ${text}; /help`); continue }
-    if (/^(以后|记住|每次)/.test(text) && text.length < 100) {
-      const result = learnPreference(ledger, text, text)
+    const feedback = correctionStatement(text)
+    if (feedback) {
+      const result = learnPreference(ledger, feedback, text)
+      dbStore()?.appendAudit({ actor: 'local', action: 'correct', allowed: true, reason: feedback })
       saveLedger(ledger)
       console.log(`[learn] ${result.preference.id} conf=${result.preference.confidence.toFixed(2)} ${result.promoted ? '(confirmed)' : '(candidate; repeat to promote)'}`)
       continue
@@ -794,6 +826,12 @@ function link(sub, from, to, type) {
       process.exitCode = 1
       return
     }
+    const linked = ledger.listLinks(from, false).some((l) => (l.fromMatter === from && l.toMatter === to) || (l.fromMatter === to && l.toMatter === from))
+    if (!linked) {
+      console.error('confirm the matter link first: advisers link add <from> <to> <type>; advisers link confirm <id>')
+      process.exitCode = 1
+      return
+    }
     const u = ledger.proposeUpdate({ sourceMatter: from, targetMatter: to, change: type })
     saveLedger(ledger)
     console.log(`${u.id} pending; apply with \`advisers link apply ${u.id}\``)
@@ -813,6 +851,7 @@ function link(sub, from, to, type) {
     }
     if (sub === 'reject') {
       ledger.resolveUpdate(from, 'rejected')
+      dbStore()?.appendAudit({ actor: 'local', action: 'link.reject', allowed: true, reason: from })
       saveLedger(ledger)
       console.log(`rejected: ${from}`)
       return
@@ -826,6 +865,7 @@ function link(sub, from, to, type) {
       source: { type: 'import', ref: proposal.id },
     })
     ledger.resolveUpdate(from, 'applied', `fact:${fact.id}`)
+    dbStore()?.appendAudit({ actor: 'local', action: 'link.apply', allowed: true, reason: `${from} -> ${fact.id}` })
     saveLedger(ledger)
     console.log(`applied: ${from} -> target fact ${fact.id}`)
     return
@@ -1020,12 +1060,20 @@ if (!command) {
   printDeliveries()
 } else if (command === 'prefs') {
   printPreferences()
+} else if (command === 'audit') {
+  printAudit()
+} else if (command === 'decay') {
+  const ledger = loadLedger()
+  const changed = applyPreferenceDecay(ledger.listPreferences({ includeCandidates: true }))
+  saveLedger(ledger)
+  console.log(`[decay] ${changed.length} preference(s) updated`)
 } else if (command === 'correct') {
   const statement = args.join(' ').trim()
   if (!statement) { console.error('usage: advisers correct <statement>'); process.exitCode = 1 }
   else {
     const ledger = loadLedger()
     const result = learnPreference(ledger, statement, statement)
+    dbStore()?.appendAudit({ actor: 'local', action: 'correct', allowed: true, reason: statement })
     saveLedger(ledger)
     console.log(`[learn] ${result.preference.id} conf=${result.preference.confidence.toFixed(2)}${result.promoted ? ' confirmed' : ' candidate'}`)
   }
