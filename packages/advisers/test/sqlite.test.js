@@ -179,3 +179,18 @@ test('nudge ledger dedupes per day/level and counts budget', () => {
     rmSync(dir, { recursive: true, force: true })
   }
 })
+
+test('task runs persist trajectories for review', () => {
+  const dir = mkdtempSync(join(tmpdir(), 'advisers-runs-'))
+  const db = join(dir, 'state.db')
+  try {
+    const store = new SqliteStore(db)
+    const id = store.addTaskRun({ conversationId: 'c', task: '周报', tools: [{ name: 'office_template', ok: true }], artifacts: ['out/a.docx'], outcome: 'ok' })
+    const row = store.listTaskRuns(1)[0]
+    assert.equal(row.id, id)
+    assert.equal(row.artifacts[0], 'out/a.docx')
+    store.close()
+  } finally {
+    rmSync(dir, { recursive: true, force: true })
+  }
+})

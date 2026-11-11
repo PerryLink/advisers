@@ -28,3 +28,20 @@ test('backup/undo restores an overwritten file and deletes a newly created file'
     rmSync(root, { recursive: true, force: true })
   }
 })
+
+test('diffLatest shows line changes before undo', async () => {
+  const root = mkdtempSync(join(tmpdir(), 'advisers-diff-'))
+  const work = join(root, 'work')
+  const backups = join(root, 'undo')
+  await import('node:fs/promises').then((fs) => fs.mkdir(work, { recursive: true }))
+  try {
+    writeFileSync(join(work, 'a.txt'), 'old\nline')
+    await backupBeforeWrite('a.txt', { cwd: work, backupDir: backups })
+    writeFileSync(join(work, 'a.txt'), 'new\nline')
+    const diff = await (await import('../lib/undo.js')).diffLatest({ cwd: work, backupDir: backups })
+    assert.match(diff.diff, /- old/)
+    assert.match(diff.diff, /\+ new/)
+  } finally {
+    rmSync(root, { recursive: true, force: true })
+  }
+})

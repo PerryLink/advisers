@@ -80,6 +80,10 @@ CREATE TRIGGER IF NOT EXISTS turns_au AFTER UPDATE ON turns BEGIN
   INSERT INTO turns_fts(turns_fts, rowid, content) VALUES ('delete', old.rowid, old.content);
   INSERT INTO turns_fts(rowid, content) VALUES (new.rowid, new.content);
 END;
+CREATE TABLE IF NOT EXISTS task_runs (
+  id TEXT PRIMARY KEY, conversation_id TEXT NOT NULL, task TEXT NOT NULL,
+  tools TEXT NOT NULL, artifacts TEXT NOT NULL, outcome TEXT NOT NULL, created_at TEXT NOT NULL
+);
 CREATE TABLE IF NOT EXISTS nudges (
   id TEXT PRIMARY KEY, at TEXT NOT NULL, local_day TEXT NOT NULL, level TEXT NOT NULL,
   commitment_id TEXT NOT NULL, dedupe_key TEXT NOT NULL UNIQUE, body TEXT NOT NULL,
@@ -105,7 +109,7 @@ export class SqliteStore {
   migrate() {
     const row = this.db.prepare('SELECT value FROM meta WHERE key = ?').get('schema_version')
     const current = row ? Number(row.value) : 0
-    if (current >= 13) return
+    if (current >= 14) return
     this.db.exec('BEGIN')
     try {
       this.db.exec(`CREATE TABLE IF NOT EXISTS seen_events (
@@ -156,14 +160,22 @@ export class SqliteStore {
       for (const [name, type] of [['valid_from','TEXT'],['valid_to','TEXT'],['expired_at','TEXT'],['evidence','TEXT'],['supersedes','TEXT'],['superseded_by','TEXT'],['shadowed_by','TEXT'],['last_seen_at','TEXT'],['deleted_at','TEXT'],['deleted_reason','TEXT']]) {
         if (!factCols.includes(name)) this.db.exec(`ALTER TABLE facts ADD COLUMN ${name} ${type}`)
       }
-      this.db.exec(`CREATE TABLE IF NOT EXISTS nudges (
+      this.db.exec(`CREATE TABLE IF NOT EXISTS task_runs (
+  id TEXT PRIMARY KEY, conversation_id TEXT NOT NULL, task TEXT NOT NULL,
+  tools TEXT NOT NULL, artifacts TEXT NOT NULL, outcome TEXT NOT NULL, created_at TEXT NOT NULL
+);
+CREATE TABLE IF NOT EXISTS nudges (
         id TEXT PRIMARY KEY, at TEXT NOT NULL, local_day TEXT NOT NULL, level TEXT NOT NULL,
         commitment_id TEXT NOT NULL, dedupe_key TEXT NOT NULL UNIQUE, body TEXT NOT NULL
       )`)
       const nudgeCols = this.db.prepare('PRAGMA table_info(nudges)').all().map((c) => c.name)
       if (!nudgeCols.includes('outcome')) this.db.exec("ALTER TABLE nudges ADD COLUMN outcome TEXT NOT NULL DEFAULT 'pending'")
       if (!nudgeCols.includes('outcome_at')) this.db.exec('ALTER TABLE nudges ADD COLUMN outcome_at TEXT')
-      this.db.prepare('INSERT OR REPLACE INTO meta(key,value) VALUES(?,?)').run('schema_version', '13')
+      this.db.exec(`CREATE TABLE IF NOT EXISTS task_runs (
+        id TEXT PRIMARY KEY, conversation_id TEXT NOT NULL, task TEXT NOT NULL,
+        tools TEXT NOT NULL, artifacts TEXT NOT NULL, outcome TEXT NOT NULL, created_at TEXT NOT NULL
+      )`)
+      this.db.prepare('INSERT OR REPLACE INTO meta(key,value) VALUES(?,?)').run('schema_version', '14')
       this.db.exec('COMMIT')
     } catch (error) {
       this.db.exec('ROLLBACK')
@@ -211,6 +223,18 @@ export class SqliteStore {
 
   deleteMeta(key) {
     this.db.prepare('DELETE FROM meta WHERE key = ?').run(key)
+  }
+
+  addTaskRun({ conversationId, task, tools, artifacts, outcome }) {
+    const id = `run_${randomUUID().replace(/-/g, '').slice(0, 16)}`
+    this.db.prepare('INSERT INTO task_runs(id,conversation_id,task,tools,artifacts,outcome,created_at) VALUES(?,?,?,?,?,?,?)')
+      .run(id, conversationId, task, json(tools), json(artifacts), outcome, new Date().toISOString())
+    return id
+  }
+
+  listTaskRuns(limit = 20) {
+    return this.db.prepare('SELECT * FROM task_runs ORDER BY created_at DESC LIMIT ?').all(limit)
+      .map((r) => ({ id: r.id, conversationId: r.conversation_id, task: r.task, tools: parse(r.tools), artifacts: parse(r.artifacts), outcome: r.outcome, createdAt: r.created_at }))
   }
 
   addNudge({ localDay, level, commitmentId, body }) {

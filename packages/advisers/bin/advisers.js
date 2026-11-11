@@ -8,7 +8,8 @@ import { chatCompletion } from '../lib/model.js'
 import { extractAttachment } from '../lib/attachments.js'
 import { applyPreferenceDecay, buildRoutineCandidate, correctionStatement } from '../lib/learning.js'
 import { checkRoutine } from '../lib/routine.js'
-import { listBackups, undoLatest } from '../lib/undo.js'
+import { diffLatest, listBackups, undoLatest } from '../lib/undo.js'
+import { lintReview, materializeReview, reviewRun } from '../lib/review.js'
 import { buildHistory, buildOpening, buildPins, continuityProbes, ensurePins, shouldSummarize, summarizeTurns } from '../lib/context-window.js'
 
 let core
@@ -194,7 +195,10 @@ Usage:
   advisers search <text>       full-text search old turns
   advisers tick               due commitments within 24h
   advisers week               last 7 days
+  advisers diff                show the last changed file
   advisers undo [--list]      restore the last file write
+  advisers learn ls           recent task trajectories
+  advisers learn review <id>  LLM routine review (needs API key)
   advisers memory             what I remember
   advisers commit add|ls|done|snooze commitments
   advisers deliveries         recent generated files
@@ -620,6 +624,28 @@ async function runTurn({ runtime, ledger, text, conversationId, debug = false, c
       dbStore()?.appendAudit({ actor: 'local', action: 'delivery', allowed: true, reason: artifacts.join(',') })
     } catch {}
   }
+  let runId
+  try {
+    runId = dbStore()?.addTaskRun({
+      conversationId,
+      task: text.slice(0, 500),
+      tools: toolLog.map((t) => ({ name: t.name, ok: t.ok })),
+      artifacts,
+      outcome: toolLog.some((t) => !t.ok) ? 'partial' : 'ok',
+    })
+  } catch {}
+  if (runId && process.env.ADVISERS_LEARNING === 'auto' && apiKey) {
+    try {
+      const run = dbStore()?.listTaskRuns(50).find((r) => r.id === runId)
+      const review = await reviewRun({ run, routines: ledger.listRoutines(), apiKey, baseUrl: process.env.ADVISERS_BASE_URL, model: process.env.ADVISERS_MODEL })
+      const checked = lintReview(review, { run, routines: ledger.listRoutines() })
+      if (checked.ok && checked.review.verdict !== 'NONE') {
+        const made = materializeReview(checked.review, { run, ledger })
+        saveLedger(ledger)
+        console.log(`[learn] ${made.verdict}${made.routine ? ` draft ${made.routine.id}` : made.patch ? ` patch ${made.patch.id}` : ''}`)
+      }
+    } catch {}
+  }
   const candidate = buildRoutineCandidate({ text, toolLog, artifacts })
   if (candidate && !ledger.listRoutines().some((r) => r.name === candidate.name)) {
     try {
@@ -738,6 +764,7 @@ async function repl() {
       console.log('  /search <text>  full-text search old turns')
       console.log('  /tick           due within 24h')
       console.log('  /week           last 7 days')
+      console.log('  /diff           show the last changed file')
       console.log('  /undo           restore the last overwritten/created file')
       console.log('  /links          list candidate/confirmed links')
       console.log('  /forget <id>    forget a preference')
@@ -784,6 +811,11 @@ async function repl() {
       continue
     }
     if (text === '/week') { printWeek(ledger); continue }
+    if (text === '/diff') {
+      const result = await diffLatest({ cwd: process.cwd(), backupDir: join(HOME, 'undo') })
+      console.log(result.ok ? result.diff : `diff failed: ${result.error}`)
+      continue
+    }
     if (text === '/undo') {
       const result = await undoLatest({ cwd: process.cwd(), backupDir: join(HOME, 'undo') })
       console.log(result.ok ? `已回滚：${result.path}` : `撤销失败：${result.error}`)
@@ -1499,6 +1531,27 @@ if (!command) {
   printHistory()
 } else if (command === 'deliveries') {
   printDeliveries()
+} else if (command === 'learn') {
+  const sub = args[0]
+  const store = dbStore()
+  if (sub === 'ls') {
+    for (const r of store?.listTaskRuns(20) ?? []) console.log(`${r.id}\t${r.outcome}\t${r.tools.map((t) => t.name).join(',')}\t${r.task.slice(0, 60)}`)
+  } else if (sub === 'review') {
+    const run = store?.listTaskRuns(100).find((r) => r.id === args[1])
+    const apiKey = process.env.ADVISERS_API_KEY
+    if (!run || !apiKey) { console.error('usage: ADVISERS_API_KEY=... advisers learn review <run-id>'); process.exitCode = 1 }
+    else {
+      const ledger = loadLedger()
+      const review = await reviewRun({ run, routines: ledger.listRoutines(), apiKey, baseUrl: process.env.ADVISERS_BASE_URL, model: process.env.ADVISERS_MODEL })
+      const checked = lintReview(review, { run, routines: ledger.listRoutines() })
+      if (!checked.ok) { console.error(`review rejected: ${checked.error}`); process.exitCode = 1 }
+      else {
+        const made = materializeReview(checked.review, { run, ledger })
+        saveLedger(ledger)
+        console.log(`verdict: ${made.verdict}${made.routine ? ` draft ${made.routine.id}` : made.patch ? ` patch ${made.patch.id}` : ''}`)
+      }
+    }
+  } else { console.error('usage: advisers learn ls|review <run-id>'); process.exitCode = 1 }
 } else if (command === 'commit') {
   const sub = args[0]
   const ledger = loadLedger()
@@ -1547,6 +1600,10 @@ if (!command) {
       }
     }
   } else { console.error('usage: advisers commit add|ls|done'); process.exitCode = 1 }
+} else if (command === 'diff') {
+  const result = await diffLatest({ cwd: process.cwd(), backupDir: join(HOME, 'undo') })
+  console.log(result.ok ? result.diff : `diff failed: ${result.error}`)
+  if (!result.ok) process.exitCode = 1
 } else if (command === 'undo') {
   if (args.includes('--list')) {
     for (const row of await listBackups(join(HOME, 'undo'))) console.log(`${row.id}\t${row.path}\t${row.existed ? 'overwrite' : 'create'}`)
