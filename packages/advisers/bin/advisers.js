@@ -211,6 +211,7 @@ Usage:
   advisers link ls            list matter links
   advisers link add <from> <to> <type>
   advisers link confirm <id>
+  advisers link suggest <id>  suggest similar matters
   advisers link updates       list cross-matter proposals
   advisers link propose-update <source> <target> <change>
   advisers link apply <id>    write to target only, then mark applied
@@ -268,6 +269,20 @@ function printAudit() {
   for (const row of store.listAudit(20)) {
     console.log(`${row.seq}\t${row.at.slice(0, 19)}\t${row.action}\t${row.allowed ? 'allow' : 'deny'}\t${row.reason ?? ''}`)
   }
+}
+
+function printLinks() {
+  const ledger = loadLedger()
+  const rows = ledger.listLinks()
+  if (!rows.length) { console.log('no links yet'); return }
+  const title = new Map(ledger.listMatters().map((m) => [m.id, m.title]))
+  for (const l of rows) {
+    console.log(`${l.id}\t${l.status}\t${l.type}\t${title.get(l.fromMatter) ?? l.fromMatter} -> ${title.get(l.toMatter) ?? l.toMatter}\tconf=${l.confidence}`)
+  }
+}
+
+function tokenize(text) {
+  return new Set((String(text).toLowerCase().match(/[a-z0-9]{2,}|[\u4e00-\u9fa5]{2}/g) ?? []))
 }
 
 function printPreferences() {
@@ -482,6 +497,8 @@ async function repl() {
       console.log('  /clear          clear pending attachments')
       console.log('  /retry          rerun the last task')
       console.log('  /correct <text>  record a correction; 2nd time promotes it')
+      console.log('  /links          list candidate/confirmed links')
+      console.log('  /forget <id>    forget a preference')
       console.log('  /prefs          list preferences (incl. candidates)')
       console.log('  /audit          verify and show the audit hash chain')
       console.log('  /decay          apply 30-day preference decay')
@@ -514,6 +531,14 @@ async function repl() {
       continue
     }
     if (text === '/prefs') { printPreferences(); continue }
+    if (text === '/links') { printLinks(); continue }
+    if (text.startsWith('/forget ')) {
+      const id = text.slice(8).trim()
+      const ok = ledger.forget('preference', id)
+      saveLedger(ledger)
+      console.log(ok ? `forgotten: ${id}` : `unknown preference: ${id}`)
+      continue
+    }
     if (text === '/audit') { printAudit(); continue }
     if (text.startsWith('/why ')) { why(text.slice(5).trim()); continue }
     if (text === '/routine save') {
@@ -812,6 +837,28 @@ function link(sub, from, to, type) {
     const l = ledger.confirmLink(from)
     saveLedger(ledger)
     console.log(`confirmed: ${l.id}`)
+    return
+  }
+  if (sub === 'suggest') {
+    if (!from) { console.error('usage: advisers link suggest <matter-id>'); process.exitCode = 1; return }
+    const source = ledger.getMatter(from)
+    if (!source) { console.error(`unknown matter: ${from}`); process.exitCode = 1; return }
+    const base = tokenize(`${source.title} ${source.summary ?? ''}`)
+    let count = 0
+    for (const other of ledger.listMatters()) {
+      if (other.id === source.id) continue
+      if (ledger.listLinks(source.id, false).some((l) => (l.fromMatter === other.id || l.toMatter === other.id))) continue
+      const tokens = tokenize(`${other.title} ${other.summary ?? ''}`)
+      let shared = 0
+      for (const t of base) if (tokens.has(t)) shared++
+      const score = shared / Math.max(1, base.size + tokens.size - shared)
+      if (score < 0.18) continue
+      const link = ledger.proposeLink({ fromMatter: source.id, toMatter: other.id, type: 'similar', confidence: Math.min(0.7, score), evidence: [`shared terms: ${shared}`] })
+      console.log(`${link.id}\t${link.confidence.toFixed(2)}\t${other.title}`)
+      count++
+    }
+    saveLedger(ledger)
+    if (!count) console.log('no suggestions')
     return
   }
   if (sub === 'updates') {
