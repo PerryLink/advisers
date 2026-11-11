@@ -9,8 +9,10 @@ SDK dependency.
 - `verifyChallenge` answers the URL-verification challenge.
 - `FeishuApiTransport` caches a tenant token and sends text messages.
 
-Not implemented yet: WebSocket long connection, interactive cards/approval,
-encrypted events, history backfill. Those are the next slice.
+`FeishuWsSource` uses the official SDK (`@larksuiteoapi/node-sdk@1.76`)
+`WSClient` + `EventDispatcher` for long-connection mode; the webhook path stays
+for deployments without outbound WS. Not implemented yet: interactive
+cards/approval, encrypted events, history backfill.
 
 ```ts
 import { FeishuLink, FeishuApiTransport } from 'advisers-link-feishu'

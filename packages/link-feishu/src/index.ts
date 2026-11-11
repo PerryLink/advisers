@@ -23,9 +23,15 @@ export interface FeishuTransport {
   send(input: { chatId: string; text: string; threadId?: string }): Promise<{ messageId: string }>
 }
 
+export interface FeishuSource {
+  start(onMessage: (message: FeishuMessage) => Promise<void>): Promise<void>
+  stop(): Promise<void>
+}
+
 export interface FeishuLinkOptions {
   verificationToken?: string
   botOpenId?: string
+  source?: FeishuSource
 }
 
 function parseText(content: string): string {
@@ -45,6 +51,14 @@ export function verifyChallenge(payload: any, verificationToken?: string): strin
   if (payload?.type !== 'url_verification') return undefined
   if (verificationToken && payload.token !== verificationToken) return undefined
   return typeof payload.challenge === 'string' ? payload.challenge : undefined
+}
+
+/** SDK long-connection handler receives header+event merged. */
+export function normalizeMergedEvent(data: any, options: FeishuLinkOptions = {}): FeishuMessage | undefined {
+  return normalizeEvent({
+    header: { event_id: data?.event_id, event_type: 'im.message.receive_v1', token: data?.token },
+    event: { sender: data?.sender, message: data?.message },
+  }, options)
 }
 
 export function normalizeEvent(payload: any, options: FeishuLinkOptions = {}): FeishuMessage | undefined {
@@ -84,9 +98,13 @@ export class FeishuLink implements LinkProvider {
 
   async start(host: LinkHost): Promise<void> {
     this.host = host
+    if (this.options.source) {
+      await this.options.source.start(async (message) => { await this.ingestMessage(message) })
+    }
   }
 
   async stop(): Promise<void> {
+    if (this.options.source) await this.options.source.stop()
     this.host = undefined
   }
 
@@ -104,9 +122,19 @@ export class FeishuLink implements LinkProvider {
   }
 
   async receive(payload: any): Promise<IngestResult> {
-    if (!this.host) throw new Error('feishu link is not started')
     const message = normalizeEvent(payload, this.options)
     if (!message) return { accepted: false, reason: 'ignored' }
+    return this.ingestMessage(message, payload)
+  }
+
+  async receiveMerged(data: any): Promise<IngestResult> {
+    const message = normalizeMergedEvent(data, this.options)
+    if (!message) return { accepted: false, reason: 'ignored' }
+    return this.ingestMessage(message, data)
+  }
+
+  private async ingestMessage(message: FeishuMessage, raw?: unknown): Promise<IngestResult> {
+    if (!this.host) throw new Error('feishu link is not started')
     const event: InboundEvent = {
       linkId: this.id,
       accountId: 'feishu',
@@ -119,7 +147,7 @@ export class FeishuLink implements LinkProvider {
       sender: { id: message.openId },
       text: message.text,
       timestamp: new Date().toISOString(),
-      raw: payload,
+      raw: raw ?? message,
     }
     return this.host.ingest(event)
   }

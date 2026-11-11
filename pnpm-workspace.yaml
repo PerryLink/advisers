@@ -5,3 +5,5 @@ minimumReleaseAgeExclude:
   - mailparser@3.14.3
   - nodemailer@10.5.0
 linkWorkspacePackages: true
+allowBuilds:
+  protobufjs: true

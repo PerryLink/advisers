@@ -10,7 +10,9 @@ export interface ImapConfig {
   port?: number
   secure?: boolean
   user: string
-  pass: string
+  pass?: string
+  /** OAuth2 access token; takes precedence over pass. */
+  accessToken?: string
   /** Default INBOX. */
   mailbox?: string
   /** Default Drafts. */
@@ -99,7 +101,9 @@ export class ImapSource implements EmailSource {
       host: this.config.host,
       port: this.config.port ?? 993,
       secure: this.config.secure ?? true,
-      auth: { user: this.config.user, pass: this.config.pass },
+      auth: this.config.accessToken
+        ? { user: this.config.user, accessToken: this.config.accessToken }
+        : { user: this.config.user, pass: this.config.pass },
       logger: false,
     })
     await this.client.connect()
@@ -158,7 +162,9 @@ export class ImapDraftTransport implements EmailDraftTransport {
       host: this.config.host,
       port: this.config.port ?? 993,
       secure: this.config.secure ?? true,
-      auth: { user: this.config.user, pass: this.config.pass },
+      auth: this.config.accessToken
+        ? { user: this.config.user, accessToken: this.config.accessToken }
+        : { user: this.config.user, pass: this.config.pass },
       logger: false,
     })
     await client.connect()

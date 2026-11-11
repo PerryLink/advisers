@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict'
 import test from 'node:test'
-import { FeishuLink, normalizeEvent, verifyChallenge } from '../src/index.ts'
+import { FeishuLink, normalizeEvent, normalizeMergedEvent, verifyChallenge } from '../src/index.ts'
 import { FeishuApiTransport } from '../src/api.ts'
 
 const payload = {
@@ -69,4 +69,23 @@ test('verifies URL challenge and dedupes by message_id', async () => {
   await link.receive({ ...payload, header: { ...payload.header, event_id: 'evt-2' } })
   assert.equal(events[0].dedupeKey, 'om_1')
   assert.equal(events[1].dedupeKey, 'om_1')
+})
+
+
+test('merged long-connection event maps like a webhook event', () => {
+  const merged = { event_id: 'evt-2', token: 'tok', sender: payload.event.sender, message: payload.event.message }
+  const m = normalizeMergedEvent(merged, { botOpenId: 'ou_bot' })
+  assert.equal(m?.messageId, 'om_1')
+  assert.equal(m?.text, '周五前给报价')
+  assert.equal(m?.mentionedBot, true)
+})
+
+test('FeishuLink starts and stops an injected source', async () => {
+  let started = 0, stopped = 0
+  const source = { async start() { started++ }, async stop() { stopped++ } }
+  const link = new FeishuLink({ async send() { return { messageId: 'x' } } }, { source })
+  await link.start({ async ingest() { return { accepted: true } }, async resolvePrincipal() { return 'p' } })
+  await link.stop()
+  assert.equal(started, 1)
+  assert.equal(stopped, 1)
 })
