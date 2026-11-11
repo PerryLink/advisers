@@ -95,3 +95,20 @@ test('agent writes after overwrite confirmation', async () => {
     rmSync(cwd, { recursive: true, force: true })
   }
 })
+
+test('office templates reject empty required data', async () => {
+  const cwd = mkdtempSync(join(tmpdir(), 'advisers-agent-'))
+  try {
+    await assert.rejects(
+      () => executeTool('office_template', { name: 'budget', out: 'b.xlsx', data: { rows: [] } }, { cwd }),
+      /non-empty rows/,
+    )
+    const ok = await executeTool('office_template', {
+      name: 'budget', out: 'b.xlsx', data: { rows: [{ item: '市场', amount: 120 }] },
+    }, { cwd })
+    assert.equal(ok.ok, true)
+    assert.equal(existsSync(join(cwd, 'b.xlsx')), true)
+  } finally {
+    rmSync(cwd, { recursive: true, force: true })
+  }
+})

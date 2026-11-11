@@ -44,10 +44,10 @@ export const LOCAL_TOOLS = [
     out: { type: 'string', description: 'Relative output path inside the workspace, e.g. out/q4.docx' },
     spec: { type: 'object', description: 'Spec matching the chosen builder. docx:{title,sections}; xlsx:{columns,rows}; pptx:{title,slides}; xmind:{title,branches}; mermaid/drawio:{title,nodes,edges}.' },
   }, ['kind', 'out', 'spec']),
-  tool('office_template', 'Build one of the five secretary templates into a file.', {
+  tool('office_template', 'Build one of the five secretary templates. data must match: weekly {period,done[],risks?,next?}; budget {rows:[{item,amount,owner?}]}; presentation {title,conclusion,bullets[]}; flow {title,steps[]}; mindmap {title,branches:[{label,children?}]}.', {
     name: { type: 'string', enum: TEMPLATE_NAMES },
     out: { type: 'string', description: 'Relative output path inside the workspace.' },
-    data: { type: 'object', description: 'Template input data (period/done/rows/title/steps/branches).' },
+    data: { type: 'object', description: 'Exact template input: weekly {period,done[],risks?,next?}; budget {rows:[{item,amount}]}; presentation {title,conclusion,bullets[]}; flow {title,steps[]}; mindmap {title,branches}.' },
   }, ['name', 'out', 'data']),
   tool('file_write', 'Write UTF-8 text to a file inside the workspace (max 1 MB).', {
     path: { type: 'string' },
@@ -61,6 +61,15 @@ export const LOCAL_TOOLS = [
   }, []),
 ]
 
+function validateTemplate(name, data) {
+  if (!data || typeof data !== 'object') throw new Error(`${name} data must be an object`)
+  if (name === 'weekly' && (!data.period || !Array.isArray(data.done) || data.done.length === 0)) throw new Error('weekly data requires period and non-empty done[]')
+  if (name === 'budget' && (!Array.isArray(data.rows) || data.rows.length === 0)) throw new Error('budget data requires non-empty rows:[{item,amount}]')
+  if (name === 'presentation' && (!data.title || !data.conclusion || !Array.isArray(data.bullets))) throw new Error('presentation data requires title, conclusion, bullets[]')
+  if (name === 'flow' && (!data.title || !Array.isArray(data.steps) || data.steps.length === 0)) throw new Error('flow data requires title and non-empty steps[]')
+  if (name === 'mindmap' && (!data.title || !Array.isArray(data.branches) || data.branches.length === 0)) throw new Error('mindmap data requires title and non-empty branches[]')
+}
+
 async function runOfficeTool(name, args, cwd) {
   const office = await loadOffice()
   const out = safePath(cwd, args.out)
@@ -72,11 +81,21 @@ async function runOfficeTool(name, args, cwd) {
     if (args.kind === 'xmind' && (!Array.isArray(spec?.branches) || spec.branches.length === 0)) {
       throw new Error('xmind spec requires a non-empty branches array: [{label, children: string[]}]')
     }
+    if (args.kind === 'xlsx' && (!Array.isArray(spec?.columns) || !Array.isArray(spec?.rows) || spec.rows.length === 0)) {
+      throw new Error('xlsx spec requires non-empty columns[] and rows[]')
+    }
+    if (args.kind === 'docx' && (!spec?.title || !Array.isArray(spec?.sections))) {
+      throw new Error('docx spec requires title and sections[]')
+    }
+    if (args.kind === 'pptx' && (!spec?.title || !Array.isArray(spec?.slides))) {
+      throw new Error('pptx spec requires title and slides[]')
+    }
     if ((args.kind === 'mermaid' || args.kind === 'drawio') && (!Array.isArray(spec?.nodes) || spec.nodes.length === 0)) {
       throw new Error('diagram spec requires nodes: [{id,label}]')
     }
   } else {
     if (!TEMPLATE_NAMES.includes(args.name)) throw new Error(`unsupported template: ${args.name}`)
+    validateTemplate(args.name, args.data)
     spec = args.name === 'weekly' ? office.weeklyReport(args.data)
       : args.name === 'budget' ? office.budget(args.data)
       : args.name === 'presentation' ? office.presentation(args.data)
