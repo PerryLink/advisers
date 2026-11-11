@@ -59,6 +59,9 @@ export const LOCAL_TOOLS = [
   tool('file_list', 'List files in a workspace directory.', {
     dir: { type: 'string', description: 'Relative directory, default .' },
   }, []),
+  tool('routine_view', 'Read one active routine by id. Use the routine index in context to choose.', {
+    id: { type: 'string' },
+  }, ['id']),
 ]
 
 function validateTemplate(name, data) {
@@ -125,7 +128,7 @@ function writeTarget(name, args, cwd) {
   return null
 }
 
-export async function executeTool(name, args, { cwd = process.cwd() } = {}) {
+export async function executeTool(name, args, { cwd = process.cwd(), ledger } = {}) {
   if (name === 'office_build' || name === 'office_template') return runOfficeTool(name, args, cwd)
   if (name === 'file_write') {
     if (typeof args.content !== 'string' || Buffer.byteLength(args.content) > MAX_FILE_BYTES) throw new Error('content is missing or too large')
@@ -139,6 +142,11 @@ export async function executeTool(name, args, { cwd = process.cwd() } = {}) {
     const content = await readFile(path, 'utf8')
     if (Buffer.byteLength(content) > MAX_FILE_BYTES) throw new Error('file is too large')
     return { ok: true, artifact: false, path, content }
+  }
+  if (name === 'routine_view') {
+    const routine = ledger?.listRoutines().find((r) => r.id === args.id)
+    if (!routine) throw new Error(`unknown routine: ${args.id}`)
+    return { ok: true, artifact: false, routine }
   }
   if (name === 'file_list') {
     const path = safePath(cwd, args.dir ?? '.')
@@ -169,9 +177,14 @@ export async function runAgent({
   onTool,
   confirm,
   force = false,
+  history = [],
+  summary = '',
+  ledger,
 }) {
+  const historyBlock = summary ? `\n\n<session-summary>\n${summary}\n</session-summary>` : ''
   const messages = [
-    { role: 'system', content: `${SYSTEM}\n\n${context.prompt}` },
+    { role: 'system', content: `${SYSTEM}\n\n${context.prompt}${historyBlock}` },
+    ...history.filter((t) => t.role === 'user' || t.role === 'assistant').map((t) => ({ role: t.role, content: t.content })),
     { role: 'user', content: text },
   ]
   const artifacts = []
@@ -194,7 +207,7 @@ export async function runAgent({
             return { reply: `未覆盖 ${target}。如需覆盖，请确认或设置 ADVISERS_FORCE=1。`, artifacts: [...new Set(artifacts)], toolLog, declined: true, steps: step + 1 }
           }
         }
-        payload = await executeTool(name, args, { cwd })
+        payload = await executeTool(name, args, { cwd, ledger })
         if (payload.artifact && payload.path) artifacts.push(payload.path)
       } catch (error) {
         payload = { ok: false, error: error instanceof Error ? error.message : String(error) }

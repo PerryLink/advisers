@@ -2,7 +2,7 @@ import { buildFocusFrame, estimateTokens, renderFocusFrame } from './focus.ts'
 import { renderIntentBrief } from './intent.ts'
 import type { IntentBrief } from './intent.ts'
 import type { Ledger } from './ledger.ts'
-import type { AssociationHint, Matter, SoulDocument, TurnContext } from './types.ts'
+import type { AssociationHint, Matter, Routine, SoulDocument, TurnContext } from './types.ts'
 
 export interface RelatedCardInput {
   matterId?: string
@@ -18,6 +18,7 @@ export interface AssembleInput {
   audience?: string
   soul?: SoulDocument
   intent?: IntentBrief
+  routines?: Routine[]
   /** 0..3; the local owner normally has 3. */
   clearance?: number
 }
@@ -71,6 +72,15 @@ export function assembleContext(input: AssembleInput): TurnContext {
     body,
     '</advisers-context>',
   )
+  const activeRoutines = (input.routines ?? []).filter((r) => r.status === 'active').slice(0, 6)
+  if (activeRoutines.length) {
+    parts.push(
+      '<routine-index>',
+      activeRoutines.map((r) => `- ${r.id} | ${r.name} | ${r.description.slice(0, 80)}`).join('\n'),
+      'Use routine_view <id> only when the task matches; do not read every routine.',
+      '</routine-index>',
+    )
+  }
   const prompt = parts.join('\n')
 
   const hints: AssociationHint[] = (input.related ?? []).slice(0, 3).map((r) => ({

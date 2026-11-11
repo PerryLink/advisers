@@ -4,9 +4,11 @@ import { homedir } from 'node:os'
 import { basename, dirname, join } from 'node:path'
 import { SqliteStore } from '../lib/sqlite.js'
 import { runAgent } from '../lib/agent.js'
+import { chatCompletion } from '../lib/model.js'
 import { extractAttachment } from '../lib/attachments.js'
 import { applyPreferenceDecay, buildRoutineCandidate, correctionStatement } from '../lib/learning.js'
 import { checkRoutine } from '../lib/routine.js'
+import { buildHistory, buildOpening, shouldSummarize, summarizeTurns } from '../lib/context-window.js'
 
 let core
 if (process.env.ADVISERS_CORE_LOCAL === '1') {
@@ -338,6 +340,62 @@ function printStatus() {
   console.log(`soul      ${existsSync(SOUL) ? 'present' : 'not initialized'}`)
 }
 
+function loadHistory(conversationId) {
+  try {
+    const store = dbStore()
+    if (!store) return { turns: [], summary: '' }
+    const turns = store.listTurns(conversationId, 100)
+    const summary = store.getSessionSummary(conversationId)
+    return buildHistory({ turns, summary: summary?.summary, throughSeq: summary?.throughSeq ?? 0 })
+  } catch {
+    return { turns: [], summary: '' }
+  }
+}
+
+function recordTurn(conversationId, role, content) {
+  if (!content) return
+  try { dbStore()?.addTurn({ conversationId, role, content }) } catch {}
+}
+
+async function maybeSummarize(conversationId, { apiKey, baseUrl, model } = {}) {
+  try {
+    const store = dbStore()
+    if (!store) return
+    const turns = store.listTurns(conversationId, 200)
+    const old = store.getSessionSummary(conversationId)
+    if (!shouldSummarize(turns, old?.throughSeq ?? 0, 10)) return
+    const fresh = turns.filter((t) => t.seq > (old?.throughSeq ?? 0))
+    let summary = summarizeTurns(fresh, old?.summary ?? '')
+    if (apiKey && process.env.ADVISERS_LLM_SUMMARY !== '0') {
+      try {
+        const transcript = fresh.map((t) => `${t.role === 'user' ? '用户' : '助手'}：${t.content}`).join('\n')
+        const response = await chatCompletion({
+          apiKey,
+          baseUrl: baseUrl || 'https://api.deepseek.com',
+          model: model || 'deepseek-chat',
+          messages: [
+            { role: 'system', content: '把会话压缩成给秘书续接用的摘要。必须保留：已完成什么、未决问题、承诺及截止时间、用户偏好/禁忌、下一步。不要寒暄，不超过 500 字。' },
+            { role: 'user', content: `${old?.summary ? `旧摘要：\n${old.summary}\n\n` : ''}${transcript}` },
+          ],
+        })
+        if (response.content?.trim()) summary = response.content.trim()
+      } catch {}
+    }
+    store.upsertSessionSummary({ conversationId, summary, throughSeq: turns.at(-1).seq })
+  } catch {}
+}
+
+function printOpening(conversationId) {
+  try {
+    const store = dbStore()
+    if (!store) return
+    const turns = store.listTurns(conversationId, 20)
+    const summary = store.getSessionSummary(conversationId)
+    const commitments = loadLedger().openCommitments()
+    console.log(buildOpening({ summary: summary?.summary, turns, commitments }))
+  } catch {}
+}
+
 async function runTurn({ runtime, ledger, text, conversationId, debug = false, confirm, attachments = [] }) {
   const result = await runtime.ingest({
     linkId: 'cli',
@@ -385,12 +443,20 @@ async function runTurn({ runtime, ledger, text, conversationId, debug = false, c
   if (intent?.action === 'ask' && intent.questions?.length) return intent.questions[0]
   const apiKey = process.env.ADVISERS_API_KEY
   if (!apiKey || process.env.ADVISERS_NO_MODEL === '1') {
+    const local = intent?.questions?.[0] ?? ''
+    recordTurn(conversationId, 'user', text)
+    if (local) recordTurn(conversationId, 'assistant', local)
+    await maybeSummarize(conversationId, { apiKey, baseUrl: process.env.ADVISERS_BASE_URL, model: process.env.ADVISERS_MODEL })
     if (!intent?.questions?.length) console.log('[local] 未配置模型；已记录到事项账本。用 /office 或 advisors office 直接生成文件。')
     return intent?.questions?.[0]
   }
+  const history = loadHistory(conversationId)
   const { reply, artifacts, toolLog } = await runAgent({
     runtime,
     text: agentText,
+    history: history.turns,
+    summary: history.summary,
+    ledger,
     context,
     apiKey,
     baseUrl: process.env.ADVISERS_BASE_URL || 'https://api.deepseek.com',
@@ -401,6 +467,9 @@ async function runTurn({ runtime, ledger, text, conversationId, debug = false, c
     onTool: (name) => { if (debug || process.env.ADVISERS_PROGRESS !== '0') console.log(`[tool] ${name}`) },
   })
   lastRun = { artifacts: [...new Set(artifacts)], toolLog }
+  recordTurn(conversationId, 'user', text)
+  recordTurn(conversationId, 'assistant', reply || '')
+  await maybeSummarize(conversationId, { apiKey, baseUrl: process.env.ADVISERS_BASE_URL, model: process.env.ADVISERS_MODEL })
   if (reply) console.log(reply)
   for (const file of [...new Set(artifacts)]) console.log(`[file] ${file}`)
   if (artifacts.length) {
@@ -469,7 +538,10 @@ async function repl() {
   console.log(`home:  ${HOME}`)
   try {
     const latest = dbStore()?.listSessions(1)[0]
-    if (latest) console.log(`resume: ${latest.title} [${latest.conversationId}]`)
+    if (latest) {
+      console.log(`resume: ${latest.title} [${latest.conversationId}]`)
+      printOpening(latest.conversationId)
+    }
   } catch {}
   console.log('/help for commands, /quit to leave')
 
@@ -608,6 +680,7 @@ async function repl() {
         pendingFiles = []
         console.log(`resumed: ${pick.title} [${pick.conversationId}]`)
       } catch { console.log('history is not available') }
+      printOpening(conversationId)
       continue
     }
     if (text.startsWith('/brief ')) {

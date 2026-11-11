@@ -112,3 +112,49 @@ test('office templates reject empty required data', async () => {
     rmSync(cwd, { recursive: true, force: true })
   }
 })
+
+test('agent receives persisted history and session summary', async () => {
+  const cwd = mkdtempSync(join(tmpdir(), 'advisers-agent-'))
+  try {
+    let body
+    const fetchImpl = async (_url, init) => {
+      body = JSON.parse(init.body)
+      return new Response(JSON.stringify({ choices: [{ message: { role: 'assistant', content: '接着上次改' } }] }), { status: 200 })
+    }
+    const result = await runAgent({
+      text: '把预算改成 420',
+      context: { prompt: '<advisers-context/>' },
+      history: [
+        { role: 'user', content: '做预算' },
+        { role: 'assistant', content: '已生成 out/budget.xlsx' },
+      ],
+      summary: '用户要求先给结论',
+      apiKey: 'k',
+      cwd,
+      fetchImpl,
+    })
+    assert.equal(result.reply, '接着上次改')
+    assert.deepEqual(body.messages.slice(1).map((m) => m.role), ['user', 'assistant', 'user'])
+    assert.match(body.messages[0].content, /session-summary/)
+    assert.match(body.messages[0].content, /先给结论/)
+  } finally {
+    rmSync(cwd, { recursive: true, force: true })
+  }
+})
+
+test('routine_view is available from the routine index', async () => {
+  const cwd = mkdtempSync(join(tmpdir(), 'advisers-agent-'))
+  try {
+    const ledger = { listRoutines: () => [{ id: 'routine_1', name: '周报流程', status: 'active', description: '周报', steps: ['office_template'] }] }
+    const fetchImpl = fakeFetch([
+      { choices: [{ message: { role: 'assistant', content: '', tool_calls: [{ id: 'c1', type: 'function', function: { name: 'routine_view', arguments: JSON.stringify({ id: 'routine_1' }) } }] } }] },
+      { choices: [{ message: { role: 'assistant', content: '按周报流程做' } }] },
+    ])
+    const result = await runAgent({ text: '做周报', context: { prompt: '' }, apiKey: 'k', cwd, fetchImpl, ledger })
+    assert.equal(result.reply, '按周报流程做')
+    assert.equal(result.toolLog[0].ok, true)
+    assert.equal(result.toolLog[0].payload.routine.name, '周报流程')
+  } finally {
+    rmSync(cwd, { recursive: true, force: true })
+  }
+})

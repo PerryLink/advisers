@@ -6,7 +6,7 @@ import { dirname, resolve } from 'node:path'
 
 export const name = 'advisers'
 export const inject = ['tools']
-export const version = '0.2.0-preview.9'
+export const version = '0.2.0-preview.10'
 
 /**
  * DSH bundle entry point. The first slice is deliberately one read-only tool:

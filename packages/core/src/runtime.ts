@@ -152,6 +152,7 @@ export class AdvisersRuntime implements LinkHost {
       soul: this.readSoul(),
       intent,
       related,
+      routines: this.ledger.listRoutines(),
     })
 
     if (event.text) {

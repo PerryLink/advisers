@@ -58,6 +58,15 @@ CREATE TABLE IF NOT EXISTS audit (
   seq INTEGER PRIMARY KEY AUTOINCREMENT, at TEXT NOT NULL, actor TEXT NOT NULL,
   action TEXT NOT NULL, allowed INTEGER NOT NULL, reason TEXT, prev_hash TEXT, hash TEXT NOT NULL
 );
+CREATE TABLE IF NOT EXISTS turns (
+  id TEXT PRIMARY KEY, conversation_id TEXT NOT NULL, seq INTEGER NOT NULL,
+  role TEXT NOT NULL, content TEXT NOT NULL, created_at TEXT NOT NULL,
+  UNIQUE(conversation_id, seq)
+);
+CREATE TABLE IF NOT EXISTS session_summaries (
+  conversation_id TEXT PRIMARY KEY, summary TEXT NOT NULL,
+  through_seq INTEGER NOT NULL, updated_at TEXT NOT NULL
+);
 CREATE TABLE IF NOT EXISTS meta (key TEXT PRIMARY KEY, value TEXT NOT NULL);
 `
 
@@ -78,7 +87,7 @@ export class SqliteStore {
   migrate() {
     const row = this.db.prepare('SELECT value FROM meta WHERE key = ?').get('schema_version')
     const current = row ? Number(row.value) : 0
-    if (current >= 7) return
+    if (current >= 8) return
     this.db.exec('BEGIN')
     try {
       this.db.exec(`CREATE TABLE IF NOT EXISTS seen_events (
@@ -102,7 +111,16 @@ export class SqliteStore {
       )`)
       const patchCols = this.db.prepare('PRAGMA table_info(routine_patches)').all().map((c) => c.name)
       if (!patchCols.includes('before')) this.db.exec('ALTER TABLE routine_patches ADD COLUMN before TEXT')
-      this.db.prepare('INSERT OR REPLACE INTO meta(key,value) VALUES(?,?)').run('schema_version', '7')
+      this.db.exec(`CREATE TABLE IF NOT EXISTS turns (
+        id TEXT PRIMARY KEY, conversation_id TEXT NOT NULL, seq INTEGER NOT NULL,
+        role TEXT NOT NULL, content TEXT NOT NULL, created_at TEXT NOT NULL,
+        UNIQUE(conversation_id, seq)
+      )`)
+      this.db.exec(`CREATE TABLE IF NOT EXISTS session_summaries (
+        conversation_id TEXT PRIMARY KEY, summary TEXT NOT NULL,
+        through_seq INTEGER NOT NULL, updated_at TEXT NOT NULL
+      )`)
+      this.db.prepare('INSERT OR REPLACE INTO meta(key,value) VALUES(?,?)').run('schema_version', '8')
       this.db.exec('COMMIT')
     } catch (error) {
       this.db.exec('ROLLBACK')
@@ -141,9 +159,40 @@ export class SqliteStore {
   }
 
   purgeMatterData(matterId) {
+    const conversations = this.db.prepare('SELECT conversation_id FROM sessions WHERE matter_id = ?').all(matterId).map((r) => r.conversation_id)
+    let turns = 0
+    for (const conversationId of conversations) {
+      turns += Number(this.db.prepare('DELETE FROM turns WHERE conversation_id = ?').run(conversationId).changes)
+      this.db.prepare('DELETE FROM session_summaries WHERE conversation_id = ?').run(conversationId)
+    }
     const sessions = this.db.prepare('DELETE FROM sessions WHERE matter_id = ?').run(matterId).changes
     const deliveries = this.db.prepare('DELETE FROM deliveries WHERE matter_id = ?').run(matterId).changes
-    return { sessions: Number(sessions), deliveries: Number(deliveries) }
+    return { sessions: Number(sessions), deliveries: Number(deliveries), turns }
+  }
+
+  addTurn({ conversationId, role, content }) {
+    const seq = (this.db.prepare('SELECT MAX(seq) AS n FROM turns WHERE conversation_id = ?').get(conversationId)?.n ?? 0) + 1
+    const id = `turn_${randomUUID().replace(/-/g, '').slice(0, 16)}`
+    this.db.prepare('INSERT INTO turns(id,conversation_id,seq,role,content,created_at) VALUES(?,?,?,?,?,?)')
+      .run(id, conversationId, seq, role, content, new Date().toISOString())
+    return { id, conversationId, seq, role, content, createdAt: new Date().toISOString() }
+  }
+
+  listTurns(conversationId, limit = 50) {
+    return this.db.prepare('SELECT * FROM turns WHERE conversation_id = ? ORDER BY seq DESC LIMIT ?').all(conversationId, limit)
+      .map((r) => ({ id: r.id, conversationId: r.conversation_id, seq: r.seq, role: r.role, content: r.content, createdAt: r.created_at }))
+      .reverse()
+  }
+
+  getSessionSummary(conversationId) {
+    const r = this.db.prepare('SELECT * FROM session_summaries WHERE conversation_id = ?').get(conversationId)
+    return r ? { conversationId: r.conversation_id, summary: r.summary, throughSeq: r.through_seq, updatedAt: r.updated_at } : undefined
+  }
+
+  upsertSessionSummary({ conversationId, summary, throughSeq }) {
+    this.db.prepare(`INSERT INTO session_summaries(conversation_id,summary,through_seq,updated_at) VALUES(?,?,?,?)
+      ON CONFLICT(conversation_id) DO UPDATE SET summary=excluded.summary, through_seq=excluded.through_seq, updated_at=excluded.updated_at`)
+      .run(conversationId, summary, throughSeq, new Date().toISOString())
   }
 
   countDeliveries() {

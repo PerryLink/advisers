@@ -101,3 +101,22 @@ test('audit log hash chain detects tampering', () => {
     rmSync(dir, { recursive: true, force: true })
   }
 })
+
+test('turns and session summaries persist across reopen', () => {
+  const dir = mkdtempSync(join(tmpdir(), 'advisers-turns-'))
+  const db = join(dir, 'state.db')
+  try {
+    const store = new SqliteStore(db)
+    store.addTurn({ conversationId: 'c1', role: 'user', content: '先列结论' })
+    store.addTurn({ conversationId: 'c1', role: 'assistant', content: '好' })
+    store.upsertSessionSummary({ conversationId: 'c1', summary: '已完成第一版', throughSeq: 2 })
+    store.close()
+    const again = new SqliteStore(db)
+    assert.equal(again.listTurns('c1').length, 2)
+    assert.equal(again.listTurns('c1')[0].content, '先列结论')
+    assert.equal(again.getSessionSummary('c1').summary, '已完成第一版')
+    again.close()
+  } finally {
+    rmSync(dir, { recursive: true, force: true })
+  }
+})
