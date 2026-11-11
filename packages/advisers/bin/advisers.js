@@ -370,6 +370,10 @@ function tick(ledger, asJson = false) {
     if (!c.dueAt || Date.parse(c.dueAt) > now + 86400_000) continue
     const dueDay = new Intl.DateTimeFormat('en-CA', { timeZone: 'Asia/Shanghai' }).format(new Date(c.dueAt))
     let level = (Date.parse(c.dueAt) < now || dueDay === localDay) ? 'L2' : 'L1'
+    if (level === 'L2' && Date.parse(c.dueAt) < now - 86400_000 && process.env.ADVISERS_ALLOW_L3 === '1') level = 'L3'
+    const recent = store?.listCommitmentNudges(c.id, 3) ?? []
+    if (recent.length === 3 && recent.every((n) => n.outcome === 'ignored') && level !== 'L1') level = level === 'L3' ? 'L2' : 'L1'
+    if (level === 'L3' && store && store.countNudges(localDay, 'L3') >= 1) level = 'L2'
     if (level === 'L2' && store && store.countNudges(localDay, 'L2') >= 3) level = 'L1'
     const nudge = store?.addNudge({ localDay, level, commitmentId: c.id, body: c.action })
     if (store && !nudge) continue
@@ -406,6 +410,14 @@ function printLinks() {
 
 function tokenize(text) {
   return new Set((String(text).toLowerCase().match(/[a-z0-9]{2,}|[\u4e00-\u9fa5]{2}/g) ?? []))
+}
+
+function printLearnReceipt(result) {
+  const p = result.preference
+  console.log(`记下了：${p.statement}`)
+  console.log(`范围：全局（默认）；要限定说「只对…」`)
+  console.log(`有效期：30 天后复核${result.promoted ? '；已确认' : '；先按候选，重复一次才确认'}`)
+  console.log(`下次：同类任务按这条执行；撤销用 /forget ${p.id}`)
 }
 
 function printPreferences() {
@@ -745,7 +757,7 @@ async function repl() {
       if (!statement) { console.log('usage: /correct <statement>'); continue }
       const result = learnPreference(ledger, statement, statement)
       saveLedger(ledger)
-      console.log(`[learn] ${result.preference.id} conf=${result.preference.confidence.toFixed(2)} ${result.promoted ? '(promoted to confirmed)' : '(candidate; repeat to promote)'}`)
+      printLearnReceipt(result)
       continue
     }
     if (text === '/decay') {
@@ -852,7 +864,7 @@ async function repl() {
       const result = learnPreference(ledger, feedback, text, { explicit: /^(以后|记住|每次)/.test(text) })
       dbStore()?.appendAudit({ actor: 'local', action: 'correct', allowed: true, reason: feedback })
       saveLedger(ledger)
-      console.log(`[learn] ${result.preference.id} conf=${result.preference.confidence.toFixed(2)} ${result.promoted ? '(confirmed)' : '(candidate; repeat to promote)'}`)
+      printLearnReceipt(result)
       continue
     }
     await runTask(text, pendingFiles)
@@ -1499,6 +1511,16 @@ if (!command) {
     if (!rows.length) console.log('没有匹配')
     for (const r of rows) console.log(`${r.seq}\t${r.role}\t${r.content.replace(/\s+/g, ' ').slice(0, 160)}`)
   }
+} else if (command === 'nudge') {
+  const sub = args[0]
+  const store = dbStore()
+  if (sub === 'list') {
+    for (const n of store?.listNudges(50) ?? []) console.log(`${n.id}\t${n.local_day}\t${n.level}\t${n.outcome}\t${n.body}`)
+  } else if (sub === 'done' || sub === 'ignore') {
+    const id = args[1]
+    if (!id || !store?.setNudgeOutcome(id, sub === 'done' ? 'accepted' : 'ignored')) { console.error('usage: advisers nudge done|ignore <nudge-id>'); process.exitCode = 1 }
+    else console.log(`${sub}: ${id}`)
+  } else { console.error('usage: advisers nudge list|done|ignore'); process.exitCode = 1 }
 } else if (command === 'tick') {
   tick(loadLedger(), args.includes('--json'))
 } else if (command === 'memory') {
@@ -1524,7 +1546,7 @@ if (!command) {
     const result = learnPreference(ledger, statement, statement, { explicit: true })
     dbStore()?.appendAudit({ actor: 'local', action: 'correct', allowed: true, reason: statement })
     saveLedger(ledger)
-    console.log(`[learn] ${result.preference.id} conf=${result.preference.confidence.toFixed(2)}${result.promoted ? ' confirmed' : ' candidate'}`)
+    printLearnReceipt(result)
   }
 } else if (command === 'ls') {
   ls()

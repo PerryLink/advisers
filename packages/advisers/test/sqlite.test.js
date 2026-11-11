@@ -171,6 +171,9 @@ test('nudge ledger dedupes per day/level and counts budget', () => {
     assert.ok(store.addNudge({ localDay: '2026-11-11', level: 'L2', commitmentId: 'cm1', body: '发报价' }))
     assert.equal(store.addNudge({ localDay: '2026-11-11', level: 'L2', commitmentId: 'cm1', body: '发报价' }), null)
     assert.equal(store.countNudges('2026-11-11', 'L2'), 1)
+    const n = store.listNudges(1)[0]
+    assert.equal(store.setNudgeOutcome(n.id, 'ignored'), true)
+    assert.equal(store.listNudges(1)[0].outcome, 'ignored')
     store.close()
   } finally {
     rmSync(dir, { recursive: true, force: true })

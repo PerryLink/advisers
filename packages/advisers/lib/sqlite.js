@@ -82,7 +82,8 @@ CREATE TRIGGER IF NOT EXISTS turns_au AFTER UPDATE ON turns BEGIN
 END;
 CREATE TABLE IF NOT EXISTS nudges (
   id TEXT PRIMARY KEY, at TEXT NOT NULL, local_day TEXT NOT NULL, level TEXT NOT NULL,
-  commitment_id TEXT NOT NULL, dedupe_key TEXT NOT NULL UNIQUE, body TEXT NOT NULL
+  commitment_id TEXT NOT NULL, dedupe_key TEXT NOT NULL UNIQUE, body TEXT NOT NULL,
+  outcome TEXT NOT NULL DEFAULT 'pending', outcome_at TEXT
 );
 CREATE TABLE IF NOT EXISTS meta (key TEXT PRIMARY KEY, value TEXT NOT NULL);
 `
@@ -104,7 +105,7 @@ export class SqliteStore {
   migrate() {
     const row = this.db.prepare('SELECT value FROM meta WHERE key = ?').get('schema_version')
     const current = row ? Number(row.value) : 0
-    if (current >= 12) return
+    if (current >= 13) return
     this.db.exec('BEGIN')
     try {
       this.db.exec(`CREATE TABLE IF NOT EXISTS seen_events (
@@ -159,7 +160,10 @@ export class SqliteStore {
         id TEXT PRIMARY KEY, at TEXT NOT NULL, local_day TEXT NOT NULL, level TEXT NOT NULL,
         commitment_id TEXT NOT NULL, dedupe_key TEXT NOT NULL UNIQUE, body TEXT NOT NULL
       )`)
-      this.db.prepare('INSERT OR REPLACE INTO meta(key,value) VALUES(?,?)').run('schema_version', '12')
+      const nudgeCols = this.db.prepare('PRAGMA table_info(nudges)').all().map((c) => c.name)
+      if (!nudgeCols.includes('outcome')) this.db.exec("ALTER TABLE nudges ADD COLUMN outcome TEXT NOT NULL DEFAULT 'pending'")
+      if (!nudgeCols.includes('outcome_at')) this.db.exec('ALTER TABLE nudges ADD COLUMN outcome_at TEXT')
+      this.db.prepare('INSERT OR REPLACE INTO meta(key,value) VALUES(?,?)').run('schema_version', '13')
       this.db.exec('COMMIT')
     } catch (error) {
       this.db.exec('ROLLBACK')
@@ -219,6 +223,14 @@ export class SqliteStore {
     } catch {
       return null
     }
+  }
+
+  setNudgeOutcome(id, outcome) {
+    return Number(this.db.prepare('UPDATE nudges SET outcome = ?, outcome_at = ? WHERE id = ?').run(outcome, new Date().toISOString(), id).changes) > 0
+  }
+
+  listCommitmentNudges(commitmentId, limit = 3) {
+    return this.db.prepare('SELECT * FROM nudges WHERE commitment_id = ? ORDER BY at DESC LIMIT ?').all(commitmentId, limit)
   }
 
   countNudges(localDay, level) {
