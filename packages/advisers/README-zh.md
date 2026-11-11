@@ -18,7 +18,7 @@ CLI 目前是**context 预览**，不是聊天 UI：它记录消息、生成 Foc
 
 ## 状态
 
-`0.1.0-preview.2` 是预览版：
+`0.1.0-preview.3` 是预览版：
 
 - 内存/JSON 账本，位于 `~/.advisers/state.json`；
 - soul 位于 `~/.advisers/soul.md`，人类独占；

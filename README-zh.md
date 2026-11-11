@@ -19,7 +19,7 @@ IM 是 **Link SPI**，不是硬依赖。Email、Satori/Koishi、`dsh-im`、OpenC
 
 ## 状态
 
-`0.1.0-preview.2` 在 npm `next` tag：
+`0.1.0-preview.3` 在 npm `next` tag：
 
 - `advisers` CLI：`soul init`、`brief`、`chat`、`office`、`ls`、`why`、`forget`、`export`；
 - soul 位于 `~/.advisers/soul.md`（人类独占，slot #1）；

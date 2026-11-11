@@ -22,7 +22,7 @@ next milestone.
 
 ## Status
 
-`0.1.0-preview.2` is a preview:
+`0.1.0-preview.3` is a preview:
 
 - in-memory/JSON ledger at `~/.advisers/state.json`;
 - soul at `~/.advisers/soul.md`, human-owned;

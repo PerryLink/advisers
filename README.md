@@ -24,7 +24,7 @@ them.
 
 ## Status
 
-`0.1.0-preview.2` is on the npm `next` tag:
+`0.1.0-preview.3` is on the npm `next` tag:
 
 - `advisers` CLI: `soul init`, `brief`, `chat`, `office`, `ls`, `why`, `forget`, `export`;
 - soul at `~/.advisers/soul.md` (human-owned, slot #1);
