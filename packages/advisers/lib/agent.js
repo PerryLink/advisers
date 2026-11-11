@@ -1,5 +1,6 @@
 import { randomUUID } from 'node:crypto'
 import { mkdir, readFile, readdir, writeFile } from 'node:fs/promises'
+import { existsSync } from 'node:fs'
 import { dirname, isAbsolute, relative, resolve } from 'node:path'
 import { chatCompletion } from './model.js'
 
@@ -95,6 +96,16 @@ async function runOfficeTool(name, args, cwd) {
   return { ok: result.ok, artifact: true, path: out, bytes: buffer.length, missing: result.missing ?? [] }
 }
 
+function writeTarget(name, args, cwd) {
+  try {
+    if (name === 'office_build' || name === 'office_template') return safePath(cwd, args.out)
+    if (name === 'file_write') return safePath(cwd, args.path)
+  } catch {
+    return null
+  }
+  return null
+}
+
 export async function executeTool(name, args, { cwd = process.cwd() } = {}) {
   if (name === 'office_build' || name === 'office_template') return runOfficeTool(name, args, cwd)
   if (name === 'file_write') {
@@ -137,6 +148,8 @@ export async function runAgent({
   maxSteps = 8,
   fetchImpl = fetch,
   onTool,
+  confirm,
+  force = false,
 }) {
   const messages = [
     { role: 'system', content: `${SYSTEM}\n\n${context.prompt}` },
@@ -155,6 +168,13 @@ export async function runAgent({
       try {
         const args = JSON.parse(call.function?.arguments || '{}')
         onTool?.(name, args)
+        const target = writeTarget(name, args, cwd)
+        if (target && !force && existsSync(target)) {
+          const allowed = confirm ? await confirm({ tool: name, path: target }) : false
+          if (!allowed) {
+            return { reply: `未覆盖 ${target}。如需覆盖，请确认或设置 ADVISERS_FORCE=1。`, artifacts: [...new Set(artifacts)], toolLog, declined: true, steps: step + 1 }
+          }
+        }
         payload = await executeTool(name, args, { cwd })
         if (payload.artifact && payload.path) artifacts.push(payload.path)
       } catch (error) {

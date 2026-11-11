@@ -1,4 +1,5 @@
 import { DatabaseSync } from 'node:sqlite'
+import { randomUUID } from 'node:crypto'
 
 const SCHEMA = `
 CREATE TABLE IF NOT EXISTS matters (
@@ -45,6 +46,14 @@ CREATE TABLE IF NOT EXISTS seen_events (
   link_id TEXT NOT NULL, account_id TEXT NOT NULL, dedupe_key TEXT NOT NULL,
   seen_at TEXT NOT NULL, PRIMARY KEY(link_id, account_id, dedupe_key)
 );
+CREATE TABLE IF NOT EXISTS sessions (
+  conversation_id TEXT PRIMARY KEY, matter_id TEXT NOT NULL, title TEXT NOT NULL,
+  created_at TEXT NOT NULL, updated_at TEXT NOT NULL
+);
+CREATE TABLE IF NOT EXISTS deliveries (
+  id TEXT PRIMARY KEY, matter_id TEXT NOT NULL, conversation_id TEXT NOT NULL,
+  files TEXT NOT NULL, tool TEXT, created_at TEXT NOT NULL
+);
 CREATE TABLE IF NOT EXISTS meta (key TEXT PRIMARY KEY, value TEXT NOT NULL);
 `
 
@@ -65,19 +74,61 @@ export class SqliteStore {
   migrate() {
     const row = this.db.prepare('SELECT value FROM meta WHERE key = ?').get('schema_version')
     const current = row ? Number(row.value) : 0
-    if (current >= 2) return
+    if (current >= 3) return
     this.db.exec('BEGIN')
     try {
       this.db.exec(`CREATE TABLE IF NOT EXISTS seen_events (
         link_id TEXT NOT NULL, account_id TEXT NOT NULL, dedupe_key TEXT NOT NULL,
         seen_at TEXT NOT NULL, PRIMARY KEY(link_id, account_id, dedupe_key)
       )`)
-      this.db.prepare('INSERT OR REPLACE INTO meta(key,value) VALUES(?,?)').run('schema_version', '2')
+      this.db.exec(`CREATE TABLE IF NOT EXISTS sessions (
+        conversation_id TEXT PRIMARY KEY, matter_id TEXT NOT NULL, title TEXT NOT NULL,
+        created_at TEXT NOT NULL, updated_at TEXT NOT NULL
+      )`)
+      this.db.exec(`CREATE TABLE IF NOT EXISTS deliveries (
+        id TEXT PRIMARY KEY, matter_id TEXT NOT NULL, conversation_id TEXT NOT NULL,
+        files TEXT NOT NULL, tool TEXT, created_at TEXT NOT NULL
+      )`)
+      this.db.prepare('INSERT OR REPLACE INTO meta(key,value) VALUES(?,?)').run('schema_version', '3')
       this.db.exec('COMMIT')
     } catch (error) {
       this.db.exec('ROLLBACK')
       throw error
     }
+  }
+
+  upsertSession({ conversationId, matterId, title }) {
+    const now = new Date().toISOString()
+    this.db.prepare(`INSERT INTO sessions(conversation_id,matter_id,title,created_at,updated_at)
+      VALUES(?,?,?,?,?)
+      ON CONFLICT(conversation_id) DO UPDATE SET matter_id=excluded.matter_id, title=excluded.title, updated_at=excluded.updated_at`)
+      .run(conversationId, matterId, title.slice(0, 120), now, now)
+  }
+
+  listSessions(limit = 20) {
+    return this.db.prepare('SELECT * FROM sessions ORDER BY updated_at DESC LIMIT ?').all(limit)
+      .map((r) => ({ conversationId: r.conversation_id, matterId: r.matter_id, title: r.title, createdAt: r.created_at, updatedAt: r.updated_at }))
+  }
+
+  getSession(conversationId) {
+    const r = this.db.prepare('SELECT * FROM sessions WHERE conversation_id = ?').get(conversationId)
+    return r ? { conversationId: r.conversation_id, matterId: r.matter_id, title: r.title, createdAt: r.created_at, updatedAt: r.updated_at } : undefined
+  }
+
+  addDelivery({ matterId, conversationId, files, tool }) {
+    const id = `del_${randomUUID().replace(/-/g, '').slice(0, 16)}`
+    this.db.prepare('INSERT INTO deliveries VALUES(?,?,?,?,?,?)')
+      .run(id, matterId, conversationId, JSON.stringify(files ?? []), tool ?? null, new Date().toISOString())
+    return id
+  }
+
+  listDeliveries(limit = 20) {
+    return this.db.prepare('SELECT * FROM deliveries ORDER BY created_at DESC LIMIT ?').all(limit)
+      .map((r) => ({ id: r.id, matterId: r.matter_id, conversationId: r.conversation_id, files: parse(r.files), tool: r.tool ?? undefined, createdAt: r.created_at }))
+  }
+
+  countDeliveries() {
+    return this.db.prepare('SELECT COUNT(*) AS n FROM deliveries').get().n
   }
 
   hasSeen(linkId, accountId, dedupeKey, ttlDays = 7) {

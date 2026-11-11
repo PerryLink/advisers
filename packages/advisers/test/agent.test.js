@@ -63,3 +63,35 @@ test('agent surfaces a tool error back to the model instead of crashing', async 
     rmSync(cwd, { recursive: true, force: true })
   }
 })
+
+test('agent asks before overwriting an existing file', async () => {
+  const cwd = mkdtempSync(join(tmpdir(), 'advisers-agent-'))
+  try {
+    writeFileSync(join(cwd, 'a.txt'), 'old')
+    const fetchImpl = fakeFetch([
+      { choices: [{ message: { role: 'assistant', content: '', tool_calls: [{ id: 'c1', type: 'function', function: { name: 'file_write', arguments: JSON.stringify({ path: 'a.txt', content: 'new' }) } }] } }] },
+      { choices: [{ message: { role: 'assistant', content: 'done' } }] },
+    ])
+    const result = await runAgent({ text: '写 a.txt', context: { prompt: '' }, apiKey: 'k', cwd, fetchImpl, confirm: async () => false })
+    assert.equal(result.declined, true)
+    assert.match(result.reply, /未覆盖/)
+    assert.equal((await executeTool('file_read', { path: 'a.txt' }, { cwd })).content, 'old')
+  } finally {
+    rmSync(cwd, { recursive: true, force: true })
+  }
+})
+
+test('agent writes after overwrite confirmation', async () => {
+  const cwd = mkdtempSync(join(tmpdir(), 'advisers-agent-'))
+  try {
+    writeFileSync(join(cwd, 'a.txt'), 'old')
+    const fetchImpl = fakeFetch([
+      { choices: [{ message: { role: 'assistant', content: '', tool_calls: [{ id: 'c1', type: 'function', function: { name: 'file_write', arguments: JSON.stringify({ path: 'a.txt', content: 'new' }) } }] } }] },
+      { choices: [{ message: { role: 'assistant', content: 'done' } }] },
+    ])
+    await runAgent({ text: '写 a.txt', context: { prompt: '' }, apiKey: 'k', cwd, fetchImpl, confirm: async () => true })
+    assert.equal((await executeTool('file_read', { path: 'a.txt' }, { cwd })).content, 'new')
+  } finally {
+    rmSync(cwd, { recursive: true, force: true })
+  }
+})

@@ -65,3 +65,22 @@ test('seen store persists dedupe keys across reopen', () => {
     rmSync(dir, { recursive: true, force: true })
   }
 })
+
+test('sessions and deliveries persist for local history', () => {
+  const dir = mkdtempSync(join(tmpdir(), 'advisers-history-'))
+  const db = join(dir, 'state.db')
+  try {
+    const store = new SqliteStore(db)
+    store.upsertSession({ conversationId: 'local', matterId: 'm1', title: 'Q4 周报' })
+    const id = store.addDelivery({ matterId: 'm1', conversationId: 'local', files: ['out/weekly.docx'], tool: 'office_build' })
+    assert.match(id, /^del_/)
+    store.close()
+    const reopened = new SqliteStore(db)
+    assert.equal(reopened.listSessions()[0].conversationId, 'local')
+    assert.deepEqual(reopened.listDeliveries()[0].files, ['out/weekly.docx'])
+    assert.equal(reopened.countDeliveries(), 1)
+    reopened.close()
+  } finally {
+    rmSync(dir, { recursive: true, force: true })
+  }
+})

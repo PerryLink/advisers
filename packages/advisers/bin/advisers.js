@@ -104,6 +104,67 @@ function now() {
   return new Date().toISOString()
 }
 
+function dbStore() {
+  return mode === 'sqlite' ? openStore() : undefined
+}
+
+function latestConversationId() {
+  try {
+    const store = dbStore()
+    return store?.listSessions(1)[0]?.conversationId ?? 'local'
+  } catch {
+    return 'local'
+  }
+}
+
+function printHistory() {
+  const store = dbStore()
+  const rows = store?.listSessions(12) ?? []
+  if (!rows.length) {
+    console.log('no saved sessions yet')
+    return
+  }
+  rows.forEach((row, index) => {
+    console.log(`${index + 1}. ${row.title}  [${row.conversationId}]  ${row.updatedAt}`)
+  })
+}
+
+function printDeliveries() {
+  const store = dbStore()
+  const rows = store?.listDeliveries(12) ?? []
+  if (!rows.length) {
+    console.log('no deliveries yet')
+    return
+  }
+  for (const row of rows) {
+    console.log(`${row.createdAt}  ${row.files.join(', ') || '(no files)'}`)
+  }
+}
+
+function shouldPlan(text, brief) {
+  if (process.env.ADVISERS_YES === '1') return false
+  if (brief.action === 'ask') return false
+  return text.length > 80 || /(先|然后|接着|最后|同时|并且)/.test(text)
+}
+
+function planLines(brief) {
+  return [
+    `1. 确认交付：${brief.goal}`,
+    `2. 生成 ${brief.deliverable}，保存到工作区（默认 out/）`,
+    '3. 校验产物，回执文件路径',
+  ]
+}
+
+async function askYesNo(rl, prompt, defaultYes = true) {
+  try {
+    const answer = (await rl.question(prompt)).trim()
+    if (!answer) return defaultYes
+    return /^y(es)?$/i.test(answer)
+  } catch {
+    return false
+  }
+}
+
 const [command, ...args] = process.argv.slice(2)
 
 function help() {
@@ -113,6 +174,8 @@ Usage:
   advisers                    start the local conversation (TTY)
   advisers chat [text]        one-shot task, or start the local conversation
   advisers status             home/store/model/counts
+  advisers history            recent conversations
+  advisers deliveries         recent generated files
   advisers ls                 list matters
   advisers why <pref-id>      explain a preference
   advisers forget <pref-id>   forget a preference (tombstone)
@@ -148,6 +211,9 @@ Environment:
   ADVISERS_STORE  sqlite (default) or json
   ADVISERS_API_KEY / ADVISERS_BASE_URL / ADVISERS_MODEL
                   enable the model call in chat
+  ADVISERS_YES=1  skip the plan confirmation
+  ADVISERS_FORCE=1 overwrite existing files without asking
+  ADVISERS_PROGRESS=0 hide [tool] progress lines
 `)
 }
 
@@ -168,10 +234,15 @@ function printStatus() {
   console.log(`prefs     ${ledger.listPreferences().length}`)
   console.log(`routines  ${ledger.listRoutines().length}`)
   console.log(`links     ${ledger.listLinks().length}`)
+  try {
+    const store = dbStore()
+    console.log(`sessions  ${store?.listSessions(100).length ?? 0}`)
+    console.log(`deliveries ${store?.countDeliveries() ?? 0}`)
+  } catch {}
   console.log(`soul      ${existsSync(SOUL) ? 'present' : 'not initialized'}`)
 }
 
-async function runTurn({ runtime, ledger, text, conversationId, debug = false }) {
+async function runTurn({ runtime, ledger, text, conversationId, debug = false, confirm }) {
   const result = await runtime.ingest({
     linkId: 'cli',
     accountId: 'local',
@@ -188,6 +259,9 @@ async function runTurn({ runtime, ledger, text, conversationId, debug = false })
   const context = runtime.lastContext
   if (!context) throw new Error('runtime did not produce a context')
   const intent = context.intent
+  try {
+    dbStore()?.upsertSession({ conversationId, matterId: context.matter.id, title: text.slice(0, 80) })
+  } catch {}
   if (debug) {
     console.log('[context]')
     console.log(context.prompt)
@@ -212,10 +286,22 @@ async function runTurn({ runtime, ledger, text, conversationId, debug = false })
     baseUrl: process.env.ADVISERS_BASE_URL || 'https://api.deepseek.com',
     model: process.env.ADVISERS_MODEL || 'deepseek-chat',
     cwd: process.cwd(),
-    onTool: (name) => { if (debug) console.log(`[tool] ${name}`) },
+    force: process.env.ADVISERS_FORCE === '1',
+    confirm,
+    onTool: (name) => { if (debug || process.env.ADVISERS_PROGRESS !== '0') console.log(`[tool] ${name}`) },
   })
   if (reply) console.log(reply)
   for (const file of [...new Set(artifacts)]) console.log(`[file] ${file}`)
+  if (artifacts.length) {
+    try {
+      dbStore()?.addDelivery({
+        matterId: context.matter.id,
+        conversationId,
+        files: artifacts,
+        tool: toolLog.map((t) => t.name).join(','),
+      })
+    } catch {}
+  }
   const failed = toolLog.filter((t) => !t.ok)
   if (failed.length && (debug || artifacts.length === 0)) console.log(`[warn] ${failed.length} 个工具调用失败，详见上一步输出`)
 }
@@ -229,7 +315,7 @@ async function chat(text) {
   }
   const ledger = loadLedger()
   const runtime = runtimeFor(ledger)
-  await runTurn({ runtime, ledger, text, conversationId: 'local' })
+  await runTurn({ runtime, ledger, text, conversationId: latestConversationId() })
   saveLedger(ledger)
 }
 
@@ -238,11 +324,15 @@ async function repl() {
   const rl = readline.createInterface({ input: process.stdin, output: process.stdout, historySize: 100 })
   const ledger = loadLedger()
   const runtime = runtimeFor(ledger)
-  let conversationId = 'local'
+  let conversationId = latestConversationId()
   let debug = process.env.ADVISERS_DEBUG === '1'
   console.log('advisers · local')
   console.log(`model: ${modelLabel()}`)
   console.log(`home:  ${HOME}`)
+  try {
+    const latest = dbStore()?.listSessions(1)[0]
+    if (latest) console.log(`resume: ${latest.title} [${latest.conversationId}]`)
+  } catch {}
   console.log('/help for commands, /quit to leave')
   for (;;) {
     let line
@@ -253,6 +343,9 @@ async function repl() {
     if (text === '/help') {
       console.log('  /help           this help')
       console.log('  /status         home/store/model/counts')
+      console.log('  /history        recent conversations')
+      console.log('  /resume <n|id>  resume a conversation')
+      console.log('  /deliveries     recent generated files')
       console.log('  /new            start a new conversation')
       console.log('  /brief <text>   print the IntentBrief without calling the model')
       console.log('  /debug          toggle full context')
@@ -260,8 +353,21 @@ async function repl() {
       continue
     }
     if (text === '/status') { printStatus(); continue }
+    if (text === '/history') { printHistory(); continue }
+    if (text === '/deliveries') { printDeliveries(); continue }
     if (text === '/new') { conversationId = `local_${Date.now()}`; console.log('new conversation'); continue }
     if (text === '/debug') { debug = !debug; console.log(`debug ${debug ? 'on' : 'off'}`); continue }
+    if (text.startsWith('/resume ')) {
+      const arg = text.slice(8).trim()
+      try {
+        const rows = dbStore()?.listSessions(50) ?? []
+        const pick = /^\d+$/.test(arg) ? rows[Number(arg) - 1] : rows.find((r) => r.conversationId === arg)
+        if (!pick) { console.log(`unknown session: ${arg}`); continue }
+        conversationId = pick.conversationId
+        console.log(`resumed: ${pick.title} [${pick.conversationId}]`)
+      } catch { console.log('history is not available') }
+      continue
+    }
     if (text.startsWith('/brief ')) {
       const brief = runtime.brief(text.slice(7).trim())
       console.log(core.renderIntentBrief(brief))
@@ -269,14 +375,24 @@ async function repl() {
       continue
     }
     if (text.startsWith('/')) { console.log(`unknown command: ${text}; /help`); continue }
+    const brief = runtime.brief(text)
+    if (shouldPlan(text, brief)) {
+      console.log('计划：')
+      for (const step of planLines(brief)) console.log(`  ${step}`)
+      if (!(await askYesNo(rl, '按这个计划执行？[Y/n] ', true))) { console.log('已取消'); continue }
+    }
+    const confirm = async ({ path }) => {
+      console.log(`${path} 已存在`)
+      return askYesNo(rl, '覆盖？[y/N] ', false)
+    }
     try {
-      const question = await runTurn({ runtime, ledger, text, conversationId, debug })
+      const question = await runTurn({ runtime, ledger, text, conversationId, debug, confirm })
       saveLedger(ledger)
       if (question) {
         let answer
         try { answer = await rl.question('? ') } catch { break }
         if (answer.trim()) {
-          await runTurn({ runtime, ledger, text: `${text}\n补充：${answer.trim()}`, conversationId, debug })
+          await runTurn({ runtime, ledger, text: `${text}\n补充：${answer.trim()}`, conversationId, debug, confirm })
           saveLedger(ledger)
         }
       }
@@ -287,6 +403,7 @@ async function repl() {
   rl.close()
   saveLedger(ledger)
 }
+
 
 function ls() {
   const matters = loadLedger().listMatters()
@@ -705,6 +822,10 @@ if (!command) {
   await chat(args.join(' ').trim())
 } else if (command === 'status') {
   printStatus()
+} else if (command === 'history') {
+  printHistory()
+} else if (command === 'deliveries') {
+  printDeliveries()
 } else if (command === 'ls') {
   ls()
 } else if (command === 'why') {
