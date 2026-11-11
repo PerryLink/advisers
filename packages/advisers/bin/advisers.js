@@ -216,6 +216,7 @@ Usage:
   advisers link propose-update <source> <target> <change>
   advisers link apply <id>    write to target only, then mark applied
   advisers link reject <id>
+  advisers link rollback <id> delete the fact written by an applied update
   advisers bridge --dir <path> [--name advisers]
                               expose Advisers to the Hermes messaging gateway
   advisers soul show          print soul.md
@@ -733,6 +734,23 @@ function routine(sub, arg, arg2) {
     if (!patch) process.exitCode = 1
     return
   }
+  if (sub === 'rollback') {
+    if (!from) { console.error('usage: advisers link rollback <id>'); process.exitCode = 1; return }
+    const proposal = ledger.listUpdates().find((u) => u.id === from)
+    if (!proposal || proposal.status !== 'applied' || !proposal.rollback?.startsWith('fact:')) {
+      console.error(`no applied update with a rollback fact: ${from}`)
+      process.exitCode = 1
+      return
+    }
+    const factId = proposal.rollback.slice(5)
+    const ok = ledger.forget('fact', factId)
+    proposal.rollback = `rolledback:${factId}`
+    dbStore()?.appendAudit({ actor: 'local', action: 'link.rollback', allowed: true, reason: factId })
+    saveLedger(ledger)
+    console.log(ok ? `rolled back: ${factId}` : `fact not found: ${factId}`)
+    if (!ok) process.exitCode = 1
+    return
+  }
   if (sub === 'apply' || sub === 'reject') {
     if (!arg) {
       console.error(`usage: advisers routine ${sub} <patch-id>`)
@@ -864,7 +882,7 @@ function link(sub, from, to, type) {
   if (sub === 'updates') {
     const rows = ledger.listUpdates()
     if (!rows.length) { console.log('no update proposals'); return }
-    for (const u of rows) console.log(`${u.id}\t${u.status}\t${u.sourceMatter} -> ${u.targetMatter}\t${u.change}`)
+    for (const u of rows) console.log(`${u.id}\t${u.status}\t${u.sourceMatter} -> ${u.targetMatter}\t${u.change}${u.rollback?.startsWith('rolledback:') ? ' (rolled back)' : ''}`)
     return
   }
   if (sub === 'propose-update') {
@@ -882,6 +900,23 @@ function link(sub, from, to, type) {
     const u = ledger.proposeUpdate({ sourceMatter: from, targetMatter: to, change: type })
     saveLedger(ledger)
     console.log(`${u.id} pending; apply with \`advisers link apply ${u.id}\``)
+    return
+  }
+  if (sub === 'rollback') {
+    if (!from) { console.error('usage: advisers link rollback <id>'); process.exitCode = 1; return }
+    const proposal = ledger.listUpdates().find((u) => u.id === from)
+    if (!proposal || proposal.status !== 'applied' || !proposal.rollback?.startsWith('fact:')) {
+      console.error(`no applied update with a rollback fact: ${from}`)
+      process.exitCode = 1
+      return
+    }
+    const factId = proposal.rollback.slice(5)
+    const ok = ledger.forget('fact', factId)
+    proposal.rollback = `rolledback:${factId}`
+    dbStore()?.appendAudit({ actor: 'local', action: 'link.rollback', allowed: true, reason: factId })
+    saveLedger(ledger)
+    console.log(ok ? `rolled back: ${factId}` : `fact not found: ${factId}`)
+    if (!ok) process.exitCode = 1
     return
   }
   if (sub === 'apply' || sub === 'reject') {
