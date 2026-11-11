@@ -7,6 +7,7 @@ import type {
   LinkProvider,
   OutboundMessage,
 } from '../../core/src/link.ts'
+import type { SendPermit } from '../../core/src/permit.ts'
 
 export interface FeishuMessage {
   openId: string
@@ -28,10 +29,16 @@ export interface FeishuSource {
   stop(): Promise<void>
 }
 
+export interface PermitGateLike {
+  verify(permit: SendPermit, request: { conversationId: string; accountId?: string }): { ok: boolean; reason?: string }
+  consume(permit: SendPermit): boolean
+}
+
 export interface FeishuLinkOptions {
   verificationToken?: string
   botOpenId?: string
   source?: FeishuSource
+  permitGate?: PermitGateLike
 }
 
 function parseText(content: string): string {
@@ -110,6 +117,12 @@ export class FeishuLink implements LinkProvider {
 
   async send(message: OutboundMessage): Promise<DeliveryResult> {
     try {
+      if (this.options.permitGate) {
+        if (!message.permit) return { ok: false, error: 'missing send permit' }
+        const check = this.options.permitGate.verify(message.permit, { conversationId: message.conversationId, accountId: 'feishu' })
+        if (!check.ok) return { ok: false, error: `send permit rejected: ${check.reason ?? 'invalid'}` }
+        if (!this.options.permitGate.consume(message.permit)) return { ok: false, error: 'send permit already consumed' }
+      }
       const result = await this.transport.send({
         chatId: message.conversationId,
         text: message.text,

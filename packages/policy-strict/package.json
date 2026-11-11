@@ -1,0 +1,38 @@
+{
+  "name": "advisers-policy-strict",
+  "version": "0.2.0-preview.1",
+  "private": false,
+  "description": "Strict policy pack for Advisers: understanding allowed; companion/roleplay disabled.",
+  "type": "module",
+  "main": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "default": "./dist/index.js"
+    },
+    "./package.json": "./package.json"
+  },
+  "files": [
+    "dist",
+    "README.md",
+    "LICENSE"
+  ],
+  "scripts": {
+    "build": "tsc -p tsconfig.build.json",
+    "typecheck": "tsc -p tsconfig.json --noEmit",
+    "test": "node --experimental-strip-types --test test/*.test.ts"
+  },
+  "dependencies": {
+    "advisers-core": "0.2.0-preview.8"
+  },
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/PerryLink/advisers.git",
+    "directory": "packages/policy-strict"
+  },
+  "publishConfig": {
+    "access": "public"
+  }
+}

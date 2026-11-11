@@ -89,3 +89,21 @@ test('FeishuLink starts and stops an injected source', async () => {
   assert.equal(started, 1)
   assert.equal(stopped, 1)
 })
+
+test('FeishuLink requires a one-shot permit when a gate is configured', async () => {
+  let consumed = false
+  const gate = {
+    verify(permit: any) { return { ok: Boolean(permit) } },
+    consume(permit: any) {
+      if (consumed) return false
+      consumed = true
+      return Boolean(permit)
+    },
+  }
+  const link = new FeishuLink({ async send() { return { messageId: 'om_1' } } }, { permitGate: gate })
+  const missing = await link.send({ conversationId: 'oc_1', text: 'hi' })
+  assert.equal(missing.ok, false)
+  const permit = { id: 'p1' }
+  assert.equal((await link.send({ conversationId: 'oc_1', text: 'hi', permit })).ok, true)
+  assert.equal((await link.send({ conversationId: 'oc_1', text: 'hi', permit })).ok, false)
+})

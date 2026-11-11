@@ -1,4 +1,5 @@
 import type { Id } from './types.ts'
+import type { SendPermit } from './permit.ts'
 
 export type AttachmentKind = 'image' | 'file' | 'audio' | 'video'
 
@@ -90,6 +91,8 @@ export interface OutboundMessage {
   cards?: Array<{ title: string; body: string }>
   attachments?: Attachment[]
   replyTo?: string
+  /** Required when the link has a PermitGate configured. */
+  permit?: SendPermit
 }
 
 /**
