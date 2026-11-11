@@ -262,6 +262,28 @@ function learnPreference(ledger, statement, quote) {
   return { preference: pref, promoted: false }
 }
 
+function purgeMatter(id, confirmed) {
+  if (!id) { console.error('usage: advisers purge <matter-id> [--yes]'); process.exitCode = 1; return }
+  const ledger = loadLedger()
+  const matter = ledger.getMatter(id)
+  if (!matter) { console.error(`unknown matter: ${id}`); process.exitCode = 1; return }
+  const facts = ledger.listFacts(id).length
+  const links = ledger.listLinks(id).length
+  const updates = ledger.listUpdates().filter((u) => u.sourceMatter === id || u.targetMatter === id).length
+  const commitments = ledger.openCommitments(id).length
+  console.log(`matter ${id}: ${matter.title}`)
+  console.log(`facts=${facts} links=${links} updates=${updates} open_commitments=${commitments}`)
+  if (!confirmed) {
+    console.log('dry-run only; re-run with --yes to purge')
+    return
+  }
+  const counts = ledger.purgeMatter(id)
+  const sqlite = dbStore()?.purgeMatterData(id)
+  dbStore()?.appendAudit({ actor: 'local', action: 'matter.purge', allowed: true, reason: `${id} ${JSON.stringify(counts)}` })
+  saveLedger(ledger)
+  console.log(`purged: ${JSON.stringify(counts)} sqlite=${JSON.stringify(sqlite ?? {})}`)
+}
+
 function printAudit() {
   const store = dbStore()
   if (!store) { console.log('audit requires SQLite store'); return }
@@ -1144,6 +1166,8 @@ if (!command) {
   printPreferences()
 } else if (command === 'audit') {
   printAudit()
+} else if (command === 'purge') {
+  purgeMatter(args[0], args.includes('--yes'))
 } else if (command === 'decay') {
   const ledger = loadLedger()
   const changed = applyPreferenceDecay(ledger.listPreferences({ includeCandidates: true }))

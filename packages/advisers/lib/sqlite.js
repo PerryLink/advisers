@@ -138,6 +138,12 @@ export class SqliteStore {
       .map((r) => ({ id: r.id, matterId: r.matter_id, conversationId: r.conversation_id, files: parse(r.files), tool: r.tool ?? undefined, title: r.title ?? undefined, validation: r.validation ?? undefined, createdAt: r.created_at }))
   }
 
+  purgeMatterData(matterId) {
+    const sessions = this.db.prepare('DELETE FROM sessions WHERE matter_id = ?').run(matterId).changes
+    const deliveries = this.db.prepare('DELETE FROM deliveries WHERE matter_id = ?').run(matterId).changes
+    return { sessions: Number(sessions), deliveries: Number(deliveries) }
+  }
+
   countDeliveries() {
     return this.db.prepare('SELECT COUNT(*) AS n FROM deliveries').get().n
   }

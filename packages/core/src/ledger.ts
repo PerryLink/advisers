@@ -217,6 +217,40 @@ export class Ledger {
     return true
   }
 
+  /** Privacy deletion: tombstone evidence, revoke links/updates, clear summary. */
+  purgeMatter(id: Id): { facts: number; links: number; updates: number; commitments: number; preferences: number; routes: number } {
+    const matter = this.matters.get(id)
+    if (!matter) throw new Error(`unknown matter: ${id}`)
+    let facts = 0
+    for (const fact of this.facts.values()) {
+      if (fact.matterId === id && fact.status !== 'deleted') { fact.status = 'deleted'; facts++ }
+    }
+    let links = 0
+    for (const link of this.links.values()) {
+      if ((link.fromMatter === id || link.toMatter === id) && link.status !== 'rejected') { link.status = 'rejected'; links++ }
+    }
+    let updates = 0
+    for (const update of this.updates.values()) {
+      if ((update.sourceMatter === id || update.targetMatter === id) && update.status === 'pending') { update.status = 'rejected'; updates++ }
+    }
+    let commitments = 0
+    for (const commitment of this.commitments.values()) {
+      if (commitment.matterId === id && commitment.status === 'open') { commitment.status = 'dropped'; commitments++ }
+    }
+    let preferences = 0
+    for (const pref of this.preferences.values()) {
+      if (pref.scope.level === 'matter' && pref.scope.value === id && pref.status !== 'deprecated') { pref.status = 'deprecated'; preferences++ }
+    }
+    let routes = 0
+    for (const [key, matterId] of this.routes.entries()) {
+      if (matterId === id) { this.routes.delete(key); routes++ }
+    }
+    matter.status = 'archived'
+    matter.summary = undefined
+    matter.updatedAt = this.clock.now()
+    return { facts, links, updates, commitments, preferences, routes }
+  }
+
   /** Association is a proposal first; only a human or a verified rule confirms it. */
   proposeLink(input: {
     fromMatter: Id
