@@ -194,7 +194,7 @@ async function runTurn({ runtime, ledger, text, conversationId, debug = false })
     console.log('[/context]')
   }
   const noisy = debug || process.env.ADVISERS_VERBOSE === '1'
-  if (intent && (noisy || intent.action !== 'execute')) {
+  if (intent && (noisy || intent.action === 'ask')) {
     console.log(intent.readback)
     if (intent.questions?.length) console.log(`问：${intent.questions[0]}`)
   }
@@ -215,9 +215,9 @@ async function runTurn({ runtime, ledger, text, conversationId, debug = false })
     onTool: (name) => { if (debug) console.log(`[tool] ${name}`) },
   })
   if (reply) console.log(reply)
-  for (const file of artifacts) console.log(`[file] ${file}`)
+  for (const file of [...new Set(artifacts)]) console.log(`[file] ${file}`)
   const failed = toolLog.filter((t) => !t.ok)
-  if (failed.length) console.log(`[warn] ${failed.length} 个工具调用失败，详见上一步输出`)
+  if (failed.length && (debug || artifacts.length === 0)) console.log(`[warn] ${failed.length} 个工具调用失败，详见上一步输出`)
 }
 
 async function chat(text) {

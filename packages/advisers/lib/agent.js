@@ -38,10 +38,10 @@ function tool(name, description, properties, required = []) {
 }
 
 export const LOCAL_TOOLS = [
-  tool('office_build', 'Build an Office/diagram artifact from a JSON spec. Returns the file path and validation result.', {
+  tool('office_build', 'Build an Office/diagram artifact from a JSON spec. For xmind, spec must be {title,branches:[{label,children:string[]}]}; for mermaid/drawio, spec must be {kind:"flowchart",title,nodes:[{id,label}],edges:[{from,to,label?}]}.', {
     kind: { type: 'string', enum: OFFICE_KINDS },
     out: { type: 'string', description: 'Relative output path inside the workspace, e.g. out/q4.docx' },
-    spec: { type: 'object', description: 'Spec matching the chosen builder (title/sections/columns/rows/slides/nodes).' },
+    spec: { type: 'object', description: 'Spec matching the chosen builder. docx:{title,sections}; xlsx:{columns,rows}; pptx:{title,slides}; xmind:{title,branches}; mermaid/drawio:{title,nodes,edges}.' },
   }, ['kind', 'out', 'spec']),
   tool('office_template', 'Build one of the five secretary templates into a file.', {
     name: { type: 'string', enum: TEMPLATE_NAMES },
@@ -68,6 +68,12 @@ async function runOfficeTool(name, args, cwd) {
   if (name === 'office_build') {
     if (!OFFICE_KINDS.includes(args.kind)) throw new Error(`unsupported kind: ${args.kind}`)
     spec = args.spec
+    if (args.kind === 'xmind' && (!Array.isArray(spec?.branches) || spec.branches.length === 0)) {
+      throw new Error('xmind spec requires a non-empty branches array: [{label, children: string[]}]')
+    }
+    if ((args.kind === 'mermaid' || args.kind === 'drawio') && (!Array.isArray(spec?.nodes) || spec.nodes.length === 0)) {
+      throw new Error('diagram spec requires nodes: [{id,label}]')
+    }
   } else {
     if (!TEMPLATE_NAMES.includes(args.name)) throw new Error(`unsupported template: ${args.name}`)
     spec = args.name === 'weekly' ? office.weeklyReport(args.data)
@@ -86,7 +92,7 @@ async function runOfficeTool(name, args, cwd) {
   else if (kind === 'drawio') { buffer = Buffer.from(office.buildDrawio(spec)); result = { ok: true, missing: [] } }
   else { buffer = Buffer.from(office.buildMermaid(spec)); result = { ok: true, missing: [] } }
   await writeFile(out, buffer)
-  return { ok: result.ok, path: out, bytes: buffer.length, missing: result.missing ?? [] }
+  return { ok: result.ok, artifact: true, path: out, bytes: buffer.length, missing: result.missing ?? [] }
 }
 
 export async function executeTool(name, args, { cwd = process.cwd() } = {}) {
@@ -96,23 +102,24 @@ export async function executeTool(name, args, { cwd = process.cwd() } = {}) {
     const path = safePath(cwd, args.path)
     await mkdir(dirname(path), { recursive: true })
     await writeFile(path, args.content)
-    return { ok: true, path, bytes: Buffer.byteLength(args.content) }
+    return { ok: true, artifact: true, path, bytes: Buffer.byteLength(args.content) }
   }
   if (name === 'file_read') {
     const path = safePath(cwd, args.path)
     const content = await readFile(path, 'utf8')
     if (Buffer.byteLength(content) > MAX_FILE_BYTES) throw new Error('file is too large')
-    return { ok: true, path, content }
+    return { ok: true, artifact: false, path, content }
   }
   if (name === 'file_list') {
     const path = safePath(cwd, args.dir ?? '.')
     const entries = await readdir(path, { withFileTypes: true })
-    return { ok: true, dir: path, entries: entries.slice(0, 200).map((e) => `${e.isDirectory() ? 'd' : 'f'} ${e.name}`) }
+    return { ok: true, artifact: false, dir: path, entries: entries.slice(0, 200).map((e) => `${e.isDirectory() ? 'd' : 'f'} ${e.name}`) }
   }
   throw new Error(`unknown tool: ${name}`)
 }
 
 const SYSTEM = `You are a work secretary, not a chatbot.
+Advisers is a local CLI: \`advisers\` starts the REPL, \`advisers chat "task"\` runs one task, \`advisers status\` shows state, \`advisers office\`/\`advisers template\` build files. It is NOT a directory of consultants; never invent product features.
 - Reply in the user's language, BLUF, no filler.
 - Use tools to create files or read workspace files. Never claim a file exists unless the tool succeeded.
 - For Office work, choose the right builder/template, put deliverables under out/ unless the user says otherwise.
@@ -139,7 +146,7 @@ export async function runAgent({
   const toolLog = []
   for (let step = 0; step < maxSteps; step++) {
     const result = await chatCompletion({ messages, apiKey, baseUrl, model, tools: LOCAL_TOOLS, fetchImpl })
-    if (!result.toolCalls.length) return { reply: result.content.trim(), artifacts, toolLog, steps: step + 1 }
+    if (!result.toolCalls.length) return { reply: result.content.trim(), artifacts: [...new Set(artifacts)], toolLog, steps: step + 1 }
     messages.push({ role: 'assistant', content: result.content, tool_calls: result.toolCalls })
     for (const call of result.toolCalls) {
       const name = call.function?.name
@@ -149,7 +156,7 @@ export async function runAgent({
         const args = JSON.parse(call.function?.arguments || '{}')
         onTool?.(name, args)
         payload = await executeTool(name, args, { cwd })
-        if (payload.path) artifacts.push(payload.path)
+        if (payload.artifact && payload.path) artifacts.push(payload.path)
       } catch (error) {
         payload = { ok: false, error: error instanceof Error ? error.message : String(error) }
       }
@@ -157,5 +164,5 @@ export async function runAgent({
       messages.push({ role: 'tool', tool_call_id: id, content: JSON.stringify(payload) })
     }
   }
-  return { reply: '任务步骤超过上限，已停止；已完成的部分见文件。', artifacts, toolLog, steps: maxSteps }
+  return { reply: '任务步骤超过上限，已停止；已完成的部分见文件。', artifacts: [...new Set(artifacts)], toolLog, steps: maxSteps }
 }
