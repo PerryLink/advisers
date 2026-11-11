@@ -1,0 +1,27 @@
+name: publish
+on:
+  push:
+    tags: ['v*']
+permissions:
+  contents: read
+  id-token: write
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 12.16.1
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: pnpm
+          registry-url: https://registry.npmjs.org
+      - run: pnpm install --no-frozen-lockfile
+      - run: pnpm -r --if-present run typecheck
+      - run: pnpm -r --if-present run build
+      - run: pnpm -r --if-present run test
+      - run: node scripts/release.mjs
+        env:
+          RELEASE_TAG: next

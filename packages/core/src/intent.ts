@@ -32,15 +32,15 @@ export interface IntentBrief {
 
 const DELIVERABLES: Array<[string, RegExp]> = [
   ['pptx', /(ppt|幻灯片|演示文稿|汇报材料)/i],
-  ['xlsx', /(excel|表格|预算表|数据表|台账)/i],
   ['docx', /(word|文档|周报|报告|纪要|方案书|合同)/i],
+  ['xlsx', /(excel|表格|预算表|数据表|台账)/i],
   ['diagram', /(流程图|思维导图|架构图|mermaid|draw\.io|xmind|visio)/i],
   ['email', /(邮件|回复|发给|草稿)/i],
   ['plan', /(计划|排期|方案|步骤)/i],
 ]
 
-const HIGH_RISK = /(发送|发给|发布|付款|转账|删除|签字|签约|对外|客户|老板|投资|合同)/
-const VAGUE = /(那个|这个|搞一下|弄一下|看一下|处理一下|看着办|随便|你懂的|老样子)/
+const HIGH_RISK = /(发送|发给|发布|付款|转账|汇款|打款|转(到|账)|删除|删掉|清空|销毁|签字|签约|对外|客户|老板|投资|合同)/
+const VAGUE = /(那个|这个|搞一下|弄一下|看一下|看看|处理一下|尽快|看着办|随便|你懂的|老样子)/
 const CONSTRAINT = /(不要|别|必须|只能|不能|务必|一定要|截止|之前|以后)/
 
 function clamp(n: number, lo: number, hi: number): number {
@@ -103,8 +103,8 @@ export function buildIntentBrief(request: string, context: IntentContext = {}): 
   )
 
   let action: IntentAction = 'execute'
-  if (risk === 'high' && confidence < 0.8) action = 'ask'
-  else if (ambiguity > 0.5 && confidence < 0.62) action = 'ask'
+  if (risk === 'high') action = confidence < 0.8 ? 'ask' : 'confirm'
+  else if (ambiguity >= 0.5 && confidence < 0.62) action = 'ask'
   else if ((context.stage ?? 'probation') === 'probation' && confidence < 0.72) action = 'confirm'
   else if (confidence < 0.55) action = 'confirm'
 

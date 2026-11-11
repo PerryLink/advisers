@@ -1,0 +1,26 @@
+name: ci
+on:
+  push:
+    branches: [main]
+  pull_request:
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        node: [22, 24]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 12.16.1
+      - uses: actions/setup-node@v4
+        with:
+          node-version: ${{ matrix.node }}
+          cache: pnpm
+      - run: pnpm install --no-frozen-lockfile
+      - run: pnpm -r --if-present run typecheck
+      - run: pnpm -r --if-present run build
+      - run: pnpm -r --if-present run test
+      - run: node --experimental-strip-types --test packages/core/test/*.test.ts packages/link-email/test/*.test.ts packages/advisers/test/*.test.js packages/office/test/*.test.ts

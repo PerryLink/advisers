@@ -206,3 +206,13 @@ export interface Routine {
   createdAt: IsoDate
   updatedAt: IsoDate
 }
+
+export interface RoutinePatch {
+  id: Id
+  routineId: Id
+  baseVersion: number
+  changes: Partial<Pick<Routine, 'name' | 'description' | 'trigger' | 'steps' | 'preferences' | 'pitfalls' | 'verification' | 'scope'>>
+  diff: string
+  status: 'pending' | 'applied' | 'rejected'
+  createdAt: IsoDate
+}

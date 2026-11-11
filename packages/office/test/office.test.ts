@@ -7,6 +7,11 @@ import {
   buildPptx,
   buildXmind,
   buildXlsx,
+  budget,
+  flow,
+  mindmap,
+  presentation,
+  weeklyReport,
   containsText,
   excelDate,
   validateXmind,
@@ -127,4 +132,25 @@ test('validator catches a broken OOXML relationship target', async () => {
   const result = await validateOffice(broken, 'docx')
   assert.equal(result.ok, false)
   assert.ok(result.missing.some((item) => item.startsWith('rel:')))
+})
+
+test('templates produce the right shapes', () => {
+  const weekly = weeklyReport({ period: '2026-W45', done: ['a', 'b'], risks: ['c'] })
+  assert.equal(weekly.sections.length, 4)
+  assert.equal(weekly.sections[0]?.bullets?.length, 2)
+
+  const b = budget({ rows: [{ item: '市场', amount: 120 }, { item: '研发', amount: 300 }] })
+  assert.equal(b.rows.length, 2)
+  assert.equal(b.formulas?.[0]?.cell, 'B4')
+  assert.match(b.formulas?.[0]?.formula ?? '', /SUM\(B2:B3\)/)
+
+  const p = presentation({ title: '复盘', conclusion: '增长', bullets: ['a'] })
+  assert.equal(p.slides.length, 3)
+
+  const f = flow({ title: '审批', steps: ['提交', '审批', '付款'] })
+  assert.equal(f.nodes?.length, 3)
+  assert.equal(f.edges?.length, 2)
+
+  const m = mindmap({ title: '规划', branches: [{ label: '目标', children: ['增长'] }] })
+  assert.equal(m.kind, 'mindmap')
 })

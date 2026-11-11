@@ -135,6 +135,11 @@ export class AdvisersRuntime implements LinkHost {
     if (!matter) throw new Error(`matter disappeared: ${matterId}`)
 
     const intent = buildIntentBrief(event.text ?? '', { stage: this.stage })
+    const related = this.ledger.listLinks(matter.id, false).flatMap((link) => {
+      const otherId = link.fromMatter === matter.id ? link.toMatter : link.fromMatter
+      const other = this.ledger.getMatter(otherId)
+      return other ? [{ matterId: other.id, title: other.title, why: `${link.type} link` }] : []
+    })
     const context = assembleContext({
       matter,
       ledger: this.ledger,
@@ -142,6 +147,7 @@ export class AdvisersRuntime implements LinkHost {
       clearance: this.clearance,
       soul: this.readSoul(),
       intent,
+      related,
     })
 
     if (event.text) {

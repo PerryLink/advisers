@@ -2,6 +2,7 @@
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs'
 import { homedir } from 'node:os'
 import { join } from 'node:path'
+import { SqliteStore } from '../lib/sqlite.js'
 
 let core
 if (process.env.ADVISERS_CORE_LOCAL === '1') {
@@ -20,19 +21,56 @@ const HOME = process.env.ADVISERS_HOME || join(homedir(), '.advisers')
 const STATE = join(HOME, 'state.json')
 const SOUL = join(HOME, 'soul.md')
 const SOUL_META = join(HOME, 'soul.meta.json')
+const DB = join(HOME, 'state.db')
+let mode = process.env.ADVISERS_STORE === 'json' ? 'json' : 'sqlite'
+let activeStore
 
 function ensureHome() {
   mkdirSync(HOME, { recursive: true })
 }
 
-function loadLedger() {
+function loadJson() {
   if (!existsSync(STATE)) return new Ledger()
   return Ledger.fromJSON(JSON.parse(readFileSync(STATE, 'utf8')))
 }
 
-function saveLedger(ledger) {
+function saveJson(ledger) {
   ensureHome()
   writeFileSync(STATE, JSON.stringify(ledger.toJSON(), null, 2) + '\n')
+}
+
+function openStore() {
+  if (!activeStore) activeStore = new SqliteStore(DB)
+  return activeStore
+}
+
+function loadLedger() {
+  ensureHome()
+  if (mode === 'json') return loadJson()
+  try {
+    if (!existsSync(DB) && existsSync(STATE)) {
+      const ledger = loadJson()
+      openStore().save(ledger.toJSON())
+      return ledger
+    }
+    return Ledger.fromJSON(openStore().load())
+  } catch (error) {
+    console.error(`sqlite unavailable (${error.message}); falling back to JSON`)
+    mode = 'json'
+    return loadJson()
+  }
+}
+
+function saveLedger(ledger) {
+  ensureHome()
+  if (mode === 'json') return saveJson(ledger)
+  try {
+    openStore().save(ledger.toJSON())
+  } catch (error) {
+    console.error(`sqlite save failed (${error.message}); falling back to JSON`)
+    mode = 'json'
+    saveJson(ledger)
+  }
 }
 
 function loadSoul() {
@@ -85,17 +123,30 @@ Usage:
   advisers routine approve <id>
                               activate a routine (human action)
   advisers routine archive <id>
+  advisers routine patches     list routine patches
+  advisers routine patch <id> <changes.json>
+  advisers routine diff <patch-id>
+  advisers routine apply <patch-id>
+  advisers routine reject <patch-id>
+  advisers template <weekly|budget|presentation|flow|mindmap> <data.json> <out>
+                              build a template into docx/xlsx/pptx/mmd/drawio/xmind
+  advisers link ls            list matter links
+  advisers link add <from> <to> <type>
+  advisers link confirm <id>
   advisers soul show          print soul.md
   advisers soul set <file>    set soul.md from a file (human action)
   advisers soul init          write a minimal starter soul.md
   advisers help
 
 Environment:
-  ADVISERS_HOME  default ~/.advisers
+  ADVISERS_HOME   default ~/.advisers
+  ADVISERS_STORE  sqlite (default) or json
+  ADVISERS_API_KEY / ADVISERS_BASE_URL / ADVISERS_MODEL
+                  enable the model call in chat
 `)
 }
 
-function chat(text) {
+async function chat(text) {
   if (!text) {
     console.error('usage: advisers chat <text>')
     process.exitCode = 1
@@ -112,6 +163,21 @@ function chat(text) {
     text,
     timestamp: now(),
   })
+  let reply
+  const apiKey = process.env.ADVISERS_API_KEY
+  if (apiKey && process.env.ADVISERS_NO_MODEL !== '1') {
+    try {
+      const { complete } = await import('../lib/model.js')
+      reply = await complete({
+        prompt: `${context.prompt}\n\n[user]\n${text}`,
+        apiKey,
+        baseUrl: process.env.ADVISERS_BASE_URL || 'https://api.deepseek.com',
+        model: process.env.ADVISERS_MODEL || 'deepseek-chat',
+      })
+    } catch (error) {
+      console.error(`model call failed: ${error.message}`)
+    }
+  }
   saveLedger(ledger)
   console.log(`[thread] ${context.threadId}`)
   console.log(context.prompt)
@@ -119,6 +185,7 @@ function chat(text) {
     console.log('\nhints:')
     for (const hint of context.hints) console.log(`- ${hint.title}: ${hint.why}`)
   }
+  console.log(reply ? `\n[reply]\n${reply}` : '\n[no model: set ADVISERS_API_KEY]')
 }
 
 function ls() {
@@ -179,7 +246,7 @@ function brief(text) {
   console.log('\n' + core.renderReadback(brief))
 }
 
-function routine(sub, arg) {
+function routine(sub, arg, arg2) {
   const ledger = loadLedger()
   if (typeof ledger.addRoutine !== 'function') {
     console.error('routine requires advisers-core@0.1.0-preview.3 or newer')
@@ -217,6 +284,50 @@ function routine(sub, arg) {
     console.log(`draft routine ${routine.id}: ${routine.name}; approve with \`advisers routine approve ${routine.id}\``)
     return
   }
+  if (sub === 'patches') {
+    const rows = ledger.listRoutinePatches()
+    if (!rows.length) {
+      console.log('no routine patches')
+      return
+    }
+    for (const p of rows) console.log(`${p.id}\t${p.status}\troutine=${p.routineId}\tbase=v${p.baseVersion}`)
+    return
+  }
+  if (sub === 'patch') {
+    if (!arg || !arg2) {
+      console.error('usage: advisers routine patch <routine-id> <changes.json>')
+      process.exitCode = 1
+      return
+    }
+    const changes = JSON.parse(readFileSync(arg2, 'utf8'))
+    const patch = ledger.proposeRoutinePatch(arg, changes)
+    saveLedger(ledger)
+    console.log(`patch ${patch.id} (base v${patch.baseVersion}):\n${patch.diff}`)
+    console.log(`approve with \`advisers routine apply ${patch.id}\``)
+    return
+  }
+  if (sub === 'diff') {
+    if (!arg) {
+      console.error('usage: advisers routine diff <patch-id>')
+      process.exitCode = 1
+      return
+    }
+    const patch = ledger.listRoutinePatches().find((p) => p.id === arg)
+    console.log(patch ? patch.diff : `unknown patch: ${arg}`)
+    if (!patch) process.exitCode = 1
+    return
+  }
+  if (sub === 'apply' || sub === 'reject') {
+    if (!arg) {
+      console.error(`usage: advisers routine ${sub} <patch-id>`)
+      process.exitCode = 1
+      return
+    }
+    const patch = sub === 'apply' ? ledger.applyRoutinePatch(arg) : ledger.rejectRoutinePatch(arg)
+    saveLedger(ledger)
+    console.log(`${patch.status}: ${patch.id}`)
+    return
+  }
   if (sub === 'approve' || sub === 'archive') {
     if (!arg) {
       console.error(`usage: advisers routine ${sub} <id>`)
@@ -229,6 +340,89 @@ function routine(sub, arg) {
     return
   }
   console.error(`unknown routine subcommand: ${sub}`)
+  process.exitCode = 1
+}
+
+async function template(name, dataFile, outFile) {
+  const names = ['weekly', 'budget', 'presentation', 'flow', 'mindmap']
+  if (!names.includes(name) || !dataFile || !outFile) {
+    console.error('usage: advisers template <weekly|budget|presentation|flow|mindmap> <data.json> <out>')
+    process.exitCode = 1
+    return
+  }
+  let mod
+  if (process.env.ADVISERS_OFFICE_LOCAL === '1') {
+    mod = await import('../../office/dist/index.js')
+  } else {
+    try {
+      mod = await import('advisers-office')
+    } catch {
+      console.error('advisers-office is not installed; run `npm i -g advisers-office@next`')
+      process.exitCode = 1
+      return
+    }
+  }
+  const data = JSON.parse(readFileSync(dataFile, 'utf8'))
+  const spec = name === 'weekly' ? mod.weeklyReport(data)
+    : name === 'budget' ? mod.budget(data)
+    : name === 'presentation' ? mod.presentation(data)
+    : name === 'flow' ? mod.flow(data)
+    : mod.mindmap(data)
+  const ext = outFile.split('.').pop()
+  let buffer
+  let result
+  if (ext === 'docx') {
+    buffer = await mod.buildDocx(spec); result = await mod.validateOffice(buffer, 'docx')
+  } else if (ext === 'xlsx') {
+    buffer = await mod.buildXlsx(spec); result = await mod.validateOffice(buffer, 'xlsx')
+  } else if (ext === 'pptx') {
+    buffer = await mod.buildPptx(spec); result = await mod.validateOffice(buffer, 'pptx')
+  } else if (ext === 'xmind') {
+    buffer = await mod.buildXmind(spec); result = await mod.validateXmind(buffer)
+  } else if (ext === 'drawio') {
+    writeFileSync(outFile, mod.buildDrawio(spec)); console.log(`wrote ${outFile}`); return
+  } else {
+    writeFileSync(outFile, mod.buildMermaid(spec)); console.log(`wrote ${outFile}`); return
+  }
+  writeFileSync(outFile, buffer)
+  console.log(result.ok ? `wrote ${outFile} (${buffer.length} bytes)` : `wrote ${outFile}, missing: ${result.missing.join(', ')}`)
+  if (!result.ok) process.exitCode = 1
+}
+
+function link(sub, from, to, type) {
+  const ledger = loadLedger()
+  if (sub === 'ls' || !sub) {
+    const rows = ledger.listLinks()
+    if (!rows.length) {
+      console.log('no links yet')
+      return
+    }
+    for (const l of rows) console.log(`${l.id}\t${l.status}\t${l.fromMatter} -[${l.type}]-> ${l.toMatter}`)
+    return
+  }
+  if (sub === 'add') {
+    if (!from || !to || !type) {
+      console.error('usage: advisers link add <from-matter> <to-matter> <type>')
+      process.exitCode = 1
+      return
+    }
+    const l = ledger.proposeLink({ fromMatter: from, toMatter: to, type })
+    saveLedger(ledger)
+    console.log(`link ${l.id} (${l.status}); confirm with \`advisers link confirm ${l.id}\``)
+    return
+  }
+  if (sub === 'confirm') {
+    if (!from) {
+      console.error('usage: advisers link confirm <id>')
+      process.exitCode = 1
+      return
+    }
+    const l = ledger.confirmLink(from)
+    saveLedger(ledger)
+    console.log(`confirmed: ${l.id}`)
+    return
+  }
+  console.error(`unknown link subcommand: ${sub}`)
   process.exitCode = 1
 }
 
@@ -331,7 +525,7 @@ function soul(sub, file) {
 if (!command || command === 'help' || command === '--help') {
   help()
 } else if (command === 'chat') {
-  chat(args.join(' ').trim())
+  await chat(args.join(' ').trim())
 } else if (command === 'ls') {
   ls()
 } else if (command === 'why') {
@@ -346,7 +540,12 @@ if (!command || command === 'help' || command === '--help') {
   await office(args[0], args[1], args[2])
   process.exit(process.exitCode || 0)
 } else if (command === 'routine') {
-  routine(args[0], args[1])
+  routine(args[0], args[1], args[2])
+} else if (command === 'template') {
+  await template(args[0], args[1], args[2])
+  process.exit(process.exitCode || 0)
+} else if (command === 'link') {
+  link(args[0], args[1], args[2], args[3])
 } else if (command === 'soul') {
   soul(args[0], args[1])
 } else {

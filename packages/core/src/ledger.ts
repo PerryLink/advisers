@@ -9,6 +9,7 @@ import type {
   MatterLink,
   MatterLinkType,
   Routine,
+  RoutinePatch,
   PreferenceKind,
   PreferenceScope,
   UpdateProposal,
@@ -72,6 +73,7 @@ export class Ledger {
   private readonly updates = new Map<Id, UpdateProposal>()
   private readonly routes = new Map<string, Id>()
   private readonly routines = new Map<Id, Routine>()
+  private readonly routinePatches = new Map<Id, RoutinePatch>()
 
   constructor(ports: HostPorts = systemPorts()) {
     this.clock = ports.clock
@@ -319,6 +321,53 @@ export class Ledger {
     return routine
   }
 
+  proposeRoutinePatch(
+    routineId: Id,
+    changes: RoutinePatch['changes'],
+  ): RoutinePatch {
+    const routine = this.routines.get(routineId)
+    if (!routine) throw new Error(`unknown routine: ${routineId}`)
+    const diff = Object.entries(changes)
+      .map(([key, value]) => `- ${key}: ${JSON.stringify((routine as unknown as Record<string, unknown>)[key])}\n+ ${key}: ${JSON.stringify(value)}`)
+      .join('\n')
+    const patch: RoutinePatch = {
+      id: this.ids.next('rpatch'),
+      routineId,
+      baseVersion: routine.version,
+      changes,
+      diff,
+      status: 'pending',
+      createdAt: this.clock.now(),
+    }
+    this.routinePatches.set(patch.id, patch)
+    return patch
+  }
+
+  listRoutinePatches(status?: RoutinePatch['status']): RoutinePatch[] {
+    return [...this.routinePatches.values()].filter((p) => (status ? p.status === status : true))
+  }
+
+  applyRoutinePatch(id: Id): RoutinePatch {
+    const patch = this.routinePatches.get(id)
+    if (!patch || patch.status !== 'pending') throw new Error(`unknown or closed routine patch: ${id}`)
+    const routine = this.routines.get(patch.routineId)
+    if (!routine) throw new Error(`unknown routine: ${patch.routineId}`)
+    for (const [key, value] of Object.entries(patch.changes)) {
+      ;(routine as unknown as Record<string, unknown>)[key] = value
+    }
+    routine.version = Math.max(routine.version, patch.baseVersion) + 1
+    routine.updatedAt = this.clock.now()
+    patch.status = 'applied'
+    return patch
+  }
+
+  rejectRoutinePatch(id: Id): RoutinePatch {
+    const patch = this.routinePatches.get(id)
+    if (!patch) throw new Error(`unknown routine patch: ${id}`)
+    patch.status = 'rejected'
+    return patch
+  }
+
   getRoute(key: string): Id | undefined {
     return this.routes.get(key)
   }
@@ -338,6 +387,7 @@ export class Ledger {
       updates: [...this.updates.values()],
       routes: Object.fromEntries(this.routes),
       routines: [...this.routines.values()],
+      routinePatches: [...this.routinePatches.values()],
     }
   }
 
@@ -351,6 +401,7 @@ export class Ledger {
     for (const u of snapshot.updates ?? []) ledger.updates.set(u.id, u)
     for (const [k, v] of Object.entries(snapshot.routes ?? {})) ledger.routes.set(k, v)
     for (const r of snapshot.routines ?? []) ledger.routines.set(r.id, r)
+    for (const p of snapshot.routinePatches ?? []) ledger.routinePatches.set(p.id, p)
     return ledger
   }
 }
@@ -365,4 +416,5 @@ export interface LedgerSnapshot {
   updates: UpdateProposal[]
   routes: Record<string, Id>
   routines: Routine[]
+  routinePatches: RoutinePatch[]
 }
