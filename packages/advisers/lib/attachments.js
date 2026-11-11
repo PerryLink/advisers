@@ -57,6 +57,25 @@ async function pptxText(zip) {
   return out.join('\n\n').trim()
 }
 
+async function pdfText(path) {
+  const pdfjs = await import('pdfjs-dist/legacy/build/pdf.mjs')
+  const data = new Uint8Array(await readFile(path))
+  const task = pdfjs.getDocument({ data, isEvalSupported: false, useSystemFonts: false, disableFontFace: true, verbosity: 0 })
+  const doc = await task.promise
+  try {
+    const pages = []
+    const count = Math.min(doc.numPages, 50)
+    for (let pageNo = 1; pageNo <= count; pageNo++) {
+      const page = await doc.getPage(pageNo)
+      const content = await page.getTextContent()
+      pages.push(content.items.map((item) => item.str ?? '').join(' '))
+    }
+    return pages.join('\n').trim()
+  } finally {
+    await task.destroy()
+  }
+}
+
 async function xlsxText(zip) {
   const shared = await zip.file('xl/sharedStrings.xml')?.async('string')
   const out = []
@@ -93,6 +112,11 @@ export async function extractAttachment(input, { cwd = process.cwd() } = {}) {
     if (!text) throw new Error(`no extractable text in ${name}`)
     return { name, path, kind: ext.slice(1), text, truncated, bytes: info.size }
   }
-  if (ext === '.pdf') throw new Error('PDF text extraction is not configured; convert to text or DOCX first')
+  if (ext === '.pdf') {
+    const raw = await pdfText(path)
+    const { text, truncated } = truncate(raw)
+    if (!text) throw new Error(`no extractable text in ${name} (scanned PDF?)`)
+    return { name, path, kind: 'pdf', text, truncated, bytes: info.size }
+  }
   throw new Error(`unsupported attachment type: ${ext || '(none)'}`)
 }

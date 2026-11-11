@@ -24,14 +24,14 @@ them.
 
 ## Status
 
-`0.2.0-preview.6/15` is staged on npm (`next` still points at the verified preview.2 until the staged packages are approved):
+`0.2.0-preview.6/16` is staged on npm (`next` still points at the verified preview.2 until the staged packages are approved):
 
 - `advisers` CLI: local REPL, `chat`, `office`, `template`, `routine`, `link`, `bridge`, `soul`, `ls`, `why`, `forget`, `export`;
 - SQLite at `~/.advisers/state.db` (JSON fallback with `ADVISERS_STORE=json`);
 - `IntentBrief` + clarification policy + readback;
 - `advisers-office`: DOCX/XLSX/PPTX/Mermaid/draw.io/XMind + 5 templates;
 - routine v0 (draft/approve/archive + patch/diff/apply);
-- local agent loop with tools (`office_build`, `office_template`, `file_read/write/list`); optional model with `ADVISERS_API_KEY`;
+- local agent loop with tools (`office_build`, `office_template`, `file_read/write/list`); attachments (txt/md/docx/xlsx/pptx/pdf); optional model with `ADVISERS_API_KEY`;
 - DSH bundle (`dsh-advisers`) with `advisers_brief`; email IMAP/draft; Feishu webhook; strict policy pack;
 - Hermes bridge (`advisers-bridge-hermes`) for 20+ platforms through Hermes gateway;
 - real-account/WS/Office-L3 validation still pending.
