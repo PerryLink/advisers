@@ -1,14 +1,24 @@
 #!/usr/bin/env node
-import { existsSync, mkdirSync, readFileSync, statSync, writeFileSync } from 'node:fs'
+import { chmodSync, existsSync, mkdirSync, readFileSync, statSync, writeFileSync } from 'node:fs'
 import { homedir } from 'node:os'
+import { randomUUID } from 'node:crypto'
 import { basename, dirname, join } from 'node:path'
-import { SqliteStore } from '../lib/sqlite.js'
+let SqliteStore
+try {
+  ({ SqliteStore } = await import('../lib/sqlite.js'))
+} catch (error) {
+  if (String(error?.message || error).includes('node:sqlite')) {
+    console.error(`Advisers needs Node >= 22.13 (node:sqlite). You have ${process.version}. Install Node 24 or use nvm-windows.`)
+    process.exit(1)
+  }
+  throw error
+}
 import { runAgent } from '../lib/agent.js'
 import { chatCompletion } from '../lib/model.js'
 import { extractAttachment } from '../lib/attachments.js'
 import { applyPreferenceDecay, buildRoutineCandidate, correctionStatement } from '../lib/learning.js'
 import { checkRoutine } from '../lib/routine.js'
-import { diffLatest, listBackups, undoLatest } from '../lib/undo.js'
+import { backupBeforeWrite, diffLatest, listBackups, undoLatest } from '../lib/undo.js'
 import { lintReview, materializeReview, reviewRun } from '../lib/review.js'
 import { classifyNudgeOutcome } from '../lib/nudge.js'
 import { buildDigest } from '../lib/digest.js'
@@ -39,7 +49,8 @@ let mode = process.env.ADVISERS_STORE === 'json' ? 'json' : 'sqlite'
 let activeStore
 
 function ensureHome() {
-  mkdirSync(HOME, { recursive: true })
+  mkdirSync(HOME, { recursive: true, mode: 0o700 })
+  try { chmodSync(HOME, 0o700) } catch {}
 }
 
 function loadJson() {
@@ -53,7 +64,10 @@ function saveJson(ledger) {
 }
 
 function openStore() {
-  if (!activeStore) activeStore = new SqliteStore(DB)
+  if (!activeStore) {
+    activeStore = new SqliteStore(DB)
+    try { chmodSync(DB, 0o600) } catch {}
+  }
   return activeStore
 }
 
@@ -101,15 +115,19 @@ function loadSoul() {
 
 function saveSoul(doc) {
   ensureHome()
-  writeFileSync(SOUL, doc.content)
-  writeFileSync(SOUL_META, JSON.stringify({ version: doc.version, updatedAt: doc.updatedAt }, null, 2) + '\n')
+  writeFileSync(SOUL, doc.content, { mode: 0o600 })
+  writeFileSync(SOUL_META, JSON.stringify({ version: doc.version, updatedAt: doc.updatedAt }, null, 2) + '\n', { mode: 0o600 })
 }
 
 const soulStore = { load: loadSoul, save: saveSoul }
 
 function runtimeFor(ledger) {
   const ports = { ...systemPorts(), soul: soulStore }
-  return createAdvisers({ ledger, ports, seen: mode === 'sqlite' ? openStore().seenStore() : undefined, ownerIds: process.env.ADVISERS_OWNER?.split(',').map((x) => x.trim()).filter(Boolean), policyResolver: StrictPolicyPack ? new StrictPolicyPack() : undefined })
+  return createAdvisers({ ledger, ports, seen: mode === 'sqlite' ? openStore().seenStore() : undefined, ownerIds: process.env.ADVISERS_OWNER?.split(',').map((x) => x.trim()).filter(Boolean), policyResolver: StrictPolicyPack ? new StrictPolicyPack() : { resolve: () => ({ allowed: false, action: 'deny', code: 'FAIL_CLOSED', reason: 'policy pack missing' }) } })
+}
+
+async function backupCliFile(path) {
+  try { await backupBeforeWrite(path, { cwd: dirname(path), backupDir: join(HOME, 'undo') }) } catch {}
 }
 
 function now() {
@@ -186,6 +204,7 @@ async function askYesNo(rl, prompt, defaultYes = true) {
   }
 }
 
+const VERSION = JSON.parse(readFileSync(new URL('../package.json', import.meta.url), 'utf8')).version
 const [command, ...args] = process.argv.slice(2)
 
 function help() {
@@ -199,7 +218,7 @@ Usage:
   advisers history            recent conversations
   advisers search <text>       full-text search old turns
   advisers compact ls|rollback summary versions
-  advisers tick               due commitments within 24h
+  advisers tick               due commitments in the next 7 days
   advisers week               last 7 days
   advisers digest day|week    short digest
   advisers diff                show the last changed file
@@ -207,6 +226,10 @@ Usage:
   advisers learn ls           recent task trajectories
   advisers learn review <id>  LLM routine review (needs API key)
   advisers memory             what I remember
+  advisers memory search <q>  search facts/preferences
+  advisers memory candidates  pending memory candidates
+  advisers memory accept|reject <id>
+  advisers prefs [--all] | correct <text> | audit | purge <matter> [--yes]
   advisers commit add|ls|done|snooze commitments
   advisers deliveries         recent generated files
   advisers ls                 list matters
@@ -214,6 +237,7 @@ Usage:
   advisers forget <pref-id>   forget a preference (tombstone)
   advisers export             export the ledger as JSON
   advisers brief <text>       print the IntentBrief for a request
+  advisers --version          print the CLI version
   advisers who                 who I owe / who owes me
   advisers policy check <text> policy/crisis check
   advisers office-read <file>  read DOCX/XLSX/PPTX structural text
@@ -236,7 +260,7 @@ Usage:
   advisers routine check <id>         run file/manual verification
   advisers routine curate [--apply]   mark stale/deprecated routines
   advisers routine restore <id>       restore an archived routine to draft
-  advisers template <weekly|budget|presentation|flow|mindmap> <data.json> <out>
+  advisers template <weekly|budget|presentation|flow|mindmap|minutes|notice> <data.json> <out>
                               build a template into docx/xlsx/pptx/mmd/drawio/xmind
   advisers link ls            list matter links
   advisers link add <from> <to> <type>
@@ -388,9 +412,10 @@ function tick(ledger, asJson = false) {
       c.status = 'open'
       store?.deleteMeta(`snooze:${c.id}`)
     }
-    if (!c.dueAt || Date.parse(c.dueAt) > now + 86400_000) continue
+    if (!c.dueAt || Date.parse(c.dueAt) > now + 7 * 86400_000) continue
     const dueDay = new Intl.DateTimeFormat('en-CA', { timeZone: 'Asia/Shanghai' }).format(new Date(c.dueAt))
-    let level = (Date.parse(c.dueAt) < now || dueDay === localDay) ? 'L2' : 'L1'
+    const msLeft = Date.parse(c.dueAt) - now
+    let level = (msLeft < 0 || dueDay === localDay) ? 'L2' : 'L1'
     if (level === 'L2' && Date.parse(c.dueAt) < now - 86400_000 && process.env.ADVISERS_ALLOW_L3 === '1') level = 'L3'
     const recent = store?.listCommitmentNudges(c.id, 3) ?? []
     if (recent.length === 3 && recent.every((n) => n.outcome === 'ignored') && level !== 'L1') level = level === 'L3' ? 'L2' : 'L1'
@@ -405,8 +430,12 @@ function tick(ledger, asJson = false) {
     console.log(JSON.stringify({ now: new Date(now).toISOString(), localDay, due }, null, 2))
     return
   }
-  if (!due.length) { console.log('今天到期：无'); return }
-  for (const c of due) console.log(`[${c.level}] ${Date.parse(c.dueAt) < now ? '逾期' : '今天到期'}：${c.action}（${c.dueAt}）`)
+  if (!due.length) { console.log('未来 7 天无到期。'); return }
+  for (const c of due) {
+    const dueDay = new Intl.DateTimeFormat('en-CA', { timeZone: 'Asia/Shanghai' }).format(new Date(c.dueAt))
+    const label = Date.parse(c.dueAt) < now ? '逾期' : dueDay === localDay ? '今天到期' : '即将到期'
+    console.log(`[${c.level}] ${label}：${c.action}（${c.dueAt}）`)
+  }
 }
 
 function printAudit() {
@@ -452,6 +481,9 @@ function printPreferences() {
 
 function printStatus() {
   const ledger = loadLedger()
+  console.log(`version   ${VERSION}`)
+  console.log(`node      ${process.version}`)
+  console.log(`office    ${process.env.ADVISERS_OFFICE_LOCAL === '1' || existsSync(new URL('../../office/dist/index.js', import.meta.url)) ? 'local build linked' : 'external package'}`)
   console.log(`home      ${HOME}`)
   console.log(`store     ${mode}${mode === 'sqlite' ? ` (${DB})` : ` (${STATE})`}`)
   console.log(`model     ${modelLabel()}`)
@@ -604,7 +636,7 @@ async function runTurn({ runtime, ledger, text, conversationId, debug = false, c
     recordTurn(conversationId, 'user', text)
     if (local) recordTurn(conversationId, 'assistant', local)
     await maybeSummarize(conversationId, { apiKey, baseUrl: process.env.ADVISERS_BASE_URL, model: process.env.ADVISERS_MODEL, ledger })
-    if (!intent?.questions?.length) console.log('[local] 未配置模型；已记录到事项账本。用 /office 或 advisors office 直接生成文件。')
+    if (!intent?.questions?.length) console.log('[local] 未配置模型；已记录到当前会话，但没有创建承诺或文件。设置 ADVISERS_API_KEY 后可用自然语言执行；也可用 `advisers office` / `advisers template` 直接生成文件。')
     return intent?.questions?.[0]
   }
   const history = loadHistory(conversationId)
@@ -960,7 +992,7 @@ async function repl() {
     const feedback = correctionStatement(text)
     if (feedback) {
       const result = learnPreference(ledger, feedback, text, { explicit: /^(以后|记住|每次)/.test(text) })
-      dbStore()?.appendAudit({ actor: 'local', action: 'correct', allowed: true, reason: feedback })
+      dbStore()?.appendAudit({ actor: 'local', action: 'correct', allowed: true, reason: result.preference.id })
       saveLedger(ledger)
       printLearnReceipt(result)
       continue
@@ -1209,7 +1241,9 @@ async function template(name, dataFile, outFile) {
     : name === 'notice' ? mod.notice(data)
     : mod.mindmap(data)
   mkdirSync(dirname(outFile), { recursive: true })
-  const ext = outFile.split('.').pop()
+  const ext = outFile.split('.').pop()?.toLowerCase()
+  const expected = name === 'budget' ? ['xlsx'] : name === 'presentation' ? ['pptx'] : (name === 'flow' || name === 'mindmap') ? ['mmd', 'mermaid', 'drawio'] : ['docx']
+  if (!expected.includes(ext)) { console.error(`template ${name} writes ${expected.join('/')}; got .${ext}`); process.exitCode = 1; return }
   let buffer
   let result
   if (ext === 'docx') {
@@ -1221,11 +1255,15 @@ async function template(name, dataFile, outFile) {
   } else if (ext === 'xmind') {
     buffer = await mod.buildXmind(spec); result = await mod.validateXmind(buffer)
   } else if (ext === 'drawio') {
+    await backupCliFile(outFile)
     writeFileSync(outFile, mod.buildDrawio(spec)); console.log(`wrote ${outFile}`); return
   } else {
+    await backupCliFile(outFile)
     writeFileSync(outFile, mod.buildMermaid(spec)); console.log(`wrote ${outFile}`); return
   }
+  await backupCliFile(outFile)
   writeFileSync(outFile, buffer)
+  dbStore()?.appendAudit({ actor: 'local', action: 'office.template', allowed: true, reason: outFile })
   console.log(result.ok ? `wrote ${outFile} (${buffer.length} bytes)` : `wrote ${outFile}, missing: ${result.missing.join(', ')}`)
   if (!result.ok) process.exitCode = 1
 }
@@ -1336,7 +1374,7 @@ function link(sub, from, to, type) {
     return
   }
   if (sub === 'curate') {
-    const apply = arg === '--apply'
+    const apply = from === '--apply'
     const now = Date.now()
     let changed = 0
     for (const r of ledger.listRoutines().filter((x) => x.status === 'active')) {
@@ -1354,15 +1392,15 @@ function link(sub, from, to, type) {
     return
   }
   if (sub === 'restore') {
-    if (!arg) { console.error('usage: advisers routine restore <id>'); process.exitCode = 1; return }
-    const r = ledger.restoreRoutine(arg)
+    if (!from) { console.error('usage: advisers routine restore <id>'); process.exitCode = 1; return }
+    const r = ledger.restoreRoutine(from)
     saveLedger(ledger)
     console.log(`restored to draft: ${r.id}`)
     return
   }
   if (sub === 'revert') {
-    if (!arg) { console.error('usage: advisers routine revert <patch-id>'); process.exitCode = 1; return }
-    const patch = ledger.revertRoutinePatch(arg)
+    if (!from) { console.error('usage: advisers routine revert <patch-id>'); process.exitCode = 1; return }
+    const patch = ledger.revertRoutinePatch(from)
     saveLedger(ledger)
     console.log(`rolled_back: ${patch.id}`)
     return
@@ -1432,16 +1470,23 @@ async function bridge(args) {
   const ledger = loadLedger()
   const runtime = runtimeFor(ledger)
   const link = new mod.HermesBridgeLink({ bridgeDir: dir, name })
-  const permitSecret = process.env.ADVISERS_PERMIT_SECRET
-  const permitGate = permitSecret ? new core.PermitGate(permitSecret) : undefined
+  const permitSecret = process.env.ADVISERS_PERMIT_SECRET || randomUUID()
+  const permitGate = new core.PermitGate(permitSecret, { replay: dbStore()?.permitReplayStore() })
   const host = {
     async ingest(event) {
       const result = await runtime.ingest(event)
       if (result.accepted && runtime.lastContext) {
         const context = runtime.lastContext
         let reply
+        if (context.crisis && (context.crisis.tier === 'T1' || context.crisis.tier === 'T2')) {
+          dbStore()?.appendAudit({ actor: 'bridge', action: 'policy.crisis', allowed: false, reason: context.crisis.tier })
+          reply = context.crisis.script
+        } else if (context.policy && !context.policy.allowed) {
+          dbStore()?.appendAudit({ actor: 'bridge', action: 'policy.deny', allowed: false, reason: context.policy.code ?? 'DENY' })
+          reply = context.policy.reason
+        }
         const key = process.env.ADVISERS_API_KEY
-        if (key && process.env.ADVISERS_NO_MODEL !== '1') {
+        if (!reply && key && process.env.ADVISERS_NO_MODEL !== '1') {
           try {
             const { complete } = await import('../lib/model.js')
             reply = await complete({
@@ -1453,7 +1498,7 @@ async function bridge(args) {
           } catch (error) {
             reply = `模型调用失败：${error.message}`
           }
-        } else {
+        } else if (!reply) {
           reply = context.intent?.readback ?? '[advisers] received'
         }
         const message = {
@@ -1475,7 +1520,8 @@ async function bridge(args) {
           }
           message.permit = permit
         }
-        await link.send(message)
+        const sent = await link.send(message)
+        dbStore()?.appendAudit({ actor: 'bridge', action: sent.ok ? 'egress.sent' : 'egress.failed', allowed: sent.ok, reason: sent.error ?? undefined })
         saveLedger(ledger)
       }
       return result
@@ -1515,18 +1561,25 @@ async function office(kind, specFile, outFile) {
   const spec = JSON.parse(readFileSync(specFile, 'utf8'))
   mkdirSync(dirname(outFile), { recursive: true })
   if (kind === 'mermaid') {
+    await backupCliFile(outFile)
     writeFileSync(outFile, mod.buildMermaid(spec))
     console.log(`wrote ${outFile}`)
     return
   }
   if (kind === 'drawio') {
+    await backupCliFile(outFile)
     writeFileSync(outFile, mod.buildDrawio(spec))
     console.log(`wrote ${outFile}`)
     return
   }
+  const ext = outFile.split('.').pop()?.toLowerCase()
+  const expected = kind === 'docx' ? ['docx'] : kind === 'xlsx' ? ['xlsx'] : kind === 'pptx' ? ['pptx'] : kind === 'xmind' ? ['xmind'] : kind === 'drawio' ? ['drawio'] : ['mmd', 'mermaid']
+  if (!expected.includes(ext)) { console.error(`office ${kind} writes ${expected.join('/')}; got .${ext}`); process.exitCode = 1; return }
   const builder = kind === 'docx' ? mod.buildDocx : kind === 'xlsx' ? mod.buildXlsx : kind === 'xmind' ? mod.buildXmind : mod.buildPptx
   const buffer = await builder(spec)
+  await backupCliFile(outFile)
   writeFileSync(outFile, buffer)
+  dbStore()?.appendAudit({ actor: 'local', action: 'office.build', allowed: true, reason: outFile })
   const result = kind === 'xmind' ? await mod.validateXmind(buffer) : await mod.validateOffice(buffer, kind)
   console.log(result.ok ? `wrote ${outFile} (${buffer.length} bytes)` : `wrote ${outFile}, missing: ${result.missing.join(', ')}`)
   if (!result.ok) process.exitCode = 1
@@ -1576,9 +1629,9 @@ function soul(sub, file) {
       id: 'soul',
       version: 1,
       content:
-        'You are my adviser. Be direct, concise, and useful.\n' +
-        'You are a guest in my life: private things stay private.\n' +
-        'If you change this file, tell me.\n',
+        '你是我的幕僚：直接、简洁、有用。\n' +
+        '你是我生活里的客人：私事保持私密。\n' +
+        '如果你要改这个文件，先告诉我。\n',
       updatedAt: now(),
       updatedBy: 'human',
     }
@@ -1593,6 +1646,8 @@ function soul(sub, file) {
 if (!command) {
   if (process.stdin.isTTY) await repl()
   else help()
+} else if (command === 'version' || command === '--version' || command === '-v') {
+  console.log(VERSION)
 } else if (command === 'help' || command === '--help') {
   help()
 } else if (command === 'chat') {
@@ -1643,6 +1698,7 @@ if (!command) {
         evidence: [{ sessionId: latestConversationId(), turnId: 'cli', quote: String(flags.quote) }],
       })
       saveLedger(ledger)
+      dbStore()?.appendAudit({ actor: 'local', action: 'commit.add', allowed: true, reason: c.id })
       console.log(`${c.id} open ${c.action}${c.dueAt ? ` due ${c.dueAt}` : ''}`)
     }
   } else if (sub === 'ls') printCommitments(ledger)
@@ -1655,6 +1711,7 @@ if (!command) {
       c.status = 'snoozed'
       dbStore()?.setMeta(`snooze:${id}`, new Date(Date.now() + hours * 3600_000).toISOString())
       saveLedger(ledger)
+      dbStore()?.appendAudit({ actor: 'local', action: 'commit.snooze', allowed: true, reason: id })
       console.log(`snoozed: ${id} for ${hours}h`)
     }
   }
@@ -1668,6 +1725,7 @@ if (!command) {
       } else {
         ledger.completeCommitment(id, [{ sessionId: latestConversationId(), turnId: 'cli', quote: String(evidence) }])
         saveLedger(ledger)
+        dbStore()?.appendAudit({ actor: 'local', action: 'commit.done', allowed: true, reason: id })
         console.log(`done: ${id}`)
       }
     }
@@ -1717,8 +1775,8 @@ if (!command) {
   tick(loadLedger(), args.includes('--json'))
 } else if (command === 'who') {
   const open = loadLedger().openCommitments()
-  const mine = open.filter((c) => c.debtor !== 'third' && c.creditor !== 'me')
-  const waiting = open.filter((c) => c.creditor === 'me')
+  const mine = open.filter((c) => c.debtor === 'user' || c.debtor === 'agent')
+  const waiting = open.filter((c) => c.debtor === 'third' || c.debtor.startsWith('third:'))
   console.log(`我欠别人（${mine.length}）`)
   for (const c of mine) console.log(`  ${c.id}  ${c.creditor} · ${c.action}${c.dueAt ? ` · ${c.dueAt.slice(0, 10)}` : ''}`)
   console.log(`等别人/别人欠我（${waiting.length}）`)
@@ -1790,7 +1848,7 @@ if (!command) {
   else {
     const ledger = loadLedger()
     const result = learnPreference(ledger, statement, statement, { explicit: true })
-    dbStore()?.appendAudit({ actor: 'local', action: 'correct', allowed: true, reason: statement })
+    dbStore()?.appendAudit({ actor: 'local', action: 'correct', allowed: true, reason: result.preference.id })
     saveLedger(ledger)
     printLearnReceipt(result)
   }
@@ -1812,7 +1870,7 @@ if (!command) {
     else {
       const crisis = new core.KeywordCrisisPolicy().scan(text)
       const pack = StrictPolicyPack ? new StrictPolicyPack() : undefined
-      const decision = pack?.resolve({ use: 'understanding', crisis: crisis.tier === 'T1' || crisis.tier === 'T2' }) ?? { allowed: true, action: 'allow', code: 'ALLOW', reason: 'no pack' }
+      const decision = pack?.resolve({ use: 'understanding', crisis: crisis.tier === 'T1' || crisis.tier === 'T2' }) ?? { allowed: false, action: 'deny', code: 'FAIL_CLOSED', reason: 'policy pack missing' }
       console.log(JSON.stringify({ tier: crisis.tier, crisis: crisis.crisis, decision }, null, 2))
     }
   } else { console.error('usage: advisers policy check "<text>"'); process.exitCode = 1 }
@@ -1828,7 +1886,7 @@ if (!command) {
     const ext = source.split('.').pop()?.toLowerCase()
     const result = await mod.editOffice(readFileSync(source), ext, JSON.parse(readFileSync(opsFile, 'utf8')))
     if (!result.ok) { console.error(result.error); process.exitCode = 1 }
-    else { writeFileSync(out, result.buffer); console.log(JSON.stringify({ ok: true, out, changes: result.changes }, null, 2)) }
+    else { await backupCliFile(out); writeFileSync(out, result.buffer); console.log(JSON.stringify({ ok: true, out, changes: result.changes }, null, 2)) }
   }
 } else if (command === 'office-read') {
   const file = args[0]

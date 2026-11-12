@@ -2,11 +2,11 @@
 /** T1–T5 local security suite. External egress/real-link tests are separate. */
 import { execFileSync } from 'node:child_process'
 const suites = [
-  ['T1 cross-matter leak', 'packages/core/test/security.test.ts'],
+  ['T1 association hints never inject other matter bodies', 'packages/core/test/security.test.ts'],
   ['T2 permit replay/expiry', 'packages/core/test/permit.test.ts'],
   ['T3 companion/roleplay denial', 'packages/policy-strict/test/policy.test.ts'],
   ['T4 audit hash chain tamper', 'packages/advisers/test/sqlite.test.js'],
-  ['T5 deletion cascade', 'packages/core/test/security.test.ts'],
+  ['T5 purge cascade tombstones matter data', 'packages/core/test/security.test.ts'],
 ]
 for (const [name, file] of suites) {
   try {

@@ -215,3 +215,22 @@ test('memory_propose requires a verbatim quote and creates a pending candidate',
     rmSync(cwd, { recursive: true, force: true })
   }
 })
+
+test('office_template builds Chinese minutes and notice through the agent tool', async () => {
+  const cwd = mkdtempSync(join(tmpdir(), 'advisers-tpl-'))
+  try {
+    const cases = [
+      { name: 'minutes', data: { date: '2026-11-12', agenda: ['报价'], actions: [{ what: '发报价', owner: '王工', due: '周五' }] }, out: 'out/m.docx' },
+      { name: 'notice', data: { title: '通知', issuer: '公司', recipients: ['全员'], body: ['放假'], signer: '行政', date: '2026年11月12日' }, out: 'out/n.docx' },
+    ]
+    for (const c of cases) {
+      const fetchImpl = fakeFetch([
+        { choices: [{ message: { role: 'assistant', content: '', tool_calls: [{ id: 't1', type: 'function', function: { name: 'office_template', arguments: JSON.stringify(c) } }] } }] },
+        { choices: [{ message: { role: 'assistant', content: 'done' } }] },
+      ])
+      const result = await runAgent({ text: 'x', context: { prompt: '' }, apiKey: 'k', cwd, fetchImpl })
+      assert.equal(result.toolLog[0].ok, true)
+      assert.equal(existsSync(join(cwd, c.out)), true)
+    }
+  } finally { rmSync(cwd, { recursive: true, force: true }) }
+})

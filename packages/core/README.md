@@ -1,6 +1,6 @@
 # advisers-core
 
-Core types and the in-memory runtime skeleton for **Advisers**:
+Core types and runtime for **Advisers**:
 
 - `Matter` — a dimension on the three ledgers, not a fourth ledger;
 - `Ledger` — user preferences, facts, commitments, evidence;
@@ -8,12 +8,11 @@ Core types and the in-memory runtime skeleton for **Advisers**:
 - `assembleContext` — global user model + active matter, hints only for others;
 - `LinkProvider` / `LinkHost` — the only integration surface for IM/email.
 
-The production storage (SQLite + FTS5) and the cordis/DSH adapters live in the
-distribution packages. This package has no cordis or DSH dependency.
+SQLite/FTS persistence lives in the `advisers` distribution; this package has no cordis or DSH dependency. The runtime is plain TypeScript and is used by the CLI and DSH adapter.
 
 ## Status
 
-Bootstrapping. The API is allowed to change before `0.1.0`.
+`0.2.0-preview.17`. API is stabilizing but may change before 0.3.
 
 ## License
 

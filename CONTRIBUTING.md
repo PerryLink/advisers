@@ -25,8 +25,8 @@ pnpm -r run build
 node --experimental-strip-types examples/demo.ts
 ```
 
-Node 22.19+ or 24.9+ is required. The DSH distribution additionally requires
-Node 24.9+ and DSH `0.2.2-rc.1`.
+Node **>= 22.13** is required (`node:sqlite`); Node 24 LTS recommended. The DSH
+distribution additionally requires Node 24.9+ and a compatible DSH 0.2.2-rc.x.
 
 ## Commits
 
@@ -36,13 +36,15 @@ Node 24.9+ and DSH `0.2.2-rc.1`.
 
 ## Releases
 
-Release order is `advisers-core` → `advisers` → `dsh-advisers`.
-All packages use lockstep versions. The DSH distribution uses exact
-`@deepseek-ai/dsh-*` pins and a `~4.1.0` cordis peer.
+Release order is `advisers-core` → `advisers-office` → `advisers-policy-strict`
+→ `advisers-bridge-hermes` → `advisers` → `dsh-advisers`. Versions are per-package,
+not lockstep; see `docs/RELEASE-EVIDENCE.md`.
 
-Publishing must use npm Trusted Publishing (OIDC) from GitHub Actions; no
-long-lived npm token is stored in the repository. Before publishing, run
-`npm pack` and import the tarball in an empty directory on Node 22 and 24.
+Current flow is local `npm stage publish --tag next` + human OTP approval; the
+GitHub `publish` workflow is manual and cannot approve stages. Trusted Publishing
+(OIDC) is a target, not current behavior. Before publishing, build from a clean
+checkout, `npm pack` every package, and install the exact tarballs in an empty
+directory on Node 22 and 24.
 
 ## Security issues
 

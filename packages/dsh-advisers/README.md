@@ -3,11 +3,10 @@
 DSH bundle for **Advisers**. It registers:
 
 - a cordis service `advisers` (an `AdvisersRuntime`);
-- a read-only tool `advisers_brief` that turns a request into an `IntentBrief`
-  (goal, deliverable, risk, at most one question, two-line readback).
+- `advisers_brief` — turns a request into an `IntentBrief` (goal, deliverable, risk, at most one question, two-line readback);
+- `advisers_office` — builds a DOCX/XLSX/PPTX/XMind/Mermaid/draw.io artifact **inside** the configured workspace.
 
-It does **not** send messages, write the ledger, or call a model. The first DSH
-slice is deliberately read-only; chat/office/link tools come next.
+It does **not** send messages or write the ledger. `advisers_office` writes files only under `config.workspace` (path-confined). The DSH adapter is a thin channel, not the full product.
 
 ## Install
 

@@ -49,6 +49,7 @@ export interface PreferenceInput {
   status?: UserPreference['status']
   priority?: UserPreference['priority']
   expiresAt?: string
+  evidence?: UserPreference['evidence']
 }
 
 export interface CommitmentInput {
@@ -206,7 +207,7 @@ export class Ledger {
       statement: input.statement,
       scope: input.scope ?? { level: 'global' },
       source: input.source ?? { type: 'user_explicit' },
-      evidence: [],
+      evidence: input.evidence ?? [],
       confidence: input.confidence ?? 0.9,
       status: input.status ?? 'confirmed',
       validFrom: this.clock.now(),
@@ -302,19 +303,19 @@ export class Ledger {
     }
     let links = 0
     for (const link of this.links.values()) {
-      if ((link.fromMatter === id || link.toMatter === id) && link.status !== 'rejected') { link.status = 'rejected'; links++ }
+      if ((link.fromMatter === id || link.toMatter === id) && link.status !== 'rejected') { link.status = 'rejected'; link.evidence = []; links++ }
     }
     let updates = 0
     for (const update of this.updates.values()) {
-      if ((update.sourceMatter === id || update.targetMatter === id) && update.status === 'pending') { update.status = 'rejected'; updates++ }
+      if ((update.sourceMatter === id || update.targetMatter === id) && update.status === 'pending') { update.status = 'rejected'; update.change = '[purged]'; update.rollback = undefined; updates++ }
     }
     let commitments = 0
     for (const commitment of this.commitments.values()) {
-      if (commitment.matterId === id && commitment.status === 'open') { commitment.status = 'dropped'; commitments++ }
+      if (commitment.matterId === id && commitment.status === 'open') { commitment.status = 'dropped'; commitment.action = '[purged]'; commitment.creditor = '[purged]'; commitment.evidence = []; commitments++ }
     }
     let preferences = 0
     for (const pref of this.preferences.values()) {
-      if (pref.scope.level === 'matter' && pref.scope.value === id && pref.status !== 'deprecated') { pref.status = 'deprecated'; preferences++ }
+      if (pref.scope.level === 'matter' && pref.scope.value === id && pref.status !== 'deprecated') { pref.status = 'deprecated'; pref.statement = '[purged]'; pref.evidence = []; preferences++ }
     }
     let routes = 0
     for (const [key, matterId] of this.routes.entries()) {

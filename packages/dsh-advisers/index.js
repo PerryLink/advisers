@@ -1,12 +1,12 @@
 import { defineTool } from '@deepseek-ai/dsh-tools'
 import { AdvisersRuntime } from 'advisers-core'
 import { buildDocx, buildPptx, buildXlsx, buildXmind, buildMermaid, buildDrawio, validateOffice, validateXmind } from 'advisers-office'
-import { mkdirSync, writeFileSync } from 'node:fs'
+import { lstatSync, mkdirSync, realpathSync, writeFileSync } from 'node:fs'
 import { dirname, isAbsolute, relative, resolve } from 'node:path'
 
 export const name = 'advisers'
 export const inject = ['tools']
-export const version = '0.2.0-preview.21'
+export const version = '0.2.0-preview.22'
 
 /**
  * DSH bundle entry point. The first slice is deliberately one read-only tool:
@@ -25,7 +25,7 @@ export function apply(ctx, config = {}) {
     parameters: {
       kind: { type: 'string', required: true, description: 'docx | xlsx | pptx | xmind | mermaid | drawio' },
       out: { type: 'string', required: true, description: 'Relative output path, e.g. out/q4.docx' },
-      spec: { type: 'object', required: true, description: 'Builder spec (title/sections/columns/rows/slides/nodes/branches).' },
+      spec: { type: 'object', additionalProperties: true, required: true, description: 'Builder spec (title/sections/columns/rows/slides/nodes/branches).' },
     },
     output: {
       schema: {
@@ -54,6 +54,11 @@ export function apply(ctx, config = {}) {
       else if (args.kind === 'mermaid') { buffer = Buffer.from(buildMermaid(args.spec)); validation = { ok: true } }
       else throw new Error(`unsupported kind: ${args.kind}`)
       mkdirSync(dirname(target), { recursive: true })
+      const realRoot = realpathSync(root)
+      const realParent = realpathSync(dirname(target))
+      const parentRel = relative(realRoot, realParent)
+      if (parentRel.startsWith('..') || isAbsolute(parentRel)) throw new Error('output path escapes workspace through a symlink')
+      try { if (lstatSync(target).isSymbolicLink()) throw new Error('symlink output is not allowed') } catch (error) { if (error.code !== 'ENOENT') throw error }
       writeFileSync(target, buffer)
       return { ok: validation.ok, path: target, bytes: buffer.length }
     },

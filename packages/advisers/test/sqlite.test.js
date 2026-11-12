@@ -235,3 +235,59 @@ test('keyed audit chain rejects tampering and wrong key', () => {
     rmSync(dir, { recursive: true, force: true })
   }
 })
+
+test('memory search finds matter-scoped facts with and without a matter filter', async () => {
+  const { Ledger } = await import('../../core/dist/index.js')
+  const ledger = new Ledger()
+  const matter = ledger.addMatter({ title: '客户' })
+  ledger.remember({ subject: 'client', predicate: 'budget', object: '上海客户预算 300 万', matterId: matter.id })
+  const dir = mkdtempSync(join(tmpdir(), 'advisers-mem-'))
+  const store = new SqliteStore(join(dir, 'state.db'))
+  store.save(ledger.toJSON())
+  assert.equal(store.searchMemory('上海', { matterId: matter.id }).length, 1)
+  assert.equal(store.searchMemory('上海').length, 1)
+  store.close()
+  rmSync(dir, { recursive: true, force: true })
+})
+
+test('turn search can be confined to a matter', () => {
+  const dir = mkdtempSync(join(tmpdir(), 'advisers-turn-'))
+  try {
+    const store = new SqliteStore(join(dir, 'state.db'))
+    store.upsertSession({ conversationId: 'c1', matterId: 'm1', title: 'a' })
+    store.upsertSession({ conversationId: 'c2', matterId: 'm2', title: 'b' })
+    store.addTurn({ conversationId: 'c1', role: 'user', content: 'secret A' })
+    store.addTurn({ conversationId: 'c2', role: 'user', content: 'secret B' })
+    const rows = store.searchTurns('secret', { matterId: 'm1' })
+    assert.equal(rows.length, 1)
+    assert.match(rows[0].content, /A/)
+    store.close()
+  } finally { rmSync(dir, { recursive: true, force: true }) }
+})
+
+test('purge removes candidate payloads for the matter', () => {
+  const dir = mkdtempSync(join(tmpdir(), 'advisers-purge-cand-'))
+  try {
+    const store = new SqliteStore(join(dir, 'state.db'))
+    store.proposeCandidate({ kind: 'fact', payload: { subject: 'user', predicate: 'secret', object: 'SECRET', matterId: 'm1' }, evidence: [{ quote: 'SECRET' }] })
+    assert.equal(store.purgeMatterData('m1').candidates, 1)
+    assert.equal(store.listCandidates('all').length, 0)
+    store.close()
+  } finally { rmSync(dir, { recursive: true, force: true }) }
+})
+
+test('permit replay store is atomic and survives reopen', () => {
+  const dir = mkdtempSync(join(tmpdir(), 'advisers-permit-'))
+  try {
+    const path = join(dir, 'state.db')
+    const a = new SqliteStore(path)
+    const replay = a.permitReplayStore()
+    assert.equal(replay.claim('p1', Date.now() + 60_000), true)
+    assert.equal(replay.claim('p1', Date.now() + 60_000), false)
+    a.close()
+    const b = new SqliteStore(path)
+    assert.equal(b.permitReplayStore().has('p1'), true)
+    assert.equal(b.permitReplayStore().claim('p1', Date.now() + 60_000), false)
+    b.close()
+  } finally { rmSync(dir, { recursive: true, force: true }) }
+})

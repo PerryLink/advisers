@@ -6,9 +6,9 @@ part of the runtime, not a checklist for later.
 
 ## Reporting
 
-Do not open a public issue for a vulnerability. Email the maintainers
-(`security@` address to be added before the first public release) or use a
-private GitHub security advisory. We will acknowledge within 72 hours.
+Do not open a public issue for a vulnerability. Use GitHub's **private vulnerability
+reporting** on this repository. We will acknowledge within 72 hours. No security
+email is published yet.
 
 ## Non-negotiable rules
 
@@ -54,22 +54,27 @@ private GitHub security advisory. We will acknowledge within 72 hours.
 - **Out of scope:** platform-side vulnerabilities; personal WeChat automation
   is prohibited and will not be merged.
 
-## Enforcement status (0.0.x)
+## Enforcement status (0.2 preview)
 
-This policy is the target, not a claim about the current skeleton.
+This policy is the target; status below is code-level, not an external audit.
 
 | Rule | Status |
 |---|---|
-| 1 no evidence, no entry | **enforced** for commitments; facts still accept optional source |
+| 1 no evidence, no entry | **enforced** for commitments; facts accept optional source |
 | 2 memory does not authorize | **not implemented** |
-| 3 external content never becomes instruction | **not implemented** (taint tracking is 0.1) |
+| 3 external content never becomes instruction | **partial**: untrusted ingress becomes candidate; no full taint tracking |
 | 4 three powers separate | **interface only**; single process today |
-| 5 egress permit | **not implemented** |
+| 5 egress permit | **partial**: `PermitGate`/`GatedLink` exist; bridge issues/consumes; Feishu/Email not fully wired; no human approval UI |
 | 6 credentials never enter context | **not implemented** |
-| 7 delete cascades | **partial** (soft delete; no deletion registry) |
-| 8 metadata mandatory | **not implemented** |
-| 9 fail closed | **not implemented** |
-| 10 supply-chain gate | **not implemented** (no CI yet) |
+| 7 delete cascades | **partial**: sessions/turns/summaries/runs/nudges/deliveries, facts/title, candidate payloads; commitment/link/update/audit text redaction partial |
+| 8 metadata mandatory | **partial** |
+| 9 fail closed | **partial**: policy resolver failure is fail-closed in runtime; package-missing fallback is fail-open |
+| 10 supply-chain gate | **partial**: CI/security suite exist, but CI has not been green; lockfile/pins must be fixed |
+
+The five CI security shims (`scripts/security-suite.mjs`) exist but do not yet
+cover injection, egress exit gate, or supply-chain. Do not describe the project
+as "secure" until the release gates in `47-TRUTH-AUDIT-2026-11-12.md` are green.
+
 
 The five CI tests (T1–T5) are not yet in the repository. Do not describe the
 project as "secure" until they are green; the skeleton is a design artifact.

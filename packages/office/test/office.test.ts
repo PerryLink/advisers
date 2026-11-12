@@ -231,3 +231,15 @@ test('Chinese meeting-minutes and notice templates build valid DOCX', async () =
   assert.equal((await validateOffice(n, 'docx')).ok, true)
   assert.match(((await readOffice(n)) as any).text, /本周五放假/)
 })
+
+test('docx edit block index stays aligned when a table precedes a paragraph', async () => {
+  const { buildDocx, editOffice, readOffice } = await import('../src/index.ts')
+  const buffer = await buildDocx({ title: '标题', sections: [{ heading: '表在前', table: { headers: ['A'], rows: [['1']] } }, { heading: '目标', paragraphs: ['旧段落'] }] })
+  const before = await readOffice(buffer)
+  const index = (before as any).blocks.findIndex((b: any) => b.paragraph?.text === '旧段落')
+  const result = await editOffice(buffer, 'docx', [{ op: 'docx.setText', block: index, text: '新段落' }])
+  assert.equal(result.ok, true)
+  const after = await readOffice(result.buffer)
+  assert.match((after as any).text, /新段落/)
+  assert.doesNotMatch((after as any).text, /旧段落/)
+})

@@ -12,14 +12,16 @@ Advisers 不是聊天框，也不是情感陪伴。它维护三本账：
 
 ## 状态
 
-`0.2.0-preview.35` 已 staged（待 OTP 批准；`next` 仍是 preview.2）：
+`0.2.0-preview.44` 已 staged（待 OTP 批准；npm `next` 仍是旧的 0.1 preview，批准前不要用它评估）：
+
+> 需要 **Node >= 22.13**；Windows/PowerShell/BOM 说明见 [docs/QUICKSTART.md](docs/QUICKSTART.md)。
 
 - SQLite 账本 `~/.advisers/state.db`；
 - turns + 会话摘要 + FTS 检索；开场协议；
 - 承诺账 + `commit add/ls/done`、`tick`、`snooze`、nudge outcome；
 - `/memory`、`/week`、`/digest`、`/diff`、`/undo`、`/learn review`；
 - routine draft/approve/patch/curator + active routine index；
-- DOCX/XLSX/PPTX/Mermaid/draw.io/XMind builder + 5 模板 + `advisers verify`；
+- DOCX/XLSX/PPTX/Mermaid/draw.io/XMind builder + 7 模板 + `office-read`/`office-edit`/`verify`；
 - 附件 txt/md/docx/xlsx/pptx/pdf；图片/扫描件暂不支持；
 - DSH bundle、Email IMAP/draft、Feishu webhook、Hermes bridge 为可选适配器；
 - 真实 IM/Windows Office 打开验证仍未完成。

@@ -99,7 +99,11 @@ async function readPptxZip(zip: JSZip): Promise<ReadPptx> {
 
 export async function readOffice(input: Buffer | string, kind?: OfficeReadKind): Promise<OfficeRead> {
   const buffer = typeof input === 'string' ? Buffer.from(await import('node:fs/promises').then((fs) => fs.readFile(input))) : input
+  if (buffer.length > 20 * 1024 * 1024) throw new Error('Office file exceeds 20MB read limit')
   const zip = await JSZip.loadAsync(buffer)
+  const entries = Object.keys(zip.files)
+  if (entries.length > 2000) throw new Error('too many ZIP entries')
+  if (entries.some((n) => n.includes('..') || n.startsWith('/'))) throw new Error('unsafe ZIP entry')
   const resolved = kind ?? (zip.files['word/document.xml'] ? 'docx' : zip.files['xl/workbook.xml'] ? 'xlsx' : zip.files['ppt/presentation.xml'] ? 'pptx' : undefined)
   if (!resolved) throw new Error('not a supported Office file')
   if (resolved === 'docx') return readDocxZip(zip)

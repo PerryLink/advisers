@@ -43,6 +43,9 @@ CREATE TABLE IF NOT EXISTS routine_patches (
   id TEXT PRIMARY KEY, routine_id TEXT NOT NULL, base_version INTEGER NOT NULL,
   changes TEXT NOT NULL, before TEXT, diff TEXT NOT NULL, status TEXT NOT NULL, created_at TEXT NOT NULL
 );
+CREATE TABLE IF NOT EXISTS permit_consumed (
+  permit_id TEXT PRIMARY KEY, expires_at INTEGER NOT NULL, consumed_at TEXT NOT NULL
+);
 CREATE TABLE IF NOT EXISTS memory_candidates (
   id TEXT PRIMARY KEY, kind TEXT NOT NULL, payload TEXT NOT NULL, evidence TEXT NOT NULL,
   status TEXT NOT NULL DEFAULT 'pending', created_at TEXT NOT NULL, reviewed_at TEXT, reject_reason TEXT
@@ -303,12 +306,13 @@ CREATE TABLE IF NOT EXISTS task_runs (
       runs += Number(this.db.prepare('DELETE FROM task_runs WHERE conversation_id = ?').run(conversationId).changes)
       this.db.prepare('DELETE FROM session_summaries WHERE conversation_id = ?').run(conversationId)
     }
+    const candidates = Number(this.db.prepare("DELETE FROM memory_candidates WHERE payload LIKE ? OR evidence LIKE ?").run(`%${matterId}%`, `%${matterId}%`).changes)
     const commitmentIds = this.db.prepare('SELECT id FROM commitments WHERE matter_id = ?').all(matterId).map((r) => r.id)
     for (const id of commitmentIds) nudges += Number(this.db.prepare('DELETE FROM nudges WHERE commitment_id = ?').run(id).changes)
     runs += Number(this.db.prepare('DELETE FROM task_runs WHERE matter_id = ?').run(matterId).changes)
     const sessions = this.db.prepare('DELETE FROM sessions WHERE matter_id = ?').run(matterId).changes
     const deliveries = this.db.prepare('DELETE FROM deliveries WHERE matter_id = ?').run(matterId).changes
-    return { sessions: Number(sessions), deliveries: Number(deliveries), turns, summaries, runs, nudges }
+    return { sessions: Number(sessions), deliveries: Number(deliveries), turns, summaries, runs, nudges, candidates }
   }
 
   addTurn({ conversationId, role, content }) {
@@ -323,6 +327,14 @@ CREATE TABLE IF NOT EXISTS task_runs (
     return this.db.prepare('SELECT * FROM turns WHERE conversation_id = ? ORDER BY seq DESC LIMIT ?').all(conversationId, limit)
       .map((r) => ({ id: r.id, conversationId: r.conversation_id, seq: r.seq, role: r.role, content: r.content, createdAt: r.created_at }))
       .reverse()
+  }
+
+  permitReplayStore() {
+    return {
+      has: (permitId) => Boolean(this.db.prepare('SELECT 1 FROM permit_consumed WHERE permit_id = ?').get(permitId)),
+      claim: (permitId, expiresAt) => Number(this.db.prepare('INSERT OR IGNORE INTO permit_consumed(permit_id,expires_at,consumed_at) VALUES(?,?,?)').run(permitId, expiresAt, new Date().toISOString()).changes) === 1,
+      prune: (now) => Number(this.db.prepare('DELETE FROM permit_consumed WHERE expires_at <= ?').run(now).changes),
+    }
   }
 
   proposeCandidate({ kind, payload, evidence }) {
@@ -352,13 +364,14 @@ CREATE TABLE IF NOT EXISTS task_runs (
   searchMemory(query, { limit = 6, matterId } = {}) {
     const terms = String(query || '').split(/[^\p{L}\p{N}]+/u).filter((t) => t.length >= 2).slice(0, 8)
     if (!terms.length) return []
+    const scope = matterId ? 'AND (matter_id IS NULL OR matter_id = ?)' : ''
     const factRows = this.db.prepare(
       `SELECT id, matter_id, subject, predicate, object, authority, evidence FROM facts
        WHERE status = 'confirmed' AND deleted_at IS NULL
-         AND (matter_id IS NULL OR matter_id = ?)
+         ${scope}
          AND (${terms.map(() => '(subject LIKE ? OR predicate LIKE ? OR object LIKE ?)').join(' OR ')})
        LIMIT 50`
-    ).all(matterId ?? null, ...terms.flatMap((t) => [`%${t}%`, `%${t}%`, `%${t}%`]))
+    ).all(...(matterId ? [matterId] : []), ...terms.flatMap((t) => [`%${t}%`, `%${t}%`, `%${t}%`]))
     const prefRows = this.db.prepare(
       `SELECT id, statement, kind, evidence, priority FROM preferences
        WHERE status IN ('confirmed','candidate') AND (expires_at IS NULL OR expires_at > ?)
@@ -372,19 +385,22 @@ CREATE TABLE IF NOT EXISTS task_runs (
     ].sort((a, b) => b.score - a.score || a.id.localeCompare(b.id)).slice(0, limit)
   }
 
-  searchTurns(query, { conversationId, limit = 8 } = {}) {
+  searchTurns(query, { conversationId, matterId, limit = 8 } = {}) {
     const q = String(query ?? '').trim()
     if (!q) return []
-    const where = conversationId ? ' AND t.conversation_id = ?' : ''
-    const args = conversationId ? [q, conversationId, limit] : [q, limit]
+    const clauses = []
+    const filterArgs = []
+    if (conversationId) { clauses.push('t.conversation_id = ?'); filterArgs.push(conversationId) }
+    if (matterId) { clauses.push('s.matter_id = ?'); filterArgs.push(matterId) }
+    const join = matterId ? ' JOIN sessions s ON s.conversation_id = t.conversation_id' : ''
+    const where = clauses.length ? ` AND ${clauses.join(' AND ')}` : ''
     try {
       if (q.length >= 3) {
-        const rows = this.db.prepare(`SELECT t.* FROM turns_fts f JOIN turns t ON t.rowid = f.rowid WHERE turns_fts MATCH ?${where} ORDER BY rank LIMIT ?`).all(...args)
+        const rows = this.db.prepare(`SELECT t.* FROM turns_fts f JOIN turns t ON t.rowid = f.rowid${join} WHERE turns_fts MATCH ?${where} ORDER BY rank LIMIT ?`).all(q, ...filterArgs, limit)
         if (rows.length) return rows.map((r) => ({ id: r.id, conversationId: r.conversation_id, seq: r.seq, role: r.role, content: r.content, createdAt: r.created_at }))
       }
     } catch {}
-    const likeArgs = conversationId ? [`%${q}%`, conversationId, limit] : [`%${q}%`, limit]
-    const rows = this.db.prepare(`SELECT t.* FROM turns t WHERE t.content LIKE ?${where.replace('t.', 't.')} ORDER BY t.seq DESC LIMIT ?`).all(...likeArgs)
+    const rows = this.db.prepare(`SELECT t.* FROM turns t${join} WHERE t.content LIKE ?${where} ORDER BY t.seq DESC LIMIT ?`).all(`%${q}%`, ...filterArgs, limit)
     return rows.reverse().map((r) => ({ id: r.id, conversationId: r.conversation_id, seq: r.seq, role: r.role, content: r.content, createdAt: r.created_at }))
   }
 

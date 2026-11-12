@@ -127,6 +127,8 @@ function validateTemplate(name, data) {
   if (name === 'presentation' && (!data.title || !data.conclusion || !Array.isArray(data.bullets))) throw new Error('presentation data requires title, conclusion, bullets[]')
   if (name === 'flow' && (!data.title || !Array.isArray(data.steps) || data.steps.length === 0)) throw new Error('flow data requires title and non-empty steps[]')
   if (name === 'mindmap' && (!data.title || !Array.isArray(data.branches) || data.branches.length === 0)) throw new Error('mindmap data requires title and non-empty branches[]')
+  if (name === 'minutes' && (!data.date || !Array.isArray(data.agenda) || data.agenda.length === 0)) throw new Error('minutes data requires date and non-empty agenda[]')
+  if (name === 'notice' && (!data.title || !data.issuer || !Array.isArray(data.recipients) || !Array.isArray(data.body) || !data.signer || !data.date)) throw new Error('notice data requires title, issuer, recipients[], body[], signer, date')
 }
 
 async function runOfficeTool(name, args, cwd, backupDir) {
@@ -159,6 +161,8 @@ async function runOfficeTool(name, args, cwd, backupDir) {
       : args.name === 'budget' ? office.budget(args.data)
       : args.name === 'presentation' ? office.presentation(args.data)
       : args.name === 'flow' ? office.flow(args.data)
+      : args.name === 'minutes' ? office.meetingMinutes(args.data)
+      : args.name === 'notice' ? office.notice(args.data)
       : office.mindmap(args.data)
   }
   let buffer
@@ -251,7 +255,7 @@ export async function executeTool(name, args, { cwd = process.cwd(), ledger, bac
   }
   if (name === 'search_memory') {
     if (!ledger) throw new Error('search_memory requires a ledger')
-    return { ok: true, artifact: false, results: ledger.searchMemory(args.query) }
+    return { ok: true, artifact: false, results: store?.searchMemory(args.query, { matterId }) ?? ledger.searchMemory(args.query, { matterId }) }
   }
   if (name === 'search_turns') {
     const rows = store?.searchTurns(args.query, { limit: 6 }) ?? []

@@ -90,13 +90,21 @@ export function assembleContext(input: AssembleInput): TurnContext {
       '</routine-index>',
     )
   }
-  const prompt = parts.join('\n')
-
   const hints: AssociationHint[] = (input.related ?? []).slice(0, 3).map((r) => ({
     title: r.title,
     why: r.why,
     matterId: r.matterId,
   }))
+  if (hints.length) {
+    parts.push(
+      '<association-hints>',
+      hints.map((h) => `- ${h.title}: ${h.why}`).join('\n'),
+      'These are hints only. Do not read or repeat the other matter body unless the user asks.',
+      '</association-hints>',
+    )
+  }
+
+  const prompt = parts.join('\n')
 
   return {
     matter: input.matter,

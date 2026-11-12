@@ -22,14 +22,42 @@ function escapeXml(text: string): string {
   return text.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;').replace(/'/g, '&apos;')
 }
 
-function paragraphBlocks(xml: string): Array<{ start: number; end: number; inner: string }> {
-  return [...xml.matchAll(/<w:p(?:\s[^>]*)?>[\s\S]*?<\/w:p>/g)].map((m) => ({ start: m.index!, end: m.index! + m[0].length, inner: m[0] }))
+interface BodyBlock { type: 'p' | 'tbl'; start: number; end: number; inner: string }
+
+/** Top-level body blocks in the same order as readOffice (paragraphs and tables only). */
+function bodyBlocks(xml: string): BodyBlock[] {
+  const bodyStart = xml.indexOf('<w:body>')
+  if (bodyStart < 0) return []
+  const start = bodyStart + '<w:body>'.length
+  const end = xml.lastIndexOf('</w:body>')
+  if (end < 0) return []
+  const body = xml.slice(start, end)
+  const blocks: BodyBlock[] = []
+  const re = /<(w:p|w:tbl)(?:\s[^>]*)?>/g
+  let match: RegExpExecArray | null
+  while ((match = re.exec(body))) {
+    const tag = match[1]
+    const openStart = match.index
+    const openEnd = openStart + match[0].length
+    const selfClosing = match[0].endsWith('/>')
+    if (selfClosing) {
+      if (tag === 'w:p') blocks.push({ type: 'p', start: start + openStart, end: start + openEnd, inner: match[0] })
+      continue
+    }
+    const reClose = new RegExp(`</${tag}>`, 'g')
+    reClose.lastIndex = openEnd
+    const close = reClose.exec(body)
+    if (!close) break
+    const blockEnd = close.index + close[0].length
+    blocks.push({ type: tag === 'w:tbl' ? 'tbl' : 'p', start: start + openStart, end: start + blockEnd, inner: body.slice(openStart, blockEnd) })
+    re.lastIndex = blockEnd
+  }
+  return blocks
 }
 
 function replaceDocxParagraph(xml: string, block: number, text: string): { xml: string; before: string } {
-  const paragraphs = paragraphBlocks(xml)
-  const target = paragraphs[block]
-  if (!target) throw new Error(`paragraph not found: ${block}`)
+  const target = bodyBlocks(xml)[block]
+  if (!target || target.type !== 'p') throw new Error(`paragraph block not found: ${block}`)
   const pPr = target.inner.match(/<w:pPr>[\s\S]*?<\/w:pPr>/)?.[0] ?? ''
   const before = target.inner.replace(/<[^>]+>/g, '').slice(0, 120)
   const paragraph = `<w:p>${pPr}<w:r><w:t xml:space="preserve">${escapeXml(text)}</w:t></w:r></w:p>`
@@ -37,15 +65,14 @@ function replaceDocxParagraph(xml: string, block: number, text: string): { xml: 
 }
 
 function replaceTable(xml: string, block: number, rows: string[][]): { xml: string; before: string } {
-  const tables = [...xml.matchAll(/<w:tbl(?:\s[^>]*)?>[\s\S]*?<\/w:tbl>/g)]
-  const target = tables[block]
-  if (!target) throw new Error(`table not found: ${block}`)
-  const firstRow = target[0].match(/<w:tr(?:\s[^>]*)?>[\s\S]*?<\/w:tr>/)?.[0] ?? ''
+  const target = bodyBlocks(xml)[block]
+  if (!target || target.type !== 'tbl') throw new Error(`table block not found: ${block}`)
+  const firstRow = target.inner.match(/<w:tr(?:\s[^>]*)?>[\s\S]*?<\/w:tr>/)?.[0] ?? ''
   const firstCell = firstRow.match(/<w:tc(?:\s[^>]*)?>[\s\S]*?<\/w:tc>/)?.[0] ?? '<w:tc><w:p></w:p></w:tc>'
   const tcPr = firstCell.match(/<w:tcPr>[\s\S]*?<\/w:tcPr>/)?.[0] ?? ''
   const body = rows.map((row) => `<w:tr>${row.map((cell) => `<w:tc>${tcPr}<w:p><w:r><w:t xml:space="preserve">${escapeXml(cell)}</w:t></w:r></w:p></w:tc>`).join('')}</w:tr>`).join('')
-  const table = `<w:tbl>${target[0].match(/<w:tblPr>[\s\S]*?<\/w:tblPr>/)?.[0] ?? ''}${body}</w:tbl>`
-  return { xml: xml.slice(0, target.index!) + table + xml.slice(target.index! + target[0].length), before: 'table' }
+  const table = `<w:tbl>${target.inner.match(/<w:tblPr>[\s\S]*?<\/w:tblPr>/)?.[0] ?? ''}${body}</w:tbl>`
+  return { xml: xml.slice(0, target.start) + table + xml.slice(target.end), before: 'table' }
 }
 
 export async function editOffice(input: Buffer, kind: OfficeEditKind, ops: EditOp[]): Promise<EditResult> {

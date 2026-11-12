@@ -1,6 +1,6 @@
 # Advisers architecture
 
-> Status: bootstrapping. This document fixes the vocabulary and the invariants;
+> Status: 0.2 preview. This document fixes the vocabulary and the invariants;
 > the implementation is allowed to be smaller than the document.
 
 ## 1. The shape
@@ -104,7 +104,7 @@ afterthoughts.
 |---|---|---|
 | **Soul** | Human-owned, versioned, slot #1; the agent may propose a diff, never write it. | Type `SoulDocument`; store port in `HostPorts.soul` |
 | **Thread** | One continuous relationship per principal; a thread contains many matters/episodes. `conversation` is a link concept, not the relationship. | Types `Thread`/`Episode`; runtime still routes by conversation |
-| **Routine** | Proposed from a successful task; needs a diff, regression case, and human approval; never auto-activated. | Type exists in the roadmap; not implemented |
+| **Routine** | Proposed from a successful task; needs a diff, regression case, and human approval; never auto-activated. | Implemented as draft/approve/patch/curator; verification is still basic |
 | **Association** | `MatterLink` (8 closed types) + `UpdateProposal`; cross-matter writes are proposals, never direct writes. | Types + in-memory ledger methods |
 
 The association schema exists from day one even though the UI/logic ships later:
@@ -123,16 +123,16 @@ adding a `MatterLink` table after the fact is a migration, adding it now is free
 The earlier plan put routines at 1.0; that makes the product a commitment
 tracker for a year. Routines must appear by 0.2 to keep the "intern" promise.
 
-## 9. Current limits (0.0.x)
+## 9. Current limits (0.2 preview)
 
-- The ledger is in-memory; SQLite is 0.1.
-- `advisers` has a CLI that prints the focus frame; it does not call a model.
-- `dsh-advisers` is a placeholder: no `apply`, no `cordis.patch.yml`, no
-  `dsh.bundle`.
-- `secrecy` is stored but not yet a hard retrieval gate; audience scoping is
-  enforced for preferences only.
-- Egress permits, deletion cascade, and the five CI security tests are
-  specified in `SECURITY.md` but not implemented.
+- Ledger is persisted in SQLite (`advisers/lib/sqlite.js`); JSON mode is a fallback but loses turns/search/audit.
+- CLI calls the model only when `ADVISERS_API_KEY` is set; without a key it records/search/builds but does not create promises or artifacts from natural language.
+- `dsh-advisers` implements `advisers_brief` + `advisers_office`; it is a thin adapter, not a second product.
+- `secrecy` is stored; hard retrieval gating is partial. Audience scoping is enforced for preferences.
+- Permit/GatedLink exist but are **not yet a mandatory boundary on every send path**.
+- Deletion cascade covers sessions/turns/summaries/runs/nudges/deliveries + facts/title and candidate payloads; commitment/link/update/audit content redaction is partial.
+- Office verification is structural (OPC/XML/rels/content types). Windows/Word/WPS open validation is manual and still pending.
+- No real IM account, Windows/WPS, or 5-user dogfood validation yet.
 
 ## 10. Intent, Office, and Affect policy
 
