@@ -217,13 +217,14 @@ export class Ledger {
     return pref
   }
 
-  listPreferences(filter: { matterId?: Id; audience?: string; includeCandidates?: boolean } = {}): UserPreference[] {
+  listPreferences(filter: { matterId?: Id; project?: string; audience?: string; includeCandidates?: boolean } = {}): UserPreference[] {
     return [...this.preferences.values()].filter((p) => {
       if (p.status === 'deprecated') return false
       if (!filter.includeCandidates && p.status !== 'confirmed') return false
       if (p.scope.level === 'global') return true
       if (p.scope.level === 'matter') return p.scope.value === filter.matterId
-      if (p.scope.level === 'audience') return !!filter.audience && p.scope.value === filter.audience
+      if (p.scope.level === 'audience') return !!filter.audience && (p.scope.value === filter.audience || filter.audience.startsWith(`${p.scope.value}:`))
+      if (p.scope.level === 'project') return !!filter.project && p.scope.value === filter.project
       return false
     })
   }

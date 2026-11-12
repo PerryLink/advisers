@@ -47,6 +47,7 @@ export function assembleContext(input: AssembleInput): TurnContext {
   const commitments = input.ledger.openCommitments(input.matter.id)
   const preferences = input.ledger.listPreferences({
     matterId: input.matter.id,
+    project: input.matter.domain === 'general' ? undefined : input.matter.domain,
     audience: input.audience,
   })
   const frame = buildFocusFrame({

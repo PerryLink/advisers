@@ -33,6 +33,7 @@ test('CLI commitment add/tick/memory works end to end', () => {
     assert.match(cli(home, ['week'], work), /发报价/)
     cli(home, ['correct', '以后周报先给结论'], work)
     assert.match(cli(home, ['memory', 'search', '周报'], work), /先给结论/)
+    assert.match(cli(home, ['who'], work), /王工/)
   } finally {
     rmSync(root, { recursive: true, force: true })
   }

@@ -214,6 +214,7 @@ Usage:
   advisers forget <pref-id>   forget a preference (tombstone)
   advisers export             export the ledger as JSON
   advisers brief <text>       print the IntentBrief for a request
+  advisers who                 who I owe / who owes me
   advisers policy check <text> policy/crisis check
   advisers office-read <file>  read DOCX/XLSX/PPTX structural text
   advisers office-edit <file> <ops.json> [out]  surgical Office edit
@@ -1714,6 +1715,14 @@ if (!command) {
   } else { console.error('usage: advisers nudge list|done|ignore'); process.exitCode = 1 }
 } else if (command === 'tick') {
   tick(loadLedger(), args.includes('--json'))
+} else if (command === 'who') {
+  const open = loadLedger().openCommitments()
+  const mine = open.filter((c) => c.debtor !== 'third' && c.creditor !== 'me')
+  const waiting = open.filter((c) => c.creditor === 'me')
+  console.log(`我欠别人（${mine.length}）`)
+  for (const c of mine) console.log(`  ${c.id}  ${c.creditor} · ${c.action}${c.dueAt ? ` · ${c.dueAt.slice(0, 10)}` : ''}`)
+  console.log(`等别人/别人欠我（${waiting.length}）`)
+  for (const c of waiting) console.log(`  ${c.id}  ${c.debtor} · ${c.action}${c.dueAt ? ` · ${c.dueAt.slice(0, 10)}` : ''}`)
 } else if (command === 'memory') {
   const ledger = loadLedger()
   if (args[0] === 'candidates') {

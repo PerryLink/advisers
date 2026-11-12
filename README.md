@@ -25,7 +25,7 @@ them.
 
 ## Status
 
-`0.2.0-preview.16/41` is staged on npm (`next` still points at the verified preview.2 until the staged packages are approved):
+`0.2.0-preview.17/42` is staged on npm (`next` still points at the verified preview.2 until the staged packages are approved):
 
 - `advisers` CLI: local REPL, `chat`, `office`, `template`, `routine`, `link`, `bridge`, `soul`, `ls`, `why`, `forget`, `export`;
 - SQLite at `~/.advisers/state.db` (JSON fallback with `ADVISERS_STORE=json`);
