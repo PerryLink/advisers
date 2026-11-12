@@ -1,5 +1,5 @@
 export * from 'advisers-core'
 
-export const version = '0.2.0-preview.44'
+export const version = '0.2.0-preview.45'
 export const distribution = 'cordis'
 export const status = 'bootstrapping'

@@ -23,5 +23,6 @@ jobs:
       - run: pnpm -r --if-present run build
       - run: pnpm -r --if-present run typecheck
       - run: pnpm -r --if-present run test
+      - run: node scripts/pack-smoke.mjs
       - run: node scripts/verify-office.mjs
       - run: node scripts/security-suite.mjs

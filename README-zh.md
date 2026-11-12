@@ -27,8 +27,12 @@ Advisers 不是聊天框，也不是情感陪伴。它维护三本账：
 - 真实 IM/Windows Office 打开验证仍未完成。
 
 ```sh
-npm i -g advisers@next advisers-office@next
-# 可选：npm i -g advisers-bridge-hermes@latest
+# 当前 preview 只 staged，等 OTP；公开 @next 还是旧 0.1 stub。
+# 从 checkout 跑：
+#   corepack pnpm install && corepack pnpm -r build
+#   ADVISERS_OFFICE_LOCAL=1 node packages/advisers/bin/advisers.js status
+# 批准后：
+npm i -g --registry=https://registry.npmjs.org advisers@next advisers-office@next
 advisers soul init
 advisers commit add "周五前发报价给王工" --quote "周五前发报价给王工" --due 2026-11-13T18:00:00+08:00
 advisers tick

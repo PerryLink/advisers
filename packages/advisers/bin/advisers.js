@@ -1,7 +1,7 @@
 #!/usr/bin/env node
-import { chmodSync, existsSync, mkdirSync, readFileSync, statSync, writeFileSync } from 'node:fs'
+import { chmodSync, copyFileSync, existsSync, mkdirSync, readFileSync, statSync, writeFileSync } from 'node:fs'
 import { homedir } from 'node:os'
-import { randomUUID } from 'node:crypto'
+import { randomBytes, randomUUID } from 'node:crypto'
 import { basename, dirname, join } from 'node:path'
 let SqliteStore
 try {
@@ -48,9 +48,23 @@ const DB = join(HOME, 'state.db')
 let mode = process.env.ADVISERS_STORE === 'json' ? 'json' : 'sqlite'
 let activeStore
 
+const AUDIT_KEY_FILE = join(HOME, 'audit.key')
+function ensureAuditKey() {
+  if (process.env.ADVISERS_AUDIT_KEY) return
+  try {
+    if (existsSync(AUDIT_KEY_FILE)) {
+      const key = readFileSync(AUDIT_KEY_FILE, 'utf8').trim()
+      if (key.length >= 16) { process.env.ADVISERS_AUDIT_KEY = key; return }
+    }
+    const key = randomBytes(32).toString('hex')
+    writeFileSync(AUDIT_KEY_FILE, key, { mode: 0o600 })
+    process.env.ADVISERS_AUDIT_KEY = key
+  } catch {}
+}
 function ensureHome() {
   mkdirSync(HOME, { recursive: true, mode: 0o700 })
   try { chmodSync(HOME, 0o700) } catch {}
+  ensureAuditKey()
 }
 
 function loadJson() {
@@ -82,9 +96,9 @@ function loadLedger() {
     }
     return Ledger.fromJSON(openStore().load())
   } catch (error) {
-    console.error(`sqlite unavailable (${error.message}); falling back to JSON`)
-    mode = 'json'
-    return loadJson()
+    console.error(`sqlite unavailable: ${error.message}`)
+    console.error('Run `advisers doctor`; refusing to silently switch to JSON (would split the ledger).')
+    process.exit(1)
   }
 }
 
@@ -127,7 +141,7 @@ function runtimeFor(ledger) {
 }
 
 async function backupCliFile(path) {
-  try { await backupBeforeWrite(path, { cwd: dirname(path), backupDir: join(HOME, 'undo') }) } catch {}
+  try { await backupBeforeWrite(path, { cwd: process.cwd(), backupDir: join(HOME, 'undo') }) } catch {}
 }
 
 function now() {
@@ -205,6 +219,16 @@ async function askYesNo(rl, prompt, defaultYes = true) {
 }
 
 const VERSION = JSON.parse(readFileSync(new URL('../package.json', import.meta.url), 'utf8')).version
+function friendlyError(error) {
+  const message = error instanceof Error ? error.message : String(error)
+  if (/ENOENT/.test(message)) return 'file not found; check the path and run `advisers doctor`'
+  if (/Unexpected token|JSON/.test(message)) return 'invalid JSON; use UTF-8 without BOM and see examples/'
+  if (/model (HTTP|timeout)|fetch failed|ECONN/.test(message)) return 'model request failed; check ADVISERS_API_KEY / network and run `advisers doctor`'
+  if (/database is locked/.test(message)) return 'database is busy; close other advisers processes and retry'
+  return message
+}
+process.on('uncaughtException', (error) => { console.error(`advisers: ${friendlyError(error)}`); process.exit(1) })
+process.on('unhandledRejection', (error) => { console.error(`advisers: ${friendlyError(error)}`); process.exit(1) })
 const [command, ...args] = process.argv.slice(2)
 
 function help() {
@@ -214,6 +238,8 @@ Usage:
   advisers                    start the local conversation (TTY)
   advisers chat [--file <path>] [text]
                               one-shot task, or start the local conversation
+  advisers init               initialize home + soul
+  advisers doctor             check Node/SQLite/Office/policy/model
   advisers status             home/store/model/counts
   advisers history            recent conversations
   advisers search <text>       full-text search old turns
@@ -235,7 +261,8 @@ Usage:
   advisers ls                 list matters
   advisers why <pref-id>      explain a preference
   advisers forget <pref-id>   forget a preference (tombstone)
-  advisers export             export the ledger as JSON
+  advisers export [--all]     export ledger (or ledger + SQLite tables) as JSON
+  advisers backup <path.db>   checkpoint and copy the SQLite database
   advisers brief <text>       print the IntentBrief for a request
   advisers --version          print the CLI version
   advisers who                 who I owe / who owes me
@@ -422,7 +449,6 @@ function tick(ledger, asJson = false) {
     if (level === 'L3' && store && store.countNudges(localDay, 'L3') >= 1) level = 'L2'
     if (level === 'L2' && store && store.countNudges(localDay, 'L2') >= 3) level = 'L1'
     const nudge = store?.addNudge({ localDay, level, commitmentId: c.id, body: c.action })
-    if (store && !nudge) continue
     due.push({ ...c, level })
   }
   saveLedger(ledger)
@@ -477,6 +503,41 @@ function printPreferences() {
   for (const p of rows) {
     console.log(`${p.id}\t${p.status}\tconf=${p.confidence.toFixed(2)}\t${p.statement}`)
   }
+}
+
+async function doctor() {
+  const rows = []
+  const check = (name, ok, detail = '') => rows.push({ name, ok, detail })
+  check('node', Number(process.versions.node.split('.')[0]) > 22 || (Number(process.versions.node.split('.')[0]) === 22 && Number(process.versions.node.split('.')[1]) >= 13), process.version)
+  try { ensureHome(); check('home', existsSync(HOME), HOME) } catch (error) { check('home', false, error.message) }
+  try {
+    const store = openStore()
+    const integrity = store.db.prepare('PRAGMA quick_check').get()?.quick_check
+    check('sqlite', integrity === 'ok', `${DB} (${integrity})`)
+    const audit = store.verifyAudit()
+    check('audit', audit.ok, audit.ok ? `${audit.count} entries` : `BROKEN at seq ${audit.seq}`)
+    check('schema', true, String(store.db.prepare("SELECT value FROM meta WHERE key='schema_version'").get()?.value ?? '?'))
+  } catch (error) { check('sqlite', false, error.message) }
+  let officeOk = false
+  try { await import('advisers-office'); officeOk = true } catch { try { await import('../../office/dist/index.js'); officeOk = true } catch {} }
+  check('office', officeOk, officeOk ? 'advisers-office resolvable' : 'npm i -g advisers-office@next, or ADVISERS_OFFICE_LOCAL=1 in checkout')
+  check('policy', Boolean(StrictPolicyPack), StrictPolicyPack ? 'strict pack loaded' : 'policy pack missing')
+  check('model', true, process.env.ADVISERS_API_KEY ? 'API key present (not tested)' : 'optional; ADVISERS_API_KEY not set')
+  for (const row of rows) console.log(`${row.ok ? 'PASS' : 'FAIL'}  ${row.name}  ${row.detail}`)
+  if (rows.some((r) => !r.ok)) process.exitCode = 1
+}
+
+function init() {
+  ensureHome()
+  if (!existsSync(SOUL)) {
+    const doc = { id: 'soul', version: 1, content: '你是我的幕僚：直接、简洁、有用。\n你是我生活里的客人：私事保持私密。\n如果你要改这个文件，先告诉我。\n', updatedAt: now(), updatedBy: 'human' }
+    saveSoul(doc)
+  }
+  console.log(`home   ${HOME}`)
+  console.log(`soul   ${existsSync(SOUL) ? SOUL : 'failed'}`)
+  console.log('next   advisers doctor')
+  console.log('       advisers template weekly examples/templates/weekly.json out/weekly.docx')
+  console.log('       advisers commit add "周五前发报价给王工" --quote "周五前发报价给王工" --due <ISO>')
 }
 
 function printStatus() {
@@ -591,7 +652,7 @@ async function runTurn({ runtime, ledger, text, conversationId, debug = false, c
   applyNudgeFeedback(text)
   const context = runtime.lastContext
   if (!context) throw new Error('runtime did not produce a context')
-  if (context.crisis && (context.crisis.tier === 'T1' || context.crisis.tier === 'T2')) {
+  if (context.crisis && (context.crisis.tier === 'T1' || context.crisis.tier === 'T2' || (context.crisis.tier === 'T3' && context.crisis.thirdParty))) {
     console.log(context.crisis.script)
     dbStore()?.appendAudit({ actor: 'local', action: 'policy.crisis', allowed: false, reason: context.crisis.tier })
     return
@@ -777,7 +838,7 @@ async function repl() {
   }
   try {
     const latest = dbStore()?.listSessions(1)[0]
-    if (latest) printOpening(latest.conversationId)
+    printOpening(latest?.conversationId ?? conversationId)
   } catch {}
   console.log('/help for commands, /quit to leave')
 
@@ -833,12 +894,13 @@ async function repl() {
       console.log('  /clear          clear pending attachments')
       console.log('  /retry          rerun the last task')
       console.log('  /correct <text>  record a correction; 2nd time promotes it')
+      console.log('  /who            who I owe / who owes me')
       console.log('  /memory         what I remember')
       console.log('  /commit add <action> --quote <text> [--due ISO]')
       console.log('  /commit ls')
       console.log('  /done <id> --evidence <text>')
       console.log('  /search <text>  full-text search old turns')
-      console.log('  /tick           due within 24h')
+      console.log('  /tick           due in the next 7 days')
       console.log('  /week           last 7 days')
       console.log('  /digest [day]   today/week digest')
       console.log('  /diff           show the last changed file')
@@ -856,6 +918,16 @@ async function repl() {
       continue
     }
     if (text === '/status') { printStatus(); continue }
+    if (text === '/who') {
+      const open = ledger.openCommitments()
+      const mine = open.filter((c) => c.debtor === 'user' || c.debtor === 'agent')
+      const waiting = open.filter((c) => c.debtor === 'third' || c.debtor.startsWith('third:'))
+      console.log(`我欠别人（${mine.length}）`)
+      for (const c of mine) console.log(`  ${c.id}  ${c.creditor} · ${c.action}${c.dueAt ? ` · ${c.dueAt.slice(0, 10)}` : ''}`)
+      console.log(`等别人/别人欠我（${waiting.length}）`)
+      for (const c of waiting) console.log(`  ${c.id}  ${c.debtor} · ${c.action}${c.dueAt ? ` · ${c.dueAt.slice(0, 10)}` : ''}`)
+      continue
+    }
     if (text === '/history') { printHistory(); continue }
     if (text === '/deliveries') { printDeliveries(); continue }
     if (text === '/new') { conversationId = `local_${Date.now()}`; pendingFiles = []; console.log('new conversation'); continue }
@@ -904,7 +976,7 @@ async function repl() {
       continue
     }
     if (text === '/undo') {
-      const result = await undoLatest({ cwd: process.cwd(), backupDir: join(HOME, 'undo') })
+      const result = await undoLatest({ cwd: process.cwd(), backupDir: join(HOME, 'undo'), force: args.includes('--force') })
       console.log(result.ok ? `已回滚：${result.path}` : `撤销失败：${result.error}`)
       continue
     }
@@ -1045,8 +1117,24 @@ function forget(id) {
   if (!ok) process.exitCode = 1
 }
 
-function exportLedger() {
-  console.log(JSON.stringify(loadLedger().toJSON(), null, 2))
+function exportLedger(all = false) {
+  const ledger = loadLedger().toJSON()
+  if (!all) { console.log(JSON.stringify(ledger, null, 2)); return }
+  const store = dbStore()
+  const tables = ['sessions', 'turns', 'session_summaries', 'summary_versions', 'deliveries', 'nudges', 'task_runs', 'audit', 'memory_candidates', 'permit_consumed']
+  const data = {}
+  for (const table of tables) data[table] = store ? store.db.prepare(`SELECT * FROM ${table}`).all() : []
+  console.log(JSON.stringify({ version: VERSION, exportedAt: now(), ledger, data }, null, 2))
+}
+
+function backup(file) {
+  if (!file) { console.error('usage: advisers backup <path.db>'); process.exitCode = 1; return }
+  const store = openStore()
+  store.db.exec('PRAGMA wal_checkpoint(TRUNCATE)')
+  mkdirSync(dirname(file), { recursive: true })
+  copyFileSync(DB, file)
+  chmodSync(file, 0o600)
+  console.log(`backup: ${file}`)
 }
 
 function brief(text) {
@@ -1478,7 +1566,7 @@ async function bridge(args) {
       if (result.accepted && runtime.lastContext) {
         const context = runtime.lastContext
         let reply
-        if (context.crisis && (context.crisis.tier === 'T1' || context.crisis.tier === 'T2')) {
+        if (context.crisis && (context.crisis.tier === 'T1' || context.crisis.tier === 'T2' || (context.crisis.tier === 'T3' && context.crisis.thirdParty))) {
           dbStore()?.appendAudit({ actor: 'bridge', action: 'policy.crisis', allowed: false, reason: context.crisis.tier })
           reply = context.crisis.script
         } else if (context.policy && !context.policy.allowed) {
@@ -1654,6 +1742,10 @@ if (!command) {
   await chat(args)
 } else if (command === 'status') {
   printStatus()
+} else if (command === 'doctor') {
+  await doctor()
+} else if (command === 'init') {
+  init()
 } else if (command === 'history') {
   printHistory()
 } else if (command === 'deliveries') {
@@ -1690,7 +1782,7 @@ if (!command) {
       const c = ledger.addCommitment({
         matterId: activeMatterId(ledger, flags.matter),
         debtor: flags.debtor ?? 'user',
-        creditor: flags.creditor ?? 'me',
+        creditor: flags.creditor ?? /(?:发给|给|向|对)([\u4e00-\u9fa5A-Za-z0-9_]{1,12})/.exec(action)?.[1] ?? 'someone',
         action,
         dueAt: flags.due,
         timezone: flags.tz ?? 'Asia/Shanghai',
@@ -1736,9 +1828,9 @@ if (!command) {
   if (!result.ok) process.exitCode = 1
 } else if (command === 'undo') {
   if (args.includes('--list')) {
-    for (const row of await listBackups(join(HOME, 'undo'))) console.log(`${row.id}\t${row.path}\t${row.existed ? 'overwrite' : 'create'}`)
+    for (const row of await listBackups(join(HOME, 'undo'), { workspace: process.cwd() })) console.log(`${row.id}\t${row.path}\t${row.existed ? 'overwrite' : 'create'}`)
   } else {
-    const result = await undoLatest({ cwd: process.cwd(), backupDir: join(HOME, 'undo') })
+    const result = await undoLatest({ cwd: process.cwd(), backupDir: join(HOME, 'undo'), force: args.includes('--force') })
     console.log(result.ok ? `已回滚：${result.path}` : `撤销失败：${result.error}`)
     if (!result.ok) process.exitCode = 1
   }
@@ -1859,7 +1951,9 @@ if (!command) {
 } else if (command === 'forget') {
   forget(args[0])
 } else if (command === 'export') {
-  exportLedger()
+  exportLedger(args.includes('--all'))
+} else if (command === 'backup') {
+  backup(args[0])
 } else if (command === 'brief') {
   brief(args.join(' ').trim())
 } else if (command === 'policy') {
@@ -1870,7 +1964,7 @@ if (!command) {
     else {
       const crisis = new core.KeywordCrisisPolicy().scan(text)
       const pack = StrictPolicyPack ? new StrictPolicyPack() : undefined
-      const decision = pack?.resolve({ use: 'understanding', crisis: crisis.tier === 'T1' || crisis.tier === 'T2' }) ?? { allowed: false, action: 'deny', code: 'FAIL_CLOSED', reason: 'policy pack missing' }
+      const decision = pack?.resolve({ use: 'understanding', crisis: crisis.tier === 'T1' || crisis.tier === 'T2' || (crisis.tier === 'T3' && crisis.thirdParty) }) ?? { allowed: false, action: 'deny', code: 'FAIL_CLOSED', reason: 'policy pack missing' }
       console.log(JSON.stringify({ tier: crisis.tier, crisis: crisis.crisis, decision }, null, 2))
     }
   } else { console.error('usage: advisers policy check "<text>"'); process.exitCode = 1 }

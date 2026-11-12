@@ -5,7 +5,8 @@
 ## 安装
 
 ```sh
-npm i -g advisers@next advisers-office@next
+# 当前 preview 只 staged，等 OTP；批准后：
+npm i -g --registry=https://registry.npmjs.org advisers@next advisers-office@next
 advisers soul init
 advisers brief "做一份 Q4 预算 Excel，周五前给老板"
 advisers chat "周五前把报价发给王工"
@@ -18,7 +19,7 @@ CLI 是**本地秘书运行时**：一个 REPL、用户账/承诺账/流程账�
 
 ## 状态
 
-`0.2.0-preview.44` 是预览版：
+`0.2.0-preview.45` 是预览版：
 
 - SQLite 账本 `~/.advisers/state.db`（JSON fallback）；
 - soul 位于 `~/.advisers/soul.md`，人类独占；

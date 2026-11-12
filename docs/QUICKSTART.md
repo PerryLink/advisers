@@ -29,6 +29,8 @@ $env:ADVISERS_OFFICE_LOCAL = "1"   # checkout-only wiring for the office package
 $A = Join-Path $PWD "packages\advisers\bin\advisers.js"
 
 node $A status
+node $A init
+node $A doctor
 node $A soul init
 node $A brief "做一份 Q4 预算 Excel，周五前给老板"
 ```
@@ -41,7 +43,7 @@ JSON must be UTF-8 **without BOM**. PowerShell 5.1 `>` writes UTF-16/BOM and wil
 $weekly = '{"period":"2026-W46","done":["完成 A 客户报价"],"risks":["B 项目排期紧"],"next":["交付 Q4 预算表"]}'
 [IO.File]::WriteAllText((Join-Path $PWD "weekly.json"), $weekly, (New-Object System.Text.UTF8Encoding($false)))
 
-node $A template weekly weekly.json out\weekly.docx
+node $A template weekly examples/templates/weekly.json out\weekly.docx
 node $A verify out\weekly.docx
 Start-Process .\out\weekly.docx
 ```

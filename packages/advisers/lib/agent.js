@@ -4,6 +4,7 @@ import { existsSync, lstatSync, realpathSync } from 'node:fs'
 import { dirname, isAbsolute, relative, resolve } from 'node:path'
 import { chatCompletion } from './model.js'
 import { backupBeforeWrite } from './undo.js'
+import { estimateTokens } from './context-window.js'
 
 const OFFICE_KINDS = ['docx', 'xlsx', 'pptx', 'xmind', 'mermaid', 'drawio']
 const TEMPLATE_NAMES = ['weekly', 'budget', 'presentation', 'flow', 'mindmap', 'minutes', 'notice']
@@ -31,8 +32,9 @@ function safePath(cwd, input) {
   if (rel.startsWith('..') || isAbsolute(rel)) throw new Error(`path escapes workspace: ${input}`)
   const parts = rel.split(/[\\/]+/).filter(Boolean)
   for (const part of parts) {
-    if (DENY_SEGMENTS.has(part) || DENY_FILES.has(part)) throw new Error(`path is protected: ${part}`)
-    if (part.startsWith('.env')) throw new Error(`path is protected: ${part}`)
+    const lower = part.toLowerCase()
+    if (DENY_SEGMENTS.has(lower) || DENY_FILES.has(lower)) throw new Error(`path is protected: ${part}`)
+    if (lower.startsWith('.env')) throw new Error(`path is protected: ${part}`)
   }
   let current = root
   for (const part of parts.slice(0, -1)) {
@@ -231,7 +233,7 @@ export async function executeTool(name, args, { cwd = process.cwd(), ledger, bac
     const commitment = ledger.addCommitment({
       matterId,
       debtor: args.debtor === 'agent' ? 'agent' : 'user',
-      creditor: args.creditor || 'me',
+      creditor: args.creditor || /(?:发给|给|向|对)([\u4e00-\u9fa5A-Za-z0-9_]{1,12})/.exec(args.action)?.[1] || 'someone',
       action: args.action,
       dueAt: args.dueAt,
       capability: 'todo',
@@ -283,6 +285,15 @@ Advisers is a local CLI: \`advisers\` starts the REPL, \`advisers chat "task"\` 
 - Do not invent facts. Keep private matters private.
 - If you promise to remind or follow up, call commitment_add first; never make an empty promise.`
 
+function fitMessages(messages, budget) {
+  const cap = Math.max(2000, Number(budget) || 12000)
+  const estimate = (list) => estimateTokens(list.map((m) => typeof m.content === 'string' ? m.content : JSON.stringify(m)).join('\n')) + 1500
+  let fitted = messages.map((m, i) => (i > 0 && m.role === 'tool' && typeof m.content === 'string' && m.content.length > 4000 ? { ...m, content: `${m.content.slice(0, 4000)}\n[tool output truncated]` } : m))
+  while (estimate(fitted) > cap && fitted.length > 3) fitted = [fitted[0], ...fitted.slice(2)]
+  if (estimate(fitted) > cap) fitted[0] = { ...fitted[0], content: `${String(fitted[0].content).slice(0, cap * 3)}\n[context truncated to budget]` }
+  return fitted
+}
+
 export async function runAgent({
   runtime,
   text,
@@ -314,7 +325,7 @@ export async function runAgent({
   const artifacts = []
   const toolLog = []
   for (let step = 0; step < maxSteps; step++) {
-    const result = await chatCompletion({ messages, apiKey, baseUrl, model, tools: LOCAL_TOOLS, fetchImpl })
+    const result = await chatCompletion({ messages: fitMessages(messages, process.env.ADVISERS_CONTEXT_TOKENS), apiKey, baseUrl, model, tools: LOCAL_TOOLS, fetchImpl })
     if (!result.toolCalls.length) return { reply: result.content.trim(), artifacts: [...new Set(artifacts)], toolLog, steps: step + 1 }
     messages.push({ role: 'assistant', content: result.content, tool_calls: result.toolCalls })
     for (const call of result.toolCalls) {
@@ -333,6 +344,7 @@ export async function runAgent({
         }
         payload = await executeTool(name, args, { cwd, ledger, backupDir, store, matterId, turnId, userText })
         if (payload.artifact && payload.path) artifacts.push(payload.path)
+        if (store && payload.artifact) { try { store.appendAudit({ actor: 'agent', action: `tool.${name}`, allowed: true, reason: payload.path }) } catch {} }
       } catch (error) {
         payload = { ok: false, error: error instanceof Error ? error.message : String(error) }
       }

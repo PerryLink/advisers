@@ -49,6 +49,15 @@ function stagedId(text) {
 }
 
 try {
+  if (process.env.ADVISERS_RELEASE_ALLOW_DIRTY !== '1') {
+    try {
+      const dirty = execFileSync('git', ['status', '--porcelain'], { cwd: root, encoding: 'utf8' }).trim()
+      if (dirty) throw new Error('working tree is dirty; commit first or set ADVISERS_RELEASE_ALLOW_DIRTY=1')
+    } catch (error) {
+      if (String(error.message).includes('dirty')) throw error
+    }
+  }
+  execFileSync('pnpm', ['-r', '--if-present', 'run', 'build'], { cwd: root, stdio: 'inherit' })
   for (const [dir, name] of packages) {
     const cwd = join(root, dir)
     const ver = await version(cwd)

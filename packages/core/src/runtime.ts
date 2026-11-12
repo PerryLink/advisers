@@ -169,7 +169,7 @@ export class AdvisersRuntime implements LinkHost {
     let policy: PolicyDecision | undefined
     const crisis = this.crisisPolicy.scan(event.text ?? '')
     try {
-      policy = this.policyResolver?.resolve({ use: 'understanding', crisis: crisis.tier === 'T1' || crisis.tier === 'T2' })
+      policy = this.policyResolver?.resolve({ use: 'understanding', crisis: crisis.tier === 'T1' || crisis.tier === 'T2' || (crisis.tier === 'T3' && crisis.thirdParty) })
     } catch {
       policy = { allowed: false, action: 'deny', code: 'FAIL_CLOSED', reason: 'policy resolver failed' }
     }

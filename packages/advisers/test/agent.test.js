@@ -165,6 +165,8 @@ test('path guard blocks protected files and symlink escapes', async () => {
   try {
     await assert.rejects(() => executeTool('file_write', { path: '.git/hooks/post-checkout', content: 'x' }, { cwd }), /protected/)
     await assert.rejects(() => executeTool('file_write', { path: 'package.json', content: 'x' }, { cwd }), /protected/)
+    await assert.rejects(() => executeTool('file_write', { path: 'Package.json', content: 'x' }, { cwd }), /protected/)
+    await assert.rejects(() => executeTool('file_write', { path: '.GIT/hooks/post-checkout', content: 'x' }, { cwd }), /protected/)
     await import('node:fs/promises').then((fs) => fs.symlink(outside, join(cwd, 'out')))
     await assert.rejects(() => executeTool('file_write', { path: 'out/pwn.txt', content: 'x' }, { cwd }), /symlink/)
   } finally {
@@ -232,5 +234,25 @@ test('office_template builds Chinese minutes and notice through the agent tool',
       assert.equal(result.toolLog[0].ok, true)
       assert.equal(existsSync(join(cwd, c.out)), true)
     }
+  } finally { rmSync(cwd, { recursive: true, force: true }) }
+})
+
+test('agent fits oversized tool output before the next model call', async () => {
+  const cwd = mkdtempSync(join(tmpdir(), 'advisers-fit-'))
+  try {
+    writeFileSync(join(cwd, 'big.txt'), 'x'.repeat(900_000))
+    let seen = 0
+    const fetchImpl = async (_url, init) => {
+      seen++
+      const body = JSON.parse(init.body)
+      const chars = JSON.stringify(body.messages).length
+      assert.ok(chars < 30_000, `request too large: ${chars}`)
+      const tool = { choices: [{ message: { role: 'assistant', content: '', tool_calls: [{ id: 't1', type: 'function', function: { name: 'file_read', arguments: JSON.stringify({ path: 'big.txt' }) } }] } }] }
+      const final = { choices: [{ message: { role: 'assistant', content: 'done' } }] }
+      return new Response(JSON.stringify(seen === 1 ? tool : final), { status: 200 })
+    }
+    const result = await runAgent({ text: 'read it', context: { prompt: 'ctx' }, apiKey: 'k', cwd, fetchImpl, maxSteps: 2 })
+    assert.equal(result.reply, 'done')
+    assert.equal(seen, 2)
   } finally { rmSync(cwd, { recursive: true, force: true }) }
 })

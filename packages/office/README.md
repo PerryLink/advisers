@@ -45,7 +45,7 @@ templates. CJK fonts default to Microsoft YaHei, with a system fallback.
 
 ## Status
 
-`0.2.0-preview.11`. Builders: DOCX/XLSX/PPTX/Mermaid/draw.io/XMind; 7 templates; `readOffice`/`editOffice`/`verifyOffice`. Structural verification only (no Word/WPS/LibreOffice application layer in this package).
+`0.2.0-preview.13`. Builders: DOCX/XLSX/PPTX/Mermaid/draw.io/XMind; 7 templates; `readOffice`/`editOffice`/`verifyOffice`. Structural verification only (no Word/WPS/LibreOffice application layer in this package).
 
 ## License
 

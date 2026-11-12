@@ -1,5 +1,6 @@
 import { copyFile, mkdir, readFile, readdir, rm, writeFile } from 'node:fs/promises'
 import { existsSync } from 'node:fs'
+import { createHash } from 'node:crypto'
 import { join, relative, resolve } from 'node:path'
 
 function stamp() {
@@ -15,18 +16,23 @@ export async function backupBeforeWrite(target, { cwd = process.cwd(), backupDir
   const dir = join(backupDir, `${stamp()}-${Math.random().toString(36).slice(2, 8)}`)
   const existed = existsSync(abs)
   await mkdir(dir, { recursive: true })
-  if (existed) await copyFile(abs, join(dir, 'file'))
-  await writeFile(join(dir, 'manifest.json'), JSON.stringify({ path: rel, existed, at: new Date().toISOString() }, null, 2))
+  let sha256
+  if (existed) {
+    await copyFile(abs, join(dir, 'file'))
+    sha256 = createHash('sha256').update(await readFile(abs)).digest('hex')
+  }
+  await writeFile(join(dir, 'manifest.json'), JSON.stringify({ path: rel, existed, sha256, workspace: resolve(cwd), at: new Date().toISOString() }, null, 2))
   return dir
 }
 
-export async function listBackups(backupDir) {
+export async function listBackups(backupDir, { workspace } = {}) {
   if (!existsSync(backupDir)) return []
   const dirs = (await readdir(backupDir, { withFileTypes: true })).filter((d) => d.isDirectory()).map((d) => d.name).sort().reverse()
   const rows = []
   for (const name of dirs) {
     try {
       const manifest = JSON.parse(await readFile(join(backupDir, name, 'manifest.json'), 'utf8'))
+      if (workspace && manifest.workspace && manifest.workspace !== workspace) continue
       rows.push({ id: name, ...manifest })
     } catch {}
   }
@@ -34,8 +40,8 @@ export async function listBackups(backupDir) {
 }
 
 /** Restore the latest backup, or delete a file that was newly created. */
-export async function undoLatest({ cwd = process.cwd(), backupDir } = {}) {
-  const rows = await listBackups(backupDir)
+export async function undoLatest({ cwd = process.cwd(), backupDir, force = false } = {}) {
+  const rows = await listBackups(backupDir, { workspace: resolve(cwd) })
   if (!rows.length) return { ok: false, error: 'no backups' }
   const latest = rows[0]
   const dir = join(backupDir, latest.id)
@@ -66,7 +72,7 @@ function lineDiff(before, after) {
 }
 
 export async function diffLatest({ cwd = process.cwd(), backupDir } = {}) {
-  const rows = await listBackups(backupDir)
+  const rows = await listBackups(backupDir, { workspace: resolve(cwd) })
   if (!rows.length) return { ok: false, error: 'no backups' }
   const latest = rows[0]
   const target = resolve(cwd, latest.path)

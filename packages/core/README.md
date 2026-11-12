@@ -12,7 +12,7 @@ SQLite/FTS persistence lives in the `advisers` distribution; this package has no
 
 ## Status
 
-`0.2.0-preview.17`. API is stabilizing but may change before 0.3.
+`0.2.0-preview.19`. API is stabilizing but may change before 0.3.
 
 ## License
 

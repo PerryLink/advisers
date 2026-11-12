@@ -6,7 +6,7 @@ import { dirname, isAbsolute, relative, resolve } from 'node:path'
 
 export const name = 'advisers'
 export const inject = ['tools']
-export const version = '0.2.0-preview.22'
+export const version = '0.2.0-preview.23'
 
 /**
  * DSH bundle entry point. The first slice is deliberately one read-only tool:
@@ -44,6 +44,11 @@ export function apply(ctx, config = {}) {
       const target = resolve(root, args.out)
       const rel = relative(root, target)
       if (rel === '' || rel.startsWith('..') || isAbsolute(rel)) throw new Error('output path escapes workspace')
+      const denied = new Set(['.git', '.hg', '.svn', '.dsh', '.github', 'node_modules', 'package.json', 'pnpm-lock.yaml', 'soul.md', 'state.db'])
+      for (const part of rel.split(/[\\/]+/)) {
+        const lower = part.toLowerCase()
+        if (denied.has(lower) || lower.startsWith('.env')) throw new Error(`output path is protected: ${part}`)
+      }
       let buffer
       let validation
       if (args.kind === 'docx') { buffer = await buildDocx(args.spec); validation = await validateOffice(buffer, 'docx') }

@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict'
 import { execFileSync } from 'node:child_process'
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs'
+import { existsSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { fileURLToPath } from 'node:url'
@@ -28,7 +28,7 @@ test('CLI commitment add/tick/memory works end to end', () => {
     const first = cli(home, ['tick'], work)
     assert.match(first, /发报价/)
     const second = cli(home, ['tick'], work)
-    assert.match(second, /未来 7 天无到期/)
+    assert.match(second, /发报价/)
     assert.match(cli(home, ['memory'], work), /发报价/)
     assert.match(cli(home, ['week'], work), /发报价/)
     cli(home, ['correct', '以后周报先给结论'], work)
@@ -91,4 +91,18 @@ test('CLI policy check and crisis short-circuit before the model', () => {
   } finally {
     rmSync(root, { recursive: true, force: true })
   }
+})
+
+test('CLI init/doctor/export/backup work in a fresh home', () => {
+  const root = mkdtempSync(join(tmpdir(), 'advisers-cli-doctor-'))
+  const home = join(root, 'home'); const work = join(root, 'work')
+  mkdirSync(work, { recursive: true })
+  try {
+    assert.match(cli(home, ['init'], work), /soul/)
+    const doctor = cli(home, ['doctor'], work)
+    assert.match(doctor, /PASS  sqlite/)
+    assert.match(cli(home, ['export', '--all'], work), /"turns"/)
+    cli(home, ['backup', join(root, 'b.db')], work)
+    assert.equal(existsSync(join(root, 'b.db')), true)
+  } finally { rmSync(root, { recursive: true, force: true }) }
 })

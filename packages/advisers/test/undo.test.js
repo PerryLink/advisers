@@ -45,3 +45,17 @@ test('diffLatest shows line changes before undo', async () => {
     rmSync(root, { recursive: true, force: true })
   }
 })
+
+test('undo does not cross workspaces', async () => {
+  const root = mkdtempSync(join(tmpdir(), 'advisers-undo-ws-'))
+  const a = join(root, 'a'); const b = join(root, 'b'); const backups = join(root, 'undo')
+  const fs = await import('node:fs/promises')
+  await fs.mkdir(a, { recursive: true }); await fs.mkdir(b, { recursive: true })
+  try {
+    writeFileSync(join(a, 'report.docx'), 'A')
+    await backupBeforeWrite('report.docx', { cwd: a, backupDir: backups })
+    writeFileSync(join(b, 'report.docx'), 'B')
+    assert.equal((await undoLatest({ cwd: b, backupDir: backups })).ok, false)
+    assert.equal(readFileSync(join(b, 'report.docx'), 'utf8'), 'B')
+  } finally { rmSync(root, { recursive: true, force: true }) }
+})

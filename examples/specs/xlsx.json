@@ -1,0 +1,1 @@
+{"sheet":"预算","columns":[{"header":"项目","key":"item","width":24},{"header":"金额","key":"amount","width":16,"numFmt":"#,##0"}],"rows":[{"item":"差旅","amount":12000},{"item":"外包","amount":30000}],"formulas":[{"cell":"B4","formula":"SUM(B2:B3)"}]}

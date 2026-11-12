@@ -114,6 +114,11 @@ export class SqliteStore {
   constructor(path) {
     this.db = new DatabaseSync(path)
     this.db.exec('PRAGMA journal_mode = WAL')
+    this.db.exec('PRAGMA busy_timeout = 5000')
+    this.db.exec('PRAGMA secure_delete = ON')
+    this.db.exec('PRAGMA synchronous = NORMAL')
+    const check = this.db.prepare('PRAGMA quick_check').get()
+    if (check && check.quick_check !== 'ok') throw new Error(`database integrity check failed: ${check.quick_check}`)
     this.db.exec(SCHEMA)
     this.migrate()
   }
@@ -312,6 +317,7 @@ CREATE TABLE IF NOT EXISTS task_runs (
     runs += Number(this.db.prepare('DELETE FROM task_runs WHERE matter_id = ?').run(matterId).changes)
     const sessions = this.db.prepare('DELETE FROM sessions WHERE matter_id = ?').run(matterId).changes
     const deliveries = this.db.prepare('DELETE FROM deliveries WHERE matter_id = ?').run(matterId).changes
+    try { this.db.exec('PRAGMA wal_checkpoint(TRUNCATE)'); this.db.exec('VACUUM') } catch {}
     return { sessions: Number(sessions), deliveries: Number(deliveries), turns, summaries, runs, nudges, candidates }
   }
 

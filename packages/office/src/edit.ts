@@ -19,6 +19,7 @@ export interface EditResult {
 }
 
 function escapeXml(text: string): string {
+  if (/[\u0000-\u0008\u000B\u000C\u000E-\u001F]/.test(text)) throw new Error('control characters are not allowed')
   return text.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;').replace(/'/g, '&apos;')
 }
 
@@ -71,7 +72,7 @@ function replaceTable(xml: string, block: number, rows: string[][]): { xml: stri
   const firstCell = firstRow.match(/<w:tc(?:\s[^>]*)?>[\s\S]*?<\/w:tc>/)?.[0] ?? '<w:tc><w:p></w:p></w:tc>'
   const tcPr = firstCell.match(/<w:tcPr>[\s\S]*?<\/w:tcPr>/)?.[0] ?? ''
   const body = rows.map((row) => `<w:tr>${row.map((cell) => `<w:tc>${tcPr}<w:p><w:r><w:t xml:space="preserve">${escapeXml(cell)}</w:t></w:r></w:p></w:tc>`).join('')}</w:tr>`).join('')
-  const table = `<w:tbl>${target.inner.match(/<w:tblPr>[\s\S]*?<\/w:tblPr>/)?.[0] ?? ''}${body}</w:tbl>`
+  const table = `<w:tbl>${target.inner.match(/<w:tblPr>[\s\S]*?<\/w:tblPr>/)?.[0] ?? ''}${target.inner.match(/<w:tblGrid>[\s\S]*?<\/w:tblGrid>/)?.[0] ?? ''}${body}</w:tbl>`
   return { xml: xml.slice(0, target.start) + table + xml.slice(target.end), before: 'table' }
 }
 
@@ -80,12 +81,15 @@ export async function editOffice(input: Buffer, kind: OfficeEditKind, ops: EditO
   try {
     if (!Array.isArray(ops) || ops.length === 0) throw new Error('ops must not be empty')
     if (kind === 'xlsx') {
+      const pre = await JSZip.loadAsync(original)
+      if (Object.keys(pre.files).some((n) => /^xl\/(charts|drawings|media)\//.test(n))) throw new Error('xlsx with charts/drawings/media is read-only (edit would drop parts)')
       const workbook = new ExcelJS.Workbook()
       await workbook.xlsx.load(original as never)
       for (const op of ops) {
         if (op.op !== 'xlsx.setCell') throw new Error(`unsupported xlsx op: ${op.op}`)
         const sheet = workbook.getWorksheet(op.sheet)
         if (!sheet) throw new Error(`sheet not found: ${op.sheet}`)
+        if (typeof op.value === 'string' && op.value.startsWith('=')) throw new Error('use xlsx.setFormula for formulas')
         sheet.getCell(op.ref).value = op.value
       }
       const buffer = Buffer.from(await workbook.xlsx.writeBuffer())
@@ -120,9 +124,11 @@ export async function editOffice(input: Buffer, kind: OfficeEditKind, ops: EditO
         const name = slideNames[op.slide - 1]
         if (!name) throw new Error(`slide not found: ${op.slide}`)
         let xml = await zip.files[name].async('string')
-        let replaced = false
-        xml = xml.replace(/<a:t(?:\s[^>]*)?>[\s\S]*?<\/a:t>/, () => { replaced = true; return `<a:t xml:space="preserve">${escapeXml(op.text)}</a:t>` })
-        if (!replaced) throw new Error(`no text on slide ${op.slide}`)
+        const runs = [...xml.matchAll(/<a:t(?:\s[^>]*)?>[\s\S]*?<\/a:t>/g)]
+        if (!runs.length) throw new Error(`no text on slide ${op.slide}`)
+        if (runs.length > 1) throw new Error(`slide ${op.slide} has multiple text runs; refusing to corrupt them`)
+        const replaced = true
+        xml = xml.replace(/<a:t(?:\s[^>]*)?>[\s\S]*?<\/a:t>/, `<a:t xml:space="preserve">${escapeXml(op.text)}</a:t>`)
         zip.file(name, xml)
         changes.push(`slide${op.slide}: -> ${op.text}`)
       }

@@ -1,6 +1,6 @@
 {
   "name": "advisers-policy-strict",
-  "version": "0.2.0-preview.8",
+  "version": "0.2.0-preview.9",
   "private": false,
   "description": "Strict policy pack for Advisers: understanding allowed; companion/roleplay disabled.",
   "type": "module",
@@ -24,7 +24,7 @@
     "test": "node --experimental-strip-types --test test/*.test.ts"
   },
   "dependencies": {
-    "advisers-core": "0.2.0-preview.18"
+    "advisers-core": "0.2.0-preview.19"
   },
   "license": "MIT",
   "repository": {
