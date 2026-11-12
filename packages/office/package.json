@@ -1,6 +1,6 @@
 {
   "name": "advisers-office",
-  "version": "0.2.0-preview.8",
+  "version": "0.2.0-preview.9",
   "private": false,
   "description": "Office artifact builders for Advisers: DOCX, XLSX, PPTX, Mermaid, and draw.io.",
   "keywords": [

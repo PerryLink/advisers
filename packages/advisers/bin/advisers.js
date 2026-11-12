@@ -211,6 +211,7 @@ Usage:
   advisers forget <pref-id>   forget a preference (tombstone)
   advisers export             export the ledger as JSON
   advisers brief <text>       print the IntentBrief for a request
+  advisers verify <file>       structural Office verification
   advisers office <kind> <spec.json> <out>
                               build docx/xlsx/pptx/xmind/mermaid/drawio
   advisers routine ls         list routines
@@ -652,6 +653,7 @@ async function runTurn({ runtime, ledger, text, conversationId, debug = false, c
   try {
     runId = dbStore()?.addTaskRun({
       conversationId,
+      matterId: context.matter.id,
       task: text.slice(0, 500),
       tools: toolLog.map((t) => ({ name: t.name, ok: t.ok })),
       artifacts,
@@ -1723,6 +1725,19 @@ if (!command) {
   exportLedger()
 } else if (command === 'brief') {
   brief(args.join(' ').trim())
+} else if (command === 'verify') {
+  const file = args[0]
+  if (!file) { console.error('usage: advisers verify <file>'); process.exitCode = 1 }
+  else {
+    const ext = file.split('.').pop()?.toLowerCase()
+    if (!['docx', 'xlsx', 'pptx'].includes(ext)) { console.error('verify supports docx/xlsx/pptx'); process.exitCode = 1 }
+    else {
+      const mod = await import('../../office/dist/index.js')
+      const result = await mod.verifyOffice(readFileSync(file), ext)
+      console.log(JSON.stringify(result, null, 2))
+      if (!result.ok) process.exitCode = 1
+    }
+  }
 } else if (command === 'office') {
   await office(args[0], args[1], args[2])
   process.exit(process.exitCode || 0)

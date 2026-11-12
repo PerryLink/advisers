@@ -173,3 +173,14 @@ test('docx bullet text is not duplicated', async () => {
   const xml = await zip.file('word/document.xml')?.async('string')
   assert.equal((xml?.match(/alpha/g) ?? []).length, 1)
 })
+
+test('verifyOffice checks XML/content types/rels and rejects corruption', async () => {
+  const { buildDocx } = await import('../src/docx.ts')
+  const { verifyOffice } = await import('../src/verify.ts')
+  const buffer = await buildDocx({ title: '验证', sections: [{ heading: '结论', paragraphs: ['正常'] }] })
+  const good = await verifyOffice(buffer, 'docx')
+  assert.equal(good.ok, true)
+  assert.ok(good.entries > 3)
+  const broken = await verifyOffice(Buffer.from('not a zip'), 'docx')
+  assert.equal(broken.ok, false)
+})

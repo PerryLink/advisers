@@ -86,7 +86,7 @@ CREATE TABLE IF NOT EXISTS summary_versions (
   PRIMARY KEY (conversation_id, version)
 );
 CREATE TABLE IF NOT EXISTS task_runs (
-  id TEXT PRIMARY KEY, conversation_id TEXT NOT NULL, task TEXT NOT NULL,
+  id TEXT PRIMARY KEY, conversation_id TEXT NOT NULL, matter_id TEXT, task TEXT NOT NULL,
   tools TEXT NOT NULL, artifacts TEXT NOT NULL, outcome TEXT NOT NULL, created_at TEXT NOT NULL
 );
 CREATE TABLE IF NOT EXISTS nudges (
@@ -114,7 +114,7 @@ export class SqliteStore {
   migrate() {
     const row = this.db.prepare('SELECT value FROM meta WHERE key = ?').get('schema_version')
     const current = row ? Number(row.value) : 0
-    if (current >= 15) return
+    if (current >= 16) return
     this.db.exec('BEGIN')
     try {
       this.db.exec(`CREATE TABLE IF NOT EXISTS seen_events (
@@ -171,7 +171,7 @@ export class SqliteStore {
   PRIMARY KEY (conversation_id, version)
 );
 CREATE TABLE IF NOT EXISTS task_runs (
-  id TEXT PRIMARY KEY, conversation_id TEXT NOT NULL, task TEXT NOT NULL,
+  id TEXT PRIMARY KEY, conversation_id TEXT NOT NULL, matter_id TEXT, task TEXT NOT NULL,
   tools TEXT NOT NULL, artifacts TEXT NOT NULL, outcome TEXT NOT NULL, created_at TEXT NOT NULL
 );
 CREATE TABLE IF NOT EXISTS nudges (
@@ -195,7 +195,9 @@ CREATE TABLE IF NOT EXISTS task_runs (
         through_seq INTEGER NOT NULL, pins TEXT, created_at TEXT NOT NULL,
         PRIMARY KEY (conversation_id, version)
       )`)
-      this.db.prepare('INSERT OR REPLACE INTO meta(key,value) VALUES(?,?)').run('schema_version', '15')
+      const runCols = this.db.prepare('PRAGMA table_info(task_runs)').all().map((c) => c.name)
+      if (!runCols.includes('matter_id')) this.db.exec('ALTER TABLE task_runs ADD COLUMN matter_id TEXT')
+      this.db.prepare('INSERT OR REPLACE INTO meta(key,value) VALUES(?,?)').run('schema_version', '16')
       this.db.exec('COMMIT')
     } catch (error) {
       this.db.exec('ROLLBACK')
@@ -245,16 +247,16 @@ CREATE TABLE IF NOT EXISTS task_runs (
     this.db.prepare('DELETE FROM meta WHERE key = ?').run(key)
   }
 
-  addTaskRun({ conversationId, task, tools, artifacts, outcome }) {
+  addTaskRun({ conversationId, matterId, task, tools, artifacts, outcome }) {
     const id = `run_${randomUUID().replace(/-/g, '').slice(0, 16)}`
-    this.db.prepare('INSERT INTO task_runs(id,conversation_id,task,tools,artifacts,outcome,created_at) VALUES(?,?,?,?,?,?,?)')
-      .run(id, conversationId, task, json(tools), json(artifacts), outcome, new Date().toISOString())
+    this.db.prepare('INSERT INTO task_runs(id,conversation_id,matter_id,task,tools,artifacts,outcome,created_at) VALUES(?,?,?,?,?,?,?,?)')
+      .run(id, conversationId, matterId ?? null, task, json(tools), json(artifacts), outcome, new Date().toISOString())
     return id
   }
 
   listTaskRuns(limit = 20) {
     return this.db.prepare('SELECT * FROM task_runs ORDER BY created_at DESC LIMIT ?').all(limit)
-      .map((r) => ({ id: r.id, conversationId: r.conversation_id, task: r.task, tools: parse(r.tools), artifacts: parse(r.artifacts), outcome: r.outcome, createdAt: r.created_at }))
+      .map((r) => ({ id: r.id, conversationId: r.conversation_id, matterId: r.matter_id ?? undefined, task: r.task, tools: parse(r.tools), artifacts: parse(r.artifacts), outcome: r.outcome, createdAt: r.created_at }))
   }
 
   addNudge({ localDay, level, commitmentId, body }) {
@@ -299,6 +301,7 @@ CREATE TABLE IF NOT EXISTS task_runs (
     }
     const commitmentIds = this.db.prepare('SELECT id FROM commitments WHERE matter_id = ?').all(matterId).map((r) => r.id)
     for (const id of commitmentIds) nudges += Number(this.db.prepare('DELETE FROM nudges WHERE commitment_id = ?').run(id).changes)
+    runs += Number(this.db.prepare('DELETE FROM task_runs WHERE matter_id = ?').run(matterId).changes)
     const sessions = this.db.prepare('DELETE FROM sessions WHERE matter_id = ?').run(matterId).changes
     const deliveries = this.db.prepare('DELETE FROM deliveries WHERE matter_id = ?').run(matterId).changes
     return { sessions: Number(sessions), deliveries: Number(deliveries), turns, summaries, runs, nudges }
