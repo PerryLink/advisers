@@ -43,6 +43,10 @@ CREATE TABLE IF NOT EXISTS routine_patches (
   id TEXT PRIMARY KEY, routine_id TEXT NOT NULL, base_version INTEGER NOT NULL,
   changes TEXT NOT NULL, before TEXT, diff TEXT NOT NULL, status TEXT NOT NULL, created_at TEXT NOT NULL
 );
+CREATE TABLE IF NOT EXISTS memory_candidates (
+  id TEXT PRIMARY KEY, kind TEXT NOT NULL, payload TEXT NOT NULL, evidence TEXT NOT NULL,
+  status TEXT NOT NULL DEFAULT 'pending', created_at TEXT NOT NULL, reviewed_at TEXT, reject_reason TEXT
+);
 CREATE TABLE IF NOT EXISTS routes (key TEXT PRIMARY KEY, matter_id TEXT NOT NULL);
 CREATE TABLE IF NOT EXISTS seen_events (
   link_id TEXT NOT NULL, account_id TEXT NOT NULL, dedupe_key TEXT NOT NULL,
@@ -319,6 +323,30 @@ CREATE TABLE IF NOT EXISTS task_runs (
     return this.db.prepare('SELECT * FROM turns WHERE conversation_id = ? ORDER BY seq DESC LIMIT ?').all(conversationId, limit)
       .map((r) => ({ id: r.id, conversationId: r.conversation_id, seq: r.seq, role: r.role, content: r.content, createdAt: r.created_at }))
       .reverse()
+  }
+
+  proposeCandidate({ kind, payload, evidence }) {
+    const id = `cand_${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 8)}`
+    const now = new Date().toISOString()
+    this.db.prepare('INSERT INTO memory_candidates(id,kind,payload,evidence,status,created_at) VALUES(?,?,?,?,?,?)')
+      .run(id, kind, JSON.stringify(payload), JSON.stringify(evidence), 'pending', now)
+    return this.getCandidate(id)
+  }
+
+  getCandidate(id) {
+    const r = this.db.prepare('SELECT * FROM memory_candidates WHERE id = ?').get(id)
+    return r ? { id: r.id, kind: r.kind, payload: JSON.parse(r.payload), evidence: JSON.parse(r.evidence), status: r.status, createdAt: r.created_at, reviewedAt: r.reviewed_at, rejectReason: r.reject_reason } : undefined
+  }
+
+  listCandidates(status = 'pending') {
+    const rows = status === 'all' ? this.db.prepare('SELECT * FROM memory_candidates ORDER BY created_at DESC').all() : this.db.prepare('SELECT * FROM memory_candidates WHERE status = ? ORDER BY created_at DESC').all(status)
+    return rows.map((r) => ({ id: r.id, kind: r.kind, payload: JSON.parse(r.payload), evidence: JSON.parse(r.evidence), status: r.status, createdAt: r.created_at, reviewedAt: r.reviewed_at, rejectReason: r.reject_reason }))
+  }
+
+  reviewCandidate(id, status, reason) {
+    this.db.prepare('UPDATE memory_candidates SET status = ?, reviewed_at = ?, reject_reason = ? WHERE id = ?')
+      .run(status, new Date().toISOString(), reason ?? null, id)
+    return this.getCandidate(id)
   }
 
   searchMemory(query, { limit = 6, matterId } = {}) {

@@ -191,3 +191,27 @@ test('commitment_add records evidence before a promise', async () => {
     rmSync(cwd, { recursive: true, force: true })
   }
 })
+
+test('memory_propose requires a verbatim quote and creates a pending candidate', async () => {
+  const cwd = mkdtempSync(join(tmpdir(), 'advisers-mem-'))
+  try {
+    const { Ledger } = await import('../../core/dist/index.js')
+    const { SqliteStore } = await import('../lib/sqlite.js')
+    const ledger = new Ledger()
+    const matter = ledger.addMatter({ title: '客户' })
+    const store = new SqliteStore(':memory:')
+    const fetchImpl = fakeFetch([
+      { choices: [{ message: { role: 'assistant', content: '', tool_calls: [{ id: 'm1', type: 'function', function: { name: 'memory_propose', arguments: JSON.stringify({ kind: 'fact', quote: '我的时区是 Asia/Shanghai', predicate: 'timezone', object: 'Asia/Shanghai' }) } }] } }] },
+      { choices: [{ message: { role: 'assistant', content: '待确认。' } }] },
+    ])
+    await runAgent({ text: '我的时区是 Asia/Shanghai', context: { prompt: '' }, apiKey: 'k', cwd, fetchImpl, ledger, store, matterId: matter.id, turnId: 't1' })
+    assert.equal(store.listCandidates('pending').length, 1)
+    assert.match(store.listCandidates('pending')[0].payload.object, /Shanghai/)
+    const bad = await runAgent({ text: '别的话', context: { prompt: '' }, apiKey: 'k', cwd, fetchImpl: fakeFetch([{ choices: [{ message: { role: 'assistant', content: '', tool_calls: [{ id: 'm2', type: 'function', function: { name: 'memory_propose', arguments: JSON.stringify({ kind: 'fact', quote: '我的时区是 Asia/Shanghai', predicate: 'timezone', object: 'x' }) } }] } }] }, { choices: [{ message: { role: 'assistant', content: '未记录。' } }] }]), ledger, store, matterId: matter.id, turnId: 't2' })
+    assert.equal(bad.toolLog[0].ok, false)
+    assert.match(bad.toolLog[0].payload.error, /verbatim/)
+    store.close()
+  } finally {
+    rmSync(cwd, { recursive: true, force: true })
+  }
+})

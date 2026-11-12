@@ -1716,7 +1716,35 @@ if (!command) {
   tick(loadLedger(), args.includes('--json'))
 } else if (command === 'memory') {
   const ledger = loadLedger()
-  if (args[0] === 'search') {
+  if (args[0] === 'candidates') {
+    const rows = dbStore()?.listCandidates(args[1] === '--all' ? 'all' : 'pending') ?? []
+    if (!rows.length) console.log('（没有待确认记忆）')
+    for (const c of rows) console.log(`${c.id}\t${c.kind}\t${JSON.stringify(c.payload)}\t${c.status}`)
+  } else if (args[0] === 'accept') {
+    const store = dbStore()
+    const candidate = store?.getCandidate(args[1])
+    if (!candidate) { console.error('candidate not found'); process.exitCode = 1 }
+    else {
+      try {
+        if (candidate.kind === 'fact') ledger.remember({ ...candidate.payload, authority: 'user', evidence: candidate.evidence.map((e) => ({ quote: e.quote, turnId: e.turnId })) })
+        else if (candidate.kind === 'preference') ledger.addPreference({ ...candidate.payload, evidence: candidate.evidence })
+        else if (candidate.kind === 'commitment') ledger.addCommitment({ ...candidate.payload, matterId: candidate.payload.matterId ?? ledger.listMatters()[0]?.id, evidence: candidate.evidence.map((e) => ({ quote: e.quote, turnId: e.turnId })) })
+        store.reviewCandidate(candidate.id, 'accepted')
+        saveLedger(ledger)
+        store.appendAudit({ actor: 'local', action: 'memory.accept', allowed: true, reason: candidate.id })
+        console.log(`accepted ${candidate.id}`)
+      } catch (error) { console.error(error.message); process.exitCode = 1 }
+    }
+  } else if (args[0] === 'reject') {
+    const store = dbStore()
+    const candidate = store?.getCandidate(args[1])
+    if (!candidate) { console.error('candidate not found'); process.exitCode = 1 }
+    else {
+      store.reviewCandidate(candidate.id, 'rejected', args.slice(2).join(' ') || undefined)
+      store.appendAudit({ actor: 'local', action: 'memory.reject', allowed: true, reason: candidate.id })
+      console.log(`rejected ${candidate.id}`)
+    }
+  } else if (args[0] === 'search') {
     const q = args.slice(1).join(' ').trim()
     if (!q) { console.error('usage: advisers memory search <query>'); process.exitCode = 1 }
     else {

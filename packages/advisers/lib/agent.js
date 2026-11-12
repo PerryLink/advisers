@@ -100,6 +100,18 @@ export const LOCAL_TOOLS = [
     debtor: { type: 'string', enum: ['user', 'agent'] },
     quote: { type: 'string', description: 'The exact user words that created the promise' },
   }, ['action', 'quote']),
+  tool('memory_propose', 'Propose a memory candidate. The quote must be verbatim from the current user message. Nothing becomes active until the user accepts.', {
+    kind: { type: 'string', enum: ['fact', 'preference', 'commitment'] },
+    quote: { type: 'string' },
+    subject: { type: 'string' },
+    predicate: { type: 'string' },
+    object: { type: 'string' },
+    statement: { type: 'string' },
+    preferenceKind: { type: 'string' },
+    action: { type: 'string' },
+    creditor: { type: 'string' },
+    dueAt: { type: 'string' },
+  }, ['kind', 'quote']),
   tool('search_memory', 'Search confirmed facts and preferences. Use before guessing what you already know.', {
     query: { type: 'string' },
   }, ['query']),
@@ -174,7 +186,7 @@ function writeTarget(name, args, cwd) {
   return null
 }
 
-export async function executeTool(name, args, { cwd = process.cwd(), ledger, backupDir, store, matterId, turnId } = {}) {
+export async function executeTool(name, args, { cwd = process.cwd(), ledger, backupDir, store, matterId, turnId, userText } = {}) {
   if (name === 'office_build' || name === 'office_template') return runOfficeTool(name, args, cwd, backupDir)
   if (name === 'file_write') {
     if (typeof args.content !== 'string' || Buffer.byteLength(args.content) > MAX_FILE_BYTES) throw new Error('content is missing or too large')
@@ -222,6 +234,20 @@ export async function executeTool(name, args, { cwd = process.cwd(), ledger, bac
       evidence: [{ sessionId: turnId || 'local', turnId: turnId || 'local', quote: args.quote }],
     })
     return { ok: true, artifact: false, commitment }
+  }
+  if (name === 'memory_propose') {
+    if (!store) throw new Error('memory_propose requires a sqlite store')
+    if (!userText || !userText.includes(args.quote)) throw new Error('evidence quote not verbatim in the current user message')
+    const payload = args.kind === 'fact'
+      ? { subject: args.subject || 'user', predicate: args.predicate, object: args.object, matterId }
+      : args.kind === 'preference'
+        ? { kind: args.preferenceKind || 'preference', statement: args.statement }
+        : { matterId, debtor: 'user', creditor: args.creditor || 'someone', action: args.action, dueAt: args.dueAt, capability: 'none' }
+    if (args.kind === 'fact' && (!payload.predicate || !payload.object)) throw new Error('fact candidates require predicate and object')
+    if (args.kind === 'preference' && !payload.statement) throw new Error('preference candidates require statement')
+    if (args.kind === 'commitment' && !payload.action) throw new Error('commitment candidates require action')
+    const candidate = store.proposeCandidate({ kind: args.kind, payload, evidence: [{ quote: args.quote, turnId }] })
+    return { ok: true, artifact: false, candidate: { id: candidate.id, kind: candidate.kind, status: candidate.status }, note: 'proposed; not active until accepted' }
   }
   if (name === 'search_memory') {
     if (!ledger) throw new Error('search_memory requires a ledger')
@@ -274,6 +300,7 @@ export async function runAgent({
   summary = '',
   ledger,
 }) {
+  const userText = text
   const historyBlock = summary ? `\n\n<session-summary>\n${summary}\n</session-summary>` : ''
   const messages = [
     { role: 'system', content: `${SYSTEM}\n\n${context.prompt}${historyBlock}` },
@@ -300,7 +327,7 @@ export async function runAgent({
             return { reply: `未覆盖 ${target}。如需覆盖，请确认或设置 ADVISERS_FORCE=1。`, artifacts: [...new Set(artifacts)], toolLog, declined: true, steps: step + 1 }
           }
         }
-        payload = await executeTool(name, args, { cwd, ledger, backupDir, store, matterId, turnId })
+        payload = await executeTool(name, args, { cwd, ledger, backupDir, store, matterId, turnId, userText })
         if (payload.artifact && payload.path) artifacts.push(payload.path)
       } catch (error) {
         payload = { ok: false, error: error instanceof Error ? error.message : String(error) }
