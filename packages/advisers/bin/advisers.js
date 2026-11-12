@@ -10,6 +10,8 @@ import { applyPreferenceDecay, buildRoutineCandidate, correctionStatement } from
 import { checkRoutine } from '../lib/routine.js'
 import { diffLatest, listBackups, undoLatest } from '../lib/undo.js'
 import { lintReview, materializeReview, reviewRun } from '../lib/review.js'
+import { classifyNudgeOutcome } from '../lib/nudge.js'
+import { buildDigest } from '../lib/digest.js'
 import { buildHistory, buildOpening, buildPins, continuityProbes, ensurePins, fitHistory, shouldSummarize, summarizeTurns } from '../lib/context-window.js'
 
 let core
@@ -196,6 +198,7 @@ Usage:
   advisers compact ls|rollback summary versions
   advisers tick               due commitments within 24h
   advisers week               last 7 days
+  advisers digest day|week    short digest
   advisers diff                show the last changed file
   advisers undo [--list]      restore the last file write
   advisers learn ls           recent task trajectories
@@ -517,6 +520,18 @@ function printOpening(conversationId) {
   } catch {}
 }
 
+function applyNudgeFeedback(text) {
+  const outcome = classifyNudgeOutcome(text)
+  if (!outcome) return
+  try {
+    const store = dbStore()
+    const pending = store?.listNudges(20).filter((n) => n.outcome === 'pending') ?? []
+    if (!pending.length) return
+    for (const n of pending.slice(0, 3)) store.setNudgeOutcome(n.id, outcome)
+    console.log(`[nudge] 记下：${outcome === 'accepted' ? '已处理' : '先不提醒'}`)
+  } catch {}
+}
+
 async function runTurn({ runtime, ledger, text, conversationId, debug = false, confirm, attachments = [] }) {
   const result = await runtime.ingest({
     linkId: 'cli',
@@ -531,6 +546,7 @@ async function runTurn({ runtime, ledger, text, conversationId, debug = false, c
     console.log(`[ignored: ${result.reason}]`)
     return
   }
+  applyNudgeFeedback(text)
   const context = runtime.lastContext
   if (!context) throw new Error('runtime did not produce a context')
   const intent = context.intent
@@ -768,6 +784,7 @@ async function repl() {
       console.log('  /search <text>  full-text search old turns')
       console.log('  /tick           due within 24h')
       console.log('  /week           last 7 days')
+      console.log('  /digest [day]   today/week digest')
       console.log('  /diff           show the last changed file')
       console.log('  /undo           restore the last overwritten/created file')
       console.log('  /links          list candidate/confirmed links')
@@ -815,6 +832,16 @@ async function repl() {
       continue
     }
     if (text === '/week') { printWeek(ledger); continue }
+    if (text === '/digest' || text === '/digest day' || text === '/digest week') {
+      const store = dbStore()
+      console.log(buildDigest({
+        period: text.endsWith('week') ? 'week' : 'day',
+        turns: store?.listTurns(conversationId, 200) ?? [],
+        commitments: ledger.listCommitments(),
+        deliveries: store?.listDeliveries(100) ?? [],
+      }))
+      continue
+    }
     if (text === '/diff') {
       const result = await diffLatest({ cwd: process.cwd(), backupDir: join(HOME, 'undo') })
       console.log(result.ok ? result.diff : `diff failed: ${result.error}`)
@@ -1649,6 +1676,15 @@ if (!command) {
   tick(loadLedger(), args.includes('--json'))
 } else if (command === 'memory') {
   printMemory(loadLedger())
+} else if (command === 'digest') {
+  const period = args[0] === 'week' ? 'week' : 'day'
+  const store = dbStore()
+  console.log(buildDigest({
+    period,
+    turns: store?.listTurns(latestConversationId(), 200) ?? [],
+    commitments: loadLedger().listCommitments(),
+    deliveries: store?.listDeliveries(100) ?? [],
+  }))
 } else if (command === 'week') {
   printWeek(loadLedger())
 } else if (command === 'prefs') {
