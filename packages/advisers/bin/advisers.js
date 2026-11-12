@@ -215,6 +215,7 @@ Usage:
   advisers export             export the ledger as JSON
   advisers brief <text>       print the IntentBrief for a request
   advisers policy check <text> policy/crisis check
+  advisers office-read <file>  read DOCX/XLSX/PPTX structural text
   advisers verify <file>       structural Office verification
   advisers office <kind> <spec.json> <out>
                               build docx/xlsx/pptx/xmind/mermaid/drawio
@@ -1766,6 +1767,16 @@ if (!command) {
       console.log(JSON.stringify({ tier: crisis.tier, crisis: crisis.crisis, decision }, null, 2))
     }
   } else { console.error('usage: advisers policy check "<text>"'); process.exitCode = 1 }
+} else if (command === 'office-read') {
+  const file = args[0]
+  if (!file) { console.error('usage: advisers office-read <file>'); process.exitCode = 1 }
+  else {
+    let mod
+    if (process.env.ADVISERS_OFFICE_LOCAL === '1') mod = await import('../../office/dist/index.js')
+    else { try { mod = await import('advisers-office') } catch { mod = await import('../../office/dist/index.js') } }
+    const doc = await mod.readOffice(readFileSync(file))
+    console.log(mod.officeToText(doc, Number(args[1]) || 20_000))
+  }
 } else if (command === 'verify') {
   const file = args[0]
   if (!file) { console.error('usage: advisers verify <file>'); process.exitCode = 1 }

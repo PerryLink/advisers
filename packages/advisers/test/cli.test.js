@@ -61,6 +61,7 @@ test('CLI builds an Office file and verifies it', () => {
     cli(home, ['office', 'docx', spec, out], work)
     const result = cli(home, ['verify', out], work)
     assert.match(result, /"ok": true/)
+    assert.match(cli(home, ['office-read', out], work), /B/)
   } finally {
     rmSync(root, { recursive: true, force: true })
   }

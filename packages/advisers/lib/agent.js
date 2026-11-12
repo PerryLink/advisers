@@ -66,6 +66,10 @@ export const LOCAL_TOOLS = [
     out: { type: 'string', description: 'Relative output path inside the workspace, e.g. out/q4.docx' },
     spec: { type: 'object', description: 'Spec matching the chosen builder. docx:{title,sections}; xlsx:{columns,rows}; pptx:{title,slides}; xmind:{title,branches}; mermaid/drawio:{title,nodes,edges}.' },
   }, ['kind', 'out', 'spec']),
+  tool('office_read', 'Read an existing DOCX/XLSX/PPTX and return structural text. Use before editing an existing file.', {
+    path: { type: 'string' },
+    max_chars: { type: 'number' },
+  }, ['path']),
   tool('office_template', 'Build one of the five secretary templates. data must match: weekly {period,done[],risks?,next?}; budget {rows:[{item,amount,owner?}]}; presentation {title,conclusion,bullets[]}; flow {title,steps[]}; mindmap {title,branches:[{label,children?}]}.', {
     name: { type: 'string', enum: TEMPLATE_NAMES },
     out: { type: 'string', description: 'Relative output path inside the workspace.' },
@@ -176,6 +180,13 @@ export async function executeTool(name, args, { cwd = process.cwd(), ledger, bac
     const content = await readFile(path, 'utf8')
     if (Buffer.byteLength(content) > MAX_FILE_BYTES) throw new Error('file is too large')
     return { ok: true, artifact: false, path, content }
+  }
+  if (name === 'office_read') {
+    const target = safePath(cwd, args.path)
+    const office = await loadOffice()
+    const doc = await office.readOffice(await readFile(target))
+    const text = office.officeToText(doc, Math.min(Number(args.max_chars) || 20_000, 50_000))
+    return { ok: true, artifact: false, kind: doc.kind, text }
   }
   if (name === 'commitment_add') {
     if (!ledger || !matterId) throw new Error('commitment_add requires a ledger and matter')
