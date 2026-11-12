@@ -14,18 +14,20 @@ advisers ls
 advisers export
 ```
 
-CLI 目前是**context 预览**，不是聊天 UI：它记录消息、生成 FocusFrame，并打印将要发给模型的上下文。模型调用是下一个里程碑。
+CLI 是**本地秘书运行时**：一个 REPL、用户账/承诺账/流程账、Office 产物，以及可选的模型回路。没有 API key 也能记录、检索、计划、生成文件，并运行承诺/摘要命令。
 
 ## 状态
 
-`0.2.0-preview.1` 是预览版：
+`0.2.0-preview.33` 是预览版：
 
-- 内存/JSON 账本，位于 `~/.advisers/state.json`；
+- SQLite 账本 `~/.advisers/state.db`（JSON fallback）；
 - soul 位于 `~/.advisers/soul.md`，人类独占；
-- 命令：`soul`、`brief`、`chat`、`office`、`ls`、`why`、`forget`、`export`；
-- IntentBrief + 澄清策略 + readback；
+- turns + 摘要 + FTS 检索；开场协议；`/resume`；
+- 承诺账 + `commit add/ls/done`、`tick`、`snooze`、nudge outcome；
+- `/memory`、`/week`、`/digest`、`/diff`、`/undo`、`/learn review`；
+- routine draft/approve/patch/curator + active routine index + `routine_view`；
 - `advisers-office` 提供 DOCX/XLSX/PPTX/Mermaid/draw.io/XMind builder 与 5 个模板；
-- 不调模型、不用 SQLite、不接真实 IM、不含 DSH bundle。
+- 真实 IM/Office 打开验证仍未完成。
 
 核心与架构：
 

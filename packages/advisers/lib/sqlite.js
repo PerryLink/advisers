@@ -1,5 +1,5 @@
 import { DatabaseSync } from 'node:sqlite'
-import { createHash, randomUUID } from 'node:crypto'
+import { createHash, createHmac, randomUUID } from 'node:crypto'
 
 const SCHEMA = `
 CREATE TABLE IF NOT EXISTS matters (
@@ -365,7 +365,8 @@ CREATE TABLE IF NOT EXISTS task_runs (
     const prev = last?.hash ?? ''
     const at = new Date().toISOString()
     const material = `${prev}\n${at}\n${actor}\n${action}\n${allowed ? 1 : 0}\n${reason ?? ''}`
-    const hash = createHash('sha256').update(material).digest('hex')
+    const key = process.env.ADVISERS_AUDIT_KEY
+    const hash = key ? createHmac('sha256', key).update(material).digest('hex') : createHash('sha256').update(material).digest('hex')
     const info = this.db.prepare('INSERT INTO audit(at,actor,action,allowed,reason,prev_hash,hash) VALUES(?,?,?,?,?,?,?)')
       .run(at, actor, action, allowed ? 1 : 0, reason ?? null, prev, hash)
     return { seq: Number(info.lastInsertRowid), at, actor, action, allowed: Boolean(allowed), reason, prevHash: prev, hash }
@@ -381,7 +382,8 @@ CREATE TABLE IF NOT EXISTS task_runs (
     let prev = ''
     for (const row of rows) {
       const material = `${prev}\n${row.at}\n${row.actor}\n${row.action}\n${row.allowed}\n${row.reason ?? ''}`
-      const expected = createHash('sha256').update(material).digest('hex')
+      const key = process.env.ADVISERS_AUDIT_KEY
+      const expected = key ? createHmac('sha256', key).update(material).digest('hex') : createHash('sha256').update(material).digest('hex')
       if (row.prev_hash !== prev || row.hash !== expected) return { ok: false, seq: row.seq }
       prev = row.hash
     }

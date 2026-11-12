@@ -7,7 +7,8 @@ routines.
 ## Install
 
 ```sh
-npm i -g advisers@next advisers-office@next advisers-bridge-hermes@next
+npm i -g advisers@next advisers-office@next
+# optional: npm i -g advisers-bridge-hermes@latest
 advisers soul init
 advisers brief "做一份 Q4 预算 Excel，周五前给老板"
 advisers chat "周五前把报价发给王工"
@@ -16,21 +17,25 @@ advisers ls
 advisers export
 ```
 
-The CLI is a **context preview**, not a chat UI: it records the message, builds
-the FocusFrame, and prints what would be sent to a model. The model call is the
-next milestone.
+The CLI is a **local secretary runtime**: one REPL, a user ledger, a commitment
+ledger, a routine ledger, Office artifacts, and an optional model loop. Without
+an API key it still records, searches, plans, builds files, and runs the
+commitment/digest commands.
 
 ## Status
 
-`0.2.0-preview.32` is staged (approval pending):
+`0.2.0-preview.33` is staged (approval pending):
 
 - SQLite ledger at `~/.advisers/state.db` (JSON fallback with `ADVISERS_STORE=json`);
 - soul at `~/.advisers/soul.md`, human-owned;
 - local REPL, `chat`, `office`, `template`, `routine`, `link`, `bridge`, `soul`, `ls`, `why`, `forget`, `export`;
 - IntentBrief + clarification policy + readback;
 - DOCX/XLSX/PPTX/Mermaid/draw.io/XMind builders and 5 templates in `advisers-office`;
-- routine v0 (draft/approve/archive + patch/diff/apply) and confirmed link hints;
-- local agent loop with Office/file tools; attachments (txt/md/docx/xlsx/pptx/pdf); optional model via `ADVISERS_API_KEY` / `ADVISERS_BASE_URL` / `ADVISERS_MODEL`;
+- turns + session summaries + FTS search; opening protocol; `/resume`;
+- commitment ledger + `commit add/ls/done`, `tick`, `snooze`, nudge outcomes;
+- `/memory`, `/week`, `/digest`, `/diff`, `/undo`, `/learn review`;
+- routine draft/approve/patch/curator + active routine index + `routine_view`;
+- local agent loop with Office/file tools, `commitment_add`, `search_turns`; attachments (txt/md/docx/xlsx/pptx/pdf); optional model via `ADVISERS_API_KEY` / `ADVISERS_BASE_URL` / `ADVISERS_MODEL`;
 - DSH bundle, email IMAP/draft, Feishu webhook, Hermes bridge; strict policy pack;
 - real-account/WS/Office-L3 validation still pending.
 

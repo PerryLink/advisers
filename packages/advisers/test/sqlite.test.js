@@ -216,3 +216,22 @@ test('purge removes turns, summaries, nudges and task runs', () => {
     rmSync(dir, { recursive: true, force: true })
   }
 })
+
+test('keyed audit chain rejects tampering and wrong key', () => {
+  const dir = mkdtempSync(join(tmpdir(), 'advisers-hmac-'))
+  const db = join(dir, 'state.db')
+  const old = process.env.ADVISERS_AUDIT_KEY
+  try {
+    process.env.ADVISERS_AUDIT_KEY = 'test-key'
+    const store = new SqliteStore(db)
+    store.appendAudit({ actor: 'local', action: 'send', allowed: false, reason: 'denied' })
+    assert.equal(store.verifyAudit().ok, true)
+    store.db.prepare("UPDATE audit SET reason = 'forged' WHERE seq = 1").run()
+    assert.equal(store.verifyAudit().ok, false)
+    store.close()
+  } finally {
+    if (old === undefined) delete process.env.ADVISERS_AUDIT_KEY
+    else process.env.ADVISERS_AUDIT_KEY = old
+    rmSync(dir, { recursive: true, force: true })
+  }
+})
