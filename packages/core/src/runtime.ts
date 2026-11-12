@@ -7,6 +7,8 @@ import { Ledger } from './ledger.ts'
 import type { HostPorts, SeenStore } from './ports.ts'
 import { systemPorts } from './ports.ts'
 import type { InboundEvent, IngestResult, LinkHost, LinkProvider, OutboundMessage, DeliveryResult } from './link.ts'
+import { GatedLink } from './link.ts'
+import type { PermitGate } from './permit.ts'
 import type { Episode, Thread, TurnContext } from './types.ts'
 
 export interface AdvisersOptions {
@@ -17,6 +19,7 @@ export interface AdvisersOptions {
   clearance?: number
   stage?: 'probation' | 'trusted'
   ownerIds?: string[]
+  egress?: { gate: PermitGate; accountIds?: Record<string, string> }
   policy?: AffectPolicy
   seen?: SeenStore
 }
@@ -35,6 +38,7 @@ export class AdvisersRuntime implements LinkHost {
   private readonly clearance: number
   private readonly stage: 'probation' | 'trusted'
   private readonly ownerIds?: string[]
+  private readonly egress?: { gate: PermitGate; accountIds?: Record<string, string> }
   readonly policy: AffectPolicy
   lastContext?: TurnContext
   private readonly ports?: HostPorts
@@ -47,6 +51,7 @@ export class AdvisersRuntime implements LinkHost {
     this.clearance = options.clearance ?? 3
     this.stage = options.stage ?? 'probation'
     this.ownerIds = options.ownerIds
+    this.egress = options.egress
     this.policy = options.policy ?? DEFAULT_AFFECT_POLICY
     const memory = new Set<string>()
     this.seen = options.seen ?? { has: (key) => memory.has(key), add: (key) => { memory.add(key) } }
@@ -91,9 +96,12 @@ export class AdvisersRuntime implements LinkHost {
     return [...this.episodes.values()].filter((e) => (threadId ? e.threadId === threadId : true))
   }
 
-  registerLink(link: LinkProvider): void {
+  registerLink(link: LinkProvider, options: { accountId?: string } = {}): void {
     if (this.links.has(link.id)) throw new Error(`link already registered: ${link.id}`)
-    this.links.set(link.id, link)
+    const wrapped = this.egress
+      ? new GatedLink(link, this.egress.gate, options.accountId ?? this.egress.accountIds?.[link.id] ?? link.id)
+      : link
+    this.links.set(link.id, wrapped)
   }
 
   async startLinks(): Promise<void> {

@@ -210,7 +210,7 @@ export class HermesBridgeLink implements LinkProvider {
       last_seen: new Date().toISOString(),
       last_event_at: this.lastEventAt || undefined,
       error: null,
-      version: '0.2.0-preview.13',
+      version: '0.2.0-preview.14',
     }
     await mkdir(this.dir('status'), { recursive: true })
     const target = join(this.dir('status'), 'status.json')

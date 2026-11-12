@@ -1,5 +1,6 @@
 import type { Id } from './types.ts'
 import type { SendPermit } from './permit.ts'
+import type { PermitGate } from './permit.ts'
 
 export type AttachmentKind = 'image' | 'file' | 'audio' | 'video'
 
@@ -80,6 +81,8 @@ export interface DeliveryResult {
   error?: string
   /** The transport cannot prove whether the message was delivered. */
   uncertain?: boolean
+  /** A core gate rejected the send before it reached the transport. */
+  denied?: boolean
 }
 
 export interface OutboundMessage {
@@ -108,4 +111,34 @@ export interface LinkProvider {
   send(message: OutboundMessage): Promise<DeliveryResult>
   stop(): Promise<void>
   health?(): Promise<{ ok: boolean; detail?: string }>
+}
+
+
+/** Enforces a one-shot permit at the single egress boundary. */
+export class GatedLink implements LinkProvider {
+  private readonly inner: LinkProvider
+  private readonly gate: PermitGate
+  private readonly accountId: string
+
+  constructor(inner: LinkProvider, gate: PermitGate, accountId: string) {
+    this.inner = inner
+    this.gate = gate
+    this.accountId = accountId
+  }
+
+  get id(): string { return this.inner.id }
+  get capabilities(): LinkCapabilities { return this.inner.capabilities }
+
+  start(host: LinkHost): Promise<void> { return this.inner.start(host) }
+  stop(): Promise<void> { return this.inner.stop() }
+  health(): Promise<{ ok: boolean; detail?: string }> { return this.inner.health?.() ?? Promise.resolve({ ok: true }) }
+
+  async send(message: OutboundMessage): Promise<DeliveryResult> {
+    if (!message.permit) return { ok: false, denied: true, error: 'missing send permit' }
+    const draft = { text: message.text, cards: message.cards, attachments: message.attachments, replyTo: message.replyTo }
+    const request = { linkId: this.inner.id, accountId: this.accountId, conversationId: message.conversationId, threadId: message.threadId, purpose: 'reply' as const, draft }
+    const auth = this.gate.authorize(message.permit, request)
+    if (!auth.ok) return { ok: false, denied: true, error: `send permit rejected: ${auth.reason ?? 'invalid'}` }
+    return this.inner.send(message)
+  }
 }

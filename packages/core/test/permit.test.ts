@@ -23,3 +23,15 @@ test('permit rejects a tampered signature', () => {
   const permit = gate.issue({ conversationId: 'oc_1' })
   assert.equal(gate.verify({ ...permit, conversationId: 'oc_2' }, { conversationId: 'oc_2' }).reason, 'bad-signature')
 })
+
+test('permit binds draft/recipient/purpose and authorizes atomically', () => {
+  const gate = new PermitGate('secret')
+  const draft = { text: 'hello', replyTo: 'm1' }
+  const req = { linkId: 'feishu', accountId: 'a1', conversationId: 'oc_1', threadId: 't1', purpose: 'reply' as const, draft }
+  const permit = gate.issue(req)
+  assert.equal(gate.verify(permit, { ...req, draft: { text: 'edited' } }).reason, 'draft-mismatch')
+  assert.equal(gate.verify(permit, { ...req, conversationId: 'oc_2' }).reason, 'wrong-conversation')
+  assert.equal(gate.verify(permit, { ...req, purpose: 'forward' }).reason, 'wrong-purpose')
+  assert.deepEqual(gate.authorize(permit, req), { ok: true, permitId: permit.id })
+  assert.equal(gate.authorize(permit, req).reason, 'consumed')
+})
