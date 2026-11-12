@@ -31,6 +31,8 @@ test('CLI commitment add/tick/memory works end to end', () => {
     assert.match(second, /今天到期：无/)
     assert.match(cli(home, ['memory'], work), /发报价/)
     assert.match(cli(home, ['week'], work), /发报价/)
+    cli(home, ['correct', '以后周报先给结论'], work)
+    assert.match(cli(home, ['memory', 'search', '周报'], work), /先给结论/)
   } finally {
     rmSync(root, { recursive: true, force: true })
   }
@@ -62,6 +64,11 @@ test('CLI builds an Office file and verifies it', () => {
     const result = cli(home, ['verify', out], work)
     assert.match(result, /"ok": true/)
     assert.match(cli(home, ['office-read', out], work), /B/)
+    const ops = join(work, 'ops.json')
+    writeFileSync(ops, JSON.stringify([{ op: 'docx.setText', block: 2, text: 'C' }]))
+    const edited = join(work, 'out', 'edited.docx')
+    cli(home, ['office-edit', out, ops, edited], work)
+    assert.match(cli(home, ['office-read', edited], work), /C/)
   } finally {
     rmSync(root, { recursive: true, force: true })
   }

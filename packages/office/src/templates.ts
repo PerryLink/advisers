@@ -99,3 +99,49 @@ export interface MindmapInput {
 export function mindmap(input: MindmapInput): DiagramSpec {
   return { kind: 'mindmap', title: input.title, branches: input.branches }
 }
+
+
+export interface MeetingMinutesInput {
+  title?: string
+  date: string
+  place?: string
+  chair?: string
+  attendees?: string[]
+  agenda: string[]
+  decisions?: string[]
+  actions?: Array<{ what: string; owner?: string; due?: string }>
+}
+
+export function meetingMinutes(input: MeetingMinutesInput): DocxSpec {
+  const actions = input.actions ?? []
+  return {
+    title: input.title ?? `${input.date} 会议纪要`,
+    subtitle: input.place ? `地点：${input.place}` : undefined,
+    sections: [
+      { heading: '基本信息', table: { headers: ['项', '内容'], rows: [['日期', input.date], ['地点', input.place ?? ''], ['主持', input.chair ?? ''], ['参会', (input.attendees ?? []).join('、')]] } },
+      { heading: '议题', bullets: input.agenda },
+      { heading: '决议', bullets: input.decisions?.length ? input.decisions : ['无'] },
+      { heading: '行动项', table: { headers: ['事项', '负责人', '截止'], rows: actions.length ? actions.map((a) => [a.what, a.owner ?? '', a.due ?? '']) : [['无', '', '']] } },
+    ],
+  }
+}
+
+export interface NoticeInput {
+  title: string
+  issuer: string
+  recipients: string[]
+  body: string[]
+  signer: string
+  date: string
+}
+
+export function notice(input: NoticeInput): DocxSpec {
+  return {
+    title: input.title,
+    subtitle: `主送：${input.recipients.join('、')}`,
+    sections: [
+      { heading: '正文', paragraphs: input.body },
+      { heading: '落款', paragraphs: [`${input.issuer}　${input.signer}`, input.date] },
+    ],
+  }
+}

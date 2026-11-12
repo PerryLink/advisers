@@ -321,6 +321,29 @@ CREATE TABLE IF NOT EXISTS task_runs (
       .reverse()
   }
 
+  searchMemory(query, { limit = 6, matterId } = {}) {
+    const terms = String(query || '').split(/[^\p{L}\p{N}]+/u).filter((t) => t.length >= 2).slice(0, 8)
+    if (!terms.length) return []
+    const factRows = this.db.prepare(
+      `SELECT id, matter_id, subject, predicate, object, authority, evidence FROM facts
+       WHERE status = 'confirmed' AND deleted_at IS NULL
+         AND (matter_id IS NULL OR matter_id = ?)
+         AND (${terms.map(() => '(subject LIKE ? OR predicate LIKE ? OR object LIKE ?)').join(' OR ')})
+       LIMIT 50`
+    ).all(matterId ?? null, ...terms.flatMap((t) => [`%${t}%`, `%${t}%`, `%${t}%`]))
+    const prefRows = this.db.prepare(
+      `SELECT id, statement, kind, evidence, priority FROM preferences
+       WHERE status IN ('confirmed','candidate') AND (expires_at IS NULL OR expires_at > ?)
+         AND (${terms.map(() => 'statement LIKE ?').join(' OR ')})
+       LIMIT 50`
+    ).all(new Date().toISOString(), ...terms.map((t) => `%${t}%`))
+    const score = (text) => terms.filter((t) => text.includes(t)).length
+    return [
+      ...factRows.map((r) => ({ kind: 'fact', id: r.id, text: r.object, detail: `${r.subject} ${r.predicate}`, matterId: r.matter_id ?? undefined, evidence: r.evidence ? JSON.parse(r.evidence)[0]?.quote : undefined, score: score(`${r.subject} ${r.predicate} ${r.object}`) })),
+      ...prefRows.map((r) => ({ kind: 'preference', id: r.id, text: r.statement, detail: r.kind, evidence: r.evidence ? JSON.parse(r.evidence)[0]?.quote : undefined, score: score(r.statement) })),
+    ].sort((a, b) => b.score - a.score || a.id.localeCompare(b.id)).slice(0, limit)
+  }
+
   searchTurns(query, { conversationId, limit = 8 } = {}) {
     const q = String(query ?? '').trim()
     if (!q) return []

@@ -216,6 +216,7 @@ Usage:
   advisers brief <text>       print the IntentBrief for a request
   advisers policy check <text> policy/crisis check
   advisers office-read <file>  read DOCX/XLSX/PPTX structural text
+  advisers office-edit <file> <ops.json> [out]  surgical Office edit
   advisers verify <file>       structural Office verification
   advisers office <kind> <spec.json> <out>
                               build docx/xlsx/pptx/xmind/mermaid/drawio
@@ -1180,9 +1181,9 @@ function routine(sub, arg, arg2) {
 }
 
 async function template(name, dataFile, outFile) {
-  const names = ['weekly', 'budget', 'presentation', 'flow', 'mindmap']
+  const names = ['weekly', 'budget', 'presentation', 'flow', 'mindmap', 'minutes', 'notice']
   if (!names.includes(name) || !dataFile || !outFile) {
-    console.error('usage: advisers template <weekly|budget|presentation|flow|mindmap> <data.json> <out>')
+    console.error('usage: advisers template <weekly|budget|presentation|flow|mindmap|minutes|notice> <data.json> <out>')
     process.exitCode = 1
     return
   }
@@ -1203,6 +1204,8 @@ async function template(name, dataFile, outFile) {
     : name === 'budget' ? mod.budget(data)
     : name === 'presentation' ? mod.presentation(data)
     : name === 'flow' ? mod.flow(data)
+    : name === 'minutes' ? mod.meetingMinutes(data)
+    : name === 'notice' ? mod.notice(data)
     : mod.mindmap(data)
   mkdirSync(dirname(outFile), { recursive: true })
   const ext = outFile.split('.').pop()
@@ -1712,7 +1715,16 @@ if (!command) {
 } else if (command === 'tick') {
   tick(loadLedger(), args.includes('--json'))
 } else if (command === 'memory') {
-  printMemory(loadLedger())
+  const ledger = loadLedger()
+  if (args[0] === 'search') {
+    const q = args.slice(1).join(' ').trim()
+    if (!q) { console.error('usage: advisers memory search <query>'); process.exitCode = 1 }
+    else {
+      const rows = dbStore()?.searchMemory(q) ?? ledger.searchMemory(q)
+      if (!rows.length) console.log('（没有匹配）')
+      for (const r of rows) console.log(`${r.kind}\t${r.id}\t${r.text}${r.matterId ? `\t[${r.matterId}]` : ''}`)
+    }
+  } else printMemory(ledger)
 } else if (command === 'digest') {
   const period = args[0] === 'week' ? 'week' : 'day'
   const store = dbStore()
@@ -1767,6 +1779,20 @@ if (!command) {
       console.log(JSON.stringify({ tier: crisis.tier, crisis: crisis.crisis, decision }, null, 2))
     }
   } else { console.error('usage: advisers policy check "<text>"'); process.exitCode = 1 }
+} else if (command === 'office-edit') {
+  const source = args[0]
+  const opsFile = args[1]
+  const out = args[2] || source
+  if (!source || !opsFile) { console.error('usage: advisers office-edit <file> <ops.json> [out]'); process.exitCode = 1 }
+  else {
+    let mod
+    if (process.env.ADVISERS_OFFICE_LOCAL === '1') mod = await import('../../office/dist/index.js')
+    else { try { mod = await import('advisers-office') } catch { mod = await import('../../office/dist/index.js') } }
+    const ext = source.split('.').pop()?.toLowerCase()
+    const result = await mod.editOffice(readFileSync(source), ext, JSON.parse(readFileSync(opsFile, 'utf8')))
+    if (!result.ok) { console.error(result.error); process.exitCode = 1 }
+    else { writeFileSync(out, result.buffer); console.log(JSON.stringify({ ok: true, out, changes: result.changes }, null, 2)) }
+  }
 } else if (command === 'office-read') {
   const file = args[0]
   if (!file) { console.error('usage: advisers office-read <file>'); process.exitCode = 1 }

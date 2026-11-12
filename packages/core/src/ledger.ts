@@ -160,6 +160,19 @@ export class Ledger {
     return fact
   }
 
+  searchMemory(query: string, options: { limit?: number; matterId?: Id } = {}): Array<{ kind: 'fact' | 'preference'; id: Id; text: string; detail?: string; matterId?: Id; evidence?: string; score: number }> {
+    const terms = query.split(/[^\p{L}\p{N}]+/u).filter((t) => t.length >= 2).slice(0, 8)
+    if (!terms.length) return []
+    const score = (text: string) => terms.filter((t) => text.includes(t)).length
+    const facts = this.listFacts(options.matterId)
+      .filter((f) => terms.some((t) => `${f.subject} ${f.predicate} ${f.object}`.includes(t)))
+      .map((f) => ({ kind: 'fact' as const, id: f.id, text: f.object, detail: `${f.subject} ${f.predicate}`, matterId: f.matterId, evidence: f.evidence?.[0]?.quote, score: score(`${f.subject} ${f.predicate} ${f.object}`) }))
+    const prefs = this.listPreferences({ matterId: options.matterId, includeCandidates: true })
+      .filter((p) => terms.some((t) => p.statement.includes(t)))
+      .map((p) => ({ kind: 'preference' as const, id: p.id, text: p.statement, detail: p.kind, evidence: p.evidence?.[0]?.quote, score: score(p.statement) }))
+    return [...facts, ...prefs].sort((a, b) => b.score - a.score || a.id.localeCompare(b.id)).slice(0, options.limit ?? 6)
+  }
+
   listFacts(matterId?: Id, includeHistory = false): Fact[] {
     return [...this.facts.values()].filter(
       (f) =>

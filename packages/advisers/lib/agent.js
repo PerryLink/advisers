@@ -6,7 +6,7 @@ import { chatCompletion } from './model.js'
 import { backupBeforeWrite } from './undo.js'
 
 const OFFICE_KINDS = ['docx', 'xlsx', 'pptx', 'xmind', 'mermaid', 'drawio']
-const TEMPLATE_NAMES = ['weekly', 'budget', 'presentation', 'flow', 'mindmap']
+const TEMPLATE_NAMES = ['weekly', 'budget', 'presentation', 'flow', 'mindmap', 'minutes', 'notice']
 const MAX_FILE_BYTES = 1_000_000
 
 let officeModule
@@ -66,11 +66,16 @@ export const LOCAL_TOOLS = [
     out: { type: 'string', description: 'Relative output path inside the workspace, e.g. out/q4.docx' },
     spec: { type: 'object', description: 'Spec matching the chosen builder. docx:{title,sections}; xlsx:{columns,rows}; pptx:{title,slides}; xmind:{title,branches}; mermaid/drawio:{title,nodes,edges}.' },
   }, ['kind', 'out', 'spec']),
+  tool('office_edit', 'Surgically edit an existing DOCX/XLSX/PPTX. Call office_read first. ops examples: {"op":"docx.setText","block":2,"text":"..."}; {"op":"xlsx.setCell","sheet":"预算","ref":"B2","value":200}; {"op":"pptx.setText","slide":1,"text":"..."}.', {
+    path: { type: 'string' },
+    out: { type: 'string' },
+    ops: { type: 'array', items: { type: 'object' } },
+  }, ['path', 'ops']),
   tool('office_read', 'Read an existing DOCX/XLSX/PPTX and return structural text. Use before editing an existing file.', {
     path: { type: 'string' },
     max_chars: { type: 'number' },
   }, ['path']),
-  tool('office_template', 'Build one of the five secretary templates. data must match: weekly {period,done[],risks?,next?}; budget {rows:[{item,amount,owner?}]}; presentation {title,conclusion,bullets[]}; flow {title,steps[]}; mindmap {title,branches:[{label,children?}]}.', {
+  tool('office_template', 'Build one of the secretary templates. data must match: weekly {period,done[],risks?,next?}; budget {rows:[{item,amount,owner?}]}; presentation {title,conclusion,bullets[]}; flow {title,steps[]}; mindmap {title,branches:[{label,children?}]}; minutes {date,agenda[],decisions?,actions?}; notice {title,issuer,recipients[],body[],signer,date}.', {
     name: { type: 'string', enum: TEMPLATE_NAMES },
     out: { type: 'string', description: 'Relative output path inside the workspace.' },
     data: { type: 'object', description: 'Exact template input: weekly {period,done[],risks?,next?}; budget {rows:[{item,amount}]}; presentation {title,conclusion,bullets[]}; flow {title,steps[]}; mindmap {title,branches}.' },
@@ -95,6 +100,9 @@ export const LOCAL_TOOLS = [
     debtor: { type: 'string', enum: ['user', 'agent'] },
     quote: { type: 'string', description: 'The exact user words that created the promise' },
   }, ['action', 'quote']),
+  tool('search_memory', 'Search confirmed facts and preferences. Use before guessing what you already know.', {
+    query: { type: 'string' },
+  }, ['query']),
   tool('search_turns', 'Search older conversation turns by keyword when the current window is insufficient.', {
     query: { type: 'string' },
   }, ['query']),
@@ -158,6 +166,7 @@ async function runOfficeTool(name, args, cwd, backupDir) {
 function writeTarget(name, args, cwd) {
   try {
     if (name === 'office_build' || name === 'office_template') return safePath(cwd, args.out)
+    if (name === 'office_edit') return safePath(cwd, args.out || args.path)
     if (name === 'file_write') return safePath(cwd, args.path)
   } catch {
     return null
@@ -181,6 +190,19 @@ export async function executeTool(name, args, { cwd = process.cwd(), ledger, bac
     if (Buffer.byteLength(content) > MAX_FILE_BYTES) throw new Error('file is too large')
     return { ok: true, artifact: false, path, content }
   }
+  if (name === 'office_edit') {
+    const source = safePath(cwd, args.path)
+    const target = safePath(cwd, args.out || args.path)
+    const office = await loadOffice()
+    const ext = source.split('.').pop()?.toLowerCase()
+    if (!['docx', 'xlsx', 'pptx'].includes(ext)) throw new Error('office_edit supports docx/xlsx/pptx')
+    const result = await office.editOffice(await readFile(source), ext, args.ops)
+    if (!result.ok) throw new Error(result.error || 'edit failed')
+    await mkdir(dirname(target), { recursive: true })
+    await backupBeforeWrite(target, { cwd, backupDir })
+    await writeFile(target, result.buffer)
+    return { ok: true, artifact: true, path: target, bytes: result.buffer.length, changes: result.changes }
+  }
   if (name === 'office_read') {
     const target = safePath(cwd, args.path)
     const office = await loadOffice()
@@ -200,6 +222,10 @@ export async function executeTool(name, args, { cwd = process.cwd(), ledger, bac
       evidence: [{ sessionId: turnId || 'local', turnId: turnId || 'local', quote: args.quote }],
     })
     return { ok: true, artifact: false, commitment }
+  }
+  if (name === 'search_memory') {
+    if (!ledger) throw new Error('search_memory requires a ledger')
+    return { ok: true, artifact: false, results: ledger.searchMemory(args.query) }
   }
   if (name === 'search_turns') {
     const rows = store?.searchTurns(args.query, { limit: 6 }) ?? []
