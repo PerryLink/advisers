@@ -247,7 +247,7 @@ export async function executeTool(name, args, { cwd = process.cwd(), ledger, bac
     const payload = args.kind === 'fact'
       ? { subject: args.subject || 'user', predicate: args.predicate, object: args.object, matterId }
       : args.kind === 'preference'
-        ? { kind: args.preferenceKind || 'preference', statement: args.statement }
+        ? { kind: args.preferenceKind || 'preference', statement: args.statement, matterId }
         : { matterId, debtor: 'user', creditor: args.creditor || 'someone', action: args.action, dueAt: args.dueAt, capability: 'none' }
     if (args.kind === 'fact' && (!payload.predicate || !payload.object)) throw new Error('fact candidates require predicate and object')
     if (args.kind === 'preference' && !payload.statement) throw new Error('preference candidates require statement')

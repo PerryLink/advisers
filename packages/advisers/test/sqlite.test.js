@@ -291,3 +291,21 @@ test('permit replay store is atomic and survives reopen', () => {
     b.close()
   } finally { rmSync(dir, { recursive: true, force: true }) }
 })
+
+test('purge leaves no planted secret bytes in the database file', async () => {
+  const { Ledger } = await import('../../core/dist/index.js')
+  const dir = mkdtempSync(join(tmpdir(), 'advisers-purge-bytes-'))
+  const path = join(dir, 'state.db')
+  try {
+    const store = new SqliteStore(path)
+    const ledger = new Ledger()
+    const matter = ledger.addMatter({ title: '客户' })
+    ledger.remember({ matterId: matter.id, subject: 'client', predicate: 'secret', object: 'SECRET_PURGE_BYTES' })
+    ledger.purgeMatter(matter.id)
+    store.save(ledger.toJSON())
+    store.purgeMatterData(matter.id)
+    store.close()
+    const raw = (await import('node:fs')).readFileSync(path)
+    assert.equal(raw.includes(Buffer.from('SECRET_PURGE_BYTES')), false)
+  } finally { rmSync(dir, { recursive: true, force: true }) }
+})
