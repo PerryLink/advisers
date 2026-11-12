@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict'
 import { execFileSync } from 'node:child_process'
-import { mkdirSync, mkdtempSync, rmSync } from 'node:fs'
+import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { fileURLToPath } from 'node:url'
@@ -11,7 +11,7 @@ const bin = fileURLToPath(new URL('../bin/advisers.js', import.meta.url))
 function cli(home, args, cwd) {
   return execFileSync(process.execPath, [bin, ...args], {
     cwd,
-    env: { ...process.env, ADVISERS_HOME: home, ADVISERS_CORE_LOCAL: '1', ADVISERS_NO_MODEL: '1', ADVISERS_STORE: 'sqlite' },
+    env: { ...process.env, ADVISERS_HOME: home, ADVISERS_CORE_LOCAL: '1', ADVISERS_OFFICE_LOCAL: '1', ADVISERS_NO_MODEL: '1', ADVISERS_STORE: 'sqlite' },
     encoding: 'utf8',
   })
 }
@@ -44,6 +44,23 @@ test('CLI rejects a missing file evidence for done', () => {
   try {
     const id = cli(home, ['commit', 'add', '发报价', '--quote', 'q'], work).split(/\s+/)[0]
     assert.throws(() => cli(home, ['commit', 'done', id, '--evidence', 'file:missing.docx'], work))
+  } finally {
+    rmSync(root, { recursive: true, force: true })
+  }
+})
+
+test('CLI builds an Office file and verifies it', () => {
+  const root = mkdtempSync(join(tmpdir(), 'advisers-cli-office-'))
+  const home = join(root, 'home')
+  const work = join(root, 'work')
+  mkdirSync(work, { recursive: true })
+  try {
+    const spec = join(work, 'spec.json')
+    writeFileSync(spec, JSON.stringify({ title: 'X', sections: [{ heading: 'A', paragraphs: ['B'] }] }))
+    const out = join(work, 'out', 'x.docx')
+    cli(home, ['office', 'docx', spec, out], work)
+    const result = cli(home, ['verify', out], work)
+    assert.match(result, /"ok": true/)
   } finally {
     rmSync(root, { recursive: true, force: true })
   }

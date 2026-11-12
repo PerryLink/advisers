@@ -1,40 +1,42 @@
-# Advisers（顾问团）
+# Advisers（幕僚）
 
-**一组 AI 顾问 —— 基于 cordis 的个人秘书 runtime。**
+**一个本地优先、可审计、中文 Office 优先的单窗口工作秘书 runtime。**
 
-Advisers 不是又一个聊天框。它是一组专科顾问（记忆、承诺、流程），共享同一个连续对话，并维护三本账：
+Advisers 不是聊天框，也不是情感陪伴。它维护三本账：
 
 - **用户账**：你是谁、偏好、边界、证据；
 - **承诺账**：谁欠谁、何时到期、外部完成证据；
-- **流程账**：这类事在这里怎么做，以 diff 形式可审阅。
+- **流程账**：这类事怎么做，以 draft/patch 形式可审阅。
 
-核心基于 [cordis](https://github.com/cordiverse/cordis)。两个发行共享同一套核心：
-
-| 包 | 角色 |
-|---|---|
-| `advisers` | 仅 cordis 的 runtime + CLI（不依赖 DSH） |
-| `dsh-advisers` | DeepSeek Harness 发行（挂载同一套核心） |
-
-IM 是 **Link SPI**，不是硬依赖。Email、Satori/Koishi、`dsh-im`、OpenClaw、Hermes gateway 都是可选的 link provider；核心永远不 import 它们。
+核心基于 [cordis](https://github.com/cordiverse/cordis)。CLI 是主产品；DSH 是薄适配器，目前只提供 `advisers_brief` + `advisers_office`，不是功能完整的第二产品。
 
 ## 状态
 
-`0.2.0-preview.6` 已 staged（待 OTP 批准；`next` 仍是已验证的 preview.2）：
+`0.2.0-preview.35` 已 staged（待 OTP 批准；`next` 仍是 preview.2）：
 
-- `advisers` CLI：`soul init`、`brief`、`chat`、`office`、`ls`、`why`、`forget`、`export`；
-- soul 位于 `~/.advisers/soul.md`（人类独占，slot #1）；
-- SQLite 账本位于 `~/.advisers/state.db`（`ADVISERS_STORE=json` 可回退）；
-- `advisers-office` 提供 DOCX/XLSX/PPTX/Mermaid/draw.io/XMind builder 与 5 个模板；
-- 不调模型、不用 SQLite、不接真实 IM、不含 DSH bundle。
+- SQLite 账本 `~/.advisers/state.db`；
+- turns + 会话摘要 + FTS 检索；开场协议；
+- 承诺账 + `commit add/ls/done`、`tick`、`snooze`、nudge outcome；
+- `/memory`、`/week`、`/digest`、`/diff`、`/undo`、`/learn review`；
+- routine draft/approve/patch/curator + active routine index；
+- DOCX/XLSX/PPTX/Mermaid/draw.io/XMind builder + 5 模板 + `advisers verify`；
+- 附件 txt/md/docx/xlsx/pptx/pdf；图片/扫描件暂不支持；
+- DSH bundle、Email IMAP/draft、Feishu webhook、Hermes bridge 为可选适配器；
+- 真实 IM/Windows Office 打开验证仍未完成。
 
 ```sh
 npm i -g advisers@next advisers-office@next
+# 可选：npm i -g advisers-bridge-hermes@latest
 advisers soul init
-advisers brief "做一份 Q4 预算 Excel，周五前给老板"
-advisers chat "周五前把报价发给王工"
+advisers commit add "周五前发报价给王工" --quote "周五前发报价给王工" --due 2026-11-13T18:00:00+08:00
+advisers tick
+advisers memory
+advisers digest day
+advisers office docx spec.json out.docx
+advisers verify out.docx
 ```
 
-在预览版转正前，`latest` 仍是占位版 `0.0.3`。
+在预览版转正前，`latest` 仍是占位版 `0.0.4`。
 
 ## 许可
 

@@ -2,11 +2,11 @@ import { defineTool } from '@deepseek-ai/dsh-tools'
 import { AdvisersRuntime } from 'advisers-core'
 import { buildDocx, buildPptx, buildXlsx, buildXmind, buildMermaid, buildDrawio, validateOffice, validateXmind } from 'advisers-office'
 import { mkdirSync, writeFileSync } from 'node:fs'
-import { dirname, resolve } from 'node:path'
+import { dirname, isAbsolute, relative, resolve } from 'node:path'
 
 export const name = 'advisers'
 export const inject = ['tools']
-export const version = '0.2.0-preview.14'
+export const version = '0.2.0-preview.15'
 
 /**
  * DSH bundle entry point. The first slice is deliberately one read-only tool:
@@ -42,7 +42,8 @@ export function apply(ctx, config = {}) {
     async execute(args) {
       const root = resolve(config.workspace || process.cwd())
       const target = resolve(root, args.out)
-      if (!target.startsWith(root + '/')) throw new Error('output path escapes workspace')
+      const rel = relative(root, target)
+      if (rel === '' || rel.startsWith('..') || isAbsolute(rel)) throw new Error('output path escapes workspace')
       let buffer
       let validation
       if (args.kind === 'docx') { buffer = await buildDocx(args.spec); validation = await validateOffice(buffer, 'docx') }

@@ -1,7 +1,8 @@
 name: publish
 on:
-  push:
-    tags: ['v*']
+  workflow_dispatch:
+    # Publication is human-OTP staged approval; do not re-enable tag triggers
+    # until Trusted Publishing is configured for all packages.
 permissions:
   contents: read
   id-token: write

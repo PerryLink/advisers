@@ -176,7 +176,7 @@ importers:
   packages/advisers:
     dependencies:
       advisers-core:
-        specifier: 0.2.0-preview.7
+        specifier: 0.2.0-preview.13
         version: link:../core
       jszip:
         specifier: ^3.10.2
@@ -188,7 +188,7 @@ importers:
   packages/bridge-hermes:
     dependencies:
       advisers-core:
-        specifier: 0.2.0-preview.7
+        specifier: 0.2.0-preview.13
         version: link:../core
 
   packages/core: {}
@@ -202,8 +202,11 @@ importers:
         specifier: '>=0.2.1-rc.5 <0.3.0'
         version: 0.2.1-rc.5(16852a7dac5cf0f2267aa6fd9d3c15fb)
       advisers-core:
-        specifier: 0.2.0-preview.7
+        specifier: 0.2.0-preview.13
         version: link:../core
+      advisers-office:
+        specifier: 0.2.0-preview.9
+        version: link:../office
 
   packages/link-email:
     dependencies:
@@ -238,7 +241,7 @@ importers:
   packages/policy-strict:
     dependencies:
       advisers-core:
-        specifier: 0.2.0-preview.7
+        specifier: 0.2.0-preview.13
         version: link:../core
 
 packages:

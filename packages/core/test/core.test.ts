@@ -576,7 +576,7 @@ test('seen store makes ingest idempotent across runtime instances', async () => 
 
 test('routine lifecycle: stale, deprecate, restore', () => {
   const ledger = new Ledger()
-  const routine = ledger.addRoutine({ name: 'x', description: '', trigger: [], steps: ['a'], preferences: [], pitfalls: [], verification: [] })
+  const routine = ledger.addRoutine({ name: 'x', description: '', trigger: [], steps: ['a'], preferences: [], pitfalls: [], verification: [], createdBy: 'user' })
   ledger.approveRoutine(routine.id)
   assert.throws(() => ledger.approveRoutine(routine.id), /only draft/)
   assert.equal(ledger.staleRoutine(routine.id).status, 'stale')

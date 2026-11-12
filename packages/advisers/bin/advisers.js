@@ -1732,7 +1732,10 @@ if (!command) {
     const ext = file.split('.').pop()?.toLowerCase()
     if (!['docx', 'xlsx', 'pptx'].includes(ext)) { console.error('verify supports docx/xlsx/pptx'); process.exitCode = 1 }
     else {
-      const mod = await import('../../office/dist/index.js')
+
+      let mod
+      if (process.env.ADVISERS_OFFICE_LOCAL === '1') mod = await import('../../office/dist/index.js')
+      else { try { mod = await import('advisers-office') } catch { mod = await import('../../office/dist/index.js') } }
       const result = await mod.verifyOffice(readFileSync(file), ext)
       console.log(JSON.stringify(result, null, 2))
       if (!result.ok) process.exitCode = 1
