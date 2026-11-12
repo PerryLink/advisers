@@ -258,7 +258,7 @@ export async function executeTool(name, args, { cwd = process.cwd(), ledger, bac
     return { ok: true, artifact: false, results: store?.searchMemory(args.query, { matterId }) ?? ledger.searchMemory(args.query, { matterId }) }
   }
   if (name === 'search_turns') {
-    const rows = store?.searchTurns(args.query, { limit: 6 }) ?? []
+    const rows = store?.searchTurns(args.query, { limit: 6, matterId }) ?? []
     return { ok: true, artifact: false, results: rows.map((r) => ({ seq: r.seq, role: r.role, content: r.content.slice(0, 300) })) }
   }
   if (name === 'routine_view') {
