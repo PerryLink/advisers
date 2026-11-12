@@ -16,6 +16,7 @@ export interface AdvisersOptions {
   /** 0..3; the local owner normally has 3. */
   clearance?: number
   stage?: 'probation' | 'trusted'
+  ownerIds?: string[]
   policy?: AffectPolicy
   seen?: SeenStore
 }
@@ -33,6 +34,7 @@ export class AdvisersRuntime implements LinkHost {
   private readonly budget: number
   private readonly clearance: number
   private readonly stage: 'probation' | 'trusted'
+  private readonly ownerIds?: string[]
   readonly policy: AffectPolicy
   lastContext?: TurnContext
   private readonly ports?: HostPorts
@@ -44,6 +46,7 @@ export class AdvisersRuntime implements LinkHost {
     this.budget = options.budget ?? 1200
     this.clearance = options.clearance ?? 3
     this.stage = options.stage ?? 'probation'
+    this.ownerIds = options.ownerIds
     this.policy = options.policy ?? DEFAULT_AFFECT_POLICY
     const memory = new Set<string>()
     this.seen = options.seen ?? { has: (key) => memory.has(key), add: (key) => { memory.add(key) } }
@@ -110,6 +113,7 @@ export class AdvisersRuntime implements LinkHost {
    * The real runtime will feed the returned context to the host's LLM.
    */
   async ingest(event: InboundEvent): Promise<IngestResult> {
+    if (this.ownerIds?.length && !this.ownerIds.includes(event.sender.id)) return { accepted: false, reason: 'unauthorized' }
     const key = `${event.linkId}:${event.accountId}:${event.dedupeKey ?? event.messageId}`
     if (this.seen.has(key)) return { accepted: false, reason: 'duplicate' }
     this.seen.add(key)
@@ -161,11 +165,13 @@ export class AdvisersRuntime implements LinkHost {
     })
 
     if (event.text) {
+      const trusted = event.trusted === true || event.linkId === 'cli'
       this.ledger.remember({
         subject: 'user',
         predicate: 'said',
         object: event.text,
         matterId,
+        authority: trusted ? 'user' : 'import',
         source: { quote: event.text, ref: event.messageId },
       })
       matter.summary = event.text.slice(0, 200)

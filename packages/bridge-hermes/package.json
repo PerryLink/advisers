@@ -1,6 +1,6 @@
 {
   "name": "advisers-bridge-hermes",
-  "version": "0.2.0-preview.12",
+  "version": "0.2.0-preview.13",
   "private": false,
   "description": "File-based bridge from Advisers to the Hermes Agent messaging gateway.",
   "type": "module",
@@ -19,7 +19,7 @@
   },
   "license": "MIT",
   "dependencies": {
-    "advisers-core": "0.2.0-preview.12"
+    "advisers-core": "0.2.0-preview.13"
   },
   "types": "./dist/index.d.ts",
   "files": [
@@ -34,5 +34,8 @@
   },
   "publishConfig": {
     "access": "public"
+  },
+  "engines": {
+    "node": ">=22.5"
   }
 }

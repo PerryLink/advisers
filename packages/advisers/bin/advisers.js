@@ -106,7 +106,7 @@ const soulStore = { load: loadSoul, save: saveSoul }
 
 function runtimeFor(ledger) {
   const ports = { ...systemPorts(), soul: soulStore }
-  return createAdvisers({ ledger, ports, seen: mode === 'sqlite' ? openStore().seenStore() : undefined })
+  return createAdvisers({ ledger, ports, seen: mode === 'sqlite' ? openStore().seenStore() : undefined, ownerIds: process.env.ADVISERS_OWNER?.split(',').map((x) => x.trim()).filter(Boolean) })
 }
 
 function now() {
@@ -352,10 +352,10 @@ function printWeek(ledger) {
   const now = Date.now()
   const weekAgo = now - 7 * 86400_000
   const commitments = ledger.listCommitments()
-  const due = commitments.filter((c) => c.dueAt && Date.parse(c.dueAt) >= weekAgo)
+  const due = commitments.filter((c) => c.dueAt && (Date.parse(c.dueAt) >= weekAgo || Date.parse(c.dueAt) < now))
   const done = due.filter((c) => c.status === 'done')
-  const open = due.filter((c) => c.status === 'open')
-  const overdue = open.filter((c) => Date.parse(c.dueAt) < now)
+  const open = commitments.filter((c) => c.status === 'open')
+  const overdue = open.filter((c) => c.dueAt && Date.parse(c.dueAt) < now)
   let deliveries = []
   try { deliveries = dbStore()?.listDeliveries(100) ?? [] } catch {}
   const weekDeliveries = deliveries.filter((d) => Date.parse(d.createdAt) >= weekAgo)
@@ -363,7 +363,8 @@ function printWeek(ledger) {
   console.log(`承诺：到期 ${due.length} 件，完成 ${done.length} 件，未完成 ${open.length} 件，逾期 ${overdue.length} 件。`)
   for (const c of due.slice(0, 5)) console.log(`  ${c.status === 'done' ? '✓' : '○'} ${c.action}${c.dueAt ? `（${c.dueAt.slice(0, 10)}）` : ''}`)
   console.log(`交付：${weekDeliveries.length} 个文件。`)
-  console.log('下周一件：' + (open[0]?.action ?? '先定一个承诺或交付。'))
+  const next = [...open].filter((c) => c.dueAt).sort((a, b) => Date.parse(a.dueAt) - Date.parse(b.dueAt))[0]
+  console.log('下周一件：' + (next?.action ?? open[0]?.action ?? '先定一个承诺或交付。'))
 }
 
 function tick(ledger, asJson = false) {
@@ -540,6 +541,7 @@ async function runTurn({ runtime, ledger, text, conversationId, debug = false, c
     messageId: `cli_${Date.now()}_${++cliSeq}`,
     sender: { id: 'local' },
     text,
+    trusted: true,
     timestamp: now(),
   })
   if (!result.accepted) {
@@ -602,6 +604,8 @@ async function runTurn({ runtime, ledger, text, conversationId, debug = false, c
     history: fitted.history,
     summary: history.summary,
     ledger,
+    matterId: context.matter.id,
+    turnId: `cli_${Date.now()}_${cliSeq}`,
     backupDir: join(HOME, 'undo'),
     store: dbStore(),
     apiKey,
@@ -674,6 +678,7 @@ async function runTurn({ runtime, ledger, text, conversationId, debug = false, c
       saveLedger(ledger)
     } catch {}
   }
+  if (/我会|我来|稍后|明天|提醒你/.test(reply || '') && !toolLog.some((t) => t.name === 'commitment_add')) console.log('[warn] 空承诺：回复里答应跟进，但账本没有承诺。请用 /commit add 或让我重做。')
   const failed = toolLog.filter((t) => !t.ok)
   if (failed.length) console.log(`[没做成] ${failed.length} 个步骤失败；已完成 ${uniqueArtifacts.length} 个文件，原文件未丢。下一步：/retry 或告诉我换一种做法。`)
 }

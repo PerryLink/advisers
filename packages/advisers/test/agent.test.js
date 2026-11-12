@@ -158,3 +158,36 @@ test('routine_view is available from the routine index', async () => {
     rmSync(cwd, { recursive: true, force: true })
   }
 })
+
+test('path guard blocks protected files and symlink escapes', async () => {
+  const cwd = mkdtempSync(join(tmpdir(), 'advisers-path-'))
+  const outside = mkdtempSync(join(tmpdir(), 'advisers-outside-'))
+  try {
+    await assert.rejects(() => executeTool('file_write', { path: '.git/hooks/post-checkout', content: 'x' }, { cwd }), /protected/)
+    await assert.rejects(() => executeTool('file_write', { path: 'package.json', content: 'x' }, { cwd }), /protected/)
+    await import('node:fs/promises').then((fs) => fs.symlink(outside, join(cwd, 'out')))
+    await assert.rejects(() => executeTool('file_write', { path: 'out/pwn.txt', content: 'x' }, { cwd }), /symlink/)
+  } finally {
+    rmSync(cwd, { recursive: true, force: true })
+    rmSync(outside, { recursive: true, force: true })
+  }
+})
+
+test('commitment_add records evidence before a promise', async () => {
+  const cwd = mkdtempSync(join(tmpdir(), 'advisers-cm-'))
+  try {
+    const { Ledger } = await import('../../core/dist/index.js')
+    const ledger = new Ledger()
+    const matter = ledger.addMatter({ title: '客户' })
+    const fetchImpl = fakeFetch([
+      { choices: [{ message: { role: 'assistant', content: '', tool_calls: [{ id: 'c1', type: 'function', function: { name: 'commitment_add', arguments: JSON.stringify({ action: '发报价', dueAt: '2026-11-13T10:00:00Z', creditor: '王工', quote: '周五前发报价给王工' }) } }] } }] },
+      { choices: [{ message: { role: 'assistant', content: '记下了，周五前提醒你。' } }] },
+    ])
+    const result = await runAgent({ text: '周五前发报价给王工', context: { prompt: '' }, apiKey: 'k', cwd, fetchImpl, ledger, matterId: matter.id, turnId: 't1' })
+    assert.equal(result.reply.includes('提醒'), true)
+    assert.equal(ledger.openCommitments(matter.id).length, 1)
+    assert.equal(ledger.openCommitments(matter.id)[0].evidence[0].quote, '周五前发报价给王工')
+  } finally {
+    rmSync(cwd, { recursive: true, force: true })
+  }
+})

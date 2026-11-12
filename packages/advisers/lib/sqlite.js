@@ -288,13 +288,20 @@ CREATE TABLE IF NOT EXISTS task_runs (
   purgeMatterData(matterId) {
     const conversations = this.db.prepare('SELECT conversation_id FROM sessions WHERE matter_id = ?').all(matterId).map((r) => r.conversation_id)
     let turns = 0
+    let summaries = 0
+    let runs = 0
+    let nudges = 0
     for (const conversationId of conversations) {
       turns += Number(this.db.prepare('DELETE FROM turns WHERE conversation_id = ?').run(conversationId).changes)
+      summaries += Number(this.db.prepare('DELETE FROM summary_versions WHERE conversation_id = ?').run(conversationId).changes)
+      runs += Number(this.db.prepare('DELETE FROM task_runs WHERE conversation_id = ?').run(conversationId).changes)
       this.db.prepare('DELETE FROM session_summaries WHERE conversation_id = ?').run(conversationId)
     }
+    const commitmentIds = this.db.prepare('SELECT id FROM commitments WHERE matter_id = ?').all(matterId).map((r) => r.id)
+    for (const id of commitmentIds) nudges += Number(this.db.prepare('DELETE FROM nudges WHERE commitment_id = ?').run(id).changes)
     const sessions = this.db.prepare('DELETE FROM sessions WHERE matter_id = ?').run(matterId).changes
     const deliveries = this.db.prepare('DELETE FROM deliveries WHERE matter_id = ?').run(matterId).changes
-    return { sessions: Number(sessions), deliveries: Number(deliveries), turns }
+    return { sessions: Number(sessions), deliveries: Number(deliveries), turns, summaries, runs, nudges }
   }
 
   addTurn({ conversationId, role, content }) {

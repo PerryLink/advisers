@@ -194,3 +194,25 @@ test('task runs persist trajectories for review', () => {
     rmSync(dir, { recursive: true, force: true })
   }
 })
+
+test('purge removes turns, summaries, nudges and task runs', () => {
+  const dir = mkdtempSync(join(tmpdir(), 'advisers-purge2-'))
+  const db = join(dir, 'state.db')
+  try {
+    const store = new SqliteStore(db)
+    store.upsertSession({ conversationId: 'c1', matterId: 'm1', title: 't' })
+    store.addTurn({ conversationId: 'c1', role: 'user', content: 'secret' })
+    store.upsertSessionSummary({ conversationId: 'c1', summary: 'secret summary', throughSeq: 1 })
+    store.addTaskRun({ conversationId: 'c1', task: 'secret task', tools: [], artifacts: [], outcome: 'ok' })
+    store.addNudge({ localDay: '2026-11-12', level: 'L2', commitmentId: 'cm1', body: 'secret nudge' })
+    const counts = store.purgeMatterData('m1')
+    assert.equal(counts.sessions, 1)
+    assert.equal(counts.turns, 1)
+    assert.equal(counts.summaries, 1)
+    assert.equal(counts.runs, 1)
+    assert.equal(counts.nudges, 0)
+    store.close()
+  } finally {
+    rmSync(dir, { recursive: true, force: true })
+  }
+})

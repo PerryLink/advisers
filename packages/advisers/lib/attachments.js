@@ -1,4 +1,5 @@
 import { readFile, stat } from 'node:fs/promises'
+import { existsSync, lstatSync, realpathSync } from 'node:fs'
 import { extname, isAbsolute, relative, resolve } from 'node:path'
 import JSZip from 'jszip'
 
@@ -9,9 +10,16 @@ const TEXT_EXT = new Set(['.txt', '.md', '.markdown', '.json', '.csv', '.log', '
 const OFFICE_EXT = new Set(['.docx', '.xlsx', '.pptx'])
 
 function safePath(cwd, input) {
-  const abs = resolve(cwd, input)
-  const rel = relative(cwd, abs)
+  const root = realpathSync(cwd)
+  const abs = resolve(root, input)
+  const rel = relative(root, abs)
   if (rel.startsWith('..') || isAbsolute(rel)) throw new Error(`attachment escapes workspace: ${input}`)
+  const parts = rel.split(/[\\/]+/).filter(Boolean)
+  let current = root
+  for (const part of parts) {
+    current = resolve(current, part)
+    if (existsSync(current) && lstatSync(current).isSymbolicLink()) throw new Error(`attachment symlink is not allowed: ${part}`)
+  }
   return abs
 }
 

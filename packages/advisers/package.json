@@ -1,6 +1,6 @@
 {
   "name": "advisers",
-  "version": "0.2.0-preview.31",
+  "version": "0.2.0-preview.32",
   "description": "A staff of AI advisers: a cordis-native personal secretary runtime with scoped memory, commitments, and reviewable routines.",
   "keywords": [
     "cordis",
@@ -34,10 +34,14 @@
     "lib/routine.js",
     "README.md",
     "README-zh.md",
-    "LICENSE"
+    "LICENSE",
+    "lib/nudge.js",
+    "lib/digest.js",
+    "lib/undo.js",
+    "lib/review.js"
   ],
   "dependencies": {
-    "advisers-core": "0.2.0-preview.12",
+    "advisers-core": "0.2.0-preview.13",
     "jszip": "^3.10.2",
     "pdfjs-dist": "^6.5.438"
   },
@@ -52,5 +56,8 @@
   },
   "publishConfig": {
     "access": "public"
+  },
+  "engines": {
+    "node": ">=22.5"
   }
 }

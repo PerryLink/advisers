@@ -1,7 +1,12 @@
+function shanghaiMidnight(now) {
+  const parts = new Intl.DateTimeFormat('en-CA', { timeZone: 'Asia/Shanghai', year: 'numeric', month: '2-digit', day: '2-digit' }).format(now).split('-').map(Number)
+  return new Date(Date.UTC(parts[0], parts[1] - 1, parts[2], -8, 0, 0))
+}
+
 export function buildDigest({ period = 'day', now = new Date(), turns = [], commitments = [], deliveries = [] } = {}) {
   const start = period === 'week'
-    ? new Date(now.getTime() - 7 * 86400_000)
-    : new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), now.getUTCDate()))
+    ? new Date(shanghaiMidnight(now).getTime() - 6 * 86400_000)
+    : shanghaiMidnight(now)
   const inPeriod = (iso) => {
     const t = Date.parse(iso)
     return Number.isFinite(t) && t >= start.getTime() && t <= now.getTime()

@@ -112,6 +112,7 @@ test('ingest is idempotent by dedupeKey', async () => {
     messageId: 'm2',
     dedupeKey: 'mail-2',
     sender: { id: 'me' },
+    trusted: true,
     text: '同一封邮件重投两次',
     timestamp: new Date().toISOString(),
   }
@@ -353,6 +354,7 @@ test('ingest is idempotent by dedupeKey', async () => {
     messageId: 'm2',
     dedupeKey: 'mail-2',
     sender: { id: 'me' },
+    trusted: true,
     text: '同一封邮件重投两次',
     timestamp: new Date().toISOString(),
   }

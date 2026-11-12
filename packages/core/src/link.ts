@@ -50,6 +50,8 @@ export interface InboundEvent {
   /** In a group, whether this message is addressed to the adviser. */
   addressed?: boolean
   mentions?: string[]
+  /** A verified owner/CLI channel; absent means external/untrusted. */
+  trusted?: boolean
   sender: LinkSender
   text?: string
   attachments?: Attachment[]

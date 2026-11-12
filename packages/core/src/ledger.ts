@@ -151,7 +151,7 @@ export class Ledger {
       id: this.ids.next('fact'), matterId: input.matterId, subject: input.subject, predicate: input.predicate,
       object: input.object, recordedAt: now, authority: input.authority ?? 'user',
       confidence: input.confidence ?? 0.9, source: input.source, evidence: input.evidence ?? (input.source ? [input.source] : []),
-      status: (input.authority ?? 'user') === 'inferred' ? 'candidate' : 'confirmed',
+      status: (input.authority ?? 'user') === 'user' ? 'confirmed' : 'candidate',
       validFrom: input.validFrom ?? now, validTo: input.validTo,
       supersedes: current?.id,
     }
@@ -276,7 +276,15 @@ export class Ledger {
     if (!matter) throw new Error(`unknown matter: ${id}`)
     let facts = 0
     for (const fact of this.facts.values()) {
-      if (fact.matterId === id && fact.status !== 'deleted') { fact.status = 'deleted'; facts++ }
+      if (fact.matterId === id && fact.status !== 'deleted') {
+        fact.status = 'deleted'
+        fact.object = '[purged]'
+        fact.source = undefined
+        fact.evidence = undefined
+        fact.deletedAt = this.clock.now()
+        fact.deletedReason = 'matter_purged'
+        facts++
+      }
     }
     let links = 0
     for (const link of this.links.values()) {
@@ -299,6 +307,7 @@ export class Ledger {
       if (matterId === id) { this.routes.delete(key); routes++ }
     }
     matter.status = 'archived'
+    matter.title = '[purged]'
     matter.summary = undefined
     matter.updatedAt = this.clock.now()
     return { facts, links, updates, commitments, preferences, routes }
