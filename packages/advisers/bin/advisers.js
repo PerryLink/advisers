@@ -1413,6 +1413,8 @@ async function bridge(args) {
   const ledger = loadLedger()
   const runtime = runtimeFor(ledger)
   const link = new mod.HermesBridgeLink({ bridgeDir: dir, name })
+  const permitSecret = process.env.ADVISERS_PERMIT_SECRET
+  const permitGate = permitSecret ? new core.PermitGate(permitSecret) : undefined
   const host = {
     async ingest(event) {
       const result = await runtime.ingest(event)
@@ -1435,13 +1437,26 @@ async function bridge(args) {
         } else {
           reply = context.intent?.readback ?? '[advisers] received'
         }
-        await link.send({
+        const message = {
           conversationId: event.conversationId,
           threadId: event.threadId,
           replyTo: event.messageId,
           text: reply,
           idempotencyKey: event.dedupeKey ?? event.messageId,
-        })
+        }
+        if (permitGate) {
+          const draft = { text: reply, replyTo: event.messageId }
+          const request = { linkId: link.id, accountId: event.accountId, conversationId: event.conversationId, threadId: event.threadId, purpose: 'reply', draft }
+          const permit = permitGate.issue(request)
+          const auth = permitGate.authorize(permit, request)
+          if (!auth.ok) {
+            dbStore()?.appendAudit({ actor: 'bridge', action: 'egress.deny', allowed: false, reason: auth.reason })
+            console.log(`[bridge] blocked: ${auth.reason}`)
+            return result
+          }
+          message.permit = permit
+        }
+        await link.send(message)
         saveLedger(ledger)
       }
       return result
