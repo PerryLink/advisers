@@ -78,7 +78,7 @@ export interface PolicyDecision {
   allowed: boolean
   action: PolicyAction
   reason: string
-  code?: 'ALLOW' | 'DENY_COMPANION' | 'CRISIS' | 'MINOR' | 'NO_CONSENT' | 'NO_DISCLOSURE' | 'REGION'
+  code?: 'ALLOW' | 'DENY_COMPANION' | 'CRISIS' | 'MINOR' | 'NO_CONSENT' | 'NO_DISCLOSURE' | 'REGION' | 'FAIL_CLOSED'
   obligations?: string[]
   pack?: { id: string; version: string; digest?: string }
   hotline?: string

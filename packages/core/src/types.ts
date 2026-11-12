@@ -186,6 +186,8 @@ export interface Episode {
   summary?: string
 }
 
+import type { CrisisAssessment, PolicyDecision } from './policy.ts'
+
 export interface TurnContext {
   matter: Matter
   threadId?: Id
@@ -193,6 +195,8 @@ export interface TurnContext {
   prompt: string
   hints: AssociationHint[]
   usedTokens: number
+  policy?: PolicyDecision
+  crisis?: CrisisAssessment
 }
 
 export type RoutineStatus = 'draft' | 'active' | 'stale' | 'deprecated' | 'archived'

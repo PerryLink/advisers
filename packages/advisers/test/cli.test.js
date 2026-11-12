@@ -65,3 +65,20 @@ test('CLI builds an Office file and verifies it', () => {
     rmSync(root, { recursive: true, force: true })
   }
 })
+
+test('CLI policy check and crisis short-circuit before the model', () => {
+  const root = mkdtempSync(join(tmpdir(), 'advisers-cli-policy-'))
+  const home = join(root, 'home')
+  const work = join(root, 'work')
+  mkdirSync(work, { recursive: true })
+  try {
+    const check = cli(home, ['policy', 'check', '我不想活了'], work)
+    assert.match(check, /"tier": "T2"/)
+    assert.match(check, /"action": "crisis"/)
+    const chat = cli(home, ['chat', '我不想活了'], work)
+    assert.match(chat, /12356/)
+    assert.doesNotMatch(chat, /\[local\] 未配置模型/)
+  } finally {
+    rmSync(root, { recursive: true, force: true })
+  }
+})

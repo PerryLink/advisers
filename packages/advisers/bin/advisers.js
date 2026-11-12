@@ -26,6 +26,9 @@ if (process.env.ADVISERS_CORE_LOCAL === '1') {
   }
 }
 const { createAdvisers, Ledger, systemPorts } = core
+let StrictPolicyPack
+let policyImportError
+try { ({ StrictPolicyPack } = await import('advisers-policy-strict')) } catch { try { ({ StrictPolicyPack } = await import('../../policy-strict/dist/index.js')) } catch (error) { policyImportError = error } }
 
 const HOME = process.env.ADVISERS_HOME || join(homedir(), '.advisers')
 const STATE = join(HOME, 'state.json')
@@ -106,7 +109,7 @@ const soulStore = { load: loadSoul, save: saveSoul }
 
 function runtimeFor(ledger) {
   const ports = { ...systemPorts(), soul: soulStore }
-  return createAdvisers({ ledger, ports, seen: mode === 'sqlite' ? openStore().seenStore() : undefined, ownerIds: process.env.ADVISERS_OWNER?.split(',').map((x) => x.trim()).filter(Boolean) })
+  return createAdvisers({ ledger, ports, seen: mode === 'sqlite' ? openStore().seenStore() : undefined, ownerIds: process.env.ADVISERS_OWNER?.split(',').map((x) => x.trim()).filter(Boolean), policyResolver: StrictPolicyPack ? new StrictPolicyPack() : undefined })
 }
 
 function now() {
@@ -211,6 +214,7 @@ Usage:
   advisers forget <pref-id>   forget a preference (tombstone)
   advisers export             export the ledger as JSON
   advisers brief <text>       print the IntentBrief for a request
+  advisers policy check <text> policy/crisis check
   advisers verify <file>       structural Office verification
   advisers office <kind> <spec.json> <out>
                               build docx/xlsx/pptx/xmind/mermaid/drawio
@@ -552,6 +556,16 @@ async function runTurn({ runtime, ledger, text, conversationId, debug = false, c
   applyNudgeFeedback(text)
   const context = runtime.lastContext
   if (!context) throw new Error('runtime did not produce a context')
+  if (context.crisis && (context.crisis.tier === 'T1' || context.crisis.tier === 'T2')) {
+    console.log(context.crisis.script)
+    dbStore()?.appendAudit({ actor: 'local', action: 'policy.crisis', allowed: false, reason: context.crisis.tier })
+    return
+  }
+  if (context.policy && !context.policy.allowed) {
+    console.log(`[policy] ${context.policy.reason}`)
+    dbStore()?.appendAudit({ actor: 'local', action: 'policy.deny', allowed: false, reason: context.policy.code ?? 'DENY' })
+    return
+  }
   const intent = context.intent
   let agentText = text
   const extracted = []
@@ -1740,6 +1754,18 @@ if (!command) {
   exportLedger()
 } else if (command === 'brief') {
   brief(args.join(' ').trim())
+} else if (command === 'policy') {
+  const sub = args[0]
+  if (sub === 'check') {
+    const text = args.slice(1).join(' ').trim()
+    if (!text) { console.error('usage: advisers policy check "<text>"'); process.exitCode = 1 }
+    else {
+      const crisis = new core.KeywordCrisisPolicy().scan(text)
+      const pack = StrictPolicyPack ? new StrictPolicyPack() : undefined
+      const decision = pack?.resolve({ use: 'understanding', crisis: crisis.tier === 'T1' || crisis.tier === 'T2' }) ?? { allowed: true, action: 'allow', code: 'ALLOW', reason: 'no pack' }
+      console.log(JSON.stringify({ tier: crisis.tier, crisis: crisis.crisis, decision }, null, 2))
+    }
+  } else { console.error('usage: advisers policy check "<text>"'); process.exitCode = 1 }
 } else if (command === 'verify') {
   const file = args[0]
   if (!file) { console.error('usage: advisers verify <file>'); process.exitCode = 1 }

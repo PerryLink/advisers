@@ -1,8 +1,8 @@
 import { assembleContext } from './context.ts'
 import { buildIntentBrief } from './intent.ts'
 import type { IntentBrief } from './intent.ts'
-import { DEFAULT_AFFECT_POLICY } from './policy.ts'
-import type { AffectPolicy } from './policy.ts'
+import { DEFAULT_AFFECT_POLICY, KeywordCrisisPolicy } from './policy.ts'
+import type { AffectPolicy, CrisisPolicy, PolicyDecision, PolicyResolver } from './policy.ts'
 import { Ledger } from './ledger.ts'
 import type { HostPorts, SeenStore } from './ports.ts'
 import { systemPorts } from './ports.ts'
@@ -20,6 +20,8 @@ export interface AdvisersOptions {
   stage?: 'probation' | 'trusted'
   ownerIds?: string[]
   egress?: { gate: PermitGate; accountIds?: Record<string, string> }
+  policyResolver?: PolicyResolver
+  crisisPolicy?: CrisisPolicy
   policy?: AffectPolicy
   seen?: SeenStore
 }
@@ -39,8 +41,11 @@ export class AdvisersRuntime implements LinkHost {
   private readonly stage: 'probation' | 'trusted'
   private readonly ownerIds?: string[]
   private readonly egress?: { gate: PermitGate; accountIds?: Record<string, string> }
+  private readonly policyResolver?: PolicyResolver
+  private readonly crisisPolicy: CrisisPolicy
   readonly policy: AffectPolicy
   lastContext?: TurnContext
+  lastPolicy?: PolicyDecision
   private readonly ports?: HostPorts
   private readonly clock: HostPorts['clock']
   private readonly ids: HostPorts['ids']
@@ -52,6 +57,8 @@ export class AdvisersRuntime implements LinkHost {
     this.stage = options.stage ?? 'probation'
     this.ownerIds = options.ownerIds
     this.egress = options.egress
+    this.policyResolver = options.policyResolver
+    this.crisisPolicy = options.crisisPolicy ?? new KeywordCrisisPolicy()
     this.policy = options.policy ?? DEFAULT_AFFECT_POLICY
     const memory = new Set<string>()
     this.seen = options.seen ?? { has: (key) => memory.has(key), add: (key) => { memory.add(key) } }
@@ -159,6 +166,14 @@ export class AdvisersRuntime implements LinkHost {
     const audience = event.conversationType === 'email' || event.conversationType === 'dm'
       ? `${event.linkId}:${event.sender.id}`
       : undefined
+    let policy: PolicyDecision | undefined
+    const crisis = this.crisisPolicy.scan(event.text ?? '')
+    try {
+      policy = this.policyResolver?.resolve({ use: 'understanding', crisis: crisis.tier === 'T1' || crisis.tier === 'T2' })
+    } catch {
+      policy = { allowed: false, action: 'deny', code: 'FAIL_CLOSED', reason: 'policy resolver failed' }
+    }
+    this.lastPolicy = policy
     const context = assembleContext({
       matter,
       ledger: this.ledger,
@@ -196,7 +211,7 @@ export class AdvisersRuntime implements LinkHost {
     }
     this.episodes.set(episode.id, episode)
 
-    return { ...context, threadId: thread.id, intent }
+    return { ...context, threadId: thread.id, intent, policy, crisis }
   }
 
   async send(linkId: string, message: OutboundMessage): Promise<DeliveryResult> {
