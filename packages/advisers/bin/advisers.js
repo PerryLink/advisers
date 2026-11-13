@@ -174,6 +174,26 @@ function printHistory() {
   })
 }
 
+function printReceipt() {
+  const store = dbStore()
+  if (!store) { console.log('receipt requires SQLite store'); return }
+  const delivery = store.listDeliveries(1)[0]
+  if (!delivery) { console.log('还没有交付记录；先运行 `advisers office` / `advisers template`。'); return }
+  const ledger = loadLedger()
+  const open = ledger.openCommitments(delivery.matterId)
+  console.log(`回执 ${delivery.id}`)
+  console.log(`时间：${delivery.createdAt}`)
+  console.log(`事项：${delivery.title || '(untitled)'}`)
+  console.log(`产物：${delivery.files.join(', ')}`)
+  console.log(`工具：${delivery.tool || '-'}`)
+  console.log(`校验：${delivery.validation || '未记录'}`)
+  console.log(`未完成承诺：${open.length}`)
+  for (const c of open.slice(0, 3)) console.log(`  ${c.id}  ${c.action}${c.dueAt ? ` · ${c.dueAt.slice(0, 10)}` : ''}`)
+  const usage = store.sumModelUsage()
+  if (usage.calls) console.log(`模型：${usage.calls} calls · ${usage.total_tokens} tokens`)
+  console.log('提示：结构校验通过不等于内容正确；对外发送仍需 permit。')
+}
+
 function printDeliveries() {
   const store = dbStore()
   const rows = store?.listDeliveries(12) ?? []
@@ -261,12 +281,13 @@ Usage:
   advisers prefs [--all] | correct <text> | audit | purge <matter> [--yes]
   advisers commit add|ls|done|snooze commitments
   advisers deliveries         recent generated files
+  advisers receipt            one-screen delivery receipt
   advisers ls                 list matters
   advisers why <pref-id>      explain a preference
   advisers forget <pref-id>   forget a preference (tombstone)
   advisers export [--all]     export ledger (or ledger + SQLite tables) as JSON
   advisers backup <path.db>   checkpoint and copy the SQLite database
-  advisers brief <text>       print the IntentBrief for a request
+  advisers brief [--deep] <text>  print the IntentBrief; --deep adds model refinement
   advisers --version          print the CLI version
   advisers who                 who I owe / who owes me
   advisers capture [--file f] [--source s] [--date ISO] [--matter id] <text>
@@ -381,6 +402,22 @@ function parseFlags(args) {
     } else positional.push(args[i])
   }
   return { flags, positional }
+}
+
+function recordManualDelivery(files, tool, title, validation) {
+  try {
+    const store = dbStore()
+    if (!store) return
+    const ledger = loadLedger()
+    store.addDelivery({
+      matterId: activeMatterId(ledger),
+      conversationId: latestConversationId(),
+      files,
+      tool,
+      title,
+      validation: typeof validation === 'string' ? validation : JSON.stringify(validation),
+    })
+  } catch {}
 }
 
 function activeMatterId(ledger, explicit) {
@@ -1183,7 +1220,7 @@ function backup(file) {
   console.log(`backup: ${file}`)
 }
 
-function brief(text) {
+async function brief(text, deep = false) {
   if (!text) {
     console.error('usage: advisers brief <text>')
     process.exitCode = 1
@@ -1193,6 +1230,23 @@ function brief(text) {
   const brief = core.buildIntentBrief(text, { stage })
   console.log(core.renderIntentBrief(brief))
   console.log('\n' + core.renderReadback(brief))
+  if (deep && process.env.ADVISERS_API_KEY) {
+    try {
+      const response = await chatCompletion({
+        apiKey: process.env.ADVISERS_API_KEY,
+        baseUrl: process.env.ADVISERS_BASE_URL,
+        model: process.env.ADVISERS_MODEL,
+        task: 'intent', thinking: true, effort: 'high', maxTokens: 2048,
+        messages: [
+          { role: 'system', content: 'Return ONLY JSON: {"goal":"","deliverable":"","audience":"","constraints":[],"assumptions":[],"unknowns":[],"question":"one question that changes the plan or empty","risk":"low|medium|high"}. Do not invent facts; ask at most one question.' },
+          { role: 'user', content: text },
+        ],
+      })
+      const parsed = JSON.parse(String(response.content).replace(/^```(?:json)?\s*/i, '').replace(/\s*```$/, ''))
+      console.log('\n深层 brief：')
+      console.log(JSON.stringify(parsed, null, 2))
+    } catch (error) { console.error(`deep brief failed: ${error.message}`) }
+  }
 }
 
 function routine(sub, arg, arg2) {
@@ -1398,6 +1452,7 @@ async function template(name, dataFile, outFile) {
   await backupCliFile(outFile)
   writeFileSync(outFile, buffer)
   dbStore()?.appendAudit({ actor: 'local', action: 'office.template', allowed: true, reason: outFile })
+  recordManualDelivery([outFile], 'template', name, result)
   console.log(result.ok ? `wrote ${outFile} (${buffer.length} bytes)` : `wrote ${outFile}, missing: ${result.missing.join(', ')}`)
   if (!result.ok) process.exitCode = 1
 }
@@ -1739,8 +1794,9 @@ async function office(kind, specFile, outFile) {
   const buffer = await builder(spec)
   await backupCliFile(outFile)
   writeFileSync(outFile, buffer)
-  dbStore()?.appendAudit({ actor: 'local', action: 'office.build', allowed: true, reason: outFile })
   const result = kind === 'xmind' ? await mod.validateXmind(buffer) : await mod.validateOffice(buffer, kind)
+  dbStore()?.appendAudit({ actor: 'local', action: 'office.build', allowed: true, reason: outFile })
+  recordManualDelivery([outFile], 'office', kind, result)
   console.log(result.ok ? `wrote ${outFile} (${buffer.length} bytes)` : `wrote ${outFile}, missing: ${result.missing.join(', ')}`)
   if (!result.ok) process.exitCode = 1
 }
@@ -1820,6 +1876,8 @@ if (!command) {
   init()
 } else if (command === 'history') {
   printHistory()
+} else if (command === 'receipt') {
+  printReceipt()
 } else if (command === 'deliveries') {
   printDeliveries()
 } else if (command === 'learn') {
@@ -2031,7 +2089,7 @@ if (!command) {
 } else if (command === 'backup') {
   backup(args[0])
 } else if (command === 'brief') {
-  brief(args.join(' ').trim())
+  await brief(args.filter((a) => a !== '--deep').join(' ').trim(), args.includes('--deep'))
 } else if (command === 'capture') {
   await capture(args)
 } else if (command === 'policy') {
@@ -2058,7 +2116,7 @@ if (!command) {
     const ext = source.split('.').pop()?.toLowerCase()
     const result = await mod.editOffice(readFileSync(source), ext, JSON.parse(readFileSync(opsFile, 'utf8')))
     if (!result.ok) { console.error(result.error); process.exitCode = 1 }
-    else { await backupCliFile(out); writeFileSync(out, result.buffer); console.log(JSON.stringify({ ok: true, out, changes: result.changes }, null, 2)) }
+    else { await backupCliFile(out); writeFileSync(out, result.buffer); recordManualDelivery([out], 'office-edit', source, 'edited'); console.log(JSON.stringify({ ok: true, out, changes: result.changes }, null, 2)) }
   }
 } else if (command === 'office-read') {
   const file = args[0]

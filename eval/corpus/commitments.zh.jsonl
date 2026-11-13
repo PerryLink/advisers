@@ -1,0 +1,10 @@
+{"id":"c01","source":"wechat","date":"2026-11-12T10:00:00+08:00","text":"王工：周五前把报价发给我。我：好的，我周五前发。","expect":[{"action":"发报价","debtor":"user","creditor":"王工","due":"2026-11-14","quote":"我周五前发","modal":"firm"}]}
+{"id":"c02","source":"meeting","date":"2026-11-12T10:00:00+08:00","text":"李总：下周一把预算表给我。我：尽量周一上午发。","expect":[{"action":"发预算表","debtor":"user","creditor":"李总","due":"2026-11-16","quote":"尽量周一上午发","modal":"tentative"}]}
+{"id":"c03","source":"email","date":"2026-11-12T10:00:00+08:00","text":"如果客户确认，我周三前把合同发给他。","expect":[{"action":"发合同","debtor":"user","creditor":"他","due":"2026-11-18","quote":"周三前把合同发给他","modal":"conditional"}]}
+{"id":"c04","source":"wechat","date":"2026-11-12T10:00:00+08:00","text":"对方说周五前回我报价。","expect":[{"action":"回报价","debtor":"third","creditor":null,"due":"2026-11-14","quote":"周五前回我报价","modal":"firm"}]}
+{"id":"c05","source":"meeting","date":"2026-11-12T10:00:00+08:00","text":"小张：我明天把会议纪要发群里。","expect":[{"action":"发会议纪要","debtor":"third","creditor":"小张","due":"2026-11-13","quote":"我明天把会议纪要发群里","modal":"firm"}]}
+{"id":"c06","source":"wechat","date":"2026-11-12T10:00:00+08:00","text":"这周有空再看看。","expect":[]}
+{"id":"c07","source":"wechat","date":"2026-11-12T10:00:00+08:00","text":"谢谢你！","expect":[]}
+{"id":"c08","source":"email","date":"2026-11-12T10:00:00+08:00","text":"我会在 11 月 20 日前提交终稿。","expect":[{"action":"提交终稿","debtor":"user","creditor":null,"due":"2026-11-20","quote":"11 月 20 日前提交终稿","modal":"firm"}]}
+{"id":"c09","source":"contract","date":"2026-11-12T10:00:00+08:00","text":"乙方应于 2027 年 1 月 10 日前交付验收材料。","expect":[{"action":"交付验收材料","debtor":"third","creditor":"乙方","due":"2027-01-10","quote":"2027 年 1 月 10 日前交付验收材料","modal":"firm"}]}
+{"id":"c10","source":"wechat","date":"2026-11-12T10:00:00+08:00","text":"老板：回头把数据发我。我：好的。","expect":[{"action":"发数据","debtor":"user","creditor":"老板","due":null,"quote":"回头把数据发我","modal":"tentative"}]}

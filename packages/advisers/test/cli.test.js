@@ -66,6 +66,7 @@ test('CLI builds an Office file and verifies it', () => {
     assert.match(result, /"ok": true/)
     assert.match(cli(home, ['office-read', out], work), /B/)
     assert.match(cli(home, ['undo', '--list'], work), /x\.docx/)
+    assert.match(cli(home, ['receipt'], work), /x\.docx/)
     const ops = join(work, 'ops.json')
     writeFileSync(ops, JSON.stringify([{ op: 'docx.setText', block: 2, text: 'C' }]))
     const edited = join(work, 'out', 'edited.docx')

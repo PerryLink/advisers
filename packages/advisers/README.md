@@ -28,7 +28,7 @@ turn natural language into commitments or artifacts.
 
 ## Status
 
-`0.2.0-preview.48` is staged (approval pending):
+`0.2.0-preview.49` is staged (approval pending):
 
 - SQLite ledger at `~/.advisers/state.db` (JSON fallback with `ADVISERS_STORE=json`);
 - soul at `~/.advisers/soul.md`, human-owned;
