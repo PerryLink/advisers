@@ -54,17 +54,20 @@ Start-Process .\out\weekly.docx
 $due = (Get-Date).AddHours(4).ToString("yyyy-MM-ddTHH:mm:sszzz")
 node $A commit add "周五前发报价给王工" --quote "周五前发报价给王工" --due $due
 node $A commit ls
+node $A today
 node $A tick
 node $A who
 ```
 
-`tick` covers the next 7 days; "今天到期" is only shown when the due date is today in Asia/Shanghai.
+`today` gives the one-screen buckets; `tick` covers the next 7 days; "今天到期" is only shown when the due date is today in Asia/Shanghai.
 
 ### Model key (optional)
 
 ```powershell
 $env:ADVISERS_API_KEY = "sk-..."       # PowerShell syntax; not VAR=value
 # $env:ADVISERS_BASE_URL = "https://api.deepseek.com"
+node $A capture --source meeting "周五前把报价发给王工，我周五前发"
+node $A memory candidates
 node $A chat "做一份 Q4 汇报 PPT，放到 out\q4.pptx"
 ```
 

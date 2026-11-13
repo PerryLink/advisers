@@ -46,6 +46,14 @@ CREATE TABLE IF NOT EXISTS routine_patches (
 CREATE TABLE IF NOT EXISTS permit_consumed (
   permit_id TEXT PRIMARY KEY, expires_at INTEGER NOT NULL, consumed_at TEXT NOT NULL
 );
+CREATE TABLE IF NOT EXISTS model_calls (
+  id TEXT PRIMARY KEY, conversation_id TEXT, matter_id TEXT, turn_id TEXT, task TEXT NOT NULL,
+  model TEXT NOT NULL, effort TEXT, thinking INTEGER NOT NULL DEFAULT 0, status TEXT NOT NULL DEFAULT 'ok',
+  code TEXT, attempts INTEGER NOT NULL DEFAULT 1, prompt_tokens INTEGER NOT NULL DEFAULT 0,
+  completion_tokens INTEGER NOT NULL DEFAULT 0, reasoning_tokens INTEGER NOT NULL DEFAULT 0,
+  cached_tokens INTEGER NOT NULL DEFAULT 0, total_tokens INTEGER NOT NULL DEFAULT 0,
+  duration_ms INTEGER NOT NULL DEFAULT 0, finish_reason TEXT, created_at TEXT NOT NULL
+);
 CREATE TABLE IF NOT EXISTS memory_candidates (
   id TEXT PRIMARY KEY, kind TEXT NOT NULL, payload TEXT NOT NULL, evidence TEXT NOT NULL,
   status TEXT NOT NULL DEFAULT 'pending', created_at TEXT NOT NULL, reviewed_at TEXT, reject_reason TEXT
@@ -315,6 +323,7 @@ CREATE TABLE IF NOT EXISTS task_runs (
     const commitmentIds = this.db.prepare('SELECT id FROM commitments WHERE matter_id = ?').all(matterId).map((r) => r.id)
     for (const id of commitmentIds) nudges += Number(this.db.prepare('DELETE FROM nudges WHERE commitment_id = ?').run(id).changes)
     runs += Number(this.db.prepare('DELETE FROM task_runs WHERE matter_id = ?').run(matterId).changes)
+    this.db.prepare('DELETE FROM model_calls WHERE matter_id = ?').run(matterId)
     const sessions = this.db.prepare('DELETE FROM sessions WHERE matter_id = ?').run(matterId).changes
     const deliveries = this.db.prepare('DELETE FROM deliveries WHERE matter_id = ?').run(matterId).changes
     try { this.db.exec('PRAGMA wal_checkpoint(TRUNCATE)'); this.db.exec('VACUUM') } catch {}
@@ -341,6 +350,28 @@ CREATE TABLE IF NOT EXISTS task_runs (
       claim: (permitId, expiresAt) => Number(this.db.prepare('INSERT OR IGNORE INTO permit_consumed(permit_id,expires_at,consumed_at) VALUES(?,?,?)').run(permitId, expiresAt, new Date().toISOString()).changes) === 1,
       prune: (now) => Number(this.db.prepare('DELETE FROM permit_consumed WHERE expires_at <= ?').run(now).changes),
     }
+  }
+
+  addModelCall({ conversationId, matterId, turnId, task, model, effort, thinking, usage, durationMs, finishReason, status = 'ok', code, attempts = 1 }) {
+    const id = `mc_${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 8)}`
+    this.db.prepare(`INSERT INTO model_calls(id,conversation_id,matter_id,turn_id,task,model,effort,thinking,status,code,attempts,prompt_tokens,completion_tokens,reasoning_tokens,cached_tokens,total_tokens,duration_ms,finish_reason,created_at)
+      VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`).run(
+      id, conversationId ?? null, matterId ?? null, turnId ?? null, task, model, effort ?? null, thinking ? 1 : 0,
+      status, code ?? null, attempts, usage?.promptTokens ?? 0, usage?.completionTokens ?? 0, usage?.reasoningTokens ?? 0,
+      usage?.cachedTokens ?? 0, usage?.totalTokens ?? 0, durationMs ?? 0, finishReason ?? null, new Date().toISOString(),
+    )
+    return id
+  }
+
+  sumModelUsage({ since } = {}) {
+    const rows = since
+      ? this.db.prepare('SELECT * FROM model_calls WHERE created_at >= ?').all(since)
+      : this.db.prepare('SELECT * FROM model_calls').all()
+    return rows.reduce((acc, r) => {
+      acc.calls += 1
+      for (const key of ['prompt_tokens', 'completion_tokens', 'reasoning_tokens', 'cached_tokens', 'total_tokens']) acc[key] += Number(r[key] || 0)
+      return acc
+    }, { calls: 0, prompt_tokens: 0, completion_tokens: 0, reasoning_tokens: 0, cached_tokens: 0, total_tokens: 0 })
   }
 
   proposeCandidate({ kind, payload, evidence }) {

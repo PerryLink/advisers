@@ -309,3 +309,16 @@ test('purge leaves no planted secret bytes in the database file', async () => {
     assert.equal(raw.includes(Buffer.from('SECRET_PURGE_BYTES')), false)
   } finally { rmSync(dir, { recursive: true, force: true }) }
 })
+
+test('model calls are recorded without reasoning text', () => {
+  const dir = mkdtempSync(join(tmpdir(), 'advisers-usage-'))
+  try {
+    const store = new SqliteStore(join(dir, 'state.db'))
+    store.addModelCall({ task: 'agent', model: 'deepseek-flash', effort: 'high', thinking: true, usage: { promptTokens: 1, completionTokens: 2, reasoningTokens: 1, totalTokens: 3 }, durationMs: 10, finishReason: 'stop' })
+    const usage = store.sumModelUsage()
+    assert.equal(usage.calls, 1)
+    assert.equal(usage.reasoning_tokens, 1)
+    assert.equal(store.db.prepare('PRAGMA table_info(model_calls)').all().some((c) => /reason/i.test(c.name) && c.name !== 'reasoning_tokens' && c.name !== 'finish_reason'), false)
+    store.close()
+  } finally { rmSync(dir, { recursive: true, force: true }) }
+})

@@ -243,3 +243,15 @@ test('docx edit block index stays aligned when a table precedes a paragraph', as
   assert.match((after as any).text, /新段落/)
   assert.doesNotMatch((after as any).text, /旧段落/)
 })
+
+test('checkOffice flags placeholders and formula errors', async () => {
+  const { buildDocx, buildXlsx, checkOffice } = await import('../src/index.ts')
+  const good = await buildDocx({ title: '报告', sections: [{ heading: '结论', paragraphs: ['正常内容，足够长。'] }] })
+  assert.equal((await checkOffice(good, 'docx')).ok, true)
+  const bad = await buildDocx({ title: '报告', sections: [{ heading: '结论', paragraphs: ['TODO 待补充内容，足够长。'] }] })
+  const result = await checkOffice(bad, 'docx')
+  assert.equal(result.ok, false)
+  assert.equal(result.findings.some((f) => f.code === 'PLACEHOLDER'), true)
+  const sheet = await buildXlsx({ columns: [{ header: 'A', key: 'a' }], rows: [{ a: '#REF!' }] })
+  assert.equal((await checkOffice(sheet, 'xlsx')).ok, false)
+})

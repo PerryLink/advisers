@@ -179,7 +179,7 @@ importers:
         specifier: 0.2.0-preview.19
         version: link:../core
       advisers-office:
-        specifier: 0.2.0-preview.13
+        specifier: 0.2.0-preview.14
         version: link:../office
       advisers-policy-strict:
         specifier: 0.2.0-preview.9
@@ -211,7 +211,7 @@ importers:
         specifier: 0.2.0-preview.19
         version: link:../core
       advisers-office:
-        specifier: 0.2.0-preview.13
+        specifier: 0.2.0-preview.14
         version: link:../office
 
   packages/link-email:

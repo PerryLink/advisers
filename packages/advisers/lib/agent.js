@@ -2,7 +2,7 @@ import { randomUUID } from 'node:crypto'
 import { mkdir, readFile, readdir, writeFile } from 'node:fs/promises'
 import { existsSync, lstatSync, realpathSync } from 'node:fs'
 import { dirname, isAbsolute, relative, resolve } from 'node:path'
-import { chatCompletion } from './model.js'
+import { chatCompletion, ModelError, resolveThinking } from './model.js'
 import { backupBeforeWrite } from './undo.js'
 import { estimateTokens } from './context-window.js'
 
@@ -73,6 +73,9 @@ export const LOCAL_TOOLS = [
     out: { type: 'string' },
     ops: { type: 'array', items: { type: 'object' } },
   }, ['path', 'ops']),
+  tool('office_check', 'Run deterministic content checks on a DOCX/XLSX/PPTX (placeholders, formula errors, empty tables/sheets/slides). Does not judge correctness.', {
+    path: { type: 'string' },
+  }, ['path']),
   tool('office_read', 'Read an existing DOCX/XLSX/PPTX and return structural text. Use before editing an existing file.', {
     path: { type: 'string' },
     max_chars: { type: 'number' },
@@ -221,6 +224,11 @@ export async function executeTool(name, args, { cwd = process.cwd(), ledger, bac
     await writeFile(target, result.buffer)
     return { ok: true, artifact: true, path: target, bytes: result.buffer.length, changes: result.changes }
   }
+  if (name === 'office_check') {
+    const office = await loadOffice()
+    const target = safePath(cwd, args.path)
+    return { ok: true, artifact: false, result: await office.checkOffice(await readFile(target)) }
+  }
   if (name === 'office_read') {
     const target = safePath(cwd, args.path)
     const office = await loadOffice()
@@ -281,18 +289,49 @@ Advisers is a local CLI: \`advisers\` starts the REPL, \`advisers chat "task"\` 
 - Reply in the user's language, BLUF, no filler.
 - Use tools to create files only when the user asks for a document/file or the task clearly needs one; otherwise answer in chat. Never claim a file exists unless the tool succeeded.
 - For Office work, choose the right builder/template, put deliverables under out/ unless the user says otherwise.
+- For Office deliverables, read the file back with office_read and run office_check before claiming completion; report blockers instead of saying done.
 - If the request is ambiguous and the answer would change the deliverable, ask one short question instead of guessing.
 - Do not invent facts. Keep private matters private.
 - If you promise to remind or follow up, call commitment_add first; never make an empty promise.`
 
 function fitMessages(messages, budget) {
   const cap = Math.max(2000, Number(budget) || 12000)
-  const estimate = (list) => estimateTokens(list.map((m) => typeof m.content === 'string' ? m.content : JSON.stringify(m)).join('\n')) + 1500
+  const estimate = (list) => estimateTokens(list.map((m) => JSON.stringify(m)).join('\n')) + 1500
   let fitted = messages.map((m, i) => (i > 0 && m.role === 'tool' && typeof m.content === 'string' && m.content.length > 4000 ? { ...m, content: `${m.content.slice(0, 4000)}\n[tool output truncated]` } : m))
-  while (estimate(fitted) > cap && fitted.length > 3) fitted = [fitted[0], ...fitted.slice(2)]
+  while (estimate(fitted) > cap && fitted.length > 2) {
+    const start = fitted.findIndex((m, i) => i > 0 && m.role === 'user')
+    if (start < 0) break
+    let end = start + 1
+    while (end < fitted.length && fitted[end].role !== 'user') end++
+    if (end >= fitted.length) break
+    fitted = [...fitted.slice(0, start), ...fitted.slice(end)]
+  }
   if (estimate(fitted) > cap) fitted[0] = { ...fitted[0], content: `${String(fitted[0].content).slice(0, cap * 3)}\n[context truncated to budget]` }
   return fitted
 }
+
+function stripReasoning(messages) {
+  return messages.map((m) => { const copy = { ...m }; delete copy.reasoning_content; return copy })
+}
+
+async function callAgentModel(messages, options) {
+  try {
+    return await chatCompletion({ ...options, messages })
+  } catch (error) {
+    const body = String(error?.body || '')
+    if (error?.status === 400 && /reasoning_content/i.test(body)) {
+      const withEmpty = messages.map((m) => m.role === 'assistant' ? { ...m, reasoning_content: m.reasoning_content ?? '' } : m)
+      try { return await chatCompletion({ ...options, messages: withEmpty }) } catch (second) {
+        if (second?.status === 400 && /reasoning_content/i.test(String(second.body || ''))) {
+          return chatCompletion({ ...options, messages: stripReasoning(messages), thinking: false })
+        }
+        throw second
+      }
+    }
+    throw error
+  }
+}
+
 
 export async function runAgent({
   runtime,
@@ -314,20 +353,29 @@ export async function runAgent({
   history = [],
   summary = '',
   ledger,
+  thinking,
+  effort,
+  signal,
 }) {
   const userText = text
+  const policy = resolveThinking({ task: 'agent', explicit: effort })
+  const useThinking = thinking ?? policy.enabled
   const historyBlock = summary ? `\n\n<session-summary>\n${summary}\n</session-summary>` : ''
   const messages = [
     { role: 'system', content: `${SYSTEM}\n\n${context.prompt}${historyBlock}` },
-    ...history.filter((t) => t.role === 'user' || t.role === 'assistant').map((t) => ({ role: t.role, content: t.content })),
+    ...history.filter((t) => t.role === (useThinking ? 'user' : t.role)).map((t) => ({ role: t.role, content: t.content })),
     { role: 'user', content: text },
   ]
   const artifacts = []
   const toolLog = []
+  const usage = { promptTokens: 0, completionTokens: 0, reasoningTokens: 0, cachedTokens: 0, totalTokens: 0 }
   for (let step = 0; step < maxSteps; step++) {
-    const result = await chatCompletion({ messages: fitMessages(messages, process.env.ADVISERS_CONTEXT_TOKENS), apiKey, baseUrl, model, tools: LOCAL_TOOLS, fetchImpl })
-    if (!result.toolCalls.length) return { reply: result.content.trim(), artifacts: [...new Set(artifacts)], toolLog, steps: step + 1 }
-    messages.push({ role: 'assistant', content: result.content, tool_calls: result.toolCalls })
+    const startedAt = Date.now()
+    const result = await callAgentModel(fitMessages(messages, process.env.ADVISERS_CONTEXT_TOKENS), { apiKey, baseUrl, model, tools: LOCAL_TOOLS, fetchImpl, task: 'agent', thinking: useThinking, effort, signal })
+    if (result.usage) for (const key of Object.keys(usage)) usage[key] += Number(result.usage[key] || 0)
+    try { store?.addModelCall({ task: 'agent', model: result.model || model, effort: result.thinking?.effort, thinking: result.thinking?.enabled !== false, usage: result.usage, durationMs: Date.now() - startedAt, finishReason: result.finishReason, turnId }) } catch {}
+    if (!result.toolCalls.length) return { reply: result.content.trim(), artifacts: [...new Set(artifacts)], toolLog, steps: step + 1, usage, thinking: result.thinking }
+    messages.push({ role: 'assistant', content: result.content, reasoning_content: result.reasoningContent, tool_calls: result.toolCalls })
     for (const call of result.toolCalls) {
       const name = call.function?.name
       const id = call.id ?? `call_${randomUUID()}`
@@ -352,5 +400,5 @@ export async function runAgent({
       messages.push({ role: 'tool', tool_call_id: id, content: JSON.stringify(payload) })
     }
   }
-  return { reply: '任务步骤超过上限，已停止；已完成的部分见文件。', artifacts: [...new Set(artifacts)], toolLog, steps: maxSteps }
+  return { reply: '任务步骤超过上限，已停止；已完成的部分见文件。', artifacts: [...new Set(artifacts)], toolLog, steps: maxSteps, usage }
 }

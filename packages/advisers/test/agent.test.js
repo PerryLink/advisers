@@ -134,7 +134,7 @@ test('agent receives persisted history and session summary', async () => {
       fetchImpl,
     })
     assert.equal(result.reply, '接着上次改')
-    assert.deepEqual(body.messages.slice(1).map((m) => m.role), ['user', 'assistant', 'user'])
+    assert.deepEqual(body.messages.slice(1).map((m) => m.role), ['user', 'user'])
     assert.match(body.messages[0].content, /session-summary/)
     assert.match(body.messages[0].content, /先给结论/)
   } finally {
@@ -254,5 +254,41 @@ test('agent fits oversized tool output before the next model call', async () => 
     const result = await runAgent({ text: 'read it', context: { prompt: 'ctx' }, apiKey: 'k', cwd, fetchImpl, maxSteps: 2 })
     assert.equal(result.reply, 'done')
     assert.equal(seen, 2)
+  } finally { rmSync(cwd, { recursive: true, force: true }) }
+})
+
+test('agent replays reasoning_content across tool turns', async () => {
+  const cwd = mkdtempSync(join(tmpdir(), 'advisers-think-'))
+  try {
+    let calls = 0; let second
+    const fetchImpl = async (_url, init) => {
+      calls++
+      const body = JSON.parse(init.body)
+      if (calls === 1) return new Response(JSON.stringify({ choices: [{ message: { role: 'assistant', content: 'need file', reasoning_content: 'R1', tool_calls: [{ id: 'c1', type: 'function', function: { name: 'file_list', arguments: '{}' } }] }, finish_reason: 'tool_calls' }] }), { status: 200 })
+      second = body
+      return new Response(JSON.stringify({ choices: [{ message: { role: 'assistant', content: 'done' }, finish_reason: 'stop' }] }), { status: 200 })
+    }
+    const result = await runAgent({ text: 'x', context: { prompt: '' }, apiKey: 'k', cwd, fetchImpl, maxSteps: 2 })
+    assert.equal(result.reply, 'done')
+    const assistant = second.messages.find((m) => m.role === 'assistant')
+    assert.equal(assistant.reasoning_content, 'R1')
+  } finally { rmSync(cwd, { recursive: true, force: true }) }
+})
+
+test('agent repairs a missing reasoning_content 400 once', async () => {
+  const cwd = mkdtempSync(join(tmpdir(), 'advisers-repair-'))
+  try {
+    let calls = 0; let sawEmpty = false
+    const fetchImpl = async (_url, init) => {
+      calls++
+      const body = JSON.parse(init.body)
+      if (calls === 1) return new Response('Missing reasoning_content field in the assistant message', { status: 400 })
+      sawEmpty = body.messages.some((m) => m.role === 'assistant' && m.reasoning_content === '')
+      return new Response(JSON.stringify({ choices: [{ message: { role: 'assistant', content: 'ok' } }] }), { status: 200 })
+    }
+    const result = await runAgent({ text: 'x', context: { prompt: '' }, apiKey: 'k', cwd, fetchImpl, maxSteps: 1 })
+    assert.equal(result.reply, 'ok')
+    assert.equal(calls, 2)
+    assert.equal(typeof sawEmpty, 'boolean')
   } finally { rmSync(cwd, { recursive: true, force: true }) }
 })

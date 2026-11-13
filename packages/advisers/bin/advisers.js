@@ -22,6 +22,7 @@ import { backupBeforeWrite, diffLatest, listBackups, undoLatest } from '../lib/u
 import { lintReview, materializeReview, reviewRun } from '../lib/review.js'
 import { classifyNudgeOutcome } from '../lib/nudge.js'
 import { buildDigest } from '../lib/digest.js'
+import { captureCandidates } from '../lib/capture.js'
 import { buildHistory, buildOpening, buildPins, continuityProbes, ensurePins, fitHistory, shouldSummarize, summarizeTurns } from '../lib/context-window.js'
 
 let core
@@ -244,6 +245,7 @@ Usage:
   advisers history            recent conversations
   advisers search <text>       full-text search old turns
   advisers compact ls|rollback summary versions
+  advisers today              one-screen today/week/waiting view
   advisers tick               due commitments in the next 7 days
   advisers week               last 7 days
   advisers digest day|week    short digest
@@ -266,10 +268,12 @@ Usage:
   advisers brief <text>       print the IntentBrief for a request
   advisers --version          print the CLI version
   advisers who                 who I owe / who owes me
+  advisers capture [--file f] [--source s] [--date ISO] [--matter id] <text>
+                              从中文工作内容抽取候选承诺（不自动入账）
   advisers policy check <text> policy/crisis check
   advisers office-read <file>  read DOCX/XLSX/PPTX structural text
   advisers office-edit <file> <ops.json> [out]  surgical Office edit
-  advisers verify <file>       structural Office verification
+  advisers verify <file> [--content]  structural + deterministic content checks
   advisers office <kind> <spec.json> <out>
                               build docx/xlsx/pptx/xmind/mermaid/drawio
   advisers routine ls         list routines
@@ -323,7 +327,7 @@ let lastRun
 function modelLabel() {
   if (!process.env.ADVISERS_API_KEY) return 'not configured (local mode)'
   if (process.env.ADVISERS_NO_MODEL === '1') return 'disabled (ADVISERS_NO_MODEL=1)'
-  return `${process.env.ADVISERS_MODEL || 'deepseek-chat'} @ ${process.env.ADVISERS_BASE_URL || 'https://api.deepseek.com'}`
+  return `${process.env.ADVISERS_MODEL || 'deepseek-flash'} @ ${process.env.ADVISERS_BASE_URL || 'https://api.deepseek.com'}`
 }
 
 function learnPreference(ledger, statement, quote, { explicit = false } = {}) {
@@ -424,6 +428,25 @@ function printWeek(ledger) {
   console.log(`交付：${weekDeliveries.length} 个文件。`)
   const next = [...open].filter((c) => c.dueAt).sort((a, b) => Date.parse(a.dueAt) - Date.parse(b.dueAt))[0]
   console.log('下周一件：' + (next?.action ?? open[0]?.action ?? '先定一个承诺或交付。'))
+}
+
+function today(ledger) {
+  const now = Date.now()
+  const localDay = new Intl.DateTimeFormat('en-CA', { timeZone: 'Asia/Shanghai' }).format(new Date(now))
+  const open = ledger.openCommitments()
+  const day = (iso) => iso ? new Intl.DateTimeFormat('en-CA', { timeZone: 'Asia/Shanghai' }).format(new Date(iso)) : ''
+  const overdue = open.filter((c) => c.dueAt && Date.parse(c.dueAt) < now && day(c.dueAt) !== localDay)
+  const todayDue = open.filter((c) => c.dueAt && day(c.dueAt) === localDay)
+  const week = open.filter((c) => c.dueAt && Date.parse(c.dueAt) > now && day(c.dueAt) !== localDay && Date.parse(c.dueAt) <= now + 7 * 86400_000)
+  const waiting = open.filter((c) => c.debtor === 'third' || c.debtor.startsWith('third:'))
+  const noDue = open.filter((c) => !c.dueAt)
+  console.log(`今天：${todayDue.length} · 逾期：${overdue.length} · 未来 7 天：${week.length} · 等别人：${waiting.length} · 无截止：${noDue.length}`)
+  for (const [label, list] of [['逾期', overdue], ['今天', todayDue], ['未来 7 天', week], ['等别人', waiting]]) {
+    if (!list.length) continue
+    console.log(`${label}：`)
+    for (const c of list.slice(0, 5)) console.log(`  ${c.id}  ${c.creditor} · ${c.action}${c.dueAt ? ` · ${c.dueAt.slice(0, 10)}` : ''}`)
+  }
+  console.log('下一件：' + ([...overdue, ...todayDue, ...week].sort((a, b) => Date.parse(a.dueAt) - Date.parse(b.dueAt))[0]?.action ?? '先定一个承诺或交付。'))
 }
 
 function tick(ledger, asJson = false) {
@@ -556,6 +579,8 @@ function printStatus() {
     const store = dbStore()
     console.log(`sessions  ${store?.listSessions(100).length ?? 0}`)
     console.log(`deliveries ${store?.countDeliveries() ?? 0}`)
+    const usage = store?.sumModelUsage?.()
+    if (usage?.calls) console.log(`model calls ${usage.calls} · tokens ${usage.total_tokens} · reasoning ${usage.reasoning_tokens}`)
   } catch {}
   console.log(`soul      ${existsSync(SOUL) ? 'present' : 'not initialized'}`)
 }
@@ -596,7 +621,9 @@ async function maybeSummarize(conversationId, { apiKey, baseUrl, model, ledger }
         const response = await chatCompletion({
           apiKey,
           baseUrl: baseUrl || 'https://api.deepseek.com',
-          model: model || 'deepseek-chat',
+          model: model || 'deepseek-flash',
+          task: 'summarize',
+          thinking: false,
           messages: [
             { role: 'system', content: '把会话压缩成给秘书续接用的摘要。必须保留：已完成什么、未决问题、承诺及截止时间、用户偏好/禁忌、下一步。不要寒暄，不超过 500 字。' },
             { role: 'user', content: `${old?.summary ? `旧摘要：\n${old.summary}\n\n` : ''}${transcript}` },
@@ -721,10 +748,11 @@ async function runTurn({ runtime, ledger, text, conversationId, debug = false, c
     store: dbStore(),
     apiKey,
     baseUrl: process.env.ADVISERS_BASE_URL || 'https://api.deepseek.com',
-    model: process.env.ADVISERS_MODEL || 'deepseek-chat',
+    model: process.env.ADVISERS_MODEL || 'deepseek-flash',
     cwd: process.cwd(),
     force: process.env.ADVISERS_FORCE === '1',
     confirm,
+    effort: process.env.ADVISERS_THINKING_EFFORT,
     onTool: (name) => { if (debug || process.env.ADVISERS_PROGRESS !== '0') console.log(`[tool] ${name}`) },
   })
   lastRun = { artifacts: [...new Set(artifacts)], toolLog }
@@ -1356,6 +1384,32 @@ async function template(name, dataFile, outFile) {
   if (!result.ok) process.exitCode = 1
 }
 
+async function capture(args) {
+  const { flags, positional } = parseFlags(args)
+  let text = positional.join(' ').trim()
+  if (flags.file) text = readFileSync(flags.file, 'utf8')
+  if (!text) { console.error('usage: advisers capture [--file path] [--source wechat|meeting|email|contract] [--date ISO] [--matter id] <text>'); process.exitCode = 1; return }
+  const apiKey = process.env.ADVISERS_API_KEY
+  if (!apiKey) { console.error('capture requires ADVISERS_API_KEY'); process.exitCode = 1; return }
+  const store = dbStore()
+  if (!store) { console.error('capture requires SQLite store'); process.exitCode = 1; return }
+  const result = await captureCandidates({ text, apiKey, baseUrl: process.env.ADVISERS_BASE_URL, model: process.env.ADVISERS_MODEL, date: flags.date, source: flags.source })
+  if (!result.candidates.length) { console.log('没有找到可确认的承诺候选。'); return }
+  const ledger = loadLedger()
+  const matterId = activeMatterId(ledger, flags.matter)
+  const turnId = `capture_${Date.now()}`
+  for (const c of result.candidates) {
+    const candidate = store.proposeCandidate({
+      kind: 'commitment',
+      payload: { matterId, debtor: c.debtor === 'third' ? 'third' : 'user', creditor: c.creditor || 'someone', action: c.action, dueAt: c.dueAt, capability: 'none' },
+      evidence: [{ quote: c.quote, turnId }],
+    })
+    console.log(`${candidate.id}\t${c.modal}\t${c.action}${c.dueAt ? ` · ${c.dueAt.slice(0, 10)}` : ''}\t「${c.quote.slice(0, 60)}」`)
+  }
+  store.appendAudit({ actor: 'local', action: 'capture.propose', allowed: true, reason: `${result.candidates.length} candidates` })
+  console.log('确认：advisers memory accept <id>；拒绝：advisers memory reject <id>')
+}
+
 function link(sub, from, to, type) {
   const ledger = loadLedger()
   if (sub === 'ls' || !sub) {
@@ -1581,7 +1635,7 @@ async function bridge(args) {
               prompt: `${context.prompt}\n\n[user]\n${event.text ?? ''}`,
               apiKey: key,
               baseUrl: process.env.ADVISERS_BASE_URL || 'https://api.deepseek.com',
-              model: process.env.ADVISERS_MODEL || 'deepseek-chat',
+              model: process.env.ADVISERS_MODEL || 'deepseek-flash',
             })
           } catch (error) {
             reply = `模型调用失败：${error.message}`
@@ -1863,6 +1917,8 @@ if (!command) {
     if (!id || !store?.setNudgeOutcome(id, sub === 'done' ? 'accepted' : 'ignored')) { console.error('usage: advisers nudge done|ignore <nudge-id>'); process.exitCode = 1 }
     else console.log(`${sub}: ${id}`)
   } else { console.error('usage: advisers nudge list|done|ignore'); process.exitCode = 1 }
+} else if (command === 'today') {
+  today(loadLedger())
 } else if (command === 'tick') {
   tick(loadLedger(), args.includes('--json'))
 } else if (command === 'who') {
@@ -1956,6 +2012,8 @@ if (!command) {
   backup(args[0])
 } else if (command === 'brief') {
   brief(args.join(' ').trim())
+} else if (command === 'capture') {
+  await capture(args)
 } else if (command === 'policy') {
   const sub = args[0]
   if (sub === 'check') {
@@ -2004,7 +2062,11 @@ if (!command) {
       if (process.env.ADVISERS_OFFICE_LOCAL === '1') mod = await import('../../office/dist/index.js')
       else { try { mod = await import('advisers-office') } catch { mod = await import('../../office/dist/index.js') } }
       const result = await mod.verifyOffice(readFileSync(file), ext)
-      console.log(JSON.stringify(result, null, 2))
+      if (args.includes('--content')) {
+        const content = await mod.checkOffice(readFileSync(file), ext)
+        console.log(JSON.stringify({ structure: result, content }, null, 2))
+        if (!content.ok) process.exitCode = 1
+      } else console.log(JSON.stringify(result, null, 2))
       if (!result.ok) process.exitCode = 1
     }
   }

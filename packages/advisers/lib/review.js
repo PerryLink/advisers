@@ -8,6 +8,9 @@ export async function reviewRun({ run, routines = [], apiKey, baseUrl, model, fe
     baseUrl,
     model,
     fetchImpl,
+    task: 'review',
+    thinking: true,
+    effort: 'high',
     messages: [
       {
         role: 'system',

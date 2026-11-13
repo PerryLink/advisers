@@ -25,7 +25,7 @@ them.
 
 ## Status
 
-`0.2.0-preview.19/46` is **staged** on npm, awaiting OTP approval. The public `next` tag still points at the old `0.1.0-preview.2`; do not evaluate this build through it until approval:
+`0.2.0-preview.19/47` is **staged** on npm, awaiting OTP approval. The public `next` tag still points at the old `0.1.0-preview.2`; do not evaluate this build through it until approval:
 
 > Requires **Node >= 22.13**. See [docs/QUICKSTART.md](docs/QUICKSTART.md) for Windows/PowerShell and BOM notes.
 
@@ -35,7 +35,9 @@ them.
 - `advisers-office`: DOCX/XLSX/PPTX/Mermaid/draw.io/XMind + 7 templates; read/edit/verify;
 - routine v0 (draft/approve/archive + patch/diff/apply);
 - local agent loop with tools (`office_build`, `office_template`, `file_read/write/list`, `commitment_add`, `routine_view`, `search_turns`); attachments (txt/md/docx/xlsx/pptx/pdf); optional model with `ADVISERS_API_KEY`;
-- turns + summaries + FTS search, `/memory`, `/week`, `/digest`, `/tick`, `/undo`, `/diff`, `/learn review`;
+- turns + summaries + FTS search, `/memory`, `/week`, `/digest`, `/tick`, `/today`, `/undo`, `/diff`, `/learn review`;
+- `advisers capture` extracts candidate commitments from Chinese work text with verbatim quotes (never auto-confirms);
+- thinking mode: `ADVISERS_THINKING=off|on|auto`, `ADVISERS_THINKING_EFFORT=low|high|max`; reasoning is not persisted;
 - DSH bundle (`dsh-advisers`) with `advisers_brief` + `advisers_office`; email/Feishu link packages are **libraries not wired into the CLI**; strict policy pack;
 - Hermes bridge (`advisers-bridge-hermes`); npm `latest` is currently a placeholder until published;
 - real-account/WS/Office-L3 validation still pending.

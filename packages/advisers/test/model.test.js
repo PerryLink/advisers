@@ -36,3 +36,29 @@ test('model retries 429/5xx and applies timeout/max_tokens', async () => {
   assert.equal(result.content, 'ok')
   assert.equal(calls, 3)
 })
+
+test('thinking mode sends effort and omits temperature, and parses reasoning_content', async () => {
+  let body
+  const fetchImpl = async (_url, init) => {
+    body = JSON.parse(init.body)
+    return new Response(JSON.stringify({ choices: [{ message: { content: 'ok', reasoning_content: 'why' }, finish_reason: 'stop' }], usage: { prompt_tokens: 1, completion_tokens: 2, completion_tokens_details: { reasoning_tokens: 1 }, total_tokens: 3 } }), { status: 200 })
+  }
+  const { chatCompletion } = await import('../lib/model.js')
+  const result = await chatCompletion({ messages: [{ role: 'user', content: 'x' }], apiKey: 'k', fetchImpl, task: 'capture', thinking: true, effort: 'high' })
+  assert.deepEqual(body.thinking, { type: 'enabled' })
+  assert.equal(body.reasoning_effort, 'high')
+  assert.equal('temperature' in body, false)
+  assert.equal(result.reasoningContent, 'why')
+  assert.equal(result.usage.reasoningTokens, 1)
+  assert.equal(result.finishReason, 'stop')
+})
+
+test('thinking off sends disabled and keeps temperature', async () => {
+  let body
+  const fetchImpl = async (_url, init) => { body = JSON.parse(init.body); return new Response(JSON.stringify({ choices: [{ message: { content: 'ok' } }] }), { status: 200 }) }
+  const { chatCompletion } = await import('../lib/model.js')
+  await chatCompletion({ messages: [{ role: 'user', content: 'x' }], apiKey: 'k', fetchImpl, thinking: false })
+  assert.deepEqual(body.thinking, { type: 'disabled' })
+  assert.equal(body.temperature, 0.2)
+  assert.equal('reasoning_effort' in body, false)
+})

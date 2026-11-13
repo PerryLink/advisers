@@ -1,6 +1,6 @@
 {
   "name": "advisers",
-  "version": "0.2.0-preview.46",
+  "version": "0.2.0-preview.47",
   "description": "A staff of AI advisers: a cordis-native personal secretary runtime with scoped memory, commitments, and reviewable routines.",
   "keywords": [
     "cordis",
@@ -65,7 +65,7 @@
     "test": "node --experimental-strip-types --test test/*.test.js"
   },
   "peerDependencies": {
-    "advisers-office": "0.2.0-preview.13"
+    "advisers-office": "0.2.0-preview.14"
   },
   "peerDependenciesMeta": {
     "advisers-office": {
