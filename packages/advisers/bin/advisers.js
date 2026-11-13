@@ -246,6 +246,7 @@ Usage:
   advisers search <text>       full-text search old turns
   advisers compact ls|rollback summary versions
   advisers today              one-screen today/week/waiting view
+  advisers risks              up to 3 deterministic obligation risks
   advisers tick               due commitments in the next 7 days
   advisers week               last 7 days
   advisers digest day|week    short digest
@@ -428,6 +429,23 @@ function printWeek(ledger) {
   console.log(`交付：${weekDeliveries.length} 个文件。`)
   const next = [...open].filter((c) => c.dueAt).sort((a, b) => Date.parse(a.dueAt) - Date.parse(b.dueAt))[0]
   console.log('下周一件：' + (next?.action ?? open[0]?.action ?? '先定一个承诺或交付。'))
+}
+
+function risks(ledger) {
+  const open = ledger.openCommitments()
+  const out = []
+  const byDay = new Map()
+  for (const c of open) {
+    if (!c.dueAt) continue
+    const day = c.dueAt.slice(0, 10)
+    byDay.set(day, [...(byDay.get(day) ?? []), c])
+  }
+  for (const [day, list] of byDay) if (list.length >= 2) out.push(`${day} 有 ${list.length} 个截止：${list.map((c) => c.action).join('、')}`)
+  for (const c of open.filter((c) => !c.dueAt)) out.push(`${c.action} 没有截止时间（${c.creditor}）`)
+  for (const c of open.filter((c) => c.creditor === 'someone' || !c.creditor)) out.push(`${c.action} 没有明确对象`)
+  for (const c of open.filter((c) => c.debtor === 'third' || c.debtor.startsWith('third:'))) out.push(`等 ${c.debtor} 回复：${c.action}`)
+  if (!out.length) { console.log('目前没有明显的义务风险。'); return }
+  for (const line of out.slice(0, 3)) console.log(`- ${line}`)
 }
 
 function today(ledger) {
@@ -1917,6 +1935,8 @@ if (!command) {
     if (!id || !store?.setNudgeOutcome(id, sub === 'done' ? 'accepted' : 'ignored')) { console.error('usage: advisers nudge done|ignore <nudge-id>'); process.exitCode = 1 }
     else console.log(`${sub}: ${id}`)
   } else { console.error('usage: advisers nudge list|done|ignore'); process.exitCode = 1 }
+} else if (command === 'risks') {
+  risks(loadLedger())
 } else if (command === 'today') {
   today(loadLedger())
 } else if (command === 'tick') {
