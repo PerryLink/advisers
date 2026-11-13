@@ -46,6 +46,10 @@ CREATE TABLE IF NOT EXISTS routine_patches (
 CREATE TABLE IF NOT EXISTS permit_consumed (
   permit_id TEXT PRIMARY KEY, expires_at INTEGER NOT NULL, consumed_at TEXT NOT NULL
 );
+CREATE TABLE IF NOT EXISTS research_runs (
+  id TEXT PRIMARY KEY, matter_id TEXT, query TEXT NOT NULL, answer TEXT NOT NULL,
+  sources TEXT NOT NULL, usage TEXT, stop_reason TEXT, created_at TEXT NOT NULL
+);
 CREATE TABLE IF NOT EXISTS model_calls (
   id TEXT PRIMARY KEY, conversation_id TEXT, matter_id TEXT, turn_id TEXT, task TEXT NOT NULL,
   model TEXT NOT NULL, effort TEXT, thinking INTEGER NOT NULL DEFAULT 0, status TEXT NOT NULL DEFAULT 'ok',
@@ -324,6 +328,7 @@ CREATE TABLE IF NOT EXISTS task_runs (
     for (const id of commitmentIds) nudges += Number(this.db.prepare('DELETE FROM nudges WHERE commitment_id = ?').run(id).changes)
     runs += Number(this.db.prepare('DELETE FROM task_runs WHERE matter_id = ?').run(matterId).changes)
     this.db.prepare('DELETE FROM model_calls WHERE matter_id = ?').run(matterId)
+    this.db.prepare('DELETE FROM research_runs WHERE matter_id = ?').run(matterId)
     const sessions = this.db.prepare('DELETE FROM sessions WHERE matter_id = ?').run(matterId).changes
     const deliveries = this.db.prepare('DELETE FROM deliveries WHERE matter_id = ?').run(matterId).changes
     try { this.db.exec('PRAGMA wal_checkpoint(TRUNCATE)'); this.db.exec('VACUUM') } catch {}
@@ -350,6 +355,17 @@ CREATE TABLE IF NOT EXISTS task_runs (
       claim: (permitId, expiresAt) => Number(this.db.prepare('INSERT OR IGNORE INTO permit_consumed(permit_id,expires_at,consumed_at) VALUES(?,?,?)').run(permitId, expiresAt, new Date().toISOString()).changes) === 1,
       prune: (now) => Number(this.db.prepare('DELETE FROM permit_consumed WHERE expires_at <= ?').run(now).changes),
     }
+  }
+
+  addResearchRun({ matterId, query, answer, sources, usage, stopReason }) {
+    const id = `rr_${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 8)}`
+    this.db.prepare('INSERT INTO research_runs(id,matter_id,query,answer,sources,usage,stop_reason,created_at) VALUES(?,?,?,?,?,?,?,?)')
+      .run(id, matterId ?? null, query, answer, JSON.stringify(sources ?? []), usage ? JSON.stringify(usage) : null, stopReason ?? null, new Date().toISOString())
+    return id
+  }
+
+  listResearch(limit = 10) {
+    return this.db.prepare('SELECT * FROM research_runs ORDER BY created_at DESC LIMIT ?').all(limit).map((r) => ({ id: r.id, matterId: r.matter_id ?? undefined, query: r.query, answer: r.answer, sources: JSON.parse(r.sources), usage: r.usage ? JSON.parse(r.usage) : undefined, stopReason: r.stop_reason ?? undefined, createdAt: r.created_at }))
   }
 
   addModelCall({ conversationId, matterId, turnId, task, model, effort, thinking, usage, durationMs, finishReason, status = 'ok', code, attempts = 1 }) {

@@ -23,6 +23,7 @@ import { lintReview, materializeReview, reviewRun } from '../lib/review.js'
 import { classifyNudgeOutcome } from '../lib/nudge.js'
 import { buildDigest } from '../lib/digest.js'
 import { captureCandidates } from '../lib/capture.js'
+import { research as runResearch } from '../lib/research.js'
 import { buildHistory, buildOpening, buildPins, continuityProbes, ensurePins, fitHistory, shouldSummarize, summarizeTurns } from '../lib/context-window.js'
 
 let core
@@ -191,6 +192,11 @@ function printReceipt() {
   for (const c of open.slice(0, 3)) console.log(`  ${c.id}  ${c.action}${c.dueAt ? ` · ${c.dueAt.slice(0, 10)}` : ''}`)
   const usage = store.sumModelUsage()
   if (usage.calls) console.log(`模型：${usage.calls} calls · ${usage.total_tokens} tokens`)
+  const research = store.listResearch?.(1)?.[0]
+  if (research) {
+    console.log(`研究：${research.query}`)
+    for (const source of research.sources.slice(0, 3)) console.log(`  web: ${source.title || '(untitled)'} ${source.url}`)
+  }
   console.log('提示：结构校验通过不等于内容正确；对外发送仍需 permit。')
 }
 
@@ -290,6 +296,8 @@ Usage:
   advisers brief [--deep] <text>  print the IntentBrief; --deep adds model refinement
   advisers --version          print the CLI version
   advisers who                 who I owe / who owes me
+  advisers research --web|--url <url> [--deep] <query>
+                              server-side web search/read URL with citations (explicit egress)
   advisers capture [--file f] [--source s] [--date ISO] [--matter id] <text>
                               从中文工作内容抽取候选承诺（不自动入账）
   advisers policy check <text> policy/crisis check
@@ -1457,6 +1465,29 @@ async function template(name, dataFile, outFile) {
   if (!result.ok) process.exitCode = 1
 }
 
+async function research(args) {
+  const { flags, positional } = parseFlags(args)
+  if (!flags.web && !flags.url) { console.error('research requires explicit --web or --url (egress)'); process.exitCode = 1; return }
+  const apiKey = process.env.ADVISERS_API_KEY
+  if (!apiKey) { console.error('research requires ADVISERS_API_KEY'); process.exitCode = 1; return }
+  const query = positional.join(' ').trim()
+  const urls = flags.url ? [String(flags.url)] : []
+  if (!query && !urls.length) { console.error('usage: advisers research --web|--url <url> [--deep] <query>'); process.exitCode = 1; return }
+  const ledger = loadLedger()
+  const matterId = activeMatterId(ledger)
+  if ((ledger.getMatter(matterId)?.secrecy ?? 'private') === 'secret') { console.error('research is disabled for secret matters'); process.exitCode = 1; return }
+  const result = await runResearch({ query, urls, apiKey, baseUrl: process.env.ADVISERS_BASE_URL, deep: Boolean(flags.deep) })
+  const store = dbStore()
+  store?.addResearchRun({ matterId, query: query || urls[0], answer: result.answer, sources: result.sources, usage: result.usage, stopReason: result.stopReason })
+  store?.appendAudit({ actor: 'local', action: 'egress.research', allowed: true, reason: `${urls.length ? 'url' : 'search'}:${result.sources.length}` })
+  console.log(result.answer.trim())
+  if (result.sources.length) {
+    console.log('\n来源：')
+    for (const source of result.sources) console.log(`- ${source.title || '(untitled)'} ${source.url}${source.pageAge ? ` (${source.pageAge.slice(0, 10)})` : ''}`)
+    console.log('提示：网页引用是服务商返回，不等于本地文件证据。')
+  }
+}
+
 async function capture(args) {
   const { flags, positional } = parseFlags(args)
   let text = positional.join(' ').trim()
@@ -2090,6 +2121,8 @@ if (!command) {
   backup(args[0])
 } else if (command === 'brief') {
   await brief(args.filter((a) => a !== '--deep').join(' ').trim(), args.includes('--deep'))
+} else if (command === 'research') {
+  await research(args)
 } else if (command === 'capture') {
   await capture(args)
 } else if (command === 'policy') {

@@ -66,6 +66,7 @@ node $A who
 ```powershell
 $env:ADVISERS_API_KEY = "sk-..."       # PowerShell syntax; not VAR=value
 # $env:ADVISERS_BASE_URL = "https://api.deepseek.com"
+node $A research --web "2026 年独立顾问市场要点"   # explicit egress
 node $A capture --source meeting "周五前把报价发给王工，我周五前发"
 node $A memory candidates
 node $A chat "做一份 Q4 汇报 PPT，放到 out\q4.pptx"
