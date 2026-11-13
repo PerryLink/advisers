@@ -294,6 +294,12 @@ Advisers is a local CLI: \`advisers\` starts the REPL, \`advisers chat "task"\` 
 - Do not invent facts. Keep private matters private.
 - If you promise to remind or follow up, call commitment_add first; never make an empty promise.`
 
+function latestReminder(now = new Date()) {
+  const parts = new Intl.DateTimeFormat('zh-CN', { timeZone: 'Asia/Shanghai', year: 'numeric', month: '2-digit', day: '2-digit', weekday: 'long' }).formatToParts(now)
+  const get = (type) => parts.find((p) => p.type === type)?.value ?? ''
+  return `${get('year')}-${get('month')}-${get('day')},${get('weekday')},${process.env.ADVISERS_LOCATION || ''},App,中文`
+}
+
 function fitMessages(messages, budget) {
   const cap = Math.max(2000, Number(budget) || 12000)
   const estimate = (list) => estimateTokens(list.map((m) => JSON.stringify(m)).join('\n')) + 1500
@@ -364,6 +370,7 @@ export async function runAgent({
   const messages = [
     { role: 'system', content: `${SYSTEM}\n\n${context.prompt}${historyBlock}` },
     ...history.filter((t) => t.role === (useThinking ? 'user' : t.role)).map((t) => ({ role: t.role, content: t.content })),
+    ...(process.env.ADVISERS_LATEST_REMINDER === '0' ? [] : [{ role: 'latest_reminder', content: latestReminder() }]),
     { role: 'user', content: text },
   ]
   const artifacts = []

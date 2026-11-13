@@ -134,7 +134,7 @@ test('agent receives persisted history and session summary', async () => {
       fetchImpl,
     })
     assert.equal(result.reply, '接着上次改')
-    assert.deepEqual(body.messages.slice(1).map((m) => m.role), ['user', 'user'])
+    assert.deepEqual(body.messages.slice(1).map((m) => m.role), ['user', 'latest_reminder', 'user'])
     assert.match(body.messages[0].content, /session-summary/)
     assert.match(body.messages[0].content, /先给结论/)
   } finally {
