@@ -55,7 +55,7 @@
   exists and it still needs human double review.
 - The Office defect set is realistic synthetic, not real desensitized customer
   documents.
-- Continuity has been run at 10/50 facts; 100/200 are scripted but long-running.
+- Continuity has been run at 10/50/100 facts; `FACTS=200` is scripted but not run (one real-model soak is ~1+ hour).
 - No Microsoft Office validation; WPS only. No 5-user dogfood.
 - npm is staged only, not published (OTP approval is a human step).
 - remote file parse is a design document only.
