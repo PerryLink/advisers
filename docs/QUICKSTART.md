@@ -175,3 +175,14 @@ node $A import handoff.enc.json --replace
 
 AES-256-GCM + scrypt; passphrase is not stored. See `docs/ENCRYPTED-HANDOFF.md`.
 This is an encrypted handoff/backup, **not** automatic at-rest database encryption.
+
+
+## K. Local OCR (optional, no cloud)
+
+```powershell
+$env:ADVISERS_OCR_CMD = "C:\tools\tesseract.exe"   # local executable
+node $A ocr .\scan.png --out scan.txt
+node $A capture --file .\scan.png                    # image attachment uses the same adapter
+```
+
+Without `ADVISERS_OCR_CMD`, image OCR fails closed. No cloud OCR is called.

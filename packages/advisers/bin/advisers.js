@@ -34,6 +34,7 @@ import { buildEvidencePack, evidenceForCommitment, evidenceForFact, evidenceForP
 import { createReadOnlyServer } from '../lib/ui.js'
 import { buildSimplePdf, findCjkFont } from '../lib/pdf.js'
 import { decryptJson, encryptJson, isVaultEnvelope } from '../lib/vault.js'
+import { runLocalOcr } from '../lib/ocr.js'
 
 let core
 if (process.env.ADVISERS_CORE_LOCAL === '1') {
@@ -329,6 +330,7 @@ Usage:
   advisers deliveries --pack [--out dir]        证据包（manifest/README/SHA256SUMS + DOCX 回执）
   advisers policy check <text> policy/crisis check
   advisers office-read <file>  read DOCX/XLSX/PPTX/OFD text
+  advisers ocr <image> [--out text]  local OCR adapter (ADVISERS_OCR_CMD; no cloud)
   advisers office-edit <file> <ops.json> [out]  surgical Office edit
   advisers verify <file> [--content]  structural + deterministic content checks
   advisers office <kind> <spec.json> <out>
@@ -2077,6 +2079,23 @@ async function mcpServer() {
   await new Promise((resolve) => process.stdin.on('end', resolve))
 }
 
+async function ocrCommand(args) {
+  const file = args.find((a) => !a.startsWith('--'))
+  if (!file) { console.error('usage: advisers ocr <image> [--out text]'); process.exitCode = 1; return }
+  try {
+    const text = await runLocalOcr(file)
+    const outIdx = args.indexOf('--out')
+    if (outIdx >= 0 && args[outIdx + 1]) {
+      writeFileSync(args[outIdx + 1], text + '\n', { mode: 0o600 })
+      dbStore()?.appendAudit({ actor: 'local', action: 'ocr.local', allowed: true, reason: basename(args[outIdx + 1]) })
+      console.log(`wrote ${args[outIdx + 1]} (${text.length} chars)`)
+    } else {
+      dbStore()?.appendAudit({ actor: 'local', action: 'ocr.local', allowed: true, reason: basename(file) })
+      console.log(text)
+    }
+  } catch (error) { console.error(`ocr failed: ${error.message}`); process.exitCode = 1 }
+}
+
 function printEvidence(args) {
   const { flags, positional } = parseFlags(args)
   ensureHome()
@@ -2532,6 +2551,8 @@ if (!command) {
   else { console.error('usage: advisers mcp --stdio'); process.exitCode = 1 }
 } else if (command === 'deliver') {
   await deliver(args)
+} else if (command === 'ocr') {
+  await ocrCommand(args)
 } else if (command === 'evidence') {
   printEvidence(args)
 } else if (command === 'receipt') {

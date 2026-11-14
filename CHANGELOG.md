@@ -1,6 +1,6 @@
 # Changelog
 
-## 0.2.0-preview.64 (staged, approval pending)
+## 0.2.0-preview.65 (staged, approval pending)
 
 ### Added
 - **E1 reminders**: `advisers remind` (buckets/dedupe/snooze, 5 rule families),
@@ -20,6 +20,7 @@
   matters.
 - **E5 partial**: `memory search` also searches turns; `why`/`forget` accept fact ids.
 - **E8**: `advisers ui [--port n]` local-only read-only view (127.0.0.1, GET only; no telemetry/writes).
+- **E7-T3 OCR adapter**: `advisers ocr <image>` + image attachments run a local executable from `ADVISERS_OCR_CMD` (no cloud OCR, 30s/200k limits); unset => fail closed; scanned PDF conversion not included.
 - **P2 encrypted handoff**: `export --all --encrypted --out file` / `import file --replace` (AES-256-GCM + scrypt; passphrase via `ADVISERS_EXPORT_PASSPHRASE`, never stored); automatic at-rest DB encryption is still not implemented.
 - **E2-T2**: `capture --from-imap` read-only IMAP client (EXAMINE + UID FETCH BODY.PEEK[]; no write commands), env credentials, app-password guidance.
 - **E7 (partial)**: `deliver --format pdf` builds a Chinese PDF report via a system CJK font (`ADVISERS_PDF_FONT`); `office-read`/attachments read OFD text; OCR remains explicitly unsupported/fail-closed.
@@ -34,7 +35,7 @@
 - `capture`/`chat` fail closed for `secrecy > 0` before model egress.
 
 ### Verified
-- `pnpm -r test`: 225 tests, 0 fail (this preview adds E0/E1/E2/E3/JSON/MCP/UI tests).
+- `pnpm -r test`: 226 tests, 0 fail (this preview adds E0/E1/E2/E3/JSON/MCP/UI tests).
 - `pnpm -r build` and `pnpm -r typecheck` pass.
 - Real-model smoke (2026-11-14): `.eml` import produced a pending candidate with
   verbatim quote; `capture --file note.docx` produced a pending candidate and

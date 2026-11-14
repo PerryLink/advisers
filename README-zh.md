@@ -12,7 +12,7 @@ Advisers 不是聊天框，也不是情感陪伴。它维护三本账：
 
 ## 状态
 
-`advisers@0.2.0-preview.64`（core `advisers-core@0.2.0-preview.22`）已 staged（待 OTP 批准；npm `next` 仍是旧的 0.1 preview，批准前不要用它评估）：
+`advisers@0.2.0-preview.65`（core `advisers-core@0.2.0-preview.22`）已 staged（待 OTP 批准；npm `next` 仍是旧的 0.1 preview，批准前不要用它评估）：
 
 > 需要 **Node >= 22.13**；Windows/PowerShell/BOM 说明见 [docs/QUICKSTART.md](docs/QUICKSTART.md)。
 

@@ -55,7 +55,7 @@ test('extracts text from PDF and rejects path escape/unsupported types', async (
     assert.match((await extractAttachment('x.pdf', { cwd: dir })).text, /Hello PDF/)
     await assert.rejects(() => extractAttachment('../outside', { cwd: dir }), /escapes workspace/)
     writeFileSync(join(dir, 'x.png'), 'x')
-    await assert.rejects(() => extractAttachment('x.png', { cwd: dir }), /unsupported attachment/)
+    await assert.rejects(() => extractAttachment('x.png', { cwd: dir }), /unsupported attachment|OCR is not configured/)
   } finally {
     rmSync(dir, { recursive: true, force: true })
   }

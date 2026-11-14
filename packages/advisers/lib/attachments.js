@@ -2,12 +2,14 @@ import { readFile, stat } from 'node:fs/promises'
 import { existsSync, lstatSync, realpathSync } from 'node:fs'
 import { extname, isAbsolute, relative, resolve } from 'node:path'
 import JSZip from 'jszip'
+import { runLocalOcr, ocrConfigured } from './ocr.js'
 
 const MAX_FILE_BYTES = 10 * 1024 * 1024
 const MAX_UNZIP_BYTES = 20 * 1024 * 1024
 const MAX_CHARS = 20_000
 const TEXT_EXT = new Set(['.txt', '.md', '.markdown', '.json', '.csv', '.log', '.yaml', '.yml', '.xml', '.html'])
 const OFFICE_EXT = new Set(['.docx', '.xlsx', '.pptx'])
+const IMAGE_EXT = new Set(['.png', '.jpg', '.jpeg', '.webp', '.bmp', '.tif', '.tiff'])
 
 function safePath(cwd, input) {
   const root = realpathSync(cwd)
@@ -138,6 +140,12 @@ export async function extractAttachment(input, { cwd = process.cwd() } = {}) {
     const { text, truncated } = truncate(raw)
     if (!text) throw new Error(`no extractable text in ${name} (OFD image-only?)`)
     return { name, path, kind: 'ofd', text, truncated, bytes: info.size }
+  }
+  if (IMAGE_EXT.has(ext)) {
+    if (!ocrConfigured()) throw new Error(`image OCR is not configured; set ADVISERS_OCR_CMD to a local OCR executable (${name})`)
+    const raw = await runLocalOcr(path, { cwd })
+    const { text, truncated } = truncate(raw)
+    return { name, path, kind: 'ocr', text, truncated, bytes: info.size }
   }
   if (ext === '.pdf') {
     const raw = await pdfText(path)
