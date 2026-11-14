@@ -292,3 +292,15 @@ test('agent repairs a missing reasoning_content 400 once', async () => {
     assert.equal(typeof sawEmpty, 'boolean')
   } finally { rmSync(cwd, { recursive: true, force: true }) }
 })
+
+test('office_check infers xlsx kind instead of crashing', async () => {
+  const { buildXlsx } = await import('../../office/dist/index.js')
+  const cwd = mkdtempSync(join(tmpdir(), 'advisers-check-'))
+  try {
+    const buffer = await buildXlsx({ columns: [{ header: '项目', key: 'a' }, { header: '金额', key: 'b' }], rows: [{ a: '差旅', b: 80 }] })
+    writeFileSync(join(cwd, 'b.xlsx'), buffer)
+    const result = await executeTool('office_check', { path: 'b.xlsx' }, { cwd })
+    assert.equal(result.ok, true)
+    assert.equal(result.result.ok, true)
+  } finally { rmSync(cwd, { recursive: true, force: true }) }
+})

@@ -227,7 +227,9 @@ export async function executeTool(name, args, { cwd = process.cwd(), ledger, bac
   if (name === 'office_check') {
     const office = await loadOffice()
     const target = safePath(cwd, args.path)
-    return { ok: true, artifact: false, result: await office.checkOffice(await readFile(target)) }
+    const kind = String(args.path).split('.').pop()?.toLowerCase()
+    if (!['docx', 'xlsx', 'pptx'].includes(kind)) throw new Error('office_check supports docx/xlsx/pptx')
+    return { ok: true, artifact: false, result: await office.checkOffice(await readFile(target), kind) }
   }
   if (name === 'office_read') {
     const target = safePath(cwd, args.path)

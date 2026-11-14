@@ -123,7 +123,9 @@ export class Ledger {
       f.subject === input.subject &&
       f.predicate === input.predicate &&
       (f.matterId ?? '') === (input.matterId ?? '')
-    const current = [...this.facts.values()].find(key)
+    // Conversation echoes must not supersede each other; otherwise only the
+    // latest user message remains searchable.
+    const current = input.predicate === 'said' ? undefined : [...this.facts.values()].find(key)
     const incomingRank = this.authorityRank(input.authority ?? 'user')
     const now = this.clock.now()
     if (current && current.object === input.object) {
@@ -193,10 +195,12 @@ export class Ledger {
   }
 
   searchFacts(query: string, { matterId, limit = 3 }: { matterId?: Id; limit?: number } = {}): Fact[] {
-    const terms = String(query).toLowerCase().split(/\s+/).filter(Boolean)
+    const terms = String(query).toLowerCase().split(/[^\p{L}\p{N}]+/u).filter(Boolean)
+    if (!terms.length) return []
     return this.listFacts(matterId).filter((f) => {
       const text = `${f.subject} ${f.predicate} ${f.object}`.toLowerCase()
-      return terms.every((t) => text.includes(t))
+      const hits = terms.filter((t) => text.includes(t)).length
+      return hits >= Math.min(2, terms.length)
     }).sort((a, b) => this.authorityRank(b.authority) - this.authorityRank(a.authority) || b.recordedAt.localeCompare(a.recordedAt)).slice(0, limit)
   }
 

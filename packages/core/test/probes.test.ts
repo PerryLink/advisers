@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict'
 import test from 'node:test'
-import { INTENT_PROBES, buildIntentBrief, runIntentProbes } from '../src/index.ts'
+import { INTENT_PROBES, Ledger, buildIntentBrief, runIntentProbes } from '../src/index.ts'
 
 test('intent probe suite: 30 cases, at least 90% pass', () => {
   const results = runIntentProbes()
@@ -22,4 +22,13 @@ test('recall questions execute instead of asking for a deadline', () => {
   assert.equal(brief.action, 'execute')
   assert.equal(brief.deliverable, 'answer')
   assert.equal(brief.questions.length, 0)
+})
+
+test('conversation said facts do not supersede each other', () => {
+  const ledger = new Ledger()
+  const matter = ledger.addMatter({ title: 'm' })
+  ledger.remember({ matterId: matter.id, subject: 'user', predicate: 'said', object: '客户 B 的预算是 80 万。' })
+  ledger.remember({ matterId: matter.id, subject: 'user', predicate: 'said', object: '客户 C 的负责人是李总。' })
+  assert.equal(ledger.listFacts(matter.id).length, 2)
+  assert.equal(ledger.searchFacts('客户 B 的预算是多少？', { matterId: matter.id })[0]?.object, '客户 B 的预算是 80 万。')
 })
