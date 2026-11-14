@@ -208,3 +208,15 @@ node $A tui --once        # read-only dashboard snapshot
 
 Both are local/no-cloud; the timestamp adapter is opt-in and fails closed when
 unset. The TUI is read-only; all writes stay in CLI commands.
+
+## N. File-based encrypted sync (optional)
+
+```powershell
+$env:ADVISERS_SYNC_PASSPHRASE = "at least 8 chars"
+node $A sync push --dir .\Sync\advisers --device laptop
+node $A sync status --dir .\Sync\advisers
+node $A sync pull --dir .\Sync\advisers
+```
+
+Encrypted whole-DB snapshots in a **user-provided** folder; no Advisers server,
+no merge, last-snapshot-wins. See `docs/SYNC.md`.

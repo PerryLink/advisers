@@ -1,14 +1,32 @@
-# Optional sync (P2, not implemented)
+# File-based E2EE snapshot sync (P2 prototype)
 
-Advisers is local-first by design; there is no cloud sync in 0.2.
+Advisers does **not** run a sync server and has no cloud account. It can write
+encrypted whole-database snapshots into a directory that your existing tool
+(OneDrive, Dropbox, Syncthing, rsync, NAS) already replicates.
 
-If sync is ever added, the minimum contract is:
+```sh
+ADVISERS_SYNC_PASSPHRASE='at least 8 chars' \
+  advisers sync push --dir ~/Sync/advisers --device laptop
 
-- end-to-end encrypted, user-held key; server cannot read ledger/evidence;
-- opt-in, per-matter; no default upload;
-- conflict resolution at the ledger-operation level (not last-write-wins on files);
-- every sync event audited; `privacy --prove` must show sync state;
-- no team/multi-tenant semantics without a separate product decision.
+ADVISERS_SYNC_PASSPHRASE='at least 8 chars' \
+  advisers sync status --dir ~/Sync/advisers --json
 
-Until implemented, use `export --encrypted` / `import` for handoff and
-`vault seal` for idle-at-rest encryption. Do not claim cloud sync exists.
+ADVISERS_SYNC_PASSPHRASE='at least 8 chars' \
+  advisers sync pull --dir ~/Sync/advisers
+```
+
+## Semantics
+
+- Whole `state.db` snapshot; AES-256-GCM + scrypt (reuses the vault envelope).
+- Filenames: `advisers-<device>-<UTC timestamp>.enc.json`; ciphertext only.
+- `pull` chooses the newest snapshot by mtime, verifies SHA256, backs up the local
+  DB as `state.db.before-sync-*`, then atomically replaces it.
+- Last-snapshot-wins. There is **no merge/multi-writer conflict resolution** and
+  no continuous sync; run push/pull explicitly.
+- The passphrase comes from `ADVISERS_SYNC_PASSPHRASE`; it is not stored.
+
+## Not provided
+
+Team/multi-tenant sync, real-time merge, server accounts, background sync,
+per-matter selective sync. Those require a separate product decision and
+security design. Until then, do not describe this as "cloud sync".

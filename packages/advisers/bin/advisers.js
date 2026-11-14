@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 import { chmodSync, copyFileSync, existsSync, mkdirSync, readdirSync, readFileSync, rmSync, statSync, writeFileSync } from 'node:fs'
-import { homedir } from 'node:os'
+import { homedir, hostname } from 'node:os'
 import { createHash, randomBytes, randomUUID } from 'node:crypto'
 import { basename, dirname, extname, join } from 'node:path'
 let SqliteStore
@@ -36,6 +36,7 @@ import { buildSimplePdf, findCjkFont } from '../lib/pdf.js'
 import { decryptJson, encryptJson, isVaultEnvelope } from '../lib/vault.js'
 import { runLocalOcr } from '../lib/ocr.js'
 import { runLocalTimestamp } from '../lib/timestamp.js'
+import { listSnapshots, pullSnapshot, pushSnapshot } from '../lib/sync.js'
 
 let core
 if (process.env.ADVISERS_CORE_LOCAL === '1') {
@@ -313,6 +314,7 @@ Usage:
   advisers export [--all] [--encrypted] [--out file]  export ledger (AES-256-GCM with passphrase)
   advisers import <file> [--replace]  import an export (encrypted or plain)
   advisers vault seal [--out f] [--remove] | unseal [f] | status  AES-256-GCM database vault
+  advisers sync push|pull|status --dir <dir>  file-based E2EE snapshot sync (user-provided dir)
   advisers backup <path.db>   checkpoint and copy the SQLite database
   advisers brief [--deep] <text>  print the IntentBrief; --deep adds model refinement
   advisers --version          print the CLI version
@@ -436,7 +438,7 @@ function purgeMatter(id, confirmed) {
 function parseFlags(args) {
   const flags = {}
   const positional = []
-  const booleanFlags = new Set(['web', 'deep', 'all', 'yes', 'json', 'list', 'force', 'apply', 'quiet', 'help', 'content', 'ics', 'deliver', 'install', 'uninstall', 'status', 'calendar', 'pack', 'from-imap', 'remove'])
+  const booleanFlags = new Set(['web', 'deep', 'all', 'yes', 'json', 'list', 'force', 'apply', 'quiet', 'help', 'content', 'ics', 'deliver', 'install', 'uninstall', 'status', 'calendar', 'pack', 'from-imap', 'remove', 'force'])
   for (let i = 0; i < args.length; i++) {
     if (args[i].startsWith('--')) {
       const key = args[i].slice(2)
@@ -2212,6 +2214,48 @@ async function tui(args) {
   })
 }
 
+function syncPass() {
+  const pass = process.env.ADVISERS_SYNC_PASSPHRASE
+  if (!pass || pass.length < 8) { console.error('sync requires ADVISERS_SYNC_PASSPHRASE (min 8 chars)'); process.exitCode = 1; return null }
+  return pass
+}
+
+function syncCommand(args) {
+  const { flags, positional } = parseFlags(args)
+  const sub = positional[0]
+  const dir = typeof flags.dir === 'string' ? flags.dir : undefined
+  if (!dir) { console.error('usage: advisers sync push|pull|status --dir <sync-dir>'); process.exitCode = 1; return }
+  if (sub === 'status') {
+    const snaps = listSnapshots(dir)
+    if (flags.json) { console.log(JSON.stringify(snaps, null, 2)); return }
+    console.log(`sync dir: ${dir}`)
+    if (!snaps.length) { console.log('no snapshots'); return }
+    for (const s of snaps.slice(0, 10)) console.log(`  ${s.name}  ${(s.bytes / 1024).toFixed(1)} KB  ${new Date(s.mtimeMs).toISOString()}`)
+    return
+  }
+  const pass = syncPass(); if (!pass) return
+  ensureHome()
+  if (sub === 'push') {
+    if (!existsSync(DB)) { console.error(`no database at ${DB}`); process.exitCode = 1; return }
+    try {
+      const store = new SqliteStore(DB)
+      store.appendAudit({ actor: 'local', action: 'sync.push', allowed: true, reason: basename(dir) })
+      store.db.exec('PRAGMA wal_checkpoint(TRUNCATE)')
+      store.db.close()
+      const result = pushSnapshot({ dir, dbPath: DB, passphrase: pass, device: typeof flags.device === 'string' ? flags.device : hostname() })
+      console.log(`pushed ${result.file}`)
+      console.log(`sha256 ${result.sha256}`)
+    } catch (error) { console.error(`sync push failed: ${error.message}`); process.exitCode = 1 }
+  } else if (sub === 'pull') {
+    try {
+      const result = pullSnapshot({ dir, dbPath: DB, passphrase: pass, file: typeof flags.file === 'string' ? flags.file : undefined, force: Boolean(flags.force) })
+      if (!result.changed) console.log('local database already matches the latest snapshot')
+      else console.log(`pulled ${result.file} (${result.sha256})${result.backup ? `; backup ${result.backup}` : ''}`)
+      if (result.changed) { try { dbStore()?.appendAudit({ actor: 'local', action: 'sync.pull', allowed: true, reason: result.file }) } catch {} }
+    } catch (error) { console.error(`sync pull failed: ${error.message}`); process.exitCode = 1 }
+  } else { console.error('usage: advisers sync push|pull|status --dir <sync-dir>'); process.exitCode = 1 }
+}
+
 function printEvidence(args) {
   const { flags, positional } = parseFlags(args)
   ensureHome()
@@ -2906,6 +2950,8 @@ if (!command) {
   why(args[0])
 } else if (command === 'forget') {
   forget(args[0])
+} else if (command === 'sync') {
+  syncCommand(args)
 } else if (command === 'vault') {
   const sub = args[0]
   if (sub === 'seal') vaultSeal(args.slice(1))
