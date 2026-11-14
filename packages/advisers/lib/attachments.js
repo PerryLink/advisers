@@ -65,6 +65,19 @@ async function pptxText(zip) {
   return out.join('\n\n').trim()
 }
 
+export async function ofdText(buffer) {
+  const zip = await loadZip(buffer)
+  const names = Object.keys(zip.files).filter((n) => /(?:^|\/)Content\.xml$/i.test(n) || /(?:^|\/)Pages\/[^/]+\.xml$/i.test(n)).sort()
+  const out = []
+  for (const name of names) {
+    const xml = await zip.file(name)?.async('string')
+    if (!xml) continue
+    const texts = [...xml.matchAll(/<(?:ofd:)?TextCode[^>]*>([\s\S]*?)<\/(?:ofd:)?TextCode>/gi)].map((m) => decodeXml(m[1]))
+    if (texts.length) out.push(texts.join('\n'))
+  }
+  return out.join('\n\n').replace(/\n{3,}/g, '\n\n').trim()
+}
+
 async function pdfText(path) {
   const pdfjs = await import('pdfjs-dist/legacy/build/pdf.mjs')
   const data = new Uint8Array(await readFile(path))
@@ -119,6 +132,12 @@ export async function extractAttachment(input, { cwd = process.cwd() } = {}) {
     const { text, truncated } = truncate(raw)
     if (!text) throw new Error(`no extractable text in ${name}`)
     return { name, path, kind: ext.slice(1), text, truncated, bytes: info.size }
+  }
+  if (ext === '.ofd') {
+    const raw = await ofdText(await readFile(path))
+    const { text, truncated } = truncate(raw)
+    if (!text) throw new Error(`no extractable text in ${name} (OFD image-only?)`)
+    return { name, path, kind: 'ofd', text, truncated, bytes: info.size }
   }
   if (ext === '.pdf') {
     const raw = await pdfText(path)

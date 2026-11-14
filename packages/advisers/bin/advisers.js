@@ -15,7 +15,7 @@ try {
 }
 import { runAgent } from '../lib/agent.js'
 import { chatCompletion } from '../lib/model.js'
-import { extractAttachment } from '../lib/attachments.js'
+import { extractAttachment, ofdText } from '../lib/attachments.js'
 import { applyPreferenceDecay, buildRoutineCandidate, correctionStatement } from '../lib/learning.js'
 import { checkRoutine } from '../lib/routine.js'
 import { backupBeforeWrite, diffLatest, listBackups, undoLatest } from '../lib/undo.js'
@@ -324,7 +324,7 @@ Usage:
   advisers deliver [--commit id] [--type confirmation|weekly|statement|ledger] [--format docx|xlsx|pdf] [--out f]  交付物
   advisers deliveries --pack [--out dir]        证据包（manifest/README/SHA256SUMS + DOCX 回执）
   advisers policy check <text> policy/crisis check
-  advisers office-read <file>  read DOCX/XLSX/PPTX structural text
+  advisers office-read <file>  read DOCX/XLSX/PPTX/OFD text
   advisers office-edit <file> <ops.json> [out]  surgical Office edit
   advisers verify <file> [--content]  structural + deterministic content checks
   advisers office <kind> <spec.json> <out>
@@ -2717,11 +2717,15 @@ if (!command) {
   const file = args[0]
   if (!file) { console.error('usage: advisers office-read <file>'); process.exitCode = 1 }
   else {
-    let mod
-    if (process.env.ADVISERS_OFFICE_LOCAL === '1') mod = await import('../../office/dist/index.js')
-    else { try { mod = await import('advisers-office') } catch { mod = await import('../../office/dist/index.js') } }
-    const doc = await mod.readOffice(readFileSync(file))
-    console.log(mod.officeToText(doc, Number(args[1]) || 20_000))
+    if (file.toLowerCase().endsWith('.ofd')) {
+      try { console.log(await ofdText(readFileSync(file))) } catch (error) { console.error(`ofd read failed: ${error.message}`); process.exitCode = 1 }
+    } else {
+      let mod
+      if (process.env.ADVISERS_OFFICE_LOCAL === '1') mod = await import('../../office/dist/index.js')
+      else { try { mod = await import('advisers-office') } catch { mod = await import('../../office/dist/index.js') } }
+      const doc = await mod.readOffice(readFileSync(file))
+      console.log(mod.officeToText(doc, Number(args[1]) || 20_000))
+    }
   }
 } else if (command === 'verify') {
   const file = args[0]
