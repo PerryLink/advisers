@@ -1,6 +1,6 @@
 # Changelog
 
-## 0.2.0-preview.69 (staged, approval pending)
+## 0.2.0-preview.70 (staged, approval pending)
 
 ### Added
 - **E1 reminders**: `advisers remind` (buckets/dedupe/snooze, 5 rule families),
@@ -31,6 +31,7 @@
 - Docs: `docs/REMINDERS.md`, `docs/SOURCE-SCHEMA.md`, `docs/CLI-JSON.md`, `docs/POSITIONING.md`, `docs/OFD-OCR.md`, `docs/PRICING-CHANNEL.md`.
 
 ### Fixed
+- Agent no longer tries to backfill facts from earlier turns via `memory_propose` (whose quote must come from the current message); this fixes the continuity-50 8/9 regression. Re-run: 9/9. See `eval/results/continuity-50-round12-*.md`.
 - `advisers audit` now calls `ensureHome()`/`ensureAuditKey()`, verifies fresh and
   recorded chains, and exits non-zero when the chain is broken.
 - `capture` now records a real turn and stores `sessionId` + `turnId`; accepting
