@@ -12,6 +12,7 @@ advisers remind                      # human view
 advisers remind --json               # scripts
 advisers remind --ics out.ics        # VEVENT + VALARM (-P1D, -PT1H)
 advisers remind --deliver            # append to ~/.advisers/reminders.log + audit
+advisers remind --deliver --notify   # + local notification adapter
 advisers remind install              # write opt-in scheduler scripts
 advisers remind uninstall
 advisers remind status
@@ -24,8 +25,10 @@ advisers remind status
   register OS tasks without the user doing so. This keeps the local-first promise
   and avoids surprising persistence.
 - **No cloud push.** `.ics` is imported into the user's existing calendar; the
-  calendar app owns the actual notification. `--deliver` only writes a local log
-  and an audit event.
+  calendar app owns the actual notification. `--deliver` writes a local log and
+  an audit event. `--notify` is best-effort local: `ADVISERS_NOTIFY_CMD`, then
+  macOS osascript / Windows Toast / WSL Toast / Linux notify-send; if none is
+  available it reports `log-only` and never pretends a push happened.
 - **No sensitive payload in logs/audit.** Audit stores commitment ids/levels, not
   client names or message bodies.
 - **Notification tooling is best-effort.** On a machine without

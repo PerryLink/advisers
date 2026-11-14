@@ -37,6 +37,7 @@ import { decryptJson, encryptJson, isVaultEnvelope } from '../lib/vault.js'
 import { runLocalOcr } from '../lib/ocr.js'
 import { runLocalTimestamp } from '../lib/timestamp.js'
 import { listSnapshots, pullSnapshot, pushSnapshot } from '../lib/sync.js'
+import { sendNotification } from '../lib/notify.js'
 
 let core
 if (process.env.ADVISERS_CORE_LOCAL === '1') {
@@ -284,7 +285,7 @@ Usage:
   advisers search <text>       full-text search old turns
   advisers compact ls|rollback summary versions
   advisers today [--calendar] one-screen today/week/waiting view (+ local events)
-  advisers remind [--json] [--ics [path]] [--deliver]  due reminders + ICS/VALARM export
+  advisers remind [--json] [--ics [path]] [--deliver] [--notify]  due reminders + ICS/VALARM export
   advisers remind install|uninstall|status  local scheduler scripts (opt-in)
   advisers calendar import --ics <file>  local .ics read-only import
   advisers risks              up to 3 deterministic obligation risks
@@ -438,7 +439,7 @@ function purgeMatter(id, confirmed) {
 function parseFlags(args) {
   const flags = {}
   const positional = []
-  const booleanFlags = new Set(['web', 'deep', 'all', 'yes', 'json', 'list', 'force', 'apply', 'quiet', 'help', 'content', 'ics', 'deliver', 'install', 'uninstall', 'status', 'calendar', 'pack', 'from-imap', 'remove', 'force'])
+  const booleanFlags = new Set(['web', 'deep', 'all', 'yes', 'json', 'list', 'force', 'apply', 'quiet', 'help', 'content', 'ics', 'deliver', 'install', 'uninstall', 'status', 'calendar', 'pack', 'from-imap', 'remove', 'force', 'notify'])
   for (let i = 0; i < args.length; i++) {
     if (args[i].startsWith('--')) {
       const key = args[i].slice(2)
@@ -1917,8 +1918,8 @@ async function remind(args) {
     mkdirSync(dir, { recursive: true, mode: 0o700 })
     const nodeBin = process.execPath
     const cli = process.argv[1]
-    writeFileSync(join(dir, 'remind.sh'), `#!/bin/sh\n"${nodeBin}" "${cli}" remind --deliver >> "${join(HOME, 'reminders.log')}" 2>&1\n`, { mode: 0o700 })
-    writeFileSync(join(dir, 'remind.ps1'), `& "${nodeBin}" "${cli}" remind --deliver *>> "${join(HOME, 'reminders.log')}"\n`, { mode: 0o700 })
+    writeFileSync(join(dir, 'remind.sh'), `#!/bin/sh\n"${nodeBin}" "${cli}" remind --deliver --notify >> "${join(HOME, 'reminders.log')}" 2>&1\n`, { mode: 0o700 })
+    writeFileSync(join(dir, 'remind.ps1'), `& "${nodeBin}" "${cli}" remind --deliver --notify *>> "${join(HOME, 'reminders.log')}"\n`, { mode: 0o700 })
     writeFileSync(join(dir, 'README.txt'), 'Install one of these user-level schedules (opt-in):\nLinux:  systemd --user timer or cron: 0 9 * * * sh ' + join(dir, 'remind.sh') + '\nWindows: Task Scheduler -> run remind.ps1 daily\nOr import ~/.advisers/reminders.ics into your calendar.\n')
     store?.appendAudit({ actor: 'local', action: 'notify.install', allowed: true, reason: dir })
     console.log(`scheduler scripts written: ${dir}`)
@@ -1957,7 +1958,13 @@ async function remind(args) {
   if (flags.deliver) {
     const line = `${new Date().toISOString()}\t${reminders.length}\t${reminders.map((r) => r.action).join('；')}\n`
     writeFileSync(join(HOME, 'reminders.log'), line, { flag: 'a', mode: 0o600 })
-    store?.appendAudit({ actor: 'local', action: 'notify.delivered', allowed: true, reason: `${reminders.length} reminders` })
+    let channel = 'log'
+    if (flags.notify) {
+      const sent = await sendNotification({ title: 'Advisers · 到期提醒', body: `${reminders.length} 条承诺到期或即将到期` })
+      channel = sent.sent ? sent.channel : 'log-only'
+    }
+    store?.appendAudit({ actor: 'local', action: 'notify.delivered', allowed: true, reason: `${reminders.length} reminders channel=${channel}` })
+    if (flags.notify) console.log(`通知通道：${channel}`)
   }
 }
 

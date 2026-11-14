@@ -1,6 +1,6 @@
 # Changelog
 
-## 0.2.0-preview.68 (staged, approval pending)
+## 0.2.0-preview.69 (staged, approval pending)
 
 ### Added
 - **E1 reminders**: `advisers remind` (buckets/dedupe/snooze, 5 rule families),
@@ -20,6 +20,7 @@
   matters.
 - **E5 partial**: `memory search` also searches turns; `why`/`forget` accept fact ids.
 - **E8**: `advisers ui [--port n]` local-only read-only view (127.0.0.1, GET only; no telemetry/writes).
+- **E1-T3 local notifications**: `remind --deliver --notify` with `ADVISERS_NOTIFY_CMD` / macOS osascript / Windows-WSL Toast / Linux notify-send; no channel => explicit `log-only` (no fake push), body only count-style.
 - **P2 file-based sync**: `sync push|pull|status --dir` encrypted whole-DB snapshots in a user-provided sync folder (AES-256-GCM; last-snapshot-wins; pull backs up local DB; no server/merge).
 - **P2 timestamp/TUI**: local timestamp/signing adapter (`ADVISERS_TIMESTAMP_CMD`) and read-only `advisers tui --once`; plugin boundary and optional-sync contracts documented (no marketplace/sync implemented).
 - **E9-T3 vault mode**: `vault seal --remove` / `unseal` / `status` encrypts the whole SQLite DB with AES-256-GCM+scrypt at rest (explicit opt-in, SHA256 verified; not transparent).
@@ -38,7 +39,7 @@
 - `capture`/`chat` fail closed for `secrecy > 0` before model egress.
 
 ### Verified
-- `pnpm -r test`: 230 tests, 0 fail (this preview adds E0/E1/E2/E3/JSON/MCP/UI tests).
+- `pnpm -r test`: 232 tests, 0 fail (this preview adds E0/E1/E2/E3/JSON/MCP/UI tests).
 - `pnpm -r build` and `pnpm -r typecheck` pass.
 - Real-model smoke (2026-11-14): `.eml` import produced a pending candidate with
   verbatim quote; `capture --file note.docx` produced a pending candidate and

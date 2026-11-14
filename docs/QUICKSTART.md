@@ -108,7 +108,7 @@ If `advisers-office` is missing, install it explicitly; the CLI does not pull it
 node $A remind                     # due now/next 7 days
 node $A remind --json              # scripts
 node $A remind --ics out.ics       # import into Google/Outlook/system calendar
-node $A remind --deliver           # append to ~/.advisers/reminders.log
+node $A remind --deliver --notify  # local log + best-effort notification
 node $A remind install             # write opt-in scheduler scripts, print instructions
 ```
 
