@@ -33,6 +33,7 @@ import { fetchImapMessages } from '../lib/imap.js'
 import { buildEvidencePack, evidenceForCommitment, evidenceForFact, evidenceForPreference, sha256Hex, toDocxRows, verifyPack } from '../lib/evidence.js'
 import { createReadOnlyServer } from '../lib/ui.js'
 import { buildSimplePdf, findCjkFont } from '../lib/pdf.js'
+import { decryptJson, encryptJson, isVaultEnvelope } from '../lib/vault.js'
 
 let core
 if (process.env.ADVISERS_CORE_LOCAL === '1') {
@@ -307,7 +308,8 @@ Usage:
   advisers privacy [--json] [--prove]  show/verify local data & egress facts
   advisers why <pref-id>      explain a preference
   advisers forget <pref-id>   forget a preference (tombstone)
-  advisers export [--all]     export ledger (or ledger + SQLite tables) as JSON
+  advisers export [--all] [--encrypted] [--out file]  export ledger (AES-256-GCM with passphrase)
+  advisers import <file> [--replace]  import an export (encrypted or plain)
   advisers backup <path.db>   checkpoint and copy the SQLite database
   advisers brief [--deep] <text>  print the IntentBrief; --deep adds model refinement
   advisers --version          print the CLI version
@@ -1334,14 +1336,55 @@ function forget(id) {
   if (!ok) process.exitCode = 1
 }
 
-function exportLedger(all = false) {
+function exportLedger(all = false, options = {}) {
   const ledger = loadLedger().toJSON()
-  if (!all) { console.log(JSON.stringify(ledger, null, 2)); return }
-  const store = dbStore()
-  const tables = ['sessions', 'turns', 'session_summaries', 'summary_versions', 'deliveries', 'nudges', 'task_runs', 'audit', 'memory_candidates', 'permit_consumed']
-  const data = {}
-  for (const table of tables) data[table] = store ? store.db.prepare(`SELECT * FROM ${table}`).all() : []
-  console.log(JSON.stringify({ version: VERSION, exportedAt: now(), ledger, data }, null, 2))
+  const payload = all ? (() => {
+    const store = dbStore()
+    const tables = ['sessions', 'turns', 'session_summaries', 'summary_versions', 'deliveries', 'nudges', 'task_runs', 'audit', 'memory_candidates', 'permit_consumed']
+    const data = {}
+    for (const table of tables) data[table] = store ? store.db.prepare(`SELECT * FROM ${table}`).all() : []
+    return { version: VERSION, exportedAt: now(), ledger, data }
+  })() : ledger
+  let text = JSON.stringify(payload, null, 2)
+  if (options.encrypted) {
+    const passphrase = process.env.ADVISERS_EXPORT_PASSPHRASE
+    if (!passphrase) { console.error('export --encrypted requires ADVISERS_EXPORT_PASSPHRASE (min 8 chars)'); process.exitCode = 1; return }
+    text = JSON.stringify(encryptJson(payload, passphrase), null, 2)
+  }
+  if (options.out) {
+    ensureHome()
+    writeFileSync(options.out, text + '\n', { mode: 0o600 })
+    dbStore()?.appendAudit({ actor: 'local', action: options.encrypted ? 'export.encrypted' : 'export', allowed: true, reason: basename(options.out) })
+    console.log(`wrote ${options.out}${options.encrypted ? ' (AES-256-GCM)' : ''}`)
+  } else console.log(text)
+}
+
+function importLedger(file, { replace = false } = {}) {
+  if (!file) { console.error('usage: advisers import <file> [--replace]'); process.exitCode = 1; return }
+  if (!replace) { console.error('import replaces the local ledger; pass --replace to confirm'); process.exitCode = 1; return }
+  let payload
+  try {
+    const raw = JSON.parse(readFileSync(file, 'utf8'))
+    if (isVaultEnvelope(raw)) {
+      const passphrase = process.env.ADVISERS_EXPORT_PASSPHRASE
+      if (!passphrase) { console.error('encrypted import requires ADVISERS_EXPORT_PASSPHRASE'); process.exitCode = 1; return }
+      payload = decryptJson(raw, passphrase)
+    } else payload = raw
+  } catch (error) { console.error(`import failed: ${error.message}`); process.exitCode = 1; return }
+  const data = payload?.ledger ?? payload
+  if (!data || !Array.isArray(data.matters)) { console.error('import file does not contain an Advisers ledger'); process.exitCode = 1; return }
+  ensureHome()
+  try {
+    const store = dbStore()
+    if (store) copyFileSync(DB, join(HOME, `import-backup-${Date.now()}.db`))
+  } catch {}
+  try {
+    const ledger = Ledger.fromJSON(data)
+    saveLedger(ledger)
+    dbStore()?.appendAudit({ actor: 'local', action: 'import.ledger', allowed: true, reason: basename(file) })
+    console.log(`imported ${data.matters.length} matters, ${data.commitments?.length ?? 0} commitments`)
+    if (payload?.data) console.error('note: SQLite-only tables in the import were not merged; ledger was replaced.')
+  } catch (error) { console.error(`import failed: ${error.message}`); process.exitCode = 1 }
 }
 
 function backup(file) {
@@ -2723,7 +2766,10 @@ if (!command) {
 } else if (command === 'forget') {
   forget(args[0])
 } else if (command === 'export') {
-  exportLedger(args.includes('--all'))
+  const { flags } = parseFlags(args)
+  exportLedger(flags.all === true || args.includes('--all'), { encrypted: args.includes('--encrypted'), out: typeof flags.out === 'string' ? flags.out : undefined })
+} else if (command === 'import') {
+  importLedger(args.find((a) => !a.startsWith('--')), { replace: args.includes('--replace') })
 } else if (command === 'backup') {
   backup(args[0])
 } else if (command === 'brief') {

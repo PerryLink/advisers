@@ -164,3 +164,14 @@ The client only sends `LOGIN`, `EXAMINE`, `UID SEARCH`, `UID FETCH
 (BODY.PEEK[])` and `LOGOUT`; it never sends STORE/APPEND/EXPUNGE/COPY/MOVE.
 Use an app password, not your primary password. Environment variables are
 read per process and are not logged.
+
+## J. Encrypted handoff
+
+```powershell
+$env:ADVISERS_EXPORT_PASSPHRASE = "at least 8 chars"
+node $A export --all --encrypted --out handoff.enc.json
+node $A import handoff.enc.json --replace
+```
+
+AES-256-GCM + scrypt; passphrase is not stored. See `docs/ENCRYPTED-HANDOFF.md`.
+This is an encrypted handoff/backup, **not** automatic at-rest database encryption.
