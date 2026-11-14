@@ -12,7 +12,7 @@ Advisers 不是聊天框，也不是情感陪伴。它维护三本账：
 
 ## 状态
 
-`advisers@0.2.0-preview.59`（core `advisers-core@0.2.0-preview.22`）已 staged（待 OTP 批准；npm `next` 仍是旧的 0.1 preview，批准前不要用它评估）：
+`advisers@0.2.0-preview.60`（core `advisers-core@0.2.0-preview.22`）已 staged（待 OTP 批准；npm `next` 仍是旧的 0.1 preview，批准前不要用它评估）：
 
 > 需要 **Node >= 22.13**；Windows/PowerShell/BOM 说明见 [docs/QUICKSTART.md](docs/QUICKSTART.md)。
 
@@ -29,7 +29,7 @@ Advisers 不是聊天框，也不是情感陪伴。它维护三本账：
 - 提醒：`remind` + `.ics`/VALARM 导出 + 可选的本地调度脚本；`.ics` 日历只读导入；
 - 只读入口：`capture --from-mail` / `--from-transcript`（去重、全部候选需人工 accept、secret matter 拒绝）；
 - 证据/交付：`evidence show`、`deliveries --pack`（manifest + SHA256SUMS + DOCX 回执）、`deliver --type ...`（DOCX/XLSX）；
-- 隐私/MCP/JSON：`privacy --prove`、`mcp --stdio`（只读工具）、`status/commit/who/deliveries/remind/evidence --json`。
+- 隐私/MCP/JSON：`privacy --prove`、`mcp --stdio`（只读工具）、`ui`（本地只读视图）、`status/commit/who/deliveries/remind/evidence --json`。
 
 ```sh
 # 当前 preview 只 staged，等 OTP；公开 @next 还是旧 0.1 stub。

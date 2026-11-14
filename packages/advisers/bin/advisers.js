@@ -30,6 +30,7 @@ import { buildHistory, buildOpening, buildPins, continuityProbes, ensurePins, fi
 import { buildReminders, toIcs } from '../lib/remind.js'
 import { dedupeKey, parseEml, parseIcs, parseMbox, parseTranscript, toCaptureInput } from '../lib/importers.js'
 import { buildEvidencePack, evidenceForCommitment, evidenceForFact, evidenceForPreference, sha256Hex, toDocxRows, verifyPack } from '../lib/evidence.js'
+import { createReadOnlyServer } from '../lib/ui.js'
 
 let core
 if (process.env.ADVISERS_CORE_LOCAL === '1') {
@@ -316,6 +317,7 @@ Usage:
                               从中文工作内容抽取候选承诺（不自动入账）
   advisers capture --from-mail <file|dir> [--limit n]  .eml/.mbox 只读导入→候选
   advisers capture --from-transcript <file>      转写稿导入→候选（不录音/不入会）
+  advisers ui [--port n]                        本地只读视图（127.0.0.1，GET only）
   advisers mcp --stdio                          只读 MCP server（today/commit/who/evidence/remind）
   advisers evidence show <id> [--json]          承诺/事实/偏好→原文来源
   advisers deliver [--commit id] [--type confirmation|weekly|statement|ledger] [--format docx|xlsx] [--out f]  交付物
@@ -1783,6 +1785,28 @@ function printCalendarToday() {
   for (const e of events) console.log(`  ${e.startsAt.slice(11, 16)}  ${e.summary}${e.location ? ` · ${e.location}` : ''}`)
 }
 
+async function ui(args) {
+  const flags = parseFlags(args).flags
+  const port = Number(flags.port) || 17860
+  const ledger = loadLedger()
+  const store = dbStore()
+  const snapshot = {
+    today: () => {
+      const open = ledger.openCommitments()
+      return { open: open.length, commitments: open.map((c) => ({ id: c.id, action: c.action, dueAt: c.dueAt, creditor: c.creditor })) }
+    },
+    commitments: () => ledger.listCommitments().map((c) => ({ id: c.id, status: c.status, action: c.action, dueAt: c.dueAt, creditor: c.creditor })),
+    who: () => ({ mine: ledger.openCommitments().filter((c) => c.debtor === 'user' || c.debtor === 'agent'), waiting: ledger.openCommitments().filter((c) => c.debtor === 'third' || c.debtor.startsWith('third:')) }),
+    reminders: () => buildReminders(ledger, { now: new Date() }),
+  }
+  const app = createReadOnlyServer({ snapshot, port })
+  const url = await app.listen()
+  console.log(`advisers ui (read-only): ${url}`)
+  console.log('Ctrl-C to stop; no writes, no telemetry, 127.0.0.1 only.')
+  await new Promise((resolve) => process.once('SIGINT', resolve))
+  await app.close()
+}
+
 async function remind(args) {
   const { flags, positional } = parseFlags(args)
   ensureHome()
@@ -2537,6 +2561,8 @@ if (!command) {
   today(loadLedger(), { calendar: args.includes('--calendar'), sources: args.includes('--sources') })
 } else if (command === 'tick') {
   tick(loadLedger(), args.includes('--json'))
+} else if (command === 'ui') {
+  await ui(args)
 } else if (command === 'remind') {
   await remind(args)
 } else if (command === 'calendar') {

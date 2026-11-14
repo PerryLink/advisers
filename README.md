@@ -27,7 +27,7 @@ on any link package; adapters load one only when configured.
 
 ## Status
 
-`advisers@0.2.0-preview.59` (with `advisers-core@0.2.0-preview.22`) is **staged** on npm, awaiting OTP approval. The public `next` tag still points at the old `0.1.0-preview.2`; do not evaluate this build through it until approval:
+`advisers@0.2.0-preview.60` (with `advisers-core@0.2.0-preview.22`) is **staged** on npm, awaiting OTP approval. The public `next` tag still points at the old `0.1.0-preview.2`; do not evaluate this build through it until approval:
 
 > Requires **Node >= 22.13**. See [docs/QUICKSTART.md](docs/QUICKSTART.md) for Windows/PowerShell and BOM notes.
 
@@ -42,7 +42,7 @@ on any link package; adapters load one only when configured.
 - `advisers research --web` / `--url` does cited research through DeepSeek server web tools. This is an explicit **web** egress path; web citations are provider output, not local file evidence.
 - `advisers remind` + `.ics`/VALARM export + opt-in scheduler scripts; `calendar import --ics`; `capture --from-mail`/`--from-transcript` (read-only, deduped, pending candidates only);
 - `advisers evidence show` / `deliveries --pack` (manifest + SHA256SUMS + DOCX receipt) / `deliver --type ...` (DOCX/XLSX);
-- `advisers privacy --prove`, `advisers mcp --stdio` (read-only tools), and JSON output for status/commit/who/deliveries/remind/evidence.
+- `advisers privacy --prove`, `advisers mcp --stdio`, `advisers ui`（本地只读视图） (read-only tools), and JSON output for status/commit/who/deliveries/remind/evidence.
 - each turn sends a `latest_reminder` date/weekday/location/language marker so relative dates are grounded;
 - thinking mode: `ADVISERS_THINKING=off|on|auto`, `ADVISERS_THINKING_EFFORT=low|high|max`; `reasoning_content` is kept in memory only for the current tool loop and is not written to turns/summaries/audit/export/backup. This does not control provider-side logs or OS crash dumps;
 - DSH bundle (`dsh-advisers`) with `advisers_brief` + `advisers_office`; email/Feishu link packages are **libraries not wired into the CLI**; optional strict policy pack (see `packages/policy-strict/README.md`);
