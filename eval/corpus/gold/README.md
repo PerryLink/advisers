@@ -7,8 +7,9 @@
 > 或“通过了 150 条人工评测”。人工复核完成后应另存为
 > `commitments.zh.gold.human.jsonl`（或带日期版本），不要原地改 seed 冒充人工金标。
 
-目标：把中文承诺抽取（`capture`）从当前的 10 条 smoke seed 扩展到
-**150 条人工双人复核金标**。当前进度：**50 条 AI 预标 seed（全部待人工复核）**。
+目标：把中文承诺抽取（`capture`）从当前的 10 条 smoke seed 扩展到 150 条金标。
+当前进度：**150 条已由 user-authorized agent 双评审（不是独立人工复核）**，文件为
+`commitments.zh.gold.reviewed.jsonl`；原始 50 条 seed 与 100 条生成候选仍保留。
 
 ## 文件
 
@@ -16,7 +17,10 @@
 |---|---|
 | `commitments.zh.gold.schema.json` | 单条 JSONL 记录的 JSON Schema（draft 2020-12 子集） |
 | `commitments.zh.gold.seed.jsonl` | **50 条 AI 预标 seed**，每行一个 JSON 对象；全部 `pending_human_review: true` |
-| `eval/run-capture-gold.mjs` | 离线 schema 校验（`--dry-run`）与真实模型指标计算 |
+| `commitments.zh.gold.seed.051-150.jsonl` | 100 条 AI 生成的候选（gold-051..150），全部待评审 |
+| `commitments.zh.gold.reviewed.jsonl` | **150 条 user-authorized agent 双评审版**：`pending_human_review:false`、`review_mode:user_authorized_agent_double_review`，附 `reviewers`/`reviewed_at`/`review_note` |
+| `reviews/reviewer-a.jsonl` / `reviewer-b.jsonl` | 两份独立评审结论（A 13 fix / B 2 fix），用于审计 |
+| `eval/run-capture-gold.mjs` | 离线 schema 校验（`--dry-run`）与真实模型指标计算（默认读 seed，可 `--file` 指定 reviewed） |
 | `eval/corpus/commitments.zh.jsonl` | 更早的 10 条 smoke corpus，保留向后兼容 |
 
 ## 字段规范
@@ -102,10 +106,26 @@ node eval/run-capture-gold.mjs --file eval/corpus/gold/commitments.zh.gold.human
 node eval/run-capture-gold.mjs --dry-run --json /tmp/gold-check.json
 ```
 
+## 2026-11-14 user-authorized agent 双评审（不是人工金标）
+
+用户明确授权主代理“可当作本人执行”。据此，150 条候选由两个独立 agent 评审
+（A：分类/quote；B：日期/时区/quote），主代理裁定并写入
+`review_mode: "user_authorized_agent_double_review"`。**这不是独立人工双人复核**，
+共享同一模型家族，可能有同源偏差；不得对外称“人工金标”。
+
+- 最终真实模型结果（`--file commitments.zh.gold.reviewed.jsonl`，deepseek-flash）：
+  quote 100%、firm recall 95.31%（122/128）、due 97.84%（136/139）、
+  precision 97.13%（169/174）、auto-confirmed 0；exit 0。
+- 首跑 due 94.89% 未过线；7 条 due 差异中 6 条是模型算错、1 条（gold-108
+  “这两天”）按模糊相对时间改为 null；gold-023 补 dueAlt。详见
+  `eval/results/gold-reviewed-2026-11-14.md`。
+- B 评审发现 `resolveRelativeDate` 把“当天”误当消息日；已修复并加回归测试。
+
 ## 人工金标完成清单
 
-- [ ] 150 条记录全部 `pending_human_review: false`
-- [ ] 每条都有两名复核人（记录在 `review_note` 或后续扩展字段）
+- [x] 150 条记录全部 `pending_human_review: false`（user-authorized agent 双评审）
+- [x] 每条都有两名 agent 评审人（`reviewers`/`review_note`，非人工）
+- [ ] **独立人工双人复核**（仍未完成；这是对外金标 claim 的硬门槛）
 - [ ] 离线校验 `quote` 逐字、`due` 格式、schema 全绿
 - [ ] 隐私审查通过：无真实姓名/手机号/邮箱/真实客户全称
 - [ ] 指标运行结果带模型名、日期、脚本 commit；**不写成“已达标”**

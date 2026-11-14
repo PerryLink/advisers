@@ -48,3 +48,18 @@ layer**, not Microsoft Office. Do not claim MS Office compatibility from it.
   verified.
 - Not verified: Microsoft Office; WPS GUI visual fidelity; macros/forms; password
   protected files; scanned PDFs/OCR; printing/PDF export.
+
+## Microsoft Office installation check (2026-11-14)
+
+- `/Program Files/Microsoft Office` and `/Program Files (x86)/Microsoft Office`
+  contain only an `Office` folder; no `WINWORD.EXE` / `EXCEL.EXE` /
+  `POWERPNT.EXE` were found (searched to depth 6).
+- The Windows uninstall registry has no Office/Word/Excel/PowerPoint product
+  entries.
+- `Word.Application` / `Excel.Application` / `PowerPoint.Application` ProgIDs all
+  resolve to `...\Kingsoft\WPS Office\12.1.0.29680\office6`, i.e. WPS's
+  Office-compatible automation layer.
+- LibreOffice is not installed either.
+- Conclusion: **Microsoft Office cannot be validated on this host** (not
+  installed; installing it needs a license/admin action). The WPS evidence above
+  is the maximum honest claim.

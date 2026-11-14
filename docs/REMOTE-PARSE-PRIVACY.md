@@ -247,3 +247,23 @@ artifact(cloud_parsed) + receipt + audit(result)
 - **对现有命令**：`research` 仍是唯一既有“显式内容出网命令”，不受影响；`doc.review` 行为不变（但其 secret 缺口建议单独评估）；`export --all` 仅在存在 artifact 时新增表；`backup` 会包含 cloud 文本，需在用户文档标注。
 
 > 再次声明：**本文是设计提案，未实现，也不承诺实现时间。** 实现须先满足 §8 并回答 §9。
+
+## 11. 用户授权后的决策记录（2026-11-14，仍为 DESIGN ONLY）
+
+> 用户在本轮明确授权“外部阻塞能做的都做、可当作本人执行”。以下把 §9 的开放
+> 问题按保守默认落成决策，作为未来实现的输入；**本轮没有实现任何代码**，
+> 仓库里仍没有 remote-parse 命令/网络路径/表。
+
+| # | 问题 | 决策（用户授权下的保守默认） |
+|---|---|---|
+| 1 | 是否允许 remote parse | 允许作为**显式可选**能力，仅限非 secret matter；默认关闭。 |
+| 2 | 默认策略 | 默认 `off`；`ADVISERS_EGRESS=deny` 优先级最高；企业/涉密模式全局拒绝。 |
+| 3 | 解析文本留存 | 默认 ephemeral（只在本次命令内存+可选 artifact）；不默认写库。 |
+| 4 | 本地脱敏预处理 | v1 不做自动 DLP；上传前展示文件名/大小/哈希/页数并要求逐字确认；失败即拒绝。 |
+| 5 | secret 阈值 | 与 research 一致：`secrecy > 0` 一律 deny（fail closed，当前已用于 research）。 |
+| 6 | 计费治理 | 每 matter/每日页数上限 + 预检显示“预计页数/费用”；断连不自动重试。 |
+| 7 | 自建代理/区域端点 | v1 只支持 DeepSeek 官方 https；不支持自建代理，base URL allowlist。 |
+| 8 | cloud_parsed 派生承诺/记忆 | 只能生成 memory candidate，**不得自动入账/自动 confirmed**；必须带 `cloud_parsed` 来源标记与 quote_hash；可 tombstone/purge。 |
+
+实现门槛不变：必须先满足 §8.1 验收清单并提升 `secrecy` 语义；在此之前
+README/回执不得宣称支持 remote parse。

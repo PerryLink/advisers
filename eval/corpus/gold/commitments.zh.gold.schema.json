@@ -2,10 +2,18 @@
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "$id": "https://github.com/PerryLink/advisers/eval/corpus/gold/commitments.zh.gold.schema.json",
   "title": "Advisers Chinese commitment gold item",
-  "description": "One JSONL line of the Chinese commitment gold corpus. IMPORTANT: commitments.zh.gold.seed.jsonl is AI-prelabeled draft data (pending_human_review=true), not a human gold set. Human review is required before pending_human_review becomes false or any metric is claimed as reached.",
+  "description": "One JSONL line of the Chinese commitment gold corpus. `commitments.zh.gold.seed.jsonl` is AI-prelabeled draft data (pending_human_review=true), not a human gold set. A reviewed file may set pending_human_review=false only after the declared review_mode is complete; user_authorized_agent_double_review is NOT independent human review and must be declared as such.",
   "type": "object",
   "additionalProperties": false,
-  "required": ["id", "source", "date", "text", "expect", "provenance", "pending_human_review"],
+  "required": [
+    "id",
+    "source",
+    "date",
+    "text",
+    "expect",
+    "provenance",
+    "pending_human_review"
+  ],
   "properties": {
     "id": {
       "type": "string",
@@ -14,7 +22,14 @@
     },
     "source": {
       "description": "Where the message came from.",
-      "enum": ["wechat", "email", "meeting", "contract", "im", "other"]
+      "enum": [
+        "wechat",
+        "email",
+        "meeting",
+        "contract",
+        "im",
+        "other"
+      ]
     },
     "date": {
       "description": "Message / meeting / contract timestamp with timezone. Relative dates in the text are resolved against this value (Asia/Shanghai).",
@@ -33,34 +48,80 @@
       "type": "array",
       "minItems": 0,
       "maxItems": 5,
-      "items": { "$ref": "#/$defs/expect" }
+      "items": {
+        "$ref": "#/$defs/expect"
+      }
     },
     "provenance": {
       "description": "synthetic = fully made up; anonymized = real message after documented redaction. Raw private messages must never be committed.",
-      "enum": ["synthetic", "anonymized"]
+      "enum": [
+        "synthetic",
+        "anonymized"
+      ]
     },
     "pending_human_review": {
-      "description": "true for AI-prelabeled draft entries. Only a completed dual-human review may set this to false.",
+      "description": "false only after the review declared in review_mode is complete. For review_mode=human_double_review this means two independent humans; for review_mode=user_authorized_agent_double_review it means the user explicitly authorized two independent agent passes plus adjudication. The latter must not be described as independent human gold.",
       "type": "boolean"
     },
     "review_note": {
       "description": "Optional human-review disagreement / adjudication note.",
       "type": "string",
       "maxLength": 500
+    },
+    "review_mode": {
+      "description": "How the entry was reviewed. Omitted for unreviewed seed entries.",
+      "enum": [
+        "human_double_review",
+        "user_authorized_agent_double_review"
+      ]
+    },
+    "reviewers": {
+      "description": "Reviewer identities/roles for the review_mode (at least two).",
+      "type": "array",
+      "maxItems": 6,
+      "items": {
+        "type": "string",
+        "minLength": 1,
+        "maxLength": 60
+      }
+    },
+    "reviewed_at": {
+      "description": "ISO timestamp of the review/adjudication.",
+      "type": "string",
+      "format": "date-time",
+      "pattern": "^\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}:\\d{2}(?:\\.\\d+)?(?:Z|[+-]\\d{2}:\\d{2})$"
     }
   },
   "if": {
-    "required": ["pending_human_review"],
-    "properties": { "pending_human_review": { "const": false } }
+    "required": [
+      "pending_human_review"
+    ],
+    "properties": {
+      "pending_human_review": {
+        "const": false
+      }
+    }
   },
   "then": {
-    "required": ["review_note"]
+    "required": [
+      "review_note",
+      "review_mode",
+      "reviewers",
+      "reviewed_at"
+    ]
   },
   "$defs": {
     "expect": {
       "type": "object",
       "additionalProperties": false,
-      "required": ["action", "debtor", "creditor", "due", "quote", "modal"],
+      "required": [
+        "action",
+        "debtor",
+        "creditor",
+        "due",
+        "quote",
+        "modal"
+      ],
       "properties": {
         "action": {
           "description": "Short verb phrase (<= 12 Chinese chars recommended), e.g. 发报价.",
@@ -70,21 +131,34 @@
         },
         "debtor": {
           "description": "Who owes the promise: user = the person whose messages these are; third = the counterparty; unknown = unclear.",
-          "enum": ["user", "third", "unknown"]
+          "enum": [
+            "user",
+            "third",
+            "unknown"
+          ]
         },
         "creditor": {
           "description": "Who receives the promise; null when unknown.",
-          "type": ["string", "null"],
+          "type": [
+            "string",
+            "null"
+          ],
           "maxLength": 60
         },
         "due": {
           "description": "Due date (YYYY-MM-DD) or null when no deadline is stated.",
-          "type": ["string", "null"],
+          "type": [
+            "string",
+            "null"
+          ],
           "pattern": "^\\d{4}-\\d{2}-\\d{2}$"
         },
         "dueAlt": {
           "description": "Optional second acceptable due date, only when there is a documented ambiguity (weekend/holiday shift, inclusive/exclusive boundary). The runner accepts either due or dueAlt.",
-          "type": ["string", "null"],
+          "type": [
+            "string",
+            "null"
+          ],
           "pattern": "^\\d{4}-\\d{2}-\\d{2}$"
         },
         "quote": {
@@ -95,7 +169,11 @@
         },
         "modal": {
           "description": "firm / tentative / conditional.",
-          "enum": ["firm", "tentative", "conditional"]
+          "enum": [
+            "firm",
+            "tentative",
+            "conditional"
+          ]
         }
       }
     }

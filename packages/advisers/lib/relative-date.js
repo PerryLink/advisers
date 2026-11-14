@@ -10,7 +10,9 @@
  * time-of-day is preserved when only the date had to be corrected.
  *
  * Semantics (documented, tested):
- * - 今天/明天/后天/大后天: message day + 0/1/2/3.
+ * - 今天/明天/后天/大后天: message day + 0/1/2/3. "当天" is intentionally
+ *   NOT resolved: it usually refers to a previously mentioned event day, not the
+ *   message day (gold review 2026-11-14, gold-029).
  * - 周X/星期X/礼拜X: upcoming X in the message's Monday-based week; if X is
  *   today it is today (marked ambiguous because "周五前" said on Friday can
  *   also mean next Friday).
@@ -188,7 +190,7 @@ const PATTERNS = [
   { re: /大后天/g, resolve: (_m, message) => ({ date: ymd(addDays(message, 3)), kind: 'day+3', ambiguous: false }) },
   { re: /(?<!大)后天/g, resolve: (_m, message) => ({ date: ymd(addDays(message, 2)), kind: 'day+2', ambiguous: false }) },
   { re: /明天|明日|明早|明晚|明儿/g, resolve: (_m, message) => ({ date: ymd(addDays(message, 1)), kind: 'day+1', ambiguous: false }) },
-  { re: /今天|今日|今早|今晚|当天|本日/g, resolve: (_m, message) => ({ date: ymd(message), kind: 'day+0', ambiguous: false }) },
+  { re: /今天|今日|今早|今晚|本日/g, resolve: (_m, message) => ({ date: ymd(message), kind: 'day+0', ambiguous: false }) },
   {
     re: /下下(?:个)?(?:周|星期|礼拜)([一二三四五六日天])/g,
     resolve: (match, message) => weekdayDate(WEEKDAY_INDEX[match[1]], 'next-next', message),

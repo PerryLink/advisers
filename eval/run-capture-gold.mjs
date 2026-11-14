@@ -29,6 +29,22 @@ import { resolve } from 'node:path'
 import { fileURLToPath, pathToFileURL } from 'node:url'
 import { captureCandidates } from '../packages/advisers/lib/capture.js'
 
+// A single 60s provider timeout should not make the whole corpus look like a
+// label failure. Retry transient capture errors once; keep the original error
+// if both attempts fail so the JSON still reports it.
+async function captureWithRetry(options, attempts = 2) {
+  let lastError
+  for (let attempt = 1; attempt <= attempts; attempt++) {
+    try {
+      return await captureCandidates(options)
+    } catch (error) {
+      lastError = error
+      if (attempt < attempts) await new Promise((resolveDelay) => setTimeout(resolveDelay, 1500))
+    }
+  }
+  throw lastError
+}
+
 const DEFAULT_GOLD = fileURLToPath(new URL('./corpus/gold/commitments.zh.gold.seed.jsonl', import.meta.url))
 const SCHEMA_PATH = fileURLToPath(new URL('./corpus/gold/commitments.zh.gold.schema.json', import.meta.url))
 const SEED_STATUS = 'AI-prelabeled draft seed, NOT human gold; all entries pending_human_review=true'
@@ -446,7 +462,7 @@ async function main() {
   const caseResults = await mapLimit(selected, concurrency, async (item) => {
     const started = Date.now()
     try {
-      const { candidates } = await captureCandidates({ text: item.text, apiKey, date: item.date, source: item.source })
+      const { candidates } = await captureWithRetry({ text: item.text, apiKey, date: item.date, source: item.source })
       const evaluated = evaluateItem(item, candidates)
       const result = {
         id: item.id,

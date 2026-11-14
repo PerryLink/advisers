@@ -117,3 +117,16 @@ test('conflicting date expressions fall back to a valid model dueAt', () => {
   assert.equal(localDate(rows[0].dueAt), '2026-11-16')
   assert.equal(rows[0].dueBasis, 'model')
 })
+
+test('"当天" is not resolved as the message day (gold-review finding)', () => {
+  // "当天" usually refers to a previously mentioned event day, not the message
+  // day. Overriding the model with the message date would be wrong; the rule
+  // pass must keep a valid model dueAt instead.
+  const base = new Date('2026-11-13T10:00:00+08:00')
+  assert.equal(resolveRelativeDate('当天下午前完成', base), null)
+  const rows = validateCaptureCandidates([
+    { action: '完成演练', debtor: 'user', quote: '当天下午前完成', dueAt: '2026-11-17T10:00:00+08:00', modal: 'firm' },
+  ], '演练当天下午前完成', { now: base })
+  assert.equal(localDate(rows[0].dueAt), '2026-11-17')
+  assert.equal(rows[0].dueBasis, 'model')
+})

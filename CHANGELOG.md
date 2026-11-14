@@ -1,5 +1,34 @@
 # Changelog
 
+## 0.2.0-preview.58 (staged, approval pending)
+
+### Fixed
+- Relative-date resolver: `"当天"` is no longer interpreted as the message day.
+  It usually refers to a previously mentioned event day; the deterministic pass
+  now leaves a valid model dueAt untouched (gold review finding, gold-029) and a
+  regression test was added.
+- Gold runner retries one transient capture/model error before recording a case
+  error, so a single provider timeout does not fail the corpus run.
+
+### Added
+- 150-case **user-authorized agent-reviewed** Chinese commitment corpus
+  (`eval/corpus/gold/commitments.zh.gold.reviewed.jsonl`) with two independent
+  agent review passes, adjudication, per-row `review_mode`/`reviewers`/
+  `reviewed_at`/`review_note`, and the two review files under
+  `eval/corpus/gold/reviews/`. This is explicitly **not** independent human gold.
+- `eval/run-dogfood-5.mjs`: 5 synthetic personas × 3 tasks with cross-session
+  continuity and cross-home isolation checks.
+
+### Verified (2026-11-14, deepseek-flash, single runs)
+- Reviewed gold: quote 100%, firm recall 95.31% (122/128), due accuracy 97.84%
+  (136/139), precision 97.13% (169/174), 0 auto-confirmed, exit 0.
+- Dogfood: 15/15 tasks, 74/74 global isolation checks, exit 0.
+- npm publish still blocked on human OTP (`npm stage approve` returns EOTP);
+  `advisers@0.2.0-preview.58` is the staged artifact.
+- Upstream DSH PR: not possible under current upstream policy (Issues/PRs
+  disabled; CONTRIBUTING rejects external PRs) — see
+  `eval/results/upstream-pr-2026-11-14.md`.
+
 ## 0.2.0-preview.57 (staged, approval pending)
 
 ### Fixed

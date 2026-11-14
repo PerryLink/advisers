@@ -1,0 +1,150 @@
+{"id":"gold-001","verdict":"ok","corrected_expect":null,"notes":"消息11-12周四；周五=2026-11-13；quote逐字"}
+{"id":"gold-002","verdict":"ok","corrected_expect":null,"notes":"消息11-12周四；周一=2026-11-16；quote逐字"}
+{"id":"gold-003","verdict":"ok","corrected_expect":null,"notes":"消息11-12周四；周三=2026-11-18；quote逐字"}
+{"id":"gold-004","verdict":"ok","corrected_expect":null,"notes":"消息11-13周五；消息日即当天，「下午5点前」=11-13 17:00；quote逐字"}
+{"id":"gold-005","verdict":"ok","corrected_expect":null,"notes":"消息11-13周五；周一=2026-11-16；quote逐字"}
+{"id":"gold-006","verdict":"ok","corrected_expect":null,"notes":"消息11-16周一；今天=2026-11-16；quote逐字"}
+{"id":"gold-007","verdict":"ok","corrected_expect":null,"notes":"消息11-16周一；明天=2026-11-17；「下午」承前句「明天」=11-17 下午；quote逐字"}
+{"id":"gold-008","verdict":"ok","corrected_expect":null,"notes":"消息11-17周二；「这周内」边界歧义：周五 11-20 为主、周日 11-22 为备；quote逐字"}
+{"id":"gold-009","verdict":"ok","corrected_expect":null,"notes":"消息11-18周三；月底=2026-11-30；quote逐字"}
+{"id":"gold-010","verdict":"ok","corrected_expect":null,"notes":"消息11-18周三；明天=2026-11-19；quote逐字"}
+{"id":"gold-011","verdict":"ok","corrected_expect":null,"notes":"消息11-12周四；周五=2026-11-13；quote逐字"}
+{"id":"gold-012","verdict":"ok","corrected_expect":null,"notes":"消息11-12周四；下周三=2026-11-18；quote逐字"}
+{"id":"gold-013","verdict":"ok","corrected_expect":null,"notes":"消息11-13周五；下周一=2026-11-16；「确认后」条件触发，无截止→null；quote逐字"}
+{"id":"gold-014","verdict":"ok","corrected_expect":null,"notes":"消息11-16周一；本周五=2026-11-20；quote逐字"}
+{"id":"gold-015","verdict":"ok","corrected_expect":null,"notes":"消息11-17周二；2026 年 12 月 10 日=2026-12-10；quote逐字"}
+{"id":"gold-016","verdict":"ok","corrected_expect":null,"notes":"消息11-17周二；周五=2026-11-20；quote逐字"}
+{"id":"gold-017","verdict":"ok","corrected_expect":null,"notes":"消息11-18周三；「回头」无日期→null；quote逐字"}
+{"id":"gold-018","verdict":"ok","corrected_expect":null,"notes":"消息11-18周三；明天=2026-11-19；quote逐字"}
+{"id":"gold-019","verdict":"ok","corrected_expect":null,"notes":"消息11-11周三；本周五=2026-11-13；下周一=2026-11-16；quote逐字"}
+{"id":"gold-020","verdict":"ok","corrected_expect":null,"notes":"消息11-13周五；下周三=2026-11-18；「配合提供」无日期→null；quote逐字"}
+{"id":"gold-021","verdict":"ok","corrected_expect":null,"notes":"消息11-16周一；演练在本周四=11-19，脚本准备以演练日为应完成日（隐式关联，非显式字面截止）；quote逐字"}
+{"id":"gold-022","verdict":"ok","corrected_expect":null,"notes":"消息11-17周二；12 月 5 日=2026-12-05；quote逐字"}
+{"id":"gold-023","verdict":"ok","corrected_expect":null,"notes":"消息11-18周三；本周五=2026-11-20；quote逐字"}
+{"id":"gold-024","verdict":"ok","corrected_expect":null,"notes":"消息11-18周三；2026 年 12 月 31 日=2026-12-31；quote逐字"}
+{"id":"gold-025","verdict":"ok","corrected_expect":null,"notes":"消息11-19周四；下周一=2026-11-23；quote逐字"}
+{"id":"gold-026","verdict":"ok","corrected_expect":null,"notes":"消息11-19周四；本周五=2026-11-20；「负责验收」无日期→null；quote逐字"}
+{"id":"gold-027","verdict":"ok","corrected_expect":null,"notes":"消息11-12周四；本周五=2026-11-13；quote逐字"}
+{"id":"gold-028","verdict":"ok","corrected_expect":null,"notes":"消息11-12周四；明天=2026-11-13；quote逐字"}
+{"id":"gold-029","verdict":"ok","corrected_expect":null,"notes":"消息11-13周五；「当天」=下周二=11-17；resolver 将「当天」误判为消息日 11-13，以人工规则为准；quote逐字"}
+{"id":"gold-030","verdict":"ok","corrected_expect":null,"notes":"消息11-13周五；下周一=2026-11-16；quote逐字"}
+{"id":"gold-031","verdict":"ok","corrected_expect":null,"notes":"消息11-16周一；本周三=2026-11-18；quote逐字"}
+{"id":"gold-032","verdict":"ok","corrected_expect":null,"notes":"消息11-16周一；12 月 1 日=2026-12-01；quote逐字"}
+{"id":"gold-033","verdict":"ok","corrected_expect":null,"notes":"消息11-17周二；「本周内」边界歧义：周五 11-20 为主、周日 11-22 为备；quote逐字"}
+{"id":"gold-034","verdict":"ok","corrected_expect":null,"notes":"消息11-17周二；11 月 30 日=2026-11-30；「收到反馈后」条件触发，无截止→null；quote逐字"}
+{"id":"gold-035","verdict":"ok","corrected_expect":null,"notes":"消息11-18周三；12 月 8 日=2026-12-08；quote逐字"}
+{"id":"gold-036","verdict":"ok","corrected_expect":null,"notes":"消息11-19周四；下周一=2026-11-23；「开好后」条件触发，无截止→null；quote逐字"}
+{"id":"gold-037","verdict":"ok","corrected_expect":null,"notes":"消息11-05周四；2026 年 12 月 15 日=2026-12-15；quote逐字"}
+{"id":"gold-038","verdict":"fix","corrected_expect":[{"action":"支付预付款","debtor":"user","creditor":null,"due":null,"quote":"我方应在合同签订后 10 个工作日内支付预付款","modal":"firm"}],"notes":"签订日未在原文给出，「合同签订后10个工作日」无法按消息时间唯一换算（capture 仅按消息时间换算相对日期；同类收到发票后/验收通过后/服务终止后均记 null）→due 改为 null"}
+{"id":"gold-039","verdict":"ok","corrected_expect":null,"notes":"消息11-10周二；保密期限非承诺到期日，锚点（签署日）未给→null；quote逐字"}
+{"id":"gold-040","verdict":"ok","corrected_expect":null,"notes":"消息11-10周二；2026 年 12 月 5 日=2026-12-05；quote逐字"}
+{"id":"gold-041","verdict":"ok","corrected_expect":null,"notes":"消息11-11周三；「收到发票后」锚点未给，无法换算→null；quote逐字"}
+{"id":"gold-042","verdict":"ok","corrected_expect":null,"notes":"消息11-11周三；expect 为空，无 due/quote 复核项"}
+{"id":"gold-043","verdict":"ok","corrected_expect":null,"notes":"消息11-12周四；2027 年 1 月 10 日=2027-01-10；quote逐字"}
+{"id":"gold-044","verdict":"ok","corrected_expect":null,"notes":"消息11-12周四；2026 年 12 月 1 日=2026-12-01；quote逐字"}
+{"id":"gold-045","verdict":"ok","corrected_expect":null,"notes":"消息11-19周四；「回头」无日期→null；quote逐字"}
+{"id":"gold-046","verdict":"ok","corrected_expect":null,"notes":"消息11-19周四；expect 为空，无 due/quote 复核项"}
+{"id":"gold-047","verdict":"ok","corrected_expect":null,"notes":"消息11-19周四；expect 为空，无 due/quote 复核项"}
+{"id":"gold-048","verdict":"ok","corrected_expect":null,"notes":"消息11-19周四；expect 为空，无 due/quote 复核项"}
+{"id":"gold-049","verdict":"ok","corrected_expect":null,"notes":"消息11-20周五；月底=2026-11-30；quote逐字"}
+{"id":"gold-050","verdict":"ok","corrected_expect":null,"notes":"消息11-20周五；下周三=2026-11-25；quote逐字"}
+{"id":"gold-051","verdict":"ok","corrected_expect":null,"notes":"消息11-10周二；周一=2026-11-16；quote逐字"}
+{"id":"gold-052","verdict":"ok","corrected_expect":null,"notes":"消息11-10周二；明天=2026-11-11；quote逐字"}
+{"id":"gold-053","verdict":"ok","corrected_expect":null,"notes":"消息11-11周三；后天=2026-11-13；quote逐字"}
+{"id":"gold-054","verdict":"ok","corrected_expect":null,"notes":"消息11-11周三；明天=2026-11-12；quote逐字"}
+{"id":"gold-055","verdict":"ok","corrected_expect":null,"notes":"消息11-12周四；这周五=2026-11-13；「回头」无日期→null；quote逐字"}
+{"id":"gold-056","verdict":"ok","corrected_expect":null,"notes":"消息11-12周四；今天=2026-11-12；quote逐字"}
+{"id":"gold-057","verdict":"ok","corrected_expect":null,"notes":"消息11-13周五；消息当天即周五→取当天 11-13；同日歧义，dueAlt 给下周五 11-20；quote逐字"}
+{"id":"gold-058","verdict":"ok","corrected_expect":null,"notes":"消息11-13周五；下周一=2026-11-16；quote逐字"}
+{"id":"gold-059","verdict":"ok","corrected_expect":null,"notes":"消息11-14周六；下周三=2026-11-18；quote逐字"}
+{"id":"gold-060","verdict":"ok","corrected_expect":null,"notes":"消息11-15周日；明天=2026-11-16；quote逐字"}
+{"id":"gold-061","verdict":"ok","corrected_expect":null,"notes":"消息11-16周一；今天=2026-11-16；quote逐字"}
+{"id":"gold-062","verdict":"ok","corrected_expect":null,"notes":"消息11-16周一；下周三=2026-11-25；下周四=2026-11-26；quote逐字"}
+{"id":"gold-063","verdict":"ok","corrected_expect":null,"notes":"消息11-17周二；今天=2026-11-17；quote逐字"}
+{"id":"gold-064","verdict":"ok","corrected_expect":null,"notes":"消息11-17周二；明天=2026-11-18；quote逐字"}
+{"id":"gold-065","verdict":"ok","corrected_expect":null,"notes":"消息11-18周三；今天=2026-11-18；quote逐字"}
+{"id":"gold-066","verdict":"ok","corrected_expect":null,"notes":"消息11-18周三；本周五=2026-11-20；quote逐字"}
+{"id":"gold-067","verdict":"ok","corrected_expect":null,"notes":"消息11-19周四；下周二=2026-11-24；周三=2026-11-25；quote逐字"}
+{"id":"gold-068","verdict":"ok","corrected_expect":null,"notes":"消息11-19周四；「整理好就发」无日期→null；quote逐字"}
+{"id":"gold-069","verdict":"ok","corrected_expect":null,"notes":"消息11-20周五；下周一=2026-11-23；quote逐字"}
+{"id":"gold-070","verdict":"ok","corrected_expect":null,"notes":"消息11-20周五；下周一=2026-11-23；quote逐字"}
+{"id":"gold-071","verdict":"ok","corrected_expect":null,"notes":"消息11-21周六；「回头」无日期→null；quote逐字"}
+{"id":"gold-072","verdict":"ok","corrected_expect":null,"notes":"消息11-22周日；明天=2026-11-23；quote逐字"}
+{"id":"gold-073","verdict":"ok","corrected_expect":null,"notes":"消息11-23周一；expect 为空，无 due/quote 复核项"}
+{"id":"gold-074","verdict":"ok","corrected_expect":null,"notes":"消息11-23周一；12 月 5 日=2026-12-05；quote逐字"}
+{"id":"gold-075","verdict":"ok","corrected_expect":null,"notes":"消息11-23周一；月底=2026-11-30；「回头」无日期→null；quote逐字"}
+{"id":"gold-076","verdict":"ok","corrected_expect":null,"notes":"消息11-24周二；今天=2026-11-24；quote逐字"}
+{"id":"gold-077","verdict":"ok","corrected_expect":null,"notes":"消息11-24周二；下周一=2026-11-30；quote逐字"}
+{"id":"gold-078","verdict":"ok","corrected_expect":null,"notes":"消息11-25周三；「这周内」边界歧义：周五 11-27 为主、周日 11-29 为备；周五=2026-11-27；quote逐字"}
+{"id":"gold-079","verdict":"ok","corrected_expect":null,"notes":"消息11-25周三；明天=2026-11-26；quote逐字"}
+{"id":"gold-080","verdict":"ok","corrected_expect":null,"notes":"消息11-26周四；下周五=2026-12-04；下下周一=2026-12-07；quote逐字"}
+{"id":"gold-081","verdict":"ok","corrected_expect":null,"notes":"消息11-26周四；月底=2026-11-30；quote逐字"}
+{"id":"gold-082","verdict":"ok","corrected_expect":null,"notes":"消息11-27周五；今天=2026-11-27；明天=2026-11-28；周三=2026-12-02；quote逐字"}
+{"id":"gold-083","verdict":"ok","corrected_expect":null,"notes":"消息11-27周五；报名无显式截止，取培训日 12-03 为应完成日（隐式关联）；下周三=2026-12-02；quote逐字"}
+{"id":"gold-084","verdict":"ok","corrected_expect":null,"notes":"消息11-28周六；下周一=2026-11-30；quote逐字"}
+{"id":"gold-085","verdict":"ok","corrected_expect":null,"notes":"消息11-29周日；明天=2026-11-30；quote逐字"}
+{"id":"gold-086","verdict":"ok","corrected_expect":null,"notes":"消息12-01周二；12 月 15 日=2026-12-15；quote逐字"}
+{"id":"gold-087","verdict":"ok","corrected_expect":null,"notes":"消息12-02周三；expect 为空，无 due/quote 复核项"}
+{"id":"gold-088","verdict":"ok","corrected_expect":null,"notes":"消息12-11周五；消息当天即周五→12-11；同日歧义，dueAlt 给下周五 12-18；quote逐字"}
+{"id":"gold-089","verdict":"ok","corrected_expect":null,"notes":"消息12-16周三；明天=2026-12-17；周五=2026-12-18；下周一=2026-12-21；quote逐字"}
+{"id":"gold-090","verdict":"ok","corrected_expect":null,"notes":"消息12-17周四；expect 为空，无 due/quote 复核项"}
+{"id":"gold-091","verdict":"ok","corrected_expect":null,"notes":"消息11-10周二；expect 为空，无 due/quote 复核项"}
+{"id":"gold-092","verdict":"ok","corrected_expect":null,"notes":"消息11-10周二；明天=2026-11-11；quote逐字"}
+{"id":"gold-093","verdict":"ok","corrected_expect":null,"notes":"消息11-11周三；本周五=2026-11-13；quote逐字"}
+{"id":"gold-094","verdict":"ok","corrected_expect":null,"notes":"消息11-12周四；「回头」无日期→null；quote逐字"}
+{"id":"gold-095","verdict":"ok","corrected_expect":null,"notes":"消息11-12周四；下周三=2026-11-18；quote逐字"}
+{"id":"gold-096","verdict":"ok","corrected_expect":null,"notes":"消息11-13周五；下周二=2026-11-17；下周三=2026-11-18；quote逐字"}
+{"id":"gold-097","verdict":"ok","corrected_expect":null,"notes":"消息11-13周五；「回头发」无日期→null；quote逐字"}
+{"id":"gold-098","verdict":"ok","corrected_expect":null,"notes":"消息11-16周一；「尽快」无日期→null；quote逐字"}
+{"id":"gold-099","verdict":"ok","corrected_expect":null,"notes":"消息11-16周一；下周三=2026-11-25；下周五=2026-11-27；quote逐字"}
+{"id":"gold-100","verdict":"ok","corrected_expect":null,"notes":"消息11-17周二；12 月 7 日=2026-12-07；quote逐字"}
+{"id":"gold-101","verdict":"ok","corrected_expect":null,"notes":"消息11-17周二；明天=2026-11-18；quote逐字"}
+{"id":"gold-102","verdict":"ok","corrected_expect":null,"notes":"消息11-18周三；下周一=2026-11-23；下周三=2026-11-25；quote逐字"}
+{"id":"gold-103","verdict":"ok","corrected_expect":null,"notes":"消息11-18周三；月底=2026-11-30；quote逐字"}
+{"id":"gold-104","verdict":"ok","corrected_expect":null,"notes":"消息11-19周四；下周三=2026-11-25；quote逐字"}
+{"id":"gold-105","verdict":"ok","corrected_expect":null,"notes":"消息11-19周四；11 月 30 日=2026-11-30；quote逐字"}
+{"id":"gold-106","verdict":"ok","corrected_expect":null,"notes":"消息11-20周五；明天=2026-11-21；下周二=2026-11-24；quote逐字"}
+{"id":"gold-107","verdict":"ok","corrected_expect":null,"notes":"消息11-20周五；下周一=2026-11-23；quote逐字"}
+{"id":"gold-108","verdict":"ok","corrected_expect":null,"notes":"消息11-23周一；「有结果就同步」条件触发，无截止→null；quote逐字"}
+{"id":"gold-109","verdict":"ok","corrected_expect":null,"notes":"消息11-24周二；明天=2026-11-25；quote逐字"}
+{"id":"gold-110","verdict":"ok","corrected_expect":null,"notes":"消息11-24周二；明天=2026-11-25；本周五=2026-11-27；下周一=2026-11-30；quote逐字"}
+{"id":"gold-111","verdict":"ok","corrected_expect":null,"notes":"消息11-10周二；expect 为空，无 due/quote 复核项"}
+{"id":"gold-112","verdict":"ok","corrected_expect":null,"notes":"消息11-10周二；本周五=2026-11-13；下周一=2026-11-16；quote逐字"}
+{"id":"gold-113","verdict":"ok","corrected_expect":null,"notes":"消息11-11周三；今天=2026-11-11；quote逐字"}
+{"id":"gold-114","verdict":"ok","corrected_expect":null,"notes":"消息11-11周三；「时间灵活」无日期→null；quote逐字"}
+{"id":"gold-115","verdict":"ok","corrected_expect":null,"notes":"消息11-12周四；本周五=2026-11-13；quote逐字"}
+{"id":"gold-116","verdict":"ok","corrected_expect":null,"notes":"消息11-12周四；下周一=2026-11-16；quote逐字"}
+{"id":"gold-117","verdict":"ok","corrected_expect":null,"notes":"消息11-13周五；下周一=2026-11-16；quote逐字"}
+{"id":"gold-118","verdict":"ok","corrected_expect":null,"notes":"消息11-13周五；下周二=2026-11-17；下周四=2026-11-19；quote逐字"}
+{"id":"gold-119","verdict":"ok","corrected_expect":null,"notes":"消息11-16周一；12 月 10 日=2026-12-10；quote逐字"}
+{"id":"gold-120","verdict":"ok","corrected_expect":null,"notes":"消息11-16周一；「尽快办完」无日期→null；quote逐字"}
+{"id":"gold-121","verdict":"ok","corrected_expect":null,"notes":"消息11-17周二；下周一=2026-11-23；quote逐字"}
+{"id":"gold-122","verdict":"ok","corrected_expect":null,"notes":"消息11-17周二；本周四=2026-11-19；quote逐字"}
+{"id":"gold-123","verdict":"ok","corrected_expect":null,"notes":"消息11-18周三；下周一=2026-11-23；下周三=2026-11-25；quote逐字"}
+{"id":"gold-124","verdict":"ok","corrected_expect":null,"notes":"消息11-18周三；「本周内」边界歧义：周五 11-20 为主、周日 11-22 为备；quote逐字"}
+{"id":"gold-125","verdict":"ok","corrected_expect":null,"notes":"消息11-19周四；下周五=2026-11-27；quote逐字"}
+{"id":"gold-126","verdict":"ok","corrected_expect":null,"notes":"消息11-19周四；「尽量」无日期→null；quote逐字"}
+{"id":"gold-127","verdict":"ok","corrected_expect":null,"notes":"消息11-20周五；下周一=2026-11-23；quote逐字"}
+{"id":"gold-128","verdict":"ok","corrected_expect":null,"notes":"消息11-20周五；下周二=2026-11-24；quote逐字"}
+{"id":"gold-129","verdict":"ok","corrected_expect":null,"notes":"消息11-23周一；明天=2026-11-24；周三=2026-11-25；下周一=2026-11-30；quote逐字"}
+{"id":"gold-130","verdict":"ok","corrected_expect":null,"notes":"消息11-23周一；12 月 5 日=2026-12-05；quote逐字"}
+{"id":"gold-131","verdict":"ok","corrected_expect":null,"notes":"消息11-10周二；expect 为空，无 due/quote 复核项"}
+{"id":"gold-132","verdict":"ok","corrected_expect":null,"notes":"消息11-10周二；2026 年 12 月 18 日=2026-12-18；quote逐字"}
+{"id":"gold-133","verdict":"fix","corrected_expect":[{"action":"支付预付款","debtor":"user","creditor":null,"due":null,"quote":"我方应在合同签订后 10 个工作日内支付预付款","modal":"firm"}],"notes":"签订日未在原文给出，「合同签订后10个工作日」无法按消息时间唯一换算（capture 仅按消息时间换算相对日期；同类收到发票后/验收通过后/服务终止后均记 null）→due 改为 null"}
+{"id":"gold-134","verdict":"ok","corrected_expect":null,"notes":"消息11-10周二；「服务终止后」锚点未给，无法换算→null；quote逐字"}
+{"id":"gold-135","verdict":"ok","corrected_expect":null,"notes":"消息11-11周三；2027 年 1 月 10 日=2027-01-10；quote逐字"}
+{"id":"gold-136","verdict":"ok","corrected_expect":null,"notes":"消息11-11周三；2026 年 12 月 10 日=2026-12-10；2026 年 12 月 20 日=2026-12-20；quote逐字"}
+{"id":"gold-137","verdict":"ok","corrected_expect":null,"notes":"消息11-11周三；2027 年 1 月 15 日=2027-01-15；quote逐字"}
+{"id":"gold-138","verdict":"ok","corrected_expect":null,"notes":"消息11-12周四；显式 12-05 为周六；dueAlt 给周末顺延的周一 12-07；quote逐字"}
+{"id":"gold-139","verdict":"ok","corrected_expect":null,"notes":"消息11-12周四；「收到发票后」锚点未给，无法换算→null；quote逐字"}
+{"id":"gold-140","verdict":"ok","corrected_expect":null,"notes":"消息11-13周五；2026 年 12 月 31 日=2026-12-31；「验收通过后」锚点未给，无法换算→null；quote逐字"}
+{"id":"gold-141","verdict":"ok","corrected_expect":null,"notes":"消息11-14周六；expect 为空，无 due/quote 复核项"}
+{"id":"gold-142","verdict":"ok","corrected_expect":null,"notes":"消息11-14周六；今天=2026-11-14；quote逐字"}
+{"id":"gold-143","verdict":"ok","corrected_expect":null,"notes":"消息11-20周五；下周一=2026-11-23；quote逐字"}
+{"id":"gold-144","verdict":"ok","corrected_expect":null,"notes":"消息11-25周三；「晚点」无日期→null；quote逐字"}
+{"id":"gold-145","verdict":"ok","corrected_expect":null,"notes":"消息12-03周四；「一点半」指明天下午=12-04 13:30；「两点前」指明天=12-04 14:00 前；quote逐字"}
+{"id":"gold-146","verdict":"ok","corrected_expect":null,"notes":"消息12-01周二；expect 为空，无 due/quote 复核项"}
+{"id":"gold-147","verdict":"ok","corrected_expect":null,"notes":"消息12-01周二；本周五=2026-12-04；quote逐字"}
+{"id":"gold-148","verdict":"ok","corrected_expect":null,"notes":"消息12-02周三；明天=2026-12-03；quote逐字"}
+{"id":"gold-149","verdict":"ok","corrected_expect":null,"notes":"消息12-03周四；12 月 8 日=2026-12-08；quote逐字"}
+{"id":"gold-150","verdict":"ok","corrected_expect":null,"notes":"消息12-08周二；本周五=2026-12-11；12 月 15 日=2026-12-15；quote逐字"}
