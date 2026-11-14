@@ -1,6 +1,6 @@
 # Advisers
 
-**A staff of AI advisers — a cordis-native personal secretary runtime.**
+**A staff of AI advisers — a local-first, auditable personal secretary runtime.**
 
 Advisers is not another chat window. It is a small staff of specialist advisers
 (memory, commitments, routines) that share one continuous conversation and keep
@@ -10,22 +10,24 @@ three ledgers:
 - **commitment ledger** — who owes whom, due dates, external proof;
 - **routine ledger** — how this kind of work is done here; routine changes can be reviewed as diffs before approval.
 
-The core is built on [cordis](https://github.com/cordiverse/cordis). The CLI is
-the primary product; the DSH bundle is a thin adapter (currently `advisers_brief`
-+ `advisers_office`), not a feature-complete second product:
+The core is standalone (no cordis dependency). The DSH bundle is a thin,
+cordis-compatible host adapter (currently `advisers_brief` + `advisers_office`),
+not a feature-complete second product:
 
 | Package | Role |
 |---|---|
 | `advisers` | primary runtime + CLI (no DSH dependency) |
 | `dsh-advisers` | thin DSH adapter (brief/office only; ledger not yet exposed) |
 
-IM is a **Link SPI**, not a hard dependency. Email, Satori/Koishi, `dsh-im`,
-OpenClaw, and Hermes gateways are optional link providers. The core package does
-not depend on them; adapters load them only when configured.
+IM is a **Link SPI**, not a hard dependency. The repository currently ships
+`link-email` (draft-only email provider/transport) and `link-feishu` (Feishu
+message provider/source), plus `bridge-hermes`; the CLI does not wire them into
+an end-to-end inbox yet. Other gateways are not bundled. The core does not depend
+on any link package; adapters load one only when configured.
 
 ## Status
 
-`advisers@0.2.0-preview.58` (with `advisers-core@0.2.0-preview.22`) is **staged** on npm, awaiting OTP approval. The public `next` tag still points at the old `0.1.0-preview.2`; do not evaluate this build through it until approval:
+`advisers@0.2.0-preview.59` (with `advisers-core@0.2.0-preview.22`) is **staged** on npm, awaiting OTP approval. The public `next` tag still points at the old `0.1.0-preview.2`; do not evaluate this build through it until approval:
 
 > Requires **Node >= 22.13**. See [docs/QUICKSTART.md](docs/QUICKSTART.md) for Windows/PowerShell and BOM notes.
 
@@ -38,6 +40,9 @@ not depend on them; adapters load them only when configured.
 - turns + summaries + FTS search, `/memory`, `/week`, `/digest`, `/tick`, `/today`, `/undo`, `/diff`, `/learn review`;
 - `advisers capture` extracts candidate commitments from Chinese work text with verbatim quotes. Candidates stay pending until you explicitly accept one; no command auto-accepts.
 - `advisers research --web` / `--url` does cited research through DeepSeek server web tools. This is an explicit **web** egress path; web citations are provider output, not local file evidence.
+- `advisers remind` + `.ics`/VALARM export + opt-in scheduler scripts; `calendar import --ics`; `capture --from-mail`/`--from-transcript` (read-only, deduped, pending candidates only);
+- `advisers evidence show` / `deliveries --pack` (manifest + SHA256SUMS + DOCX receipt) / `deliver --type ...` (DOCX/XLSX);
+- `advisers privacy --prove`, `advisers mcp --stdio` (read-only tools), and JSON output for status/commit/who/deliveries/remind/evidence.
 - each turn sends a `latest_reminder` date/weekday/location/language marker so relative dates are grounded;
 - thinking mode: `ADVISERS_THINKING=off|on|auto`, `ADVISERS_THINKING_EFFORT=low|high|max`; `reasoning_content` is kept in memory only for the current tool loop and is not written to turns/summaries/audit/export/backup. This does not control provider-side logs or OS crash dumps;
 - DSH bundle (`dsh-advisers`) with `advisers_brief` + `advisers_office`; email/Feishu link packages are **libraries not wired into the CLI**; optional strict policy pack (see `packages/policy-strict/README.md`);

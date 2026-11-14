@@ -69,12 +69,9 @@ This policy is the target; status below is code-level, not an external audit.
 | 7 delete cascades | **partial**: sessions/turns/summaries/runs/nudges/deliveries, facts/title, candidate payloads; commitment/link/update/audit text redaction partial |
 | 8 metadata mandatory | **partial** |
 | 9 fail closed | **partial**: policy resolver failure is fail-closed in runtime; package-missing fallback is fail-open |
-| 10 supply-chain gate | **partial**: CI/security suite exist, but CI has not been green; lockfile/pins must be fixed |
+| 10 supply-chain gate | **partial**: CI and `scripts/security-suite.mjs` are green (5/5); full T1–T5 corpus/permit/supply-chain gates are not all implemented |
 
-The five CI security shims (`scripts/security-suite.mjs`) exist but do not yet
-cover injection, egress exit gate, or supply-chain. Do not describe the project
-as "secure" until the release gates in `47-TRUTH-AUDIT-2026-11-12.md` are green.
-
-
-The five CI tests (T1–T5) are not yet in the repository. Do not describe the
-project as "secure" until they are green; the skeleton is a design artifact.
+`scripts/security-suite.mjs` runs five static checks in CI (permit, injection
+patterns, egress, supply chain, secrets). It is not a full T1–T5 dynamic test
+suite: do not describe the project as "secure" until the remaining gates are
+implemented and green.

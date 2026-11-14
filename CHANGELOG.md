@@ -1,5 +1,41 @@
 # Changelog
 
+## 0.2.0-preview.59 (staged, approval pending)
+
+### Added
+- **E1 reminders**: `advisers remind` (buckets/dedupe/snooze, 5 rule families),
+  `.ics` VEVENT+VALARM export, `--deliver` local log, and opt-in
+  `remind install|uninstall|status` scheduler scripts (`~/.advisers/scheduler`).
+- **E2 read-only ingress**: `capture --from-mail` (`.eml`/`.mbox`), `capture
+  --from-transcript` (VTT/SRT/text), `calendar import --ics`; all candidates
+  require `memory accept`, imports are deduped for 30 days, and secret matters
+  fail closed before any model/network call.
+- **E3 evidence/交付**: `evidence show <id>`, `deliveries --pack` (manifest,
+  README, SHA256SUMS, DOCX receipt), `deliver --type ...` (confirmation/weekly/
+  statement/ledger; docx/xlsx), and `today --sources`.
+- **E6**: read-only JSON for status/commit/who/deliveries; `advisers mcp --stdio`
+  (today/commit/who/evidence/remind); OpenAI-compatible/Ollama provider support
+  via `ADVISERS_PROVIDER` (DeepSeek remains default).
+- **E9**: `advisers privacy [--json] [--prove]`; evidence exports honor secret
+  matters.
+- **E5 partial**: `memory search` also searches turns; `why`/`forget` accept fact ids.
+- Docs: `docs/REMINDERS.md`, `docs/SOURCE-SCHEMA.md`, `docs/CLI-JSON.md`.
+
+### Fixed
+- `advisers audit` now calls `ensureHome()`/`ensureAuditKey()`, verifies fresh and
+  recorded chains, and exits non-zero when the chain is broken.
+- `capture` now records a real turn and stores `sessionId` + `turnId`; accepting
+  dangling evidence fails closed; default matters are persisted; `capture --file`
+  uses the attachment extractor (docx/xlsx/pptx/pdf) instead of raw UTF-8.
+- `capture`/`chat` fail closed for `secrecy > 0` before model egress.
+
+### Verified
+- `pnpm -r test`: 219 tests, 0 fail (this preview adds E0/E1/E2/E3/JSON/MCP tests).
+- `pnpm -r build` and `pnpm -r typecheck` pass.
+- Real-model smoke (2026-11-14): `.eml` import produced a pending candidate with
+  verbatim quote; `capture --file note.docx` produced a pending candidate and
+  persisted the default matter.
+
 ## 0.2.0-preview.58 (staged, approval pending)
 
 ### Fixed
@@ -88,7 +124,7 @@
   exists and it still needs human double review.
 - The Office defect set is realistic synthetic, not real desensitized customer
   documents.
-- Continuity has been run at 10/50/100 facts; `FACTS=200` is scripted but not run (one real-model soak is ~1+ hour).
+- Continuity has been run at 10/50/100/200 facts (see `eval/results/continuity-*.md`); each real-model soak is long and is recorded as a single run, not a nightly gate.
 - No Microsoft Office validation; WPS only. No 5-user dogfood.
 - npm is staged only, not published (OTP approval is a human step).
 - remote file parse is a design document only.

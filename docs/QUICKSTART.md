@@ -101,3 +101,52 @@ If `advisers-office` is missing, install it explicitly; the CLI does not pull it
 - Data: `%USERPROFILE%\.advisers\` unless `ADVISERS_HOME` is set.
 - `advisers export` contains raw conversations/preferences — do not share it.
 - Model calls send context to the configured API; local-only commands (`status`, `office`, `template`, `verify`, `commit`) do not.
+
+## E. Reminders (local, opt-in)
+
+```powershell
+node $A remind                     # due now/next 7 days
+node $A remind --json              # scripts
+node $A remind --ics out.ics       # import into Google/Outlook/system calendar
+node $A remind --deliver           # append to ~/.advisers/reminders.log
+node $A remind install             # write opt-in scheduler scripts, print instructions
+```
+
+`remind install` does **not** silently register a daemon or OS task; it writes
+`~/.advisers/scheduler/remind.sh` / `remind.ps1` and a README. Calendar import is
+the most portable notification path. See `docs/REMINDERS.md`.
+
+## F. Read-only imports (no write-back)
+
+```powershell
+node $A capture --from-mail .\mail.eml
+node $A capture --from-mail .\maildir\ --limit 20
+node $A capture --from-transcript .\meeting.vtt
+node $A calendar import --ics .\calendar.ics
+node $A today --calendar
+```
+
+All commitments stay **pending** until `advisers memory accept <id>`. Secret
+matters (`secrecy > 0`) fail closed before any model/network call. Re-importing
+the same mail/transcript is deduplicated for 30 days. See `docs/SOURCE-SCHEMA.md`.
+
+## G. Evidence and delivery
+
+```powershell
+node $A evidence show <cm_...> --json
+node $A deliveries --pack --out .\evidence
+node $A deliver --commit <cm_...> --type confirmation --out .\confirm.docx
+node $A deliver --type ledger --out .\commitments.xlsx
+```
+
+`deliveries --pack` writes `manifest.json`, `README.txt`, `SHA256SUMS` and a
+`receipt.docx`. SHA256SUMS is tamper-evidence, not a signature. See
+`docs/CLI-JSON.md` for machine-readable output and `docs/SOURCE-SCHEMA.md` for
+source references.
+
+## H. Privacy and MCP
+
+```powershell
+node $A privacy --prove
+node $A mcp --stdio        # JSON-RPC over stdio: initialize/tools/list/tools/call
+```

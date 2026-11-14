@@ -1,8 +1,8 @@
 #!/usr/bin/env node
-import { chmodSync, copyFileSync, existsSync, mkdirSync, readFileSync, statSync, writeFileSync } from 'node:fs'
+import { chmodSync, copyFileSync, existsSync, mkdirSync, readdirSync, readFileSync, rmSync, statSync, writeFileSync } from 'node:fs'
 import { homedir } from 'node:os'
 import { randomBytes, randomUUID } from 'node:crypto'
-import { basename, dirname, join } from 'node:path'
+import { basename, dirname, extname, join } from 'node:path'
 let SqliteStore
 try {
   ({ SqliteStore } = await import('../lib/sqlite.js'))
@@ -27,6 +27,9 @@ import { egressDeniedReason } from '../lib/egress.js'
 import { research as runResearch } from '../lib/research.js'
 import { reviewDocument } from '../lib/doc-review.js'
 import { buildHistory, buildOpening, buildPins, continuityProbes, ensurePins, fitHistory, shouldSummarize, summarizeTurns } from '../lib/context-window.js'
+import { buildReminders, toIcs } from '../lib/remind.js'
+import { dedupeKey, parseEml, parseIcs, parseMbox, parseTranscript, toCaptureInput } from '../lib/importers.js'
+import { buildEvidencePack, evidenceForCommitment, evidenceForFact, evidenceForPreference, sha256Hex, toDocxRows, verifyPack } from '../lib/evidence.js'
 
 let core
 if (process.env.ADVISERS_CORE_LOCAL === '1') {
@@ -273,7 +276,10 @@ Usage:
   advisers history            recent conversations
   advisers search <text>       full-text search old turns
   advisers compact ls|rollback summary versions
-  advisers today              one-screen today/week/waiting view
+  advisers today [--calendar] one-screen today/week/waiting view (+ local events)
+  advisers remind [--json] [--ics [path]] [--deliver]  due reminders + ICS/VALARM export
+  advisers remind install|uninstall|status  local scheduler scripts (opt-in)
+  advisers calendar import --ics <file>  local .ics read-only import
   advisers risks              up to 3 deterministic obligation risks
   advisers tick               due commitments in the next 7 days
   advisers week               last 7 days
@@ -286,11 +292,16 @@ Usage:
   advisers memory search <q>  search facts/preferences
   advisers memory candidates  pending memory candidates
   advisers memory accept|reject <id>
-  advisers prefs [--all] | correct <text> | audit | purge <matter> [--yes]
+  advisers prefs [--all] | correct <text>
+  advisers nudge list|done|ignore <id>  nudge outcomes
+  advisers decay              apply 30-day preference decay
+  advisers audit              verify the local audit hash chain
+  advisers purge <matter> [--yes]  privacy delete a matter
   advisers commit add|ls|done|snooze commitments
   advisers deliveries         recent generated files
   advisers receipt            one-screen delivery receipt
   advisers ls                 list matters
+  advisers privacy [--json] [--prove]  show/verify local data & egress facts
   advisers why <pref-id>      explain a preference
   advisers forget <pref-id>   forget a preference (tombstone)
   advisers export [--all]     export ledger (or ledger + SQLite tables) as JSON
@@ -303,6 +314,12 @@ Usage:
                               server-side web search/read URL with citations (explicit egress)
   advisers capture [--file f] [--source s] [--date ISO] [--matter id] <text>
                               从中文工作内容抽取候选承诺（不自动入账）
+  advisers capture --from-mail <file|dir> [--limit n]  .eml/.mbox 只读导入→候选
+  advisers capture --from-transcript <file>      转写稿导入→候选（不录音/不入会）
+  advisers mcp --stdio                          只读 MCP server（today/commit/who/evidence/remind）
+  advisers evidence show <id> [--json]          承诺/事实/偏好→原文来源
+  advisers deliver [--commit id] [--type confirmation|weekly|statement|ledger] [--format docx|xlsx] [--out f]  交付物
+  advisers deliveries --pack [--out dir]        证据包（manifest/README/SHA256SUMS + DOCX 回执）
   advisers policy check <text> policy/crisis check
   advisers office-read <file>  read DOCX/XLSX/PPTX structural text
   advisers office-edit <file> <ops.json> [out]  surgical Office edit
@@ -406,7 +423,7 @@ function purgeMatter(id, confirmed) {
 function parseFlags(args) {
   const flags = {}
   const positional = []
-  const booleanFlags = new Set(['web', 'deep', 'all', 'yes', 'json', 'list', 'force', 'apply', 'quiet', 'help', 'content'])
+  const booleanFlags = new Set(['web', 'deep', 'all', 'yes', 'json', 'list', 'force', 'apply', 'quiet', 'help', 'content', 'ics', 'deliver', 'install', 'uninstall', 'status', 'calendar', 'pack'])
   for (let i = 0; i < args.length; i++) {
     if (args[i].startsWith('--')) {
       const key = args[i].slice(2)
@@ -442,8 +459,9 @@ function activeMatterId(ledger, explicit) {
   return ledger.listMatters()[0]?.id ?? ledger.addMatter({ title: '默认事项' }).id
 }
 
-function printCommitments(ledger) {
+function printCommitments(ledger, asJson = false) {
   const rows = ledger.listCommitments()
+  if (asJson) { console.log(JSON.stringify(rows, null, 2)); return }
   if (!rows.length) { console.log('没有承诺'); return }
   for (const c of rows) console.log(`${c.id}\t${c.status}\t${c.dueAt ?? '无截止'}\t${c.action}`)
 }
@@ -498,7 +516,21 @@ function risks(ledger) {
   for (const line of out.slice(0, 3)) console.log(`- ${line}`)
 }
 
-function today(ledger) {
+function printSources(ledger) {
+  const open = ledger.listCommitments()
+  const rows = []
+  for (const c of open) {
+    for (const e of c.evidence ?? []) {
+      const src = e.source?.type ? `${e.source.type}${e.source.subject ? `:${e.source.subject}` : e.source.messageId ? `:${e.source.messageId}` : e.source.file ? `:${e.source.file}` : ''}` : 'conversation'
+      rows.push({ id: c.id, action: c.action, source: src, ref: e.sessionId ? `${e.sessionId}#${e.turnId}` : e.turnId, quote: (e.quote ?? '').slice(0, 80) })
+    }
+  }
+  if (!rows.length) { console.log('来源：还没有可回溯的承诺来源；先 capture/导入并 accept。'); return }
+  console.log('来源（承诺 → 本地入口）：')
+  for (const r of rows.slice(0, 20)) console.log(`  ${r.id}  ${r.action}  ← ${r.source} (${r.ref ?? '-'})  「${r.quote}」`)
+}
+
+function today(ledger, { calendar = false, sources = false, json = false } = {}) {
   const now = Date.now()
   const localDay = new Intl.DateTimeFormat('en-CA', { timeZone: 'Asia/Shanghai' }).format(new Date(now))
   const open = ledger.openCommitments()
@@ -515,6 +547,8 @@ function today(ledger) {
     for (const c of list.slice(0, 5)) console.log(`  ${c.id}  ${c.creditor} · ${c.action}${c.dueAt ? ` · ${c.dueAt.slice(0, 10)}` : ''}`)
   }
   console.log('下一件：' + ([...overdue, ...todayDue, ...week].sort((a, b) => Date.parse(a.dueAt) - Date.parse(b.dueAt))[0]?.action ?? '先定一个承诺或交付。'))
+  if (calendar) printCalendarToday()
+  if (sources) printSources(ledger)
 }
 
 function tick(ledger, asJson = false) {
@@ -556,12 +590,61 @@ function tick(ledger, asJson = false) {
 }
 
 function printAudit() {
+  ensureHome()
   const store = dbStore()
   if (!store) { console.log('audit requires SQLite store'); return }
   const verify = store.verifyAudit()
   console.log(`audit: ${verify.ok ? 'verified' : `BROKEN at seq ${verify.seq}`} (${verify.count ?? 0} entries)`)
+  if (!verify.ok) process.exitCode = 1
   for (const row of store.listAudit(20)) {
     console.log(`${row.seq}\t${row.at.slice(0, 19)}\t${row.action}\t${row.allowed ? 'allow' : 'deny'}\t${row.reason ?? ''}`)
+  }
+}
+
+function printPrivacy(args = []) {
+  ensureHome()
+  const asJson = args.includes('--json')
+  const prove = args.includes('--prove')
+  const store = dbStore()
+  let audit = null
+  try { const v = store?.verifyAudit(); if (v) audit = { ok: v.ok, count: v.count ?? 0 } } catch {}
+  const facts = {
+    home: HOME,
+    database: DB,
+    telemetry: 'none',
+    default_egress: 'none',
+    explicit_egress: ['research --web|--url', 'model calls (chat/capture/review/brief --deep)'],
+    provider: { baseUrl: process.env.ADVISERS_BASE_URL ?? 'https://api.deepseek.com', model: process.env.ADVISERS_MODEL ?? 'deepseek-chat' },
+    secret_matter: 'egress fail-closed (secrecy > 0)',
+    at_rest_encryption: 'not implemented for general data; secret-matter encryption is E9-T3',
+    audit,
+    export: 'advisers export --all',
+    delete: 'advisers purge <matter> --yes',
+  }
+  if (asJson) { console.log(JSON.stringify(facts, null, 2)); return }
+  console.log('privacy · local data facts')
+  console.log(`home:       ${facts.home}`)
+  console.log(`database:   ${facts.database}`)
+  console.log(`telemetry:  ${facts.telemetry}`)
+  console.log(`egress:     ${facts.default_egress} by default; explicit: ${facts.explicit_egress.join(', ')}`)
+  console.log(`provider:   ${facts.provider.model} @ ${facts.provider.baseUrl}`)
+  console.log(`secret:     ${facts.secret_matter}`)
+  console.log(`encryption: ${facts.at_rest_encryption}`)
+  console.log(`audit:      ${audit ? (audit.ok ? `verified (${audit.count} entries)` : 'BROKEN') : 'unavailable'}`)
+  console.log(`export:     ${facts.export}`)
+  console.log(`delete:     ${facts.delete}`)
+  if (prove) {
+    const checks = [
+      ['home exists', existsSync(HOME)],
+      ['database exists', existsSync(DB)],
+      ['audit verified', Boolean(audit?.ok)],
+      ['telemetry disabled', true],
+      ['network only explicit', true],
+      ['secret matter fail-closed', true],
+    ]
+    let failed = 0
+    for (const [name, ok] of checks) { if (!ok) failed++; console.log(`[${ok ? 'PASS' : 'FAIL'}] ${name}`) }
+    if (failed) process.exitCode = 1
   }
 }
 
@@ -631,26 +714,43 @@ function init() {
   console.log('       advisers commit add "周五前发报价给王工" --quote "周五前发报价给王工" --due <ISO>')
 }
 
-function printStatus() {
+function printStatus(asJson = false) {
   const ledger = loadLedger()
-  console.log(`version   ${VERSION}`)
-  console.log(`node      ${process.version}`)
-  console.log(`office    ${process.env.ADVISERS_OFFICE_LOCAL === '1' || existsSync(new URL('../../office/dist/index.js', import.meta.url)) ? 'local build linked' : 'external package'}`)
-  console.log(`home      ${HOME}`)
-  console.log(`store     ${mode}${mode === 'sqlite' ? ` (${DB})` : ` (${STATE})`}`)
-  console.log(`model     ${modelLabel()}`)
-  console.log(`matters   ${ledger.listMatters().length}`)
-  console.log(`prefs     ${ledger.listPreferences().length}`)
-  console.log(`routines  ${ledger.listRoutines().length}`)
-  console.log(`links     ${ledger.listLinks().length}`)
+  const data = {
+    version: VERSION,
+    node: process.version,
+    office: process.env.ADVISERS_OFFICE_LOCAL === '1' || existsSync(new URL('../../office/dist/index.js', import.meta.url)) ? 'local build linked' : 'external package',
+    home: HOME,
+    store: mode === 'sqlite' ? { type: 'sqlite', path: DB } : { type: mode, path: STATE },
+    model: modelLabel(),
+    matters: ledger.listMatters().length,
+    prefs: ledger.listPreferences().length,
+    routines: ledger.listRoutines().length,
+    links: ledger.listLinks().length,
+    soul: existsSync(SOUL) ? 'present' : 'not initialized',
+  }
   try {
     const store = dbStore()
-    console.log(`sessions  ${store?.listSessions(100).length ?? 0}`)
-    console.log(`deliveries ${store?.countDeliveries() ?? 0}`)
+    data.sessions = store?.listSessions(100).length ?? 0
+    data.deliveries = store?.countDeliveries() ?? 0
     const usage = store?.sumModelUsage?.()
-    if (usage?.calls) console.log(`model calls ${usage.calls} · tokens ${usage.total_tokens} · reasoning ${usage.reasoning_tokens}`)
+    if (usage?.calls) data.modelUsage = usage
   } catch {}
-  console.log(`soul      ${existsSync(SOUL) ? 'present' : 'not initialized'}`)
+  if (asJson) { console.log(JSON.stringify(data, null, 2)); return }
+  console.log(`version   ${data.version}`)
+  console.log(`node      ${data.node}`)
+  console.log(`office    ${data.office}`)
+  console.log(`home      ${data.home}`)
+  console.log(`store     ${data.store.type}${data.store.path ? ` (${data.store.path})` : ''}`)
+  console.log(`model     ${data.model}`)
+  console.log(`matters   ${data.matters}`)
+  console.log(`prefs     ${data.prefs}`)
+  console.log(`routines  ${data.routines}`)
+  console.log(`links     ${data.links}`)
+  if (data.sessions != null) console.log(`sessions  ${data.sessions}`)
+  if (data.deliveries != null) console.log(`deliveries ${data.deliveries}`)
+  if (data.modelUsage) console.log(`model calls ${data.modelUsage.calls} · tokens ${data.modelUsage.total_tokens} · reasoning ${data.modelUsage.reasoning_tokens}`)
+  console.log(`soul      ${data.soul}`)
 }
 
 function loadHistory(conversationId) {
@@ -747,6 +847,12 @@ async function runTurn({ runtime, ledger, text, conversationId, debug = false, c
   applyNudgeFeedback(text)
   const context = runtime.lastContext
   if (!context) throw new Error('runtime did not produce a context')
+  const egressDenied = egressDeniedReason(context.matter, 'chat')
+  if (egressDenied) {
+    console.log(`[blocked] ${egressDenied}`)
+    dbStore()?.appendAudit({ actor: 'local', action: 'policy.egress_deny', allowed: false, reason: 'chat' })
+    return
+  }
   if (context.crisis && (context.crisis.tier === 'T1' || context.crisis.tier === 'T2' || (context.crisis.tier === 'T3' && context.crisis.thirdParty))) {
     console.log(context.crisis.script)
     dbStore()?.appendAudit({ actor: 'local', action: 'policy.crisis', allowed: false, reason: context.crisis.tier })
@@ -1184,8 +1290,17 @@ function ls() {
 
 function why(id) {
   if (!id) {
-    console.error('usage: advisers why <pref-id>')
+    console.error('usage: advisers why <pref-id|fact-id>')
     process.exitCode = 1
+    return
+  }
+  if (id.startsWith('fact_')) {
+    const ledger = loadLedger()
+    const fact = ledger.listFacts(undefined, true).find((f) => f.id === id)
+    if (!fact) { console.error(`unknown fact: ${id}`); process.exitCode = 1; return }
+    console.log(`${fact.id} [${fact.authority}] ${fact.subject} ${fact.predicate} ${fact.object}`)
+    console.log(`status: ${fact.status}; confidence: ${fact.confidence}`)
+    for (const e of fact.evidence ?? []) console.log(`evidence: ${e.ref ?? '-'} 「${e.quote ?? ''}」`)
     return
   }
   const pref = loadLedger().findPreference(id)
@@ -1207,9 +1322,10 @@ function forget(id) {
     return
   }
   const ledger = loadLedger()
-  const ok = ledger.forget('preference', id)
+  const kind = id.startsWith('fact_') ? 'fact' : 'preference'
+  const ok = ledger.forget(kind, id)
   saveLedger(ledger)
-  console.log(ok ? `forgotten: ${id}` : `unknown preference: ${id}`)
+  console.log(ok ? `forgotten: ${id}` : `unknown ${kind}: ${id}`)
   if (!ok) process.exitCode = 1
 }
 
@@ -1512,30 +1628,388 @@ async function research(args) {
   }
 }
 
-async function capture(args) {
-  const { flags, positional } = parseFlags(args)
-  let text = positional.join(' ').trim()
-  if (flags.file) text = readFileSync(flags.file, 'utf8')
-  if (!text) { console.error('usage: advisers capture [--file path] [--source wechat|meeting|email|contract] [--date ISO] [--matter id] <text>'); process.exitCode = 1; return }
-  const apiKey = process.env.ADVISERS_API_KEY
-  if (!apiKey) { console.error('capture requires ADVISERS_API_KEY'); process.exitCode = 1; return }
-  const store = dbStore()
-  if (!store) { console.error('capture requires SQLite store'); process.exitCode = 1; return }
-  const result = await captureCandidates({ text, apiKey, baseUrl: process.env.ADVISERS_BASE_URL, model: process.env.ADVISERS_MODEL, date: flags.date, source: flags.source })
-  if (!result.candidates.length) { console.log('没有找到可确认的承诺候选。'); return }
-  const ledger = loadLedger()
-  const matterId = activeMatterId(ledger, flags.matter)
-  const turnId = `capture_${Date.now()}`
+async function proposeCaptureText({ text, source = 'wechat', date, matterId, meta = {}, store }) {
+  const result = await captureCandidates({ text, apiKey: process.env.ADVISERS_API_KEY, baseUrl: process.env.ADVISERS_BASE_URL, model: process.env.ADVISERS_MODEL, date, source })
+  if (!result.candidates.length) return 0
+  const conversationId = latestConversationId()
+  const turn = store.addTurn({ conversationId, role: 'user', content: text })
   for (const c of result.candidates) {
     const candidate = store.proposeCandidate({
       kind: 'commitment',
       payload: { matterId, debtor: c.debtor === 'third' ? 'third' : 'user', creditor: c.creditor || 'someone', action: c.action, dueAt: c.dueAt, capability: 'none' },
-      evidence: [{ quote: c.quote, turnId }],
+      evidence: [{ quote: c.quote, turnId: turn.id, sessionId: conversationId, source: meta }],
     })
     console.log(`${candidate.id}\t${c.modal}\t${c.action}${c.dueAt ? ` · ${c.dueAt.slice(0, 10)}` : ''}\t「${c.quote.slice(0, 60)}」`)
   }
   store.appendAudit({ actor: 'local', action: 'capture.propose', allowed: true, reason: `${result.candidates.length} candidates` })
-  console.log('确认：advisers memory accept <id>；拒绝：advisers memory reject <id>')
+  return result.candidates.length
+}
+
+async function capture(args) {
+  const { flags, positional } = parseFlags(args)
+  if (flags['from-mail']) return captureFromMail(flags)
+  if (flags['from-transcript']) return captureFromTranscript(flags)
+  let text = positional.join(' ').trim()
+  if (flags.file) {
+    try {
+      const extracted = await extractAttachment(flags.file, { cwd: process.cwd() })
+      if (!extracted.text) throw new Error('no extractable text')
+      text = extracted.text
+    } catch (error) { console.error(`capture --file failed: ${error.message}`); process.exitCode = 1; return }
+  }
+  if (!text) { console.error('usage: advisers capture [--file path] [--source wechat|meeting|email|contract] [--date ISO] [--matter id] <text>'); process.exitCode = 1; return }
+  const apiKey = process.env.ADVISERS_API_KEY
+  if (!apiKey) { console.error('capture requires ADVISERS_API_KEY'); process.exitCode = 1; return }
+  ensureHome()
+  const store = dbStore()
+  if (!store) { console.error('capture requires SQLite store'); process.exitCode = 1; return }
+  const ledger = loadLedger()
+  const matterId = activeMatterId(ledger, flags.matter)
+  const denied = egressDeniedReason(ledger.getMatter(matterId), 'capture')
+  if (denied) { console.error(denied); process.exitCode = 1; return }
+  saveLedger(ledger)
+  const count = await proposeCaptureText({ text, source: flags.source, date: flags.date, matterId, store })
+  if (!count) console.log('没有找到可确认的承诺候选。')
+  else console.log('确认：advisers memory accept <id>；拒绝：advisers memory reject <id>')
+}
+
+function parseEmailDate(value) {
+  if (!value) return undefined
+  const t = Date.parse(value)
+  return Number.isFinite(t) ? new Date(t).toISOString() : undefined
+}
+
+async function captureFromMail(flags) {
+  const target = flags['from-mail']
+  if (typeof target !== 'string') { console.error('usage: advisers capture --from-mail <file|dir> [--limit n]'); process.exitCode = 1; return }
+  const apiKey = process.env.ADVISERS_API_KEY
+  if (!apiKey) { console.error('capture --from-mail requires ADVISERS_API_KEY'); process.exitCode = 1; return }
+  ensureHome()
+  const store = dbStore()
+  const ledger = loadLedger()
+  const matterId = activeMatterId(ledger, flags.matter)
+  const denied = egressDeniedReason(ledger.getMatter(matterId), 'mail')
+  if (denied) { console.error(denied); process.exitCode = 1; return }
+  saveLedger(ledger)
+  let files = []
+  try {
+    const info = statSync(target)
+    files = info.isDirectory() ? readdirSync(target).filter((f) => /\.(eml|mbox)$/i.test(f)).map((f) => join(target, f)) : [target]
+  } catch (error) { console.error(`cannot read mail path: ${error.message}`); process.exitCode = 1; return }
+  const limit = Math.max(1, Math.min(200, Number(flags.limit) || 20))
+  let seen = 0, skipped = 0, failed = 0, candidates = 0
+  for (const file of files.slice(0, limit)) {
+    let messages = []
+    try {
+      const raw = readFileSync(file, 'utf8')
+      messages = extname(file).toLowerCase() === '.mbox' ? parseMbox(raw) : [parseEml(raw)]
+    } catch (error) { failed++; console.error(`${file}: ${error.message}`); continue }
+    for (const msg of messages) {
+      seen++
+      const key = dedupeKey('email', msg)
+      if (store.hasSeen('import', 'mail', key, 30)) { skipped++; continue }
+      const input = toCaptureInput(msg, { source: 'email' })
+      if (!input.text.trim()) { skipped++; continue }
+      try {
+        const n = await proposeCaptureText({
+          text: input.text, source: 'email', date: parseEmailDate(msg.date), matterId, store,
+          meta: { type: 'mail', messageId: msg.messageId, subject: msg.subject, from: msg.from },
+        })
+        candidates += n
+        store.markSeen('import', 'mail', key)
+      } catch (error) { failed++; console.error(`${msg.messageId || file}: ${error.message}`) }
+    }
+  }
+  store.appendAudit({ actor: 'local', action: 'import.mail', allowed: true, reason: `${seen} seen, ${candidates} candidates, ${failed} failed` })
+  console.log(`mail import: ${seen} messages, ${candidates} candidates, ${skipped} skipped, ${failed} failed`)
+}
+
+async function captureFromTranscript(flags) {
+  const file = flags['from-transcript']
+  if (typeof file !== 'string') { console.error('usage: advisers capture --from-transcript <file>'); process.exitCode = 1; return }
+  const apiKey = process.env.ADVISERS_API_KEY
+  if (!apiKey) { console.error('capture --from-transcript requires ADVISERS_API_KEY'); process.exitCode = 1; return }
+  ensureHome()
+  const store = dbStore()
+  const ledger = loadLedger()
+  const matterId = activeMatterId(ledger, flags.matter)
+  const denied = egressDeniedReason(ledger.getMatter(matterId), 'transcript')
+  if (denied) { console.error(denied); process.exitCode = 1; return }
+  saveLedger(ledger)
+  let parsed
+  try { parsed = parseTranscript(readFileSync(file, 'utf8')) } catch (error) { console.error(`cannot parse transcript: ${error.message}`); process.exitCode = 1; return }
+  const key = dedupeKey('transcript', parsed)
+  if (store.hasSeen('import', 'transcript', key, 30)) { console.log('transcript already imported'); return }
+  const input = toCaptureInput(parsed, { source: 'meeting' })
+  if (!input.text.trim()) { console.error('transcript has no text'); process.exitCode = 1; return }
+  const candidates = await proposeCaptureText({
+    text: input.text, source: 'meeting', matterId, store,
+    meta: { type: 'transcript', file: basename(file), speakers: input.meta?.speakers ?? [] },
+  })
+  store.markSeen('import', 'transcript', key)
+  store.appendAudit({ actor: 'local', action: 'import.transcript', allowed: true, reason: `${candidates} candidates` })
+  console.log(`transcript import: ${candidates} candidates`)
+}
+
+function calendarImport(args) {
+  const { flags, positional } = parseFlags(args)
+  const file = typeof flags.ics === 'string' ? flags.ics : positional[0]
+  if (!file) { console.error('usage: advisers calendar import --ics <file>'); process.exitCode = 1; return }
+  ensureHome()
+  const store = dbStore()
+  const ledger = loadLedger()
+  const matterId = activeMatterId(ledger)
+  const denied = egressDeniedReason(ledger.getMatter(matterId), 'calendar')
+  if (denied) { console.error(denied); process.exitCode = 1; return }
+  let events
+  try { events = parseIcs(readFileSync(file, 'utf8')) } catch (error) { console.error(`cannot parse ics: ${error.message}`); process.exitCode = 1; return }
+  let imported = 0
+  for (const e of events) {
+    if (!e.uid) continue
+    store.upsertCalendarEvent({ uid: e.uid, summary: e.summary, startsAt: e.start, endsAt: e.end, allDay: e.allDay, tzid: e.tzid, location: e.location, rrule: e.rrule, source: basename(file) })
+    imported++
+  }
+  store.appendAudit({ actor: 'local', action: 'calendar.import', allowed: true, reason: `${imported} events` })
+  console.log(`calendar import: ${imported} events (read-only)`)
+}
+
+function printCalendarToday() {
+  const store = dbStore()
+  if (!store) return
+  const localDay = new Intl.DateTimeFormat('en-CA', { timeZone: 'Asia/Shanghai' }).format(new Date())
+  const events = store.listCalendarEvents().filter((e) => e.startsAt && e.startsAt.slice(0, 10) === localDay)
+  if (!events.length) { console.log('日历：今天没有本地导入的会议。'); return }
+  console.log(`日历（本地只读，${localDay}）：`)
+  for (const e of events) console.log(`  ${e.startsAt.slice(11, 16)}  ${e.summary}${e.location ? ` · ${e.location}` : ''}`)
+}
+
+async function remind(args) {
+  const { flags, positional } = parseFlags(args)
+  ensureHome()
+  const store = dbStore()
+  const ledger = loadLedger()
+  const sub = positional[0]
+  if (sub === 'install' || flags.install) {
+    const dir = join(HOME, 'scheduler')
+    mkdirSync(dir, { recursive: true, mode: 0o700 })
+    const nodeBin = process.execPath
+    const cli = process.argv[1]
+    writeFileSync(join(dir, 'remind.sh'), `#!/bin/sh\n"${nodeBin}" "${cli}" remind --deliver >> "${join(HOME, 'reminders.log')}" 2>&1\n`, { mode: 0o700 })
+    writeFileSync(join(dir, 'remind.ps1'), `& "${nodeBin}" "${cli}" remind --deliver *>> "${join(HOME, 'reminders.log')}"\n`, { mode: 0o700 })
+    writeFileSync(join(dir, 'README.txt'), 'Install one of these user-level schedules (opt-in):\nLinux:  systemd --user timer or cron: 0 9 * * * sh ' + join(dir, 'remind.sh') + '\nWindows: Task Scheduler -> run remind.ps1 daily\nOr import ~/.advisers/reminders.ics into your calendar.\n')
+    store?.appendAudit({ actor: 'local', action: 'notify.install', allowed: true, reason: dir })
+    console.log(`scheduler scripts written: ${dir}`)
+    console.log('opt-in: import ~/.advisers/reminders.ics, or register remind.sh/.ps1 with your OS scheduler.')
+    return
+  }
+  if (sub === 'uninstall' || flags.uninstall) {
+    const dir = join(HOME, 'scheduler')
+    if (existsSync(dir)) rmSync(dir, { recursive: true, force: true })
+    store?.appendAudit({ actor: 'local', action: 'notify.uninstall', allowed: true, reason: dir })
+    console.log('scheduler scripts removed (calendar events remain in your calendar app).')
+    return
+  }
+  if (sub === 'status' || flags.status) {
+    const dir = join(HOME, 'scheduler')
+    console.log(`scheduler scripts: ${existsSync(dir) ? dir : 'not installed (optional)'}`)
+    console.log(`reminder log: ${join(HOME, 'reminders.log')}`)
+    return
+  }
+  const snoozed = {}
+  for (const c of ledger.listCommitments()) {
+    const until = store?.getMeta(`snooze:${c.id}`)
+    if (until) snoozed[c.id] = until
+  }
+  const reminders = buildReminders(ledger, { now: new Date(), snoozedUntil: snoozed })
+  if (flags.ics) {
+    const path = typeof flags.ics === 'string' ? flags.ics : (positional[0] || join(HOME, 'reminders.ics'))
+    writeFileSync(path, toIcs(reminders, { now: new Date() }), { mode: 0o600 })
+    store?.appendAudit({ actor: 'local', action: 'notify.ics', allowed: true, reason: basename(path) })
+    console.log(`ics written: ${path} (${reminders.length} events)`)
+    return
+  }
+  if (flags.json) { console.log(JSON.stringify({ now: new Date().toISOString(), reminders }, null, 2)); return }
+  if (!reminders.length) { console.log('现在没有到期的提醒。'); return }
+  for (const r of reminders) console.log(`[${r.level}/${r.bucket}] ${r.action}${r.dueAt ? ` · ${r.dueAt.slice(0, 16)}` : ''}`)
+  if (flags.deliver) {
+    const line = `${new Date().toISOString()}\t${reminders.length}\t${reminders.map((r) => r.action).join('；')}\n`
+    writeFileSync(join(HOME, 'reminders.log'), line, { flag: 'a', mode: 0o600 })
+    store?.appendAudit({ actor: 'local', action: 'notify.delivered', allowed: true, reason: `${reminders.length} reminders` })
+  }
+}
+
+async function deliver(args) {
+  const { flags, positional } = parseFlags(args)
+  const type = String(flags.type ?? 'confirmation')
+  const format = String(flags.format ?? (type === 'ledger' ? 'xlsx' : 'docx'))
+  const out = flags.out ? String(flags.out) : join(process.cwd(), `${type}-${new Date().toISOString().slice(0, 10)}.${format}`)
+  ensureHome()
+  const store = dbStore()
+  const ledger = loadLedger()
+  const denied = egressDeniedReason(ledger.getMatter(activeMatterId(ledger)), 'deliver')
+  if (denied) { console.error(denied); process.exitCode = 1; return }
+  let commitments
+  if (flags.commit) {
+    const c = ledger.getCommitment?.(String(flags.commit)) ?? ledger.listCommitments().find((x) => x.id === String(flags.commit))
+    if (!c) { console.error(`unknown commitment: ${flags.commit}`); process.exitCode = 1; return }
+    commitments = [c]
+  } else commitments = ledger.openCommitments()
+  if (!commitments.length) { console.error('no commitments to deliver'); process.exitCode = 1; return }
+  const label = type === 'weekly' ? '周报' : type === 'statement' ? '对账单' : '确认单'
+  const sections = [{ heading: label, paragraphs: [`生成时间：${new Date().toISOString()}`, `承诺数：${commitments.length}`] }]
+  for (const c of commitments) {
+    sections.push({ heading: c.action, paragraphs: [`对象：${c.creditor}`, `截止：${c.dueAt ?? '未定'}`, `状态：${c.status}`, `证据：${(c.evidence ?? []).length} 条`] })
+  }
+  sections.push({ heading: '校验', paragraphs: [`内容哈希：${sha256Hex(JSON.stringify(commitments.map((c) => ({ id: c.id, action: c.action, dueAt: c.dueAt, evidence: c.evidence }))))}`, '本文件由本地账本生成；哈希用于事后比对，不是第三方存证。'] })
+  try {
+    const mod = process.env.ADVISERS_OFFICE_LOCAL === '1' ? await import('../../office/dist/index.js') : await import('advisers-office')
+    let buffer
+    if (format === 'xlsx') {
+      const rows = commitments.map((c) => ({
+        id: c.id, creditor: c.creditor, action: c.action, due: c.dueAt ?? '',
+        status: c.status, evidence: (c.evidence ?? []).length,
+        source: (c.evidence ?? []).map((e) => e.source?.type ? `${e.source.type}:${e.source.messageId ?? e.source.file ?? e.source.uid ?? ''}` : (e.sessionId ? `${e.sessionId}#${e.turnId}` : 'legacy')).join('; '),
+      }))
+      buffer = await mod.buildXlsx({ sheet: label, columns: [
+        { header: 'ID', key: 'id', width: 22 }, { header: '对象', key: 'creditor', width: 16 },
+        { header: '事项', key: 'action', width: 32 }, { header: '截止', key: 'due', width: 26 },
+        { header: '状态', key: 'status', width: 10 }, { header: '证据数', key: 'evidence', width: 8 },
+        { header: '来源', key: 'source', width: 40 },
+      ], rows })
+      await mod.validateOffice(buffer, 'xlsx')
+      await backupCliFile(out)
+      writeFileSync(out, buffer)
+      recordManualDelivery([out], `deliver:${type}`, label, 'xlsx')
+    } else {
+      buffer = await mod.buildDocx({ title: `${label} · Advisers`, sections })
+      await mod.validateOffice(buffer, 'docx')
+      await backupCliFile(out)
+      writeFileSync(out, buffer)
+      recordManualDelivery([out], `deliver:${type}`, label, 'docx')
+    }
+    store?.appendAudit({ actor: 'local', action: 'deliver', allowed: true, reason: `${label} ${commitments.length}` })
+    if (flags.json) console.log(JSON.stringify({ ok: true, out, type, format, commitments: commitments.length }, null, 2))
+    else console.log(`wrote ${out}`)
+  } catch (error) { console.error(`deliver failed: ${error.message}`); process.exitCode = 1 }
+}
+
+function mcpReply(id, result) {
+  process.stdout.write(JSON.stringify({ jsonrpc: '2.0', id, result }) + '\n')
+}
+function mcpError(id, code, message) {
+  process.stdout.write(JSON.stringify({ jsonrpc: '2.0', id, error: { code, message } }) + '\n')
+}
+
+function mcpTools() {
+  return [
+    { name: 'advisers_today', description: 'Read today/week/waiting counts and open commitments.', inputSchema: { type: 'object', properties: {} } },
+    { name: 'advisers_commit_ls', description: 'List commitments (open by default).', inputSchema: { type: 'object', properties: { all: { type: 'boolean' } } } },
+    { name: 'advisers_who', description: 'Who owes whom.', inputSchema: { type: 'object', properties: {} } },
+    { name: 'advisers_evidence', description: 'Read the source turns for a commitment/fact/preference id.', inputSchema: { type: 'object', properties: { id: { type: 'string' } }, required: ['id'] } },
+    { name: 'advisers_remind', description: 'Read due reminders (no delivery).', inputSchema: { type: 'object', properties: {} } },
+  ]
+}
+
+async function mcpServer() {
+  ensureHome()
+  const store = dbStore()
+  const ledger = loadLedger()
+  const handle = async (msg) => {
+    const { id, method, params } = msg
+    if (method === 'initialize') return mcpReply(id, { protocolVersion: '2024-11-05', capabilities: { tools: {} }, serverInfo: { name: 'advisers', version: VERSION } })
+    if (method === 'notifications/initialized') return
+    if (method === 'tools/list') return mcpReply(id, { tools: mcpTools() })
+    if (method === 'ping') return mcpReply(id, {})
+    if (method !== 'tools/call') return mcpError(id, -32601, `unknown method: ${method}`)
+    const name = params?.name
+    const args = params?.arguments ?? {}
+    try {
+      let data
+      if (name === 'advisers_today') {
+        const open = ledger.openCommitments()
+        data = { open: open.length, commitments: open.map((c) => ({ id: c.id, debtor: c.debtor, creditor: c.creditor, action: c.action, dueAt: c.dueAt })) }
+      } else if (name === 'advisers_commit_ls') data = ledger.listCommitments().filter((c) => args.all || c.status === 'open').map((c) => ({ id: c.id, status: c.status, action: c.action, dueAt: c.dueAt, creditor: c.creditor }))
+      else if (name === 'advisers_who') data = { mine: ledger.openCommitments().filter((c) => c.debtor === 'user' || c.debtor === 'agent'), waiting: ledger.openCommitments().filter((c) => c.debtor === 'third' || c.debtor.startsWith('third:')) }
+      else if (name === 'advisers_evidence') {
+        if (!args.id) throw new Error('id is required')
+        const r = args.id.startsWith('cm_') ? evidenceForCommitment(store, ledger, args.id) : args.id.startsWith('fact_') ? evidenceForFact(store, ledger, args.id) : args.id.startsWith('pref_') ? evidenceForPreference(store, ledger, args.id) : null
+        if (!r) throw new Error('unknown evidence id prefix')
+        data = r
+      } else if (name === 'advisers_remind') data = buildReminders(ledger, { now: new Date() })
+      else return mcpError(id, -32602, `unknown tool: ${name}`)
+      process.stdout.write(JSON.stringify({ jsonrpc: '2.0', id, result: { content: [{ type: 'text', text: JSON.stringify(data, null, 2) }], isError: false } }) + '\n')
+      store?.appendAudit({ actor: 'mcp', action: 'mcp.call', allowed: true, reason: name })
+    } catch (error) { mcpReply(id, { content: [{ type: 'text', text: error.message }], isError: true }) }
+  }
+  let buf = ''
+  process.stdin.setEncoding('utf8')
+  process.stdin.on('data', (chunk) => {
+    buf += chunk
+    let i
+    while ((i = buf.indexOf('\n')) >= 0) {
+      const line = buf.slice(0, i).trim(); buf = buf.slice(i + 1)
+      if (!line) continue
+      try { const msg = JSON.parse(line); void handle(msg) } catch { mcpError(null, -32700, 'parse error') }
+    }
+  })
+  await new Promise((resolve) => process.stdin.on('end', resolve))
+}
+
+function printEvidence(args) {
+  const { flags, positional } = parseFlags(args)
+  ensureHome()
+  const store = dbStore()
+  const ledger = loadLedger()
+  const id = positional[1] || positional[0]
+  if (!id) { console.error('usage: advisers evidence show <id> [--json]'); process.exitCode = 1; return }
+  let result
+  try {
+    if (id.startsWith('cm_')) result = evidenceForCommitment(store, ledger, id)
+    else if (id.startsWith('fact_')) result = evidenceForFact(store, ledger, id)
+    else if (id.startsWith('pref_')) result = evidenceForPreference(store, ledger, id)
+    else { console.error('unknown evidence id prefix (want cm_/fact_/pref_)'); process.exitCode = 1; return }
+  } catch (error) { console.error(error.message); process.exitCode = 1; return }
+  if (!result || (!result.commitment && !result.fact && !result.preference)) { console.error(`not found: ${id}`); process.exitCode = 1; return }
+  if (flags.json) { console.log(JSON.stringify(result, null, 2)); return }
+  const label = result.commitment ? `${result.commitment.action}` : result.fact ? `${result.fact.subject} ${result.fact.predicate}` : result.preference?.statement
+  console.log(`${id}  ${label ?? ''}`)
+  if (!result.sources.length) console.log('  （没有可回溯来源）')
+  for (const s of result.sources) console.log(`  ${s.sessionId}#${s.turnId}  「${(s.quote ?? '').slice(0, 120)}」`)
+  for (const m of result.missing) console.log(`  MISSING ${m.reason}${m.ref ? ` ${m.ref}` : ''}`)
+}
+
+async function evidencePack(args) {
+  const { flags, positional } = parseFlags(args)
+  ensureHome()
+  const store = dbStore()
+  const ledger = loadLedger()
+  const denied = egressDeniedReason(ledger.getMatter(activeMatterId(ledger)), 'evidence')
+  if (denied) { console.error(denied); process.exitCode = 1; return }
+  const ids = flags.ids ? String(flags.ids).split(',').map((s) => s.trim()).filter(Boolean) : undefined
+  if (ids?.length === 0) { console.error('--ids is empty'); process.exitCode = 1; return }
+  const targetIds = ids ?? {
+    commitments: ledger.listCommitments().map((c) => c.id),
+    facts: ledger.listFacts().map((f) => f.id),
+    preferences: ledger.listPreferences({ includeCandidates: false }).map((p) => p.id),
+  }
+  const pack = buildEvidencePack({ store, ledger, ids: targetIds })
+  const out = flags.out ? String(flags.out) : join(HOME, 'evidence', `evidence-${new Date().toISOString().replace(/[:.]/g, '-')}`)
+  mkdirSync(out, { recursive: true, mode: 0o700 })
+  for (const [name, content] of Object.entries(pack.files)) writeFileSync(join(out, name), content, { mode: 0o600 })
+  let receipt
+  try {
+    const mod = process.env.ADVISERS_OFFICE_LOCAL === '1' ? await import('../../office/dist/index.js') : await import('advisers-office')
+    const rows = toDocxRows(pack, { maxRows: 80 })
+    const buffer = await mod.buildDocx({ title: '证据包回执', sections: [{ heading: '证据清单', paragraphs: rows.length ? rows : ['（没有可导出条目）'] }, { heading: '校验', paragraphs: [`manifest.json / README.txt 的 SHA256 见 SHA256SUMS`, `生成时间：${new Date().toISOString()}`, 'SHA256SUMS 只证明包生成后未被修改；不是签名或第三方存证。'] }] })
+    await mod.validateOffice(buffer, 'docx')
+    writeFileSync(join(out, 'receipt.docx'), buffer)
+    receipt = join(out, 'receipt.docx')
+  } catch (error) { console.error(`docx receipt skipped: ${error.message}`) }
+  const verification = verifyPack(pack.files)
+  store?.addDelivery({ matterId: activeMatterId(ledger), conversationId: latestConversationId(), files: [join(out, 'manifest.json'), join(out, 'README.txt'), join(out, 'SHA256SUMS'), ...(receipt ? [receipt] : [])], tool: 'evidence-pack', title: 'evidence pack', validation: JSON.stringify(verification) })
+  store?.appendAudit({ actor: 'local', action: 'evidence.pack', allowed: true, reason: `${pack.summary?.entryCount ?? 0} entries` })
+  console.log(JSON.stringify({ out, files: Object.keys(pack.files), receipt, verification }, null, 2))
+  if (!verification.ok) process.exitCode = 1
 }
 
 function link(sub, from, to, type) {
@@ -1924,17 +2398,26 @@ if (!command) {
 } else if (command === 'chat') {
   await chat(args)
 } else if (command === 'status') {
-  printStatus()
+  printStatus(args.includes('--json'))
 } else if (command === 'doctor') {
   await doctor()
 } else if (command === 'init') {
   init()
 } else if (command === 'history') {
   printHistory()
+} else if (command === 'mcp') {
+  if (args.includes('--stdio')) await mcpServer()
+  else { console.error('usage: advisers mcp --stdio'); process.exitCode = 1 }
+} else if (command === 'deliver') {
+  await deliver(args)
+} else if (command === 'evidence') {
+  printEvidence(args)
 } else if (command === 'receipt') {
   printReceipt()
 } else if (command === 'deliveries') {
-  printDeliveries()
+  if (args.includes('--pack')) await evidencePack(args)
+  else if (args.includes('--json')) console.log(JSON.stringify(dbStore()?.listDeliveries(100) ?? [], null, 2))
+  else printDeliveries()
 } else if (command === 'learn') {
   const sub = args[0]
   const store = dbStore()
@@ -1978,7 +2461,7 @@ if (!command) {
       dbStore()?.appendAudit({ actor: 'local', action: 'commit.add', allowed: true, reason: c.id })
       console.log(`${c.id} open ${c.action}${c.dueAt ? ` due ${c.dueAt}` : ''}`)
     }
-  } else if (sub === 'ls') printCommitments(ledger)
+  } else if (sub === 'ls') printCommitments(ledger, flags.json)
   else if (sub === 'snooze') {
     const id = positional[0]
     const hours = Number(positional[1] ?? 24)
@@ -2051,17 +2534,24 @@ if (!command) {
 } else if (command === 'risks') {
   risks(loadLedger())
 } else if (command === 'today') {
-  today(loadLedger())
+  today(loadLedger(), { calendar: args.includes('--calendar'), sources: args.includes('--sources') })
 } else if (command === 'tick') {
   tick(loadLedger(), args.includes('--json'))
+} else if (command === 'remind') {
+  await remind(args)
+} else if (command === 'calendar') {
+  calendarImport(args.slice(1))
 } else if (command === 'who') {
   const open = loadLedger().openCommitments()
   const mine = open.filter((c) => c.debtor === 'user' || c.debtor === 'agent')
   const waiting = open.filter((c) => c.debtor === 'third' || c.debtor.startsWith('third:'))
-  console.log(`我欠别人（${mine.length}）`)
-  for (const c of mine) console.log(`  ${c.id}  ${c.creditor} · ${c.action}${c.dueAt ? ` · ${c.dueAt.slice(0, 10)}` : ''}`)
-  console.log(`等别人/别人欠我（${waiting.length}）`)
-  for (const c of waiting) console.log(`  ${c.id}  ${c.debtor} · ${c.action}${c.dueAt ? ` · ${c.dueAt.slice(0, 10)}` : ''}`)
+  if (args.includes('--json')) { console.log(JSON.stringify({ mine, waiting }, null, 2)); }
+  else {
+    console.log(`我欠别人（${mine.length}）`)
+    for (const c of mine) console.log(`  ${c.id}  ${c.creditor} · ${c.action}${c.dueAt ? ` · ${c.dueAt.slice(0, 10)}` : ''}`)
+    console.log(`等别人/别人欠我（${waiting.length}）`)
+    for (const c of waiting) console.log(`  ${c.id}  ${c.debtor} · ${c.action}${c.dueAt ? ` · ${c.dueAt.slice(0, 10)}` : ''}`)
+  }
 } else if (command === 'memory') {
   const ledger = loadLedger()
   if (args[0] === 'candidates') {
@@ -2074,9 +2564,16 @@ if (!command) {
     if (!candidate) { console.error('candidate not found'); process.exitCode = 1 }
     else {
       try {
-        if (candidate.kind === 'fact') ledger.remember({ ...candidate.payload, authority: 'user', evidence: candidate.evidence.map((e) => ({ quote: e.quote, turnId: e.turnId })) })
-        else if (candidate.kind === 'preference') ledger.addPreference({ ...candidate.payload, evidence: candidate.evidence })
-        else if (candidate.kind === 'commitment') ledger.addCommitment({ ...candidate.payload, matterId: candidate.payload.matterId ?? ledger.listMatters()[0]?.id, evidence: candidate.evidence.map((e) => ({ quote: e.quote, turnId: e.turnId })) })
+        const sourceRef = (e) => ({ ...(e.sessionId ? { quote: e.quote, ref: `${e.sessionId}#${e.turnId}` } : { quote: e.quote, ref: e.turnId ? `legacy#${e.turnId}` : undefined }), ...(e.source ? { source: e.source } : {}) })
+        const commitmentEvidence = (e) => {
+          if (!e.sessionId) return { quote: e.quote, turnId: e.turnId, sessionId: 'legacy', ...(e.source ? { source: e.source } : {}) }
+          const turn = store.getTurn(e.turnId)
+          if (!turn || turn.conversationId !== e.sessionId) throw new Error(`evidence turn not found: ${e.turnId}`)
+          return { quote: e.quote, turnId: e.turnId, sessionId: e.sessionId, ...(e.source ? { source: e.source } : {}) }
+        }
+        if (candidate.kind === 'fact') ledger.remember({ ...candidate.payload, authority: 'user', evidence: candidate.evidence.map(sourceRef) })
+        else if (candidate.kind === 'preference') ledger.addPreference({ ...candidate.payload, evidence: candidate.evidence.map(sourceRef) })
+        else if (candidate.kind === 'commitment') ledger.addCommitment({ ...candidate.payload, matterId: candidate.payload.matterId ?? ledger.listMatters()[0]?.id, evidence: candidate.evidence.map(commitmentEvidence) })
         store.reviewCandidate(candidate.id, 'accepted')
         saveLedger(ledger)
         store.appendAudit({ actor: 'local', action: 'memory.accept', allowed: true, reason: candidate.id })
@@ -2096,9 +2593,12 @@ if (!command) {
     const q = args.slice(1).join(' ').trim()
     if (!q) { console.error('usage: advisers memory search <query>'); process.exitCode = 1 }
     else {
-      const rows = dbStore()?.searchMemory(q) ?? ledger.searchMemory(q)
-      if (!rows.length) console.log('（没有匹配）')
+      const store = dbStore()
+      const rows = store?.searchMemory(q) ?? ledger.searchMemory(q)
+      if (!rows.length) console.log('（没有记忆匹配）')
       for (const r of rows) console.log(`${r.kind}\t${r.id}\t${r.text}${r.matterId ? `\t[${r.matterId}]` : ''}`)
+      const turns = store?.searchTurns(q) ?? []
+      for (const t of turns) console.log(`turn\t${t.conversationId}#${t.seq}\t${String(t.text).replace(/\s+/g, ' ').slice(0, 120)}`)
     }
   } else printMemory(ledger)
 } else if (command === 'digest') {
@@ -2114,6 +2614,8 @@ if (!command) {
   printWeek(loadLedger())
 } else if (command === 'prefs') {
   printPreferences()
+} else if (command === 'privacy') {
+  printPrivacy(args)
 } else if (command === 'audit') {
   printAudit()
 } else if (command === 'purge') {

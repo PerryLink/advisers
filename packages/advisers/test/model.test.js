@@ -62,3 +62,23 @@ test('thinking off sends disabled and keeps temperature', async () => {
   assert.equal(body.temperature, 0.2)
   assert.equal('reasoning_effort' in body, false)
 })
+
+test('openai-compatible/ollama provider omits DeepSeek thinking fields', async () => {
+  const old = process.env.ADVISERS_PROVIDER
+  process.env.ADVISERS_PROVIDER = 'ollama'
+  try {
+    let body
+    const fetchImpl = async (_url, init) => {
+      body = JSON.parse(init.body)
+      return new Response(JSON.stringify({ choices: [{ message: { content: 'ok' } }] }), { status: 200 })
+    }
+    const { complete } = await import('../lib/model.js')
+    assert.equal(await complete({ prompt: 'x', apiKey: 'k', fetchImpl }), 'ok')
+    assert.equal('thinking' in body, false)
+    assert.equal(body.temperature, 0.2)
+    assert.equal('reasoning_effort' in body, false)
+  } finally {
+    if (old === undefined) delete process.env.ADVISERS_PROVIDER
+    else process.env.ADVISERS_PROVIDER = old
+  }
+})

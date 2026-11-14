@@ -82,13 +82,20 @@ export async function chatCompletion({
   if (!apiKey) throw new ModelError('missing API key', { code: 'MISSING_API_KEY' })
   const policy = thinking === false ? { enabled: false } : { enabled: true, ...resolveThinking({ task, explicit: effort }) }
   if (thinking === true && !policy.enabled) policy.enabled = true
+  const provider = (process.env.ADVISERS_PROVIDER || 'deepseek').toLowerCase()
   const body = { model, messages, max_tokens: maxTokens }
   if (tools?.length) body.tools = tools
-  if (policy.enabled) {
-    body.thinking = { type: 'enabled' }
-    body.reasoning_effort = normalizeEffort(policy.effort) || 'high'
+  if (provider === 'deepseek') {
+    if (policy.enabled) {
+      body.thinking = { type: 'enabled' }
+      body.reasoning_effort = normalizeEffort(policy.effort) || 'high'
+    } else {
+      body.thinking = { type: 'disabled' }
+      body.temperature = temperature
+    }
   } else {
-    body.thinking = { type: 'disabled' }
+    // OpenAI-compatible providers (OpenAI, Ollama /v1, LM Studio, vLLM) do not
+    // understand DeepSeek's thinking fields; keep the request portable.
     body.temperature = temperature
   }
   let lastError
@@ -139,6 +146,10 @@ export async function chatCompletion({
     await sleep(400 * 2 ** attempt)
   }
   throw lastError ?? new ModelError('model request failed', { code: 'UPSTREAM' })
+}
+
+export function modelProvider() {
+  return { provider: (process.env.ADVISERS_PROVIDER || 'deepseek').toLowerCase(), baseUrl: process.env.ADVISERS_BASE_URL || 'https://api.deepseek.com', model: process.env.ADVISERS_MODEL || 'deepseek-flash' }
 }
 
 export async function complete({ prompt, ...options }) {

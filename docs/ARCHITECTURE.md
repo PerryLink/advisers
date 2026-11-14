@@ -24,7 +24,8 @@
 - **Three ledgers**: user (who you are), commitments (who owes whom), routines
   (how this kind of work is done here).
 - **Two loops**: foreground (listen → answer/act → receipt → ledger) and
-  background (nightly reconcile → diff → next-day confirmation).
+  background design target (nightly reconcile → diff → next-day confirmation);
+  **not scheduled in 0.2 — no daemon/cron in code.**
 - **Matter is a dimension, not a fourth ledger.** Commitments, facts, and
   decisions carry `matterId`; the global user model does not.
 
@@ -55,7 +56,7 @@
 | `ctx.advisers.commitments` | open/done/snoozed/dropped, evidence, nudges |
 | `ctx.advisers.routines` | routine proposals, diffs, versions, rollback |
 | `ctx.advisers.recall` | FTS5 first, vector optional, 1–2 hop graph expansion |
-| `ctx.advisers.curator` | nightly reconcile, dedupe, expiry, brief draft |
+| `ctx.advisers.curator` | design target: nightly reconcile, dedupe, expiry, brief draft (not scheduled in 0.2) |
 | `ctx.advisers.redaction` | forget, pause, private session, export |
 
 ## 4. Link SPI

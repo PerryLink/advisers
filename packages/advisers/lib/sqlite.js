@@ -113,6 +113,11 @@ CREATE TABLE IF NOT EXISTS nudges (
   commitment_id TEXT NOT NULL, dedupe_key TEXT NOT NULL UNIQUE, body TEXT NOT NULL,
   outcome TEXT NOT NULL DEFAULT 'pending', outcome_at TEXT
 );
+CREATE TABLE IF NOT EXISTS calendar_events (
+  uid TEXT PRIMARY KEY, summary TEXT NOT NULL, starts_at TEXT, ends_at TEXT,
+  all_day INTEGER NOT NULL DEFAULT 0, tzid TEXT, location TEXT, rrule TEXT,
+  source TEXT, imported_at TEXT NOT NULL
+);
 CREATE TABLE IF NOT EXISTS meta (key TEXT PRIMARY KEY, value TEXT NOT NULL);
 `
 
@@ -138,7 +143,7 @@ export class SqliteStore {
   migrate() {
     const row = this.db.prepare('SELECT value FROM meta WHERE key = ?').get('schema_version')
     const current = row ? Number(row.value) : 0
-    if (current >= 16) return
+    if (current >= 17) return
     this.db.exec('BEGIN')
     try {
       this.db.exec(`CREATE TABLE IF NOT EXISTS seen_events (
@@ -221,7 +226,12 @@ CREATE TABLE IF NOT EXISTS task_runs (
       )`)
       const runCols = this.db.prepare('PRAGMA table_info(task_runs)').all().map((c) => c.name)
       if (!runCols.includes('matter_id')) this.db.exec('ALTER TABLE task_runs ADD COLUMN matter_id TEXT')
-      this.db.prepare('INSERT OR REPLACE INTO meta(key,value) VALUES(?,?)').run('schema_version', '16')
+      this.db.exec(`CREATE TABLE IF NOT EXISTS calendar_events (
+        uid TEXT PRIMARY KEY, summary TEXT NOT NULL, starts_at TEXT, ends_at TEXT,
+        all_day INTEGER NOT NULL DEFAULT 0, tzid TEXT, location TEXT, rrule TEXT,
+        source TEXT, imported_at TEXT NOT NULL
+      )`)
+      this.db.prepare('INSERT OR REPLACE INTO meta(key,value) VALUES(?,?)').run('schema_version', '17')
       this.db.exec('COMMIT')
     } catch (error) {
       this.db.exec('ROLLBACK')
@@ -343,6 +353,26 @@ CREATE TABLE IF NOT EXISTS task_runs (
     return { id, conversationId, seq, role, content, createdAt: new Date().toISOString() }
   }
 
+  getTurn(id) {
+    const r = this.db.prepare('SELECT * FROM turns WHERE id = ?').get(id)
+    return r ? { id: r.id, conversationId: r.conversation_id, seq: r.seq, role: r.role, content: r.content, createdAt: r.created_at } : undefined
+  }
+
+  upsertCalendarEvent({ uid, summary, startsAt, endsAt, allDay = false, tzid, location, rrule, source }) {
+    this.db.prepare(`INSERT INTO calendar_events(uid,summary,starts_at,ends_at,all_day,tzid,location,rrule,source,imported_at)
+      VALUES(?,?,?,?,?,?,?,?,?,?)
+      ON CONFLICT(uid) DO UPDATE SET summary=excluded.summary, starts_at=excluded.starts_at, ends_at=excluded.ends_at,
+        all_day=excluded.all_day, tzid=excluded.tzid, location=excluded.location, rrule=excluded.rrule,
+        source=excluded.source, imported_at=excluded.imported_at`)
+      .run(uid, summary ?? '', startsAt ?? null, endsAt ?? null, allDay ? 1 : 0, tzid ?? null, location ?? null, rrule ?? null, source ?? null, new Date().toISOString())
+    return { uid, summary, startsAt, endsAt, allDay, tzid, location, rrule, source }
+  }
+
+  listCalendarEvents(limit = 500) {
+    return this.db.prepare('SELECT * FROM calendar_events ORDER BY starts_at ASC LIMIT ?').all(limit)
+      .map((r) => ({ uid: r.uid, summary: r.summary, startsAt: r.starts_at ?? undefined, endsAt: r.ends_at ?? undefined, allDay: Boolean(r.all_day), tzid: r.tzid ?? undefined, location: r.location ?? undefined, rrule: r.rrule ?? undefined, source: r.source ?? undefined, importedAt: r.imported_at }))
+  }
+
   listTurns(conversationId, limit = 50) {
     return this.db.prepare('SELECT * FROM turns WHERE conversation_id = ? ORDER BY seq DESC LIMIT ?').all(conversationId, limit)
       .map((r) => ({ id: r.id, conversationId: r.conversation_id, seq: r.seq, role: r.role, content: r.content, createdAt: r.created_at }))
@@ -412,6 +442,15 @@ CREATE TABLE IF NOT EXISTS task_runs (
     this.db.prepare('UPDATE memory_candidates SET status = ?, reviewed_at = ?, reject_reason = ? WHERE id = ?')
       .run(status, new Date().toISOString(), reason ?? null, id)
     return this.getCandidate(id)
+  }
+
+  searchTurns(query, { limit = 8 } = {}) {
+    const terms = String(query || '').split(/[^\p{L}\p{N}]+/u).filter((t) => t.length >= 2).slice(0, 8)
+    if (!terms.length) return []
+    const rows = this.db.prepare('SELECT * FROM turns ORDER BY created_at DESC LIMIT 2000').all()
+    const score = (text) => terms.filter((t) => String(text).includes(t)).length
+    return rows.map((r) => ({ id: r.id, conversationId: r.conversation_id, seq: r.seq, role: r.role, text: r.content, createdAt: r.created_at, score: score(r.content) }))
+      .filter((r) => r.score > 0).sort((a, b) => b.score - a.score || Date.parse(b.createdAt) - Date.parse(a.createdAt)).slice(0, limit)
   }
 
   searchMemory(query, { limit = 6, matterId } = {}) {
