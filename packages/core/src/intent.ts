@@ -74,11 +74,18 @@ export function ambiguityScore(request: string): number {
   return clamp(score, 0, 1)
 }
 
+function isRecallQuestion(text: string): boolean {
+  if (!/[？?]\s*$/.test(text)) return false
+  if (/(做|写|生成|整理|发给|发我|交付|安排|准备|改|优化|检查|帮我)/.test(text)) return false
+  return /(什么|多少|谁|哪|吗|是否|多久|什么时候|叫什么|是什么|怎么样)/.test(text)
+}
+
 export function buildIntentBrief(request: string, context: IntentContext = {}): IntentBrief {
   const text = request.trim()
-  const deliverable = detectDeliverable(text)
-  const risk = detectRisk(text)
-  const ambiguity = ambiguityScore(text)
+  const recall = isRecallQuestion(text)
+  const deliverable = recall ? 'answer' : detectDeliverable(text)
+  const risk = recall ? 'low' : detectRisk(text)
+  const ambiguity = recall ? 0 : ambiguityScore(text)
   const hasDeadline = /(今天|明天|后天|本周|下周|周[一二三四五六日天]|\d{1,2}[-/月]\d{1,2}|月底|季度末)/.test(text)
   const constraints = unique(
     text
@@ -89,8 +96,8 @@ export function buildIntentBrief(request: string, context: IntentContext = {}): 
   )
 
   const unknowns: string[] = []
-  if (!hasDeadline) unknowns.push('截止时间')
-  if (deliverable === 'answer') unknowns.push('交付形式')
+  if (!recall && !hasDeadline) unknowns.push('截止时间')
+  if (!recall && deliverable === 'answer') unknowns.push('交付形式')
   if (ambiguity > 0.45) unknowns.push('具体对象/范围')
   if (/(给|发|汇报)/.test(text) && !/(给谁|对谁|王工|老板|客户|团队)/.test(text)) {
     unknowns.push('受众')
@@ -103,7 +110,8 @@ export function buildIntentBrief(request: string, context: IntentContext = {}): 
   )
 
   let action: IntentAction = 'execute'
-  if (risk === 'high') action = confidence < 0.8 ? 'ask' : 'confirm'
+  if (recall) action = 'execute'
+  else if (risk === 'high') action = confidence < 0.8 ? 'ask' : 'confirm'
   else if (ambiguity >= 0.5 && confidence < 0.62) action = 'ask'
   else if ((context.stage ?? 'probation') === 'probation' && confidence < 0.72) action = 'confirm'
   else if (confidence < 0.55) action = 'confirm'

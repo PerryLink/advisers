@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict'
 import test from 'node:test'
-import { INTENT_PROBES, runIntentProbes } from '../src/index.ts'
+import { INTENT_PROBES, buildIntentBrief, runIntentProbes } from '../src/index.ts'
 
 test('intent probe suite: 30 cases, at least 90% pass', () => {
   const results = runIntentProbes()
@@ -15,4 +15,11 @@ test('high-risk requests are never silently executed', () => {
   const results = runIntentProbes().filter((r) => r.actual.risk === 'high')
   assert.ok(results.length >= 5)
   assert.ok(results.every((r) => r.actual.action !== 'execute'))
+})
+
+test('recall questions execute instead of asking for a deadline', () => {
+  const brief = buildIntentBrief('客户 A 的报价底线是多少？')
+  assert.equal(brief.action, 'execute')
+  assert.equal(brief.deliverable, 'answer')
+  assert.equal(brief.questions.length, 0)
 })
