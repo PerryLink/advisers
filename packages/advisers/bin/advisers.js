@@ -29,6 +29,7 @@ import { reviewDocument } from '../lib/doc-review.js'
 import { buildHistory, buildOpening, buildPins, continuityProbes, ensurePins, fitHistory, shouldSummarize, summarizeTurns } from '../lib/context-window.js'
 import { buildReminders, toIcs } from '../lib/remind.js'
 import { dedupeKey, parseEml, parseIcs, parseMbox, parseTranscript, toCaptureInput } from '../lib/importers.js'
+import { fetchImapMessages } from '../lib/imap.js'
 import { buildEvidencePack, evidenceForCommitment, evidenceForFact, evidenceForPreference, sha256Hex, toDocxRows, verifyPack } from '../lib/evidence.js'
 import { createReadOnlyServer } from '../lib/ui.js'
 import { buildSimplePdf, findCjkFont } from '../lib/pdf.js'
@@ -318,6 +319,7 @@ Usage:
                               从中文工作内容抽取候选承诺（不自动入账）
   advisers capture --from-mail <file|dir> [--limit n]  .eml/.mbox 只读导入→候选
   advisers capture --from-transcript <file>      转写稿导入→候选（不录音/不入会）
+  advisers capture --from-imap                   只读 IMAP 导入（EXAMINE/FETCH；env 凭据）
   advisers ui [--port n]                        本地只读视图（127.0.0.1，GET only）
   advisers mcp --stdio                          只读 MCP server（today/commit/who/evidence/remind）
   advisers evidence show <id> [--json]          承诺/事实/偏好→原文来源
@@ -426,7 +428,7 @@ function purgeMatter(id, confirmed) {
 function parseFlags(args) {
   const flags = {}
   const positional = []
-  const booleanFlags = new Set(['web', 'deep', 'all', 'yes', 'json', 'list', 'force', 'apply', 'quiet', 'help', 'content', 'ics', 'deliver', 'install', 'uninstall', 'status', 'calendar', 'pack'])
+  const booleanFlags = new Set(['web', 'deep', 'all', 'yes', 'json', 'list', 'force', 'apply', 'quiet', 'help', 'content', 'ics', 'deliver', 'install', 'uninstall', 'status', 'calendar', 'pack', 'from-imap'])
   for (let i = 0; i < args.length; i++) {
     if (args[i].startsWith('--')) {
       const key = args[i].slice(2)
@@ -1652,6 +1654,7 @@ async function capture(args) {
   const { flags, positional } = parseFlags(args)
   if (flags['from-mail']) return captureFromMail(flags)
   if (flags['from-transcript']) return captureFromTranscript(flags)
+  if (flags['from-imap']) return captureFromImap(flags)
   let text = positional.join(' ').trim()
   if (flags.file) {
     try {
@@ -1752,6 +1755,50 @@ async function captureFromTranscript(flags) {
   store.markSeen('import', 'transcript', key)
   store.appendAudit({ actor: 'local', action: 'import.transcript', allowed: true, reason: `${candidates} candidates` })
   console.log(`transcript import: ${candidates} candidates`)
+}
+
+async function captureFromImap(flags) {
+  const host = process.env.ADVISERS_IMAP_HOST
+  const user = process.env.ADVISERS_IMAP_USER
+  const pass = process.env.ADVISERS_IMAP_PASS
+  if (!host || !user || !pass) { console.error('capture --from-imap requires ADVISERS_IMAP_HOST / ADVISERS_IMAP_USER / ADVISERS_IMAP_PASS'); process.exitCode = 1; return }
+  if (!process.env.ADVISERS_API_KEY) { console.error('capture --from-imap requires ADVISERS_API_KEY'); process.exitCode = 1; return }
+  ensureHome()
+  const store = dbStore()
+  const ledger = loadLedger()
+  const matterId = activeMatterId(ledger, flags.matter)
+  const denied = egressDeniedReason(ledger.getMatter(matterId), 'imap')
+  if (denied) { console.error(denied); process.exitCode = 1; return }
+  saveLedger(ledger)
+  let messages
+  try {
+    messages = await fetchImapMessages({
+      host,
+      port: Number(process.env.ADVISERS_IMAP_PORT) || (String(process.env.ADVISERS_IMAP_SECURE) === '0' ? 143 : 993),
+      secure: String(process.env.ADVISERS_IMAP_SECURE) !== '0',
+      user, pass,
+      mailbox: process.env.ADVISERS_IMAP_MAILBOX || 'INBOX',
+      sinceDays: Math.max(1, Number(flags['since-days']) || 30),
+      limit: Math.max(1, Math.min(100, Number(flags.limit) || 20)),
+    })
+  } catch (error) { console.error(`imap failed: ${error.message}`); process.exitCode = 1; return }
+  let seen = 0, skipped = 0, failed = 0, candidates = 0
+  for (const msg of messages) {
+    seen++
+    let parsed
+    try { parsed = parseEml(msg.raw.toString('utf8')) } catch (error) { failed++; console.error(`imap message ${msg.uid}: ${error.message}`); continue }
+    const key = dedupeKey('email', parsed)
+    if (store.hasSeen('import', 'imap', key, 30)) { skipped++; continue }
+    const input = toCaptureInput(parsed, { source: 'email' })
+    if (!input.text.trim()) { skipped++; continue }
+    try {
+      const n = await proposeCaptureText({ text: input.text, source: 'email', date: parseEmailDate(parsed.date), matterId, store, meta: { type: 'mail', channel: 'imap', uid: msg.uid, messageId: parsed.messageId, subject: parsed.subject, from: parsed.from } })
+      candidates += n
+      store.markSeen('import', 'imap', key)
+    } catch (error) { failed++; console.error(`imap message ${msg.uid}: ${error.message}`) }
+  }
+  store.appendAudit({ actor: 'local', action: 'import.imap', allowed: true, reason: `${seen} seen, ${candidates} candidates, ${failed} failed` })
+  console.log(`imap import: ${seen} messages, ${candidates} candidates, ${skipped} skipped, ${failed} failed (EXAMINE/read-only)`)
 }
 
 function calendarImport(args) {

@@ -150,3 +150,17 @@ source references.
 node $A privacy --prove
 node $A mcp --stdio        # JSON-RPC over stdio: initialize/tools/list/tools/call
 ```
+
+## I. Read-only IMAP (opt-in)
+
+```powershell
+$env:ADVISERS_IMAP_HOST = "imap.example.com"
+$env:ADVISERS_IMAP_USER = "me@example.com"
+$env:ADVISERS_IMAP_PASS = "app-password"   # never written to disk by Advisers
+node $A capture --from-imap --limit 20
+```
+
+The client only sends `LOGIN`, `EXAMINE`, `UID SEARCH`, `UID FETCH
+(BODY.PEEK[])` and `LOGOUT`; it never sends STORE/APPEND/EXPUNGE/COPY/MOVE.
+Use an app password, not your primary password. Environment variables are
+read per process and are not logged.
