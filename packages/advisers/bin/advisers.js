@@ -403,10 +403,12 @@ function purgeMatter(id, confirmed) {
 function parseFlags(args) {
   const flags = {}
   const positional = []
+  const booleanFlags = new Set(['web', 'deep', 'all', 'yes', 'json', 'list', 'force', 'apply', 'quiet', 'help', 'content'])
   for (let i = 0; i < args.length; i++) {
     if (args[i].startsWith('--')) {
       const key = args[i].slice(2)
-      flags[key] = args[i + 1] && !args[i + 1].startsWith('--') ? args[++i] : true
+      if (booleanFlags.has(key)) flags[key] = true
+      else flags[key] = args[i + 1] && !args[i + 1].startsWith('--') ? args[++i] : true
     } else positional.push(args[i])
   }
   return { flags, positional }
