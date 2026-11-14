@@ -583,3 +583,14 @@ test('routine lifecycle: stale, deprecate, restore', () => {
   assert.equal(ledger.deprecateRoutine(routine.id).status, 'deprecated')
   assert.equal(ledger.restoreRoutine(routine.id).status, 'draft')
 })
+
+test('a stable default matter keeps CLI commitments visible across conversations', async () => {
+  const ledger = new Ledger()
+  const matter = ledger.addMatter({ title: '默认事项' })
+  const runtime = new AdvisersRuntime({ ledger, defaultMatterId: matter.id })
+  const base = { linkId: 'cli', accountId: 'local', sender: { id: 'me' }, timestamp: new Date().toISOString() }
+  const a = await runtime.handleInbound({ ...base, conversationId: 'c1', messageId: 'm1', text: '先记一下' })
+  const b = await runtime.handleInbound({ ...base, conversationId: 'c2', messageId: 'm2', text: '继续' })
+  assert.equal(a.matter.id, matter.id)
+  assert.equal(b.matter.id, matter.id)
+})

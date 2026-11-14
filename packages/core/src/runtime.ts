@@ -9,7 +9,7 @@ import { systemPorts } from './ports.ts'
 import type { InboundEvent, IngestResult, LinkHost, LinkProvider, OutboundMessage, DeliveryResult } from './link.ts'
 import { GatedLink } from './link.ts'
 import type { PermitGate } from './permit.ts'
-import type { Episode, Thread, TurnContext } from './types.ts'
+import type { Episode, Id, Thread, TurnContext } from './types.ts'
 
 export interface AdvisersOptions {
   budget?: number
@@ -19,6 +19,8 @@ export interface AdvisersOptions {
   clearance?: number
   stage?: 'probation' | 'trusted'
   ownerIds?: string[]
+  /** Optional stable matter for local CLI turns before a route exists. */
+  defaultMatterId?: Id
   egress?: { gate: PermitGate; accountIds?: Record<string, string> }
   policyResolver?: PolicyResolver
   crisisPolicy?: CrisisPolicy
@@ -40,6 +42,7 @@ export class AdvisersRuntime implements LinkHost {
   private readonly clearance: number
   private readonly stage: 'probation' | 'trusted'
   private readonly ownerIds?: string[]
+  private readonly defaultMatterId?: Id
   private readonly egress?: { gate: PermitGate; accountIds?: Record<string, string> }
   private readonly policyResolver?: PolicyResolver
   private readonly crisisPolicy: CrisisPolicy
@@ -56,6 +59,7 @@ export class AdvisersRuntime implements LinkHost {
     this.clearance = options.clearance ?? 3
     this.stage = options.stage ?? 'probation'
     this.ownerIds = options.ownerIds
+    this.defaultMatterId = options.defaultMatterId
     this.egress = options.egress
     this.policyResolver = options.policyResolver
     this.crisisPolicy = options.crisisPolicy ?? new KeywordCrisisPolicy()
@@ -145,7 +149,11 @@ export class AdvisersRuntime implements LinkHost {
     const principalId = `${event.linkId}:${event.accountId}`
     const thread = this.ensureThread(principalId)
     const key = `${thread.id}:${event.conversationId}`
-    let matterId = this.ledger.getRoute(key)
+    let matterId: Id | undefined = this.ledger.getRoute(key)
+    if (!matterId && this.defaultMatterId) {
+      matterId = this.defaultMatterId
+      this.ledger.setRoute(key, matterId)
+    }
     if (!matterId) {
       const matter = this.ledger.addMatter({
         title: event.text?.slice(0, 60) || `conversation ${event.conversationId}`,

@@ -1,6 +1,6 @@
 {
   "name": "dsh-advisers",
-  "version": "0.2.0-preview.24",
+  "version": "0.2.0-preview.25",
   "description": "DSH bundle for Advisers: registers the advisers service and the read-only advisers_brief tool.",
   "keywords": [
     "dsh",
@@ -51,7 +51,7 @@
   },
   "peerDependenciesMeta": {},
   "dependencies": {
-    "advisers-core": "0.2.0-preview.19",
+    "advisers-core": "0.2.0-preview.20",
     "advisers-office": "0.2.0-preview.14",
     "@deepseek-ai/dsh-tools": "0.2.2-rc.2"
   },
