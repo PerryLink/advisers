@@ -31,6 +31,7 @@ import { buildReminders, toIcs } from '../lib/remind.js'
 import { dedupeKey, parseEml, parseIcs, parseMbox, parseTranscript, toCaptureInput } from '../lib/importers.js'
 import { buildEvidencePack, evidenceForCommitment, evidenceForFact, evidenceForPreference, sha256Hex, toDocxRows, verifyPack } from '../lib/evidence.js'
 import { createReadOnlyServer } from '../lib/ui.js'
+import { buildSimplePdf, findCjkFont } from '../lib/pdf.js'
 
 let core
 if (process.env.ADVISERS_CORE_LOCAL === '1') {
@@ -320,7 +321,7 @@ Usage:
   advisers ui [--port n]                        本地只读视图（127.0.0.1，GET only）
   advisers mcp --stdio                          只读 MCP server（today/commit/who/evidence/remind）
   advisers evidence show <id> [--json]          承诺/事实/偏好→原文来源
-  advisers deliver [--commit id] [--type confirmation|weekly|statement|ledger] [--format docx|xlsx] [--out f]  交付物
+  advisers deliver [--commit id] [--type confirmation|weekly|statement|ledger] [--format docx|xlsx|pdf] [--out f]  交付物
   advisers deliveries --pack [--out dir]        证据包（manifest/README/SHA256SUMS + DOCX 回执）
   advisers policy check <text> policy/crisis check
   advisers office-read <file>  read DOCX/XLSX/PPTX structural text
@@ -1888,7 +1889,14 @@ async function deliver(args) {
   try {
     const mod = process.env.ADVISERS_OFFICE_LOCAL === '1' ? await import('../../office/dist/index.js') : await import('advisers-office')
     let buffer
-    if (format === 'xlsx') {
+    if (format === 'pdf') {
+      const lines = commitments.map((c) => `${c.id}  ${c.creditor} · ${c.action}${c.dueAt ? ` · 截止 ${c.dueAt}` : ''} · ${c.status}`)
+      buffer = await buildSimplePdf({ title: `${label} · Advisers`, paragraphs: [`承诺数：${commitments.length}`, ...lines, 'SHA256SUMS/回执说明：本 PDF 为本地账本生成，不是第三方存证。'] })
+      if (!buffer.subarray(0, 5).equals(Buffer.from('%PDF-'))) throw new Error('pdf builder returned a non-PDF buffer')
+      await backupCliFile(out)
+      writeFileSync(out, buffer)
+      recordManualDelivery([out], `deliver:${type}`, label, 'pdf')
+    } else if (format === 'xlsx') {
       const rows = commitments.map((c) => ({
         id: c.id, creditor: c.creditor, action: c.action, due: c.dueAt ?? '',
         status: c.status, evidence: (c.evidence ?? []).length,

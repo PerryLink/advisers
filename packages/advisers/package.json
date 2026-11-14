@@ -1,6 +1,6 @@
 {
   "name": "advisers",
-  "version": "0.2.0-preview.60",
+  "version": "0.2.0-preview.61",
   "description": "A staff of AI advisers: a cordis-native personal secretary runtime with scoped memory, commitments, and reviewable routines.",
   "keywords": [
     "cordis",
@@ -31,10 +31,12 @@
     "LICENSE"
   ],
   "dependencies": {
+    "@pdf-lib/fontkit": "^1.1.1",
     "advisers-core": "0.2.0-preview.22",
+    "advisers-policy-strict": "0.2.0-preview.12",
     "jszip": "^3.10.2",
-    "pdfjs-dist": "^6.5.438",
-    "advisers-policy-strict": "0.2.0-preview.12"
+    "pdf-lib": "^1.17.1",
+    "pdfjs-dist": "^6.5.438"
   },
   "repository": {
     "type": "git",
