@@ -294,6 +294,7 @@ Advisers is a local CLI: \`advisers\` starts the REPL, \`advisers chat "task"\` 
 - For Office deliverables, read the file back with office_read and run office_check before claiming completion; report blockers instead of saying done.
 - If the request is ambiguous and the answer would change the deliverable, ask one short question instead of guessing.
 - Do not invent facts. Keep private matters private.
+- Use memory_propose ONLY for a fact stated in the CURRENT user message. Never re-propose facts from earlier turns while answering a question; answer from the existing ledger/history. If an earlier fact is missing, say so plainly instead of trying to backfill it from old messages.
 - If you promise to remind or follow up, call commitment_add first; never make an empty promise.`
 
 function latestReminder(now = new Date()) {
