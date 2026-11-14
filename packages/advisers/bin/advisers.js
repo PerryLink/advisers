@@ -23,6 +23,7 @@ import { lintReview, materializeReview, reviewRun } from '../lib/review.js'
 import { classifyNudgeOutcome } from '../lib/nudge.js'
 import { buildDigest } from '../lib/digest.js'
 import { captureCandidates } from '../lib/capture.js'
+import { egressDeniedReason } from '../lib/egress.js'
 import { research as runResearch } from '../lib/research.js'
 import { reviewDocument } from '../lib/doc-review.js'
 import { buildHistory, buildOpening, buildPins, continuityProbes, ensurePins, fitHistory, shouldSummarize, summarizeTurns } from '../lib/context-window.js'
@@ -1497,7 +1498,8 @@ async function research(args) {
   if (!query && !urls.length) { console.error('usage: advisers research --web|--url <url> [--deep] <query>'); process.exitCode = 1; return }
   const ledger = loadLedger()
   const matterId = activeMatterId(ledger)
-  if ((ledger.getMatter(matterId)?.secrecy ?? 'private') === 'secret') { console.error('research is disabled for secret matters'); process.exitCode = 1; return }
+  const denied = egressDeniedReason(ledger.getMatter(matterId), 'research')
+  if (denied) { console.error(denied); process.exitCode = 1; return }
   const result = await runResearch({ query, urls, apiKey, baseUrl: process.env.ADVISERS_BASE_URL, deep: Boolean(flags.deep) })
   const store = dbStore()
   store?.addResearchRun({ matterId, query: query || urls[0], answer: result.answer, sources: result.sources, usage: result.usage, stopReason: result.stopReason })

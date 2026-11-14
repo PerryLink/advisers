@@ -12,6 +12,8 @@ const cases = readFileSync(new URL('./corpus/commitments.zh.jsonl', import.meta.
 let expected = 0
 let found = 0
 let quoteValid = 0
+let dueOk = 0
+let dueTotal = 0
 let autoConfirmed = 0
 const failures = []
 for (const item of cases) {
@@ -23,12 +25,16 @@ for (const item of cases) {
     found++
     if (match.quote.includes(want.quote) || want.quote.includes(match.quote)) quoteValid++
     const localDue = match.dueAt ? new Intl.DateTimeFormat('en-CA', { timeZone: 'Asia/Shanghai' }).format(new Date(match.dueAt)) : null
-    if (localDue && want.due && localDue !== want.due) failures.push(`${item.id}: due ${localDue} != ${want.due}`)
+    if (want.due || want.dueAlt) {
+      dueTotal++
+      if (localDue === want.due || (want.dueAlt && localDue === want.dueAlt)) dueOk++
+      else failures.push(`${item.id}: due ${localDue} != ${want.due}${want.dueAlt ? ` (alt ${want.dueAlt})` : ''}`)
+    }
     if (match.modal !== want.modal) failures.push(`${item.id}: modal ${match.modal} != ${want.modal}`)
   }
   autoConfirmed += candidates.filter((c) => c.confirmed).length
   console.error(`${item.id}: ${candidates.length} candidates`)
 }
 const recall = expected ? found / expected : 0
-console.log(JSON.stringify({ cases: cases.length, expected, found, recall, quoteValid, autoConfirmed, failures }, null, 2))
+console.log(JSON.stringify({ cases: cases.length, expected, found, recall, quoteValid, dueOk, dueTotal, dueRate: dueTotal ? dueOk / dueTotal : 0, autoConfirmed, failures }, null, 2))
 if (autoConfirmed > 0 || (expected && recall < 0.7)) process.exitCode = 1

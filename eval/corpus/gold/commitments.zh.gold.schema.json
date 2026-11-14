@@ -1,0 +1,103 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/PerryLink/advisers/eval/corpus/gold/commitments.zh.gold.schema.json",
+  "title": "Advisers Chinese commitment gold item",
+  "description": "One JSONL line of the Chinese commitment gold corpus. IMPORTANT: commitments.zh.gold.seed.jsonl is AI-prelabeled draft data (pending_human_review=true), not a human gold set. Human review is required before pending_human_review becomes false or any metric is claimed as reached.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["id", "source", "date", "text", "expect", "provenance", "pending_human_review"],
+  "properties": {
+    "id": {
+      "type": "string",
+      "pattern": "^[a-z][a-z0-9-]{2,63}$",
+      "description": "Globally unique stable id, e.g. gold-001."
+    },
+    "source": {
+      "description": "Where the message came from.",
+      "enum": ["wechat", "email", "meeting", "contract", "im", "other"]
+    },
+    "date": {
+      "description": "Message / meeting / contract timestamp with timezone. Relative dates in the text are resolved against this value (Asia/Shanghai).",
+      "type": "string",
+      "format": "date-time",
+      "pattern": "^\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}:\\d{2}(?:\\.\\d+)?(?:Z|[+-]\\d{2}:\\d{2})$"
+    },
+    "text": {
+      "description": "Redacted message text. Every expect[].quote must be a verbatim substring of this string.",
+      "type": "string",
+      "minLength": 2,
+      "maxLength": 2000
+    },
+    "expect": {
+      "description": "Expected commitment candidates. An empty array is valid and useful (negative/non-commitment examples for precision).",
+      "type": "array",
+      "minItems": 0,
+      "maxItems": 5,
+      "items": { "$ref": "#/$defs/expect" }
+    },
+    "provenance": {
+      "description": "synthetic = fully made up; anonymized = real message after documented redaction. Raw private messages must never be committed.",
+      "enum": ["synthetic", "anonymized"]
+    },
+    "pending_human_review": {
+      "description": "true for AI-prelabeled draft entries. Only a completed dual-human review may set this to false.",
+      "type": "boolean"
+    },
+    "review_note": {
+      "description": "Optional human-review disagreement / adjudication note.",
+      "type": "string",
+      "maxLength": 500
+    }
+  },
+  "if": {
+    "required": ["pending_human_review"],
+    "properties": { "pending_human_review": { "const": false } }
+  },
+  "then": {
+    "required": ["review_note"]
+  },
+  "$defs": {
+    "expect": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["action", "debtor", "creditor", "due", "quote", "modal"],
+      "properties": {
+        "action": {
+          "description": "Short verb phrase (<= 12 Chinese chars recommended), e.g. 发报价.",
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 40
+        },
+        "debtor": {
+          "description": "Who owes the promise: user = the person whose messages these are; third = the counterparty; unknown = unclear.",
+          "enum": ["user", "third", "unknown"]
+        },
+        "creditor": {
+          "description": "Who receives the promise; null when unknown.",
+          "type": ["string", "null"],
+          "maxLength": 60
+        },
+        "due": {
+          "description": "Due date (YYYY-MM-DD) or null when no deadline is stated.",
+          "type": ["string", "null"],
+          "pattern": "^\\d{4}-\\d{2}-\\d{2}$"
+        },
+        "dueAlt": {
+          "description": "Optional second acceptable due date, only when there is a documented ambiguity (weekend/holiday shift, inclusive/exclusive boundary). The runner accepts either due or dueAlt.",
+          "type": ["string", "null"],
+          "pattern": "^\\d{4}-\\d{2}-\\d{2}$"
+        },
+        "quote": {
+          "description": "Verbatim substring of item.text; never normalized, never paraphrased.",
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 200
+        },
+        "modal": {
+          "description": "firm / tentative / conditional.",
+          "enum": ["firm", "tentative", "conditional"]
+        }
+      }
+    }
+  }
+}

@@ -25,7 +25,7 @@ not depend on them; adapters load them only when configured.
 
 ## Status
 
-`0.2.0-preview.22/56` is **staged** on npm, awaiting OTP approval. The public `next` tag still points at the old `0.1.0-preview.2`; do not evaluate this build through it until approval:
+`advisers@0.2.0-preview.57` (with `advisers-core@0.2.0-preview.22`) is **staged** on npm, awaiting OTP approval. The public `next` tag still points at the old `0.1.0-preview.2`; do not evaluate this build through it until approval:
 
 > Requires **Node >= 22.13**. See [docs/QUICKSTART.md](docs/QUICKSTART.md) for Windows/PowerShell and BOM notes.
 
@@ -37,7 +37,7 @@ not depend on them; adapters load them only when configured.
 - local agent loop with tools (`office_build`, `office_template`, `file_read/write/list`, `commitment_add`, `routine_view`, `search_turns`); attachments (txt/md/docx/xlsx/pptx/pdf); optional model with `ADVISERS_API_KEY`;
 - turns + summaries + FTS search, `/memory`, `/week`, `/digest`, `/tick`, `/today`, `/undo`, `/diff`, `/learn review`;
 - `advisers capture` extracts candidate commitments from Chinese work text with verbatim quotes. Candidates stay pending until you explicitly accept one; no command auto-accepts.
-- `advisers research --web` / `--url` does cited research through DeepSeek server web tools. This is an explicit egress path; web citations are provider output, not local file evidence.
+- `advisers research --web` / `--url` does cited research through DeepSeek server web tools. This is an explicit **web** egress path; web citations are provider output, not local file evidence.
 - each turn sends a `latest_reminder` date/weekday/location/language marker so relative dates are grounded;
 - thinking mode: `ADVISERS_THINKING=off|on|auto`, `ADVISERS_THINKING_EFFORT=low|high|max`; `reasoning_content` is kept in memory only for the current tool loop and is not written to turns/summaries/audit/export/backup. This does not control provider-side logs or OS crash dumps;
 - DSH bundle (`dsh-advisers`) with `advisers_brief` + `advisers_office`; email/Feishu link packages are **libraries not wired into the CLI**; optional strict policy pack (see `packages/policy-strict/README.md`);
@@ -68,7 +68,8 @@ promoted.
 ## Security boundary
 
 - Local-first by default: no telemetry; no network calls without an API key or a configured link provider.
-- `research --web` / `--url` is the only built-in content-egress command; it requires an explicit flag and rejects secret matters.
+- `research --web` / `--url` is the only built-in **web** egress command; it requires an explicit flag and refuses matters with `secrecy > 0` (fail closed until the 0–3 secrecy levels are productized).
+- When `ADVISERS_API_KEY` is set, model-backed commands (`chat`, `capture`, `review`, `brief --deep`, `learn review`) send their inputs to the configured model API; local-only commands (`status`, `office`, `template`, `verify`, `commit add`, `tick`) do not.
 - Audit is a local hash chain, not a third-party attestation; it detects edits to its own rows, not a compromised host.
 - Office verification checks structure and deterministic content signals; it does not prove factual correctness.
 
