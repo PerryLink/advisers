@@ -60,6 +60,9 @@ layer**, not Microsoft Office. Do not claim MS Office compatibility from it.
   resolve to `...\Kingsoft\WPS Office\12.1.0.29680\office6`, i.e. WPS's
   Office-compatible automation layer.
 - LibreOffice is not installed either.
-- Conclusion: **Microsoft Office cannot be validated on this host** (not
-  installed; installing it needs a license/admin action). The WPS evidence above
-  is the maximum honest claim.
+- Conclusion: Microsoft Office is not installed on this host, but **this is not
+  a delivery blocker**. Per the user direction (2026-11-14): the tool does not
+  matter; the acceptance bar is that the required-format file is generated or
+  modified correctly and opens/parses in a real consumer. WPS is that consumer
+  here. Do not claim Microsoft Office-specific fidelity, but do not block
+  delivery on Office being installed.

@@ -18,6 +18,10 @@
   `eval/corpus/gold/reviews/`. This is explicitly **not** independent human gold.
 - `eval/run-dogfood-5.mjs`: 5 synthetic personas × 3 tasks with cross-session
   continuity and cross-home isolation checks.
+- Delivery sample pack `examples/delivery-2026-11-14/` (docx/xlsx/pptx + an
+  edited contract) with `verify --content` and WPS real-consumer checks; the
+  acceptance bar is tool-agnostic (the user clarified Microsoft Office is not
+  required). See `eval/results/delivery-2026-11-14.md`.
 
 ### Verified (2026-11-14, deepseek-flash, single runs)
 - Reviewed gold: quote 100%, firm recall 95.31% (122/128), due accuracy 97.84%
