@@ -32,7 +32,7 @@
 - `capture`/`chat` fail closed for `secrecy > 0` before model egress.
 
 ### Verified
-- `pnpm -r test`: 220 tests, 0 fail (this preview adds E0/E1/E2/E3/JSON/MCP/UI tests).
+- `pnpm -r test`: 222 tests, 0 fail (this preview adds E0/E1/E2/E3/JSON/MCP/UI tests).
 - `pnpm -r build` and `pnpm -r typecheck` pass.
 - Real-model smoke (2026-11-14): `.eml` import produced a pending candidate with
   verbatim quote; `capture --file note.docx` produced a pending candidate and
