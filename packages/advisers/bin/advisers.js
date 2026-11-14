@@ -24,6 +24,7 @@ import { classifyNudgeOutcome } from '../lib/nudge.js'
 import { buildDigest } from '../lib/digest.js'
 import { captureCandidates } from '../lib/capture.js'
 import { research as runResearch } from '../lib/research.js'
+import { reviewDocument } from '../lib/doc-review.js'
 import { buildHistory, buildOpening, buildPins, continuityProbes, ensurePins, fitHistory, shouldSummarize, summarizeTurns } from '../lib/context-window.js'
 
 let core
@@ -296,6 +297,7 @@ Usage:
   advisers brief [--deep] <text>  print the IntentBrief; --deep adds model refinement
   advisers --version          print the CLI version
   advisers who                 who I owe / who owes me
+  advisers review <file> --request "..."  model content review (no edits)
   advisers research --web|--url <url> [--deep] <query>
                               server-side web search/read URL with citations (explicit egress)
   advisers capture [--file f] [--source s] [--date ISO] [--matter id] <text>
@@ -1467,6 +1469,24 @@ async function template(name, dataFile, outFile) {
   if (!result.ok) process.exitCode = 1
 }
 
+async function documentReview(args) {
+  const { flags, positional } = parseFlags(args)
+  const file = positional[0]
+  if (!file) { console.error('usage: advisers review <file> --request "..."'); process.exitCode = 1; return }
+  const apiKey = process.env.ADVISERS_API_KEY
+  if (!apiKey) { console.error('document review requires ADVISERS_API_KEY'); process.exitCode = 1; return }
+  let mod
+  if (process.env.ADVISERS_OFFICE_LOCAL === '1') mod = await import('../../office/dist/index.js')
+  else { try { mod = await import('advisers-office') } catch { mod = await import('../../office/dist/index.js') } }
+  const doc = await mod.readOffice(readFileSync(file))
+  const result = await reviewDocument({ text: mod.officeToText(doc, 20_000), request: flags.request, apiKey, baseUrl: process.env.ADVISERS_BASE_URL, model: process.env.ADVISERS_MODEL })
+  dbStore()?.appendAudit({ actor: 'local', action: 'doc.review', allowed: !result.findings.some((f) => f.severity === 'blocker'), reason: file })
+  console.log(result.summary || '(no summary)')
+  for (const f of result.findings) console.log(`[${f.severity}] ${f.message}${f.evidence ? `（原文：${f.evidence}）` : ''}`)
+  if (result.invalid) { console.error('review output was not valid JSON'); process.exitCode = 1 }
+  if (result.findings.some((f) => f.severity === 'blocker')) process.exitCode = 1
+}
+
 async function research(args) {
   const { flags, positional } = parseFlags(args)
   if (!flags.web && !flags.url) { console.error('research requires explicit --web or --url (egress)'); process.exitCode = 1; return }
@@ -2123,6 +2143,8 @@ if (!command) {
   backup(args[0])
 } else if (command === 'brief') {
   await brief(args.filter((a) => a !== '--deep').join(' ').trim(), args.includes('--deep'))
+} else if (command === 'review') {
+  await documentReview(args)
 } else if (command === 'research') {
   await research(args)
 } else if (command === 'capture') {

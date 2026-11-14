@@ -14,6 +14,7 @@ export function buildCapturePrompt(text, { date = new Date().toISOString(), sour
     '规则：',
     '1. 只抽明确义务：我答应别人、别人答应我、双方待定；不要把请求、客套、计划、愿望当承诺。',
     '2. quote 必须逐字来自原文，不改标点/不补字；找不到原句就不要输出。',
+    '2b. action 必须是 12 字以内的动词短语，去掉“把/给+人名”，例如“发报价”而不是“把报价发给王工”。',
     '3. modal: firm（我会/一定/周五前）、tentative（尽量/争取/应该/回头）、conditional（如果/前提）。',
     '4. dueAt 用 ISO 8601；相对日期按消息时间换算；无法确定就 null，并在 uncertainty 写明。',
     '5. debtor: user（我）/ third（对方）/ unknown；creditor 是对方名字，未知写 null。',
