@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 import { chmodSync, copyFileSync, existsSync, mkdirSync, readdirSync, readFileSync, rmSync, statSync, writeFileSync } from 'node:fs'
 import { homedir } from 'node:os'
-import { randomBytes, randomUUID } from 'node:crypto'
+import { createHash, randomBytes, randomUUID } from 'node:crypto'
 import { basename, dirname, extname, join } from 'node:path'
 let SqliteStore
 try {
@@ -311,6 +311,7 @@ Usage:
   advisers forget <pref-id>   forget a preference (tombstone)
   advisers export [--all] [--encrypted] [--out file]  export ledger (AES-256-GCM with passphrase)
   advisers import <file> [--replace]  import an export (encrypted or plain)
+  advisers vault seal [--out f] [--remove] | unseal [f] | status  AES-256-GCM database vault
   advisers backup <path.db>   checkpoint and copy the SQLite database
   advisers brief [--deep] <text>  print the IntentBrief; --deep adds model refinement
   advisers --version          print the CLI version
@@ -432,7 +433,7 @@ function purgeMatter(id, confirmed) {
 function parseFlags(args) {
   const flags = {}
   const positional = []
-  const booleanFlags = new Set(['web', 'deep', 'all', 'yes', 'json', 'list', 'force', 'apply', 'quiet', 'help', 'content', 'ics', 'deliver', 'install', 'uninstall', 'status', 'calendar', 'pack', 'from-imap'])
+  const booleanFlags = new Set(['web', 'deep', 'all', 'yes', 'json', 'list', 'force', 'apply', 'quiet', 'help', 'content', 'ics', 'deliver', 'install', 'uninstall', 'status', 'calendar', 'pack', 'from-imap', 'remove'])
   for (let i = 0; i < args.length; i++) {
     if (args[i].startsWith('--')) {
       const key = args[i].slice(2)
@@ -2096,6 +2097,64 @@ async function ocrCommand(args) {
   } catch (error) { console.error(`ocr failed: ${error.message}`); process.exitCode = 1 }
 }
 
+function vaultPass() {
+  const pass = process.env.ADVISERS_VAULT_PASSPHRASE
+  if (!pass || pass.length < 8) { console.error('vault requires ADVISERS_VAULT_PASSPHRASE (min 8 chars)'); process.exitCode = 1; return null }
+  return pass
+}
+
+function vaultSeal(args) {
+  const { flags } = parseFlags(args)
+  ensureHome()
+  if (!existsSync(DB)) { console.error(`no database at ${DB}`); process.exitCode = 1; return }
+  const pass = vaultPass(); if (!pass) return
+  try {
+    const store = new SqliteStore(DB)
+    store.appendAudit({ actor: 'local', action: 'vault.seal', allowed: true, reason: 'database encrypted at rest' })
+    store.db.exec('PRAGMA wal_checkpoint(TRUNCATE)')
+    store.db.close()
+  } catch (error) { console.error(`vault seal failed: ${error.message}`); process.exitCode = 1; return }
+  try {
+    const bytes = readFileSync(DB)
+    const sha = createHash('sha256').update(bytes).digest('hex')
+    const envelope = encryptJson({ kind: 'advisers-db', version: VERSION, sha256: sha, db: bytes.toString('base64') }, pass)
+    const out = typeof flags.out === 'string' ? flags.out : `${DB}.vault`
+    writeFileSync(out, JSON.stringify(envelope) + '\n', { mode: 0o600 })
+    const check = decryptJson(JSON.parse(readFileSync(out, 'utf8')), pass)
+    if (check.sha256 !== sha) throw new Error('sealed file verification failed')
+    if (flags.remove || args.includes('--remove')) {
+      for (const f of [DB, `${DB}-wal`, `${DB}-shm`]) { try { if (existsSync(f)) rmSync(f) } catch {} }
+    }
+    console.log(`sealed ${DB} -> ${out}${flags.remove ? ' (plaintext removed)' : ' (plaintext kept; pass --remove)'}`)
+  } catch (error) { console.error(`vault seal failed: ${error.message}`); process.exitCode = 1 }
+}
+
+function vaultUnseal(args) {
+  const file = args.find((a) => !a.startsWith('--')) || `${DB}.vault`
+  if (!existsSync(file)) { console.error(`no sealed database at ${file}`); process.exitCode = 1; return }
+  const pass = vaultPass(); if (!pass) return
+  try {
+    const payload = decryptJson(JSON.parse(readFileSync(file, 'utf8')), pass)
+    if (payload.kind !== 'advisers-db' || typeof payload.db !== 'string') throw new Error('not an Advisers database vault')
+    const bytes = Buffer.from(payload.db, 'base64')
+    const sha = createHash('sha256').update(bytes).digest('hex')
+    if (sha !== payload.sha256) throw new Error('vault checksum mismatch')
+    ensureHome()
+    if (existsSync(DB)) copyFileSync(DB, `${DB}.before-unseal-${Date.now()}`)
+    writeFileSync(DB, bytes, { mode: 0o600 })
+    try { chmodSync(DB, 0o600) } catch {}
+    console.log(`unsealed ${file} -> ${DB} (${bytes.length} bytes)`)
+  } catch (error) { console.error(`vault unseal failed: ${error.message}`); process.exitCode = 1 }
+}
+
+function vaultStatus() {
+  ensureHome()
+  const sealed = `${DB}.vault`
+  console.log(`database: ${existsSync(DB) ? DB : 'absent'}`)
+  console.log(`sealed:   ${existsSync(sealed) ? sealed : 'none'}`)
+  console.log(`state:    ${existsSync(DB) ? 'plaintext at rest' : existsSync(sealed) ? 'encrypted at rest (run vault unseal)' : 'empty'}`)
+}
+
 function printEvidence(args) {
   const { flags, positional } = parseFlags(args)
   ensureHome()
@@ -2786,6 +2845,12 @@ if (!command) {
   why(args[0])
 } else if (command === 'forget') {
   forget(args[0])
+} else if (command === 'vault') {
+  const sub = args[0]
+  if (sub === 'seal') vaultSeal(args.slice(1))
+  else if (sub === 'unseal') vaultUnseal(args.slice(1))
+  else if (sub === 'status' || !sub) vaultStatus()
+  else { console.error('usage: advisers vault seal [--out file] [--remove] | unseal [file] | status'); process.exitCode = 1 }
 } else if (command === 'export') {
   const { flags } = parseFlags(args)
   exportLedger(flags.all === true || args.includes('--all'), { encrypted: args.includes('--encrypted'), out: typeof flags.out === 'string' ? flags.out : undefined })

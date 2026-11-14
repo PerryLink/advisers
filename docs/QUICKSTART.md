@@ -186,3 +186,14 @@ node $A capture --file .\scan.png                    # image attachment uses the
 ```
 
 Without `ADVISERS_OCR_CMD`, image OCR fails closed. No cloud OCR is called.
+
+## L. Vault mode (encrypted database at rest)
+
+```powershell
+$env:ADVISERS_VAULT_PASSPHRASE = "at least 8 chars"
+node $A vault seal --remove        # ciphertext in state.db.vault, plaintext removed
+node $A vault status
+node $A vault unseal               # restores state.db (SHA256 verified)
+```
+
+Explicit opt-in; not transparent/automatic. See `docs/AT-REST-VAULT.md`.
