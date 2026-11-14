@@ -40,7 +40,7 @@
 ### Verified (single runs, 2026-11-14)
 - capture synthetic 150: recall 150/150, due 150/150 natural, 141/150 under the
   legacy ambiguous labels, 120 dates resolved by the rule pass, 0 auto-confirmed.
-- continuity `FACTS=50`: see `eval/results/continuity-50-2026-11-14.md`.
+- continuity: `FACTS=50` 9/9, `FACTS=100` 10/10, `FACTS=200` 12/12 (see `eval/results/continuity-*.md`).
 - agent tasks: 8/8 PASS (`eval/results/agent-tasks-2026-11-14.md`).
 - Office realistic-synthetic review: v2 20/20 blocker; v1 (before two
   severity-ambiguous defects were strengthened) was 18/20. See
