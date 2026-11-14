@@ -27,7 +27,7 @@ on any link package; adapters load one only when configured.
 
 ## Status
 
-`advisers@0.2.0-preview.66` (with `advisers-core@0.2.0-preview.22`) is **staged** on npm, awaiting OTP approval. The public `next` tag still points at the old `0.1.0-preview.2`; do not evaluate this build through it until approval:
+`advisers@0.2.0-preview.67` (with `advisers-core@0.2.0-preview.22`) is **staged** on npm, awaiting OTP approval. The public `next` tag still points at the old `0.1.0-preview.2`; do not evaluate this build through it until approval:
 
 > Requires **Node >= 22.13**. See [docs/QUICKSTART.md](docs/QUICKSTART.md) for Windows/PowerShell and BOM notes.
 

@@ -197,3 +197,14 @@ node $A vault unseal               # restores state.db (SHA256 verified)
 ```
 
 Explicit opt-in; not transparent/automatic. See `docs/AT-REST-VAULT.md`.
+
+## M. Timestamp / TUI
+
+```powershell
+$env:ADVISERS_TIMESTAMP_CMD = "C:\\tools\\tsa-client.exe"
+node $A timestamp .\\evidence\\manifest.json --out proof.txt
+node $A tui --once        # read-only dashboard snapshot
+```
+
+Both are local/no-cloud; the timestamp adapter is opt-in and fails closed when
+unset. The TUI is read-only; all writes stay in CLI commands.

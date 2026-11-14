@@ -35,6 +35,7 @@ import { createReadOnlyServer } from '../lib/ui.js'
 import { buildSimplePdf, findCjkFont } from '../lib/pdf.js'
 import { decryptJson, encryptJson, isVaultEnvelope } from '../lib/vault.js'
 import { runLocalOcr } from '../lib/ocr.js'
+import { runLocalTimestamp } from '../lib/timestamp.js'
 
 let core
 if (process.env.ADVISERS_CORE_LOCAL === '1') {
@@ -332,6 +333,8 @@ Usage:
   advisers policy check <text> policy/crisis check
   advisers office-read <file>  read DOCX/XLSX/PPTX/OFD text
   advisers ocr <image> [--out text]  local OCR adapter (ADVISERS_OCR_CMD; no cloud)
+  advisers timestamp <file> [--out proof]  local timestamp/signing adapter
+  advisers tui [--once]          read-only terminal dashboard
   advisers office-edit <file> <ops.json> [out]  surgical Office edit
   advisers verify <file> [--content]  structural + deterministic content checks
   advisers office <kind> <spec.json> <out>
@@ -2155,6 +2158,60 @@ function vaultStatus() {
   console.log(`state:    ${existsSync(DB) ? 'plaintext at rest' : existsSync(sealed) ? 'encrypted at rest (run vault unseal)' : 'empty'}`)
 }
 
+async function timestampCommand(args) {
+  const file = args.find((a) => !a.startsWith('--'))
+  if (!file) { console.error('usage: advisers timestamp <file> [--out proof]'); process.exitCode = 1; return }
+  try {
+    const proof = await runLocalTimestamp(file)
+    const outIdx = args.indexOf('--out')
+    if (outIdx >= 0 && args[outIdx + 1]) {
+      writeFileSync(args[outIdx + 1], proof + '\n', { mode: 0o600 })
+      dbStore()?.appendAudit({ actor: 'local', action: 'timestamp.local', allowed: true, reason: basename(args[outIdx + 1]) })
+      console.log(`wrote ${args[outIdx + 1]}`)
+    } else { console.log(proof) }
+  } catch (error) { console.error(`timestamp failed: ${error.message}`); process.exitCode = 1 }
+}
+
+async function tui(args) {
+  const once = args.includes('--once')
+  const render = () => {
+    const ledger = loadLedger()
+    const store = dbStore()
+    const open = ledger.openCommitments()
+    const localDay = new Intl.DateTimeFormat('en-CA', { timeZone: 'Asia/Shanghai' }).format(new Date())
+    const due = open.filter((c) => c.dueAt && c.dueAt.slice(0, 10) <= localDay)
+    const reminders = buildReminders(ledger, { now: new Date() })
+    const deliveries = store?.listDeliveries(3) ?? []
+    const lines = [
+      'Advisers TUI (read-only)',
+      `today ${localDay} · open ${open.length} · due ${due.length} · reminders ${reminders.length}`,
+      '',
+      'reminders:',
+      ...(reminders.length ? reminders.slice(0, 8).map((r) => `  [${r.level}/${r.bucket}] ${r.action}${r.dueAt ? ` · ${r.dueAt.slice(0, 16)}` : ''}`) : ['  (none)']),
+      '',
+      'open commitments:',
+      ...(open.length ? open.slice(0, 8).map((c) => `  ${c.id}  ${c.creditor} · ${c.action}${c.dueAt ? ` · ${c.dueAt.slice(0, 10)}` : ''}`) : ['  (none)']),
+      '',
+      'recent deliveries:',
+      ...(deliveries.length ? deliveries.map((d) => `  ${d.createdAt.slice(0, 16)}  ${d.title ?? d.tool ?? d.id}`) : ['  (none)']),
+    ]
+    return lines.join(String.fromCharCode(10))
+  }
+  if (once) { console.log(render()); return }
+  const readline = await import('node:readline')
+  const rl = readline.createInterface({ input: process.stdin, output: process.stdout })
+  const draw = () => { process.stdout.write('\x1b[2J\x1b[H' + render() + '\n\n[r] refresh  [q] quit\n') }
+  draw()
+  await new Promise((resolve) => {
+    const onKey = (str, key) => {
+      if (key?.name === 'q' || str === 'q') { rl.close(); resolve() }
+      else if (key?.name === 'r' || str === 'r') draw()
+    }
+    process.stdin.on('keypress', onKey)
+    rl.on('close', resolve)
+  })
+}
+
 function printEvidence(args) {
   const { flags, positional } = parseFlags(args)
   ensureHome()
@@ -2610,6 +2667,10 @@ if (!command) {
   else { console.error('usage: advisers mcp --stdio'); process.exitCode = 1 }
 } else if (command === 'deliver') {
   await deliver(args)
+} else if (command === 'timestamp') {
+  await timestampCommand(args)
+} else if (command === 'tui') {
+  await tui(args)
 } else if (command === 'ocr') {
   await ocrCommand(args)
 } else if (command === 'evidence') {
