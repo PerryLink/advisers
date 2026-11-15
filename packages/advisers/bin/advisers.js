@@ -28,6 +28,7 @@ import { research as runResearch } from '../lib/research.js'
 import { reviewDocument } from '../lib/doc-review.js'
 import { buildHistory, buildOpening, buildPins, continuityProbes, ensurePins, fitHistory, shouldSummarize, summarizeTurns } from '../lib/context-window.js'
 import { buildReminders, toIcs } from '../lib/remind.js'
+import { buildPetBrief, validatePetBrief, writePetBriefAtomic } from '../lib/pet-brief.js'
 import { dedupeKey, parseEml, parseIcs, parseMbox, parseTranscript, toCaptureInput } from '../lib/importers.js'
 import { fetchImapMessages } from '../lib/imap.js'
 import { buildEvidencePack, evidenceForCommitment, evidenceForFact, evidenceForPreference, sha256Hex, toDocxRows, verifyPack } from '../lib/evidence.js'
@@ -289,6 +290,7 @@ Usage:
   advisers remind install|uninstall|status  local scheduler scripts (opt-in)
   advisers calendar import --ics <file>  local .ics read-only import
   advisers risks              up to 3 deterministic obligation risks
+  advisers pet-brief [--json] [--out [path]] [--check]  read-only redacted Pet Brief (contract v0.1)
   advisers tick               due commitments in the next 7 days
   advisers week               last 7 days
   advisers digest day|week    short digest
@@ -671,6 +673,61 @@ function printLinks() {
   const title = new Map(ledger.listMatters().map((m) => [m.id, m.title]))
   for (const l of rows) {
     console.log(`${l.id}\t${l.status}\t${l.type}\t${title.get(l.fromMatter) ?? l.fromMatter} -> ${title.get(l.toMatter) ?? l.toMatter}\tconf=${l.confidence}`)
+  }
+}
+
+/**
+ * `advisers pet-brief` — read-only projection for the pet (contract v0.1).
+ * Never opens the store read-write, never calls a model, never writes the
+ * ledger. The only write is the optional `--out` file (0600, atomic rename).
+ */
+async function petBrief(args) {
+  const { flags } = parseFlags(args)
+  const asJson = args.includes('--json')
+  const check = args.includes('--check')
+  const inFile = flags.in
+  const outFlag = flags.out
+  const fail = (code, message) => {
+    console.error(JSON.stringify({ error: { code, message } }))
+    process.exitCode = 1
+  }
+  if (inFile !== undefined && !check) return fail('E_USAGE', '--in can only be used with --check')
+  if (inFile !== undefined && typeof inFile !== 'string') return fail('E_USAGE', '--in needs a file path')
+  if (outFlag !== undefined && typeof outFlag !== 'string' && outFlag !== true) return fail('E_USAGE', '--out takes an optional file path')
+  try {
+    if (inFile) {
+      let text
+      try { text = readFileSync(inFile, 'utf8') } catch (error) { return fail('E_READ', `cannot read ${inFile}: ${error.message}`) }
+      const result = validatePetBrief(text, { now: Date.now() })
+      console.log(JSON.stringify({ ok: result.ok, checked: inFile, expiresAt: result.brief?.expiresAt ?? null, counts: result.brief?.counts ?? null, errors: result.errors }, null, 2))
+      if (!result.ok) process.exitCode = 1
+      return
+    }
+    const { readLedgerSnapshotReadOnly } = await import('../lib/pet-brief-store.js')
+    let snapshot
+    try {
+      snapshot = readLedgerSnapshotReadOnly({ store: mode, dbPath: DB, statePath: STATE })
+    } catch (error) {
+      return fail(error?.code ?? 'E_STORE', error?.message ?? String(error))
+    }
+    const ledger = Ledger.fromJSON(snapshot)
+    const brief = buildPetBrief(ledger, { now: Date.now() })
+    if (check) {
+      const result = validatePetBrief(brief, { now: Date.now() })
+      console.log(JSON.stringify({ ok: result.ok, checked: 'generated', expiresAt: brief.expiresAt, counts: brief.counts, errors: result.errors }, null, 2))
+      if (!result.ok) process.exitCode = 1
+      return
+    }
+    const outPath = outFlag === true ? join(HOME, 'pet-brief.json') : outFlag
+    if (outPath) {
+      try { writePetBriefAtomic(outPath, brief) } catch (error) { return fail('E_WRITE', `cannot write ${outPath}: ${error.message}`) }
+    }
+    if (asJson) { console.log(JSON.stringify(brief, null, 2)); return }
+    console.log(`pet-brief · ${brief.counts.today} today · ${brief.counts.commitments} commitments · ${brief.counts.risks} risks · ${brief.counts.facts} facts`)
+    console.log(`mood ${brief.mood} · expires ${brief.expiresAt}`)
+    if (outPath) console.log(`wrote ${outPath} (mode 600, atomic)`)
+  } catch (error) {
+    fail(error?.code ?? 'E_BRIEF', error?.message ?? String(error))
   }
 }
 
@@ -2847,6 +2904,8 @@ if (!command) {
   } else { console.error('usage: advisers nudge list|done|ignore'); process.exitCode = 1 }
 } else if (command === 'risks') {
   risks(loadLedger())
+} else if (command === 'pet-brief') {
+  await petBrief(args)
 } else if (command === 'today') {
   today(loadLedger(), { calendar: args.includes('--calendar'), sources: args.includes('--sources') })
 } else if (command === 'tick') {

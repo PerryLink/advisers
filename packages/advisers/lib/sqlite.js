@@ -128,8 +128,14 @@ const parse = (v, fallback = []) => {
 }
 
 export class SqliteStore {
-  constructor(path) {
-    this.db = new DatabaseSync(path)
+  constructor(path, { readOnly = false } = {}) {
+    this.db = readOnly ? new DatabaseSync(path, { readOnly: true }) : new DatabaseSync(path)
+    if (readOnly) {
+      this.db.exec('PRAGMA busy_timeout = 5000')
+      const integrity = this.db.prepare('PRAGMA quick_check').get()
+      if (integrity && integrity.quick_check !== 'ok') throw new Error(`database integrity check failed: ${integrity.quick_check}`)
+      return
+    }
     this.db.exec('PRAGMA journal_mode = WAL')
     this.db.exec('PRAGMA busy_timeout = 5000')
     this.db.exec('PRAGMA secure_delete = ON')
