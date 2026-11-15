@@ -5,9 +5,10 @@
 **第一步只读，不要改任何文件、不要 commit/push、不要 npm stage/publish：**
 
 1. 完整阅读 `/mnt/d/Projects/dsh/plugins/advisers/docs/HANDOFF-2026-11-15.md`。
-2. 检查仓库真实状态：
+2. 检查仓库真实状态（以实测为准，不要只信文档）：
    - `cd /mnt/d/Projects/dsh/plugins/advisers`
-   - `git status`、`git log -5`、`git remote -v`
+   - `git status`、`git log -5 --oneline`、`git remote -v`
+   - `git ls-remote` 三端（GitHub/Gitee/GitCode；Gitee 可能需要 token）
    - `node -e "console.log(require('./packages/advisers/package.json').version)"`
    - 跑 `pnpm -r test`（若耗时可控）并核对测试数
    - 用只读方式核对 npm `stage view`/`dist-tags`（不要 approve）
@@ -22,7 +23,9 @@
 - 不要引用/索引任何旧会话、旧 transcript 或旧 INDEX；只以本文件、仓库、CI、npm 实测为准。
 - 不要伪造完成；不能代做 OTP/真人金标/真实用户验收，需如实说需要我做什么。
 - 没有我同意前不要发布、不要 approve、不要改版本号、不要 push。
-- 重要背景：当前 HEAD 已包含另一个会话新增的 **Pet Brief producer**，但 npm staged `.70` 不包含它；下一次发布必须先 bump `.71` 并重新 stage。不要直接 approve `.70` 当成最新功能版本。
+- 重要背景（写交接时的实测）：HEAD 约 `c7e30a0`，代码 HEAD `64a7f82`；250 tests；版本仍是 `.70`；**staged `.70` 不包含另一个会话新增的 Pet Brief producer**。若你看到版本已是 `.71` 或更高，以 CHANGELOG/当前 stage 为准，不要把本文当现值。
+- 不要直接 approve `.70` 当成包含 Pet Brief 的版本；要包含它，先 bump `.71` 并重新 stage。
+- Gitee 公开 API 读回可能 404/受限；用 token 核实，不要假设三端已同步。
 
 ## 我同意后，建议的第一批工作
 
@@ -32,12 +35,33 @@
 4. `npm stage publish .` 记录 stage id/shasum；
 5. 告诉我 approve 需要我本人 OTP，并带我完成；不要索要 OTP 明文。
 
-## 如果我要你现在引导 npm approve
+## 如果我要你现在引导 npm approve（一步一步）
 
-请按以下方式：
+前提：**OTP/浏览器确认由我本人完成；你不要索要或记录 OTP 明文。**
 
-- 先只读确认 stage id/version/status 和 `dist-tags`；
-- 给出**一步一步**的命令与浏览器操作说明；
-- 提醒：OTP/浏览器确认由我本人完成，不要让我把 OTP 发给你；
-- 认准 `advisers@0.2.0-preview.71`（或我指定的版本）的 stage id，不要批准旧 staged 版本；
-- 我完成后，你再帮我验证 `dist-tags` 与全局安装 smoke。
+1. 先只读确认目标（token 加载见交接文档 §8「token 安全加载」，不要打印/落盘）：
+   ```sh
+   cd /mnt/d/Projects/dsh/plugins/advisers/packages/advisers
+   npm stage view <stage-id> --registry https://registry.npmjs.org/
+   npm view advisers dist-tags --registry https://registry.npmjs.org/
+   ```
+   核对 `version`、`status: staged`、stage id；不要批准旧 staged 版本。
+
+2. 让我在**我自己的终端**运行（token 从 `发布令牌.md` 读取，不打印）：
+   ```sh
+   npm stage approve <stage-id> --registry https://registry.npmjs.org/
+   ```
+   终端会给出 `https://www.npmjs.com/auth/cli/...`。
+
+3. 让我复制该 URL 到浏览器：登录 `perrylink` → 完成 2FA/安全密钥 → 回终端看成功输出。
+
+4. 若我收到 `EOTP`：让我重跑并加 `--otp <6位码>`；**不要让 OTP 进对话**。
+
+5. 成功后你验证：
+   ```sh
+   npm view advisers dist-tags --registry https://registry.npmjs.org/
+   npm view advisers@<version> version --registry https://registry.npmjs.org/
+   ```
+   再做全局安装 smoke：`npm i -g advisers@<version> --registry ...` → `advisers --version`。
+
+6. 再次提醒：`.70` 不含 Pet Brief；如果要 Pet Brief，先发布 `.71` 再批准 `.71`。
