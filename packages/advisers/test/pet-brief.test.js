@@ -383,7 +383,8 @@ test('pet-brief CLI: missing store exits non-zero with a machine-readable error'
     // Node 22 (CI) emits an ExperimentalWarning for node:sqlite on stderr before
     // the machine-readable error; parse the final JSON line, not the whole stream.
     const errorLines = result.stderr.trim().split(/\r?\n/).filter(Boolean)
-    const payload = JSON.parse(errorLines.at(-1))
+    const jsonLine = errorLines.find((line) => line.trim().startsWith('{')) ?? errorLines.at(-1)
+    const payload = JSON.parse(jsonLine)
     assert.equal(payload.error.code, 'E_STORE')
     assert.match(payload.error.message, /not found/)
     assert.equal(result.stdout, '')
