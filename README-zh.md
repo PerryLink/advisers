@@ -12,7 +12,7 @@ Advisers 不是聊天框，也不是情感陪伴。它维护三本账：
 
 ## 状态
 
-`advisers@0.2.0-preview.70`（core `advisers-core@0.2.0-preview.22`）已 staged（待 OTP 批准；npm `next` 仍是旧的 0.1 preview，批准前不要用它评估）：
+`advisers@0.2.0-preview.71`（core `advisers-core@0.2.0-preview.22`）是当前预览版；npm staging 与账号所有者 OTP 批准仍在等待。npm `next` 仍是旧的 0.1 preview，批准前不要用它评估：
 
 > 需要 **Node >= 22.13**；Windows/PowerShell/BOM 说明见 [docs/QUICKSTART.md](docs/QUICKSTART.md)。
 
@@ -30,6 +30,7 @@ Advisers 不是聊天框，也不是情感陪伴。它维护三本账：
 - 只读入口：`capture --from-mail` / `--from-transcript`（去重、全部候选需人工 accept、secret matter 拒绝）；
 - 证据/交付：`evidence show`、`deliveries --pack`（manifest + SHA256SUMS + DOCX 回执）、`deliver --type ...`（DOCX/XLSX）；
 - 隐私/MCP/JSON：`privacy --prove`、`mcp --stdio`（只读工具）、`ui`（本地只读视图）、`status/commit/who/deliveries/remind/evidence --json`。
+- Pet Brief（只读脱敏投影，契约 v0.1）：`pet-brief --json|--out|--check`；`secrecy >= 2` 全排除、confidence < 0.7 丢弃、5 分钟 TTL、每节 10 项上限；不调模型、不联网、不改账本；桌宠 UI/传输尚未接通。见 `docs/PET-BRIEF-PRODUCER.md`。
 
 ```sh
 # 当前 preview 只 staged，等 OTP；公开 @next 还是旧 0.1 stub。
@@ -51,4 +52,5 @@ advisers verify out.docx
 
 ## 许可
 
-MIT。
+Apache License, Version 2.0，见 [LICENSE](LICENSE) 与 [NOTICE](NOTICE)。
+此前以 MIT 发布的版本仍为 MIT；本版本及后续版本为 Apache-2.0。

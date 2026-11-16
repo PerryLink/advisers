@@ -19,7 +19,7 @@ CLI 是**本地秘书运行时**：一个 REPL、用户账/承诺账/流程账�
 
 ## 状态
 
-`0.2.0-preview.70` 是预览版：
+`0.2.0-preview.71` 是当前预览版（待 npm staging 与账号所有者批准）：
 
 - SQLite 账本 `~/.advisers/state.db`（JSON fallback）；
 - soul 位于 `~/.advisers/soul.md`，人类独占；
@@ -28,6 +28,7 @@ CLI 是**本地秘书运行时**：一个 REPL、用户账/承诺账/流程账�
 - `/memory`、`/week`、`/digest`、`/diff`、`/undo`、`/learn review`；
 - routine draft/approve/patch/curator + active routine index + `routine_view`；
 - `advisers-office` 提供 DOCX/XLSX/PPTX/Mermaid/draw.io/XMind builder 与 5 个模板；
+- `advisers pet-brief`：只读脱敏 Pet Brief 投影（契约 v0.1；`--json`/`--out`/`--check`；`secrecy >= 2` 全排除；5 分钟 TTL；未接桌宠 UI）；
 - 真实 IM/Office 打开验证仍未完成。
 
 核心与架构：
@@ -36,4 +37,5 @@ https://github.com/PerryLink/advisers
 
 ## 许可
 
-MIT。
+Apache License, Version 2.0，见 [LICENSE](LICENSE) 与 [NOTICE](NOTICE)。
+此前以 MIT 发布的版本仍为 MIT；本版本及后续版本为 Apache-2.0。

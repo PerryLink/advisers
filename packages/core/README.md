@@ -16,4 +16,4 @@ SQLite/FTS persistence lives in the `advisers` distribution; this package has no
 
 ## License
 
-MIT.
+Apache License, Version 2.0. See [LICENSE](LICENSE) and [NOTICE](NOTICE).

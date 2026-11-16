@@ -1,5 +1,33 @@
 # Changelog
 
+## 0.2.0-preview.71 (npm staging pending owner approval)
+
+### Added
+- **Pet Brief producer (contract v0.1)**: `advisers pet-brief --json|--out [path]|--check [--in file]`
+  projects a read-only, redacted brief (today/commitments/risks/facts/mood/counts) for the
+  desktop-pet consumer. SQLite is opened read-only; no model call, no network, no ledger
+  writes. `secrecy >= 2` matters are excluded entirely, facts with `confidence < 0.7` are
+  dropped, TTL is 5 minutes, each section is capped at 10 items. 18 new tests.
+  Contract and known limits: `docs/PET-BRIEF-PRODUCER.md`; consumer UI/transport is not wired yet.
+- **Apache-2.0 switch finished in the source tree**: every package now carries the Apache-2.0
+  `LICENSE` and `NOTICE`, sets `license: Apache-2.0`, and ships `NOTICE` in its npm `files`
+  allowlist; package READMEs (EN/ZH), root README-zh, `docs/PRICING-CHANNEL.md` and
+  `scripts/check-docs.mjs` were updated to match. Builds from this preview onward are
+  Apache-2.0. The already-staged dependency builds `advisers-core@0.2.0-preview.22`,
+  `advisers-policy-strict@0.2.0-preview.12` and `advisers-office@0.2.0-preview.14` were built
+  before the switch and remain MIT; they are the pinned versions of this release.
+
+### Changed
+- `scripts/check-docs.mjs` now fails CI when a publishable package's `license` field,
+  `LICENSE`, `NOTICE`, `files` allowlist or README license section drifts from Apache-2.0.
+- Docs: Pet Brief added to root/package READMEs, CHANGELOG and `docs/PET-BRIEF-PRODUCER.md`.
+
+### Verified
+- `pnpm -r test`: 250 tests / 250 pass / 0 fail (8 packages).
+- `pnpm -r build` and `pnpm -r typecheck` pass; `pack-smoke` reports 36 files for `advisers` (incl. `NOTICE`).
+- `node scripts/check-docs.mjs`, `node scripts/security-suite.mjs` (5/5) and
+  `node scripts/verify-office.mjs` pass.
+
 ## 0.2.0-preview.70 (staged, approval pending)
 
 ### Added

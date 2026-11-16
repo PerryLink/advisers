@@ -28,7 +28,7 @@ turn natural language into commitments or artifacts.
 
 ## Status
 
-`0.2.0-preview.70` is staged (approval pending):
+`0.2.0-preview.71` is the current preview (npm staging and owner approval pending):
 
 - SQLite ledger at `~/.advisers/state.db` (JSON fallback with `ADVISERS_STORE=json`);
 - soul at `~/.advisers/soul.md`, human-owned;
@@ -40,6 +40,7 @@ turn natural language into commitments or artifacts.
 - `/memory`, `/week`, `/digest`, `/diff`, `/undo`, `/learn review`;
 - routine draft/approve/patch/curator + active routine index + `routine_view`;
 - local agent loop with Office/file tools, `commitment_add`, `search_turns`; attachments (txt/md/docx/xlsx/pptx/pdf); optional model via `ADVISERS_API_KEY` / `ADVISERS_BASE_URL` / `ADVISERS_MODEL`;
+- `advisers pet-brief` read-only redacted projection for the desktop-pet consumer (contract v0.1; `--json`/`--out`/`--check`; `secrecy >= 2` excluded; 5-minute TTL); no UI wiring yet;
 - DSH bundle, email IMAP/draft, Feishu webhook, Hermes bridge; strict policy pack;
 - real-account/WS/Office-L3 validation still pending.
 
@@ -49,4 +50,5 @@ https://github.com/PerryLink/advisers
 
 ## License
 
-MIT.
+Apache License, Version 2.0. See [LICENSE](LICENSE) and [NOTICE](NOTICE).
+Prior MIT releases remain MIT; this and future versions are Apache-2.0.

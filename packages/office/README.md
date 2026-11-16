@@ -49,4 +49,4 @@ templates. CJK fonts default to Microsoft YaHei, with a system fallback.
 
 ## License
 
-MIT.
+Apache License, Version 2.0. See [LICENSE](LICENSE) and [NOTICE](NOTICE).

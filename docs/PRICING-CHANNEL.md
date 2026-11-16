@@ -4,7 +4,7 @@
 
 ## Price positioning
 
-- MIT core stays free; no per-seat/enterprise pricing for the target user.
+- Apache-2.0 core stays free; no per-seat/enterprise pricing for the target user.
 - Optional local pro/support subscription at a personal price point (roughly
   $10–40/user/month equivalent); do not gate core evidence/audit features.
 - Do not price against enterprise CLM (¥2.4万–28万 projects) or per-seat suites;
@@ -25,7 +25,7 @@
 - Fyxer: Pro $37–49 / Team $64–99, 14-day trial (no free tier).
 - Gemini/Workspace: $7–22; Copilot $30 add-on; Todoist/滴答/Motion/飞书 AI
   subscriptions; Chinese suites ¥19–¥398/month plus enterprise private quotes.
-- Advisers: MIT core free; any paid tier must be optional and local-first.
+- Advisers: Apache-2.0 core free; any paid tier must be optional and local-first.
 
 ## Do not claim
 

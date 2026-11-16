@@ -5,3 +5,7 @@ Strict policy pack for Advisers. **Understanding** is always allowed;
 
 The core keeps only the floor/ports; policy packs live outside so enabling a
 future policy does not change core code.
+
+## License
+
+Apache License, Version 2.0. See [LICENSE](LICENSE) and [NOTICE](NOTICE).

@@ -34,6 +34,7 @@ const versions = {}
 for (const [name, meta] of Object.entries(packages)) {
   const pkg = json(join(meta.dir, meta.versionFile))
   if (pkg.name !== name) failures.push(`${meta.dir}: package name ${pkg.name} != expected ${name}`)
+  check(`${meta.dir} license field`, pkg.license === 'Apache-2.0', `found ${pkg.license}`)
   versions[name] = pkg.version
 }
 
@@ -60,6 +61,31 @@ const pinChecks = [
 for (const [file, field, dep, expected] of pinChecks) {
   const found = json(file)?.[field]?.[dep]
   check(`${file} ${field}.${dep}`, found === expected, `found ${found}, expected ${expected}`)
+}
+
+// Publishable packages must ship the Apache-2.0 license texts (switch 2026-11-16).
+const licensePackages = [
+  'packages/core',
+  'packages/office',
+  'packages/policy-strict',
+  'packages/bridge-hermes',
+  'packages/advisers',
+  'packages/dsh-advisers',
+]
+const rootLicense = read('LICENSE')
+const rootNotice = read('NOTICE')
+for (const dir of licensePackages) {
+  const pkg = json(dir + '/package.json')
+  const licenseFile = dir + '/LICENSE'
+  check(licenseFile + ' matches root LICENSE', existsSync(join(root, licenseFile)) && read(licenseFile) === rootLicense)
+  const noticeFile = dir + '/NOTICE'
+  check(noticeFile + ' matches root NOTICE', existsSync(join(root, noticeFile)) && read(noticeFile) === rootNotice)
+  check(dir + ' files allowlist includes NOTICE', Array.isArray(pkg.files) && pkg.files.includes('NOTICE'))
+  const readmeFile = dir + '/README.md'
+  check(readmeFile + ' mentions Apache-2.0', existsSync(join(root, readmeFile)) && /Apache/.test(read(readmeFile)))
+}
+for (const file of ['README.md', 'README-zh.md']) {
+  check(file + ' license is Apache-2.0', /Apache/.test(read(file)))
 }
 
 // The current version must be the one the user-facing docs advertise.

@@ -42,4 +42,4 @@ model key; it is not part of CI.
 
 ## License
 
-MIT.
+Apache License, Version 2.0. See [LICENSE](LICENSE) and [NOTICE](NOTICE).

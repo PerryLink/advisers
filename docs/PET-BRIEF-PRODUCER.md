@@ -1,6 +1,6 @@
 # Pet Brief producer (Advisers → Famling/Pearl)
 
-状态：**已实现 producer（只读投影 + CLI + `--check` + 测试）；未发布 npm、未接桌宠 UI。**
+状态：**已实现 producer（只读投影 + CLI + `--check` + 测试）；列入 `0.2.0-preview.71`（npm staging + 账号所有者 OTP 批准待完成）；未接桌宠 UI。**
 契约版本：**v0.1（2026-11-14，status: design contract）**。
 本机契约快照：`/mnt/d/Projects/dsh/desktop-games/docs/contracts/pet-brief/`
 （2026-11-15 自私有仓 `PerryLink/famling` `docs/` 复制；sha：PET-BRIEF.md `8698dd0c`、schema `5ec912cc`、example `12c1ecf4`、testcases `bcec4c94`/`47e86a88`。canonical 仍以 famling 为准。）
@@ -72,7 +72,7 @@ npm test                      # 单包：165/165 pass（含本功能 18 个）
 
 ## 6. 已知限制 / 未做
 
-- **未发布 npm**：`advisers` preview 线仍卡人工 OTP；本功能随下次发布才会到用户手里（不处理 OTP）。
+- **npm 发布**：随 `advisers@0.2.0-preview.71` 进入 staged 发布（批准需账号所有者本人 OTP，agent 不代做）；批准前用户还拿不到。
 - **未做真实数据集成**：测试用合成 fixture + 临时 store；没有在真实用户账本上跑过（隐私边界：不应提交真实数据）。
 - **未接桌宠 UI/传输**：未改 famling/desktop-games 的 `pet.html`/主流程；没有 daemon、文件监听、stdio/MCP/IPC 选型落地。`--out` 文件路径缺省 `~/.advisers/pet-brief.json`，由消费端自行轮询。
 - **脱敏是启发式**：只覆盖“已知人名值 + 常见 `<动词><姓><职务>` 文本”；不含 NER/全量姓名库，极限 case 可能漏掉 title/action 中的陌生姓名。若需默认全文本脱敏，应改契约（opt-in 策略）而不是本投影。
