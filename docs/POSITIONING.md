@@ -17,7 +17,7 @@
 - Office/PDF generation：Claude Cowork/Claude Code built-in skills、Copilot、飞书/WPS.
 - 会议转写/行动项：Otter/Fireflies/Granola/Fathom/飞书妙记.
 - 提醒：Todoist/滴答/Motion/飞书 aily/Kimi.
-- CLI 入口：飞书 CLI（MIT, 18 domains, individual developer path）、钉钉 CLI
+- CLI 入口：飞书 CLI（Apache-2.0, 18 domains, individual developer path）、钉钉 CLI
   (Apache-2.0)、企微 CLI+MCP（10 人以下也可用）、石墨/FlowUs.
 - “开源/本地”本身：OpenClaw/Ollama+Open WebUI/Khoj/Jan/LM Studio.
 
@@ -51,7 +51,7 @@
 
 ## Pricing / channel (research recommendation, not a commitment)
 
-MIT core free; optional local pro/support subscription at a personal price point
+Apache-2.0 core free; optional local pro/support subscription at a personal price point
 (roughly $10–40/month), not per-seat enterprise. Channel: independent-consultant
 communities, open source, DSH/agent ecosystem; make `.ics` reminders and evidence
 packs the customer-visible artifacts.

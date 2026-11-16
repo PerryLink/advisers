@@ -26,7 +26,7 @@
   "dependencies": {
     "advisers-core": "0.2.0-preview.22"
   },
-  "license": "MIT",
+  "license": "Apache-2.0",
   "repository": {
     "type": "git",
     "url": "git+https://github.com/PerryLink/advisers.git",

@@ -80,4 +80,6 @@ promoted.
 
 ## License
 
-MIT.
+Apache License, Version 2.0. See [LICENSE](LICENSE) and [NOTICE](NOTICE).
+Prior MIT releases remain MIT; this and future versions are Apache-2.0.
+Advisers is an independent core, not coupled to the famling desktop pet.
