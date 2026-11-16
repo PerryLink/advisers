@@ -1,6 +1,6 @@
 # Changelog
 
-## 0.2.0-preview.71 (npm staging pending owner approval)
+## 0.2.0-preview.71 (staged, approval pending)
 
 ### Added
 - **Pet Brief producer (contract v0.1)**: `advisers pet-brief --json|--out [path]|--check [--in file]`

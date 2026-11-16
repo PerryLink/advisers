@@ -19,7 +19,7 @@ CLI 是**本地秘书运行时**：一个 REPL、用户账/承诺账/流程账�
 
 ## 状态
 
-`0.2.0-preview.71` 是当前预览版（待 npm staging 与账号所有者批准）：
+`0.2.0-preview.71` 已 staged（待账号所有者 OTP 批准）：
 
 - SQLite 账本 `~/.advisers/state.db`（JSON fallback）；
 - soul 位于 `~/.advisers/soul.md`，人类独占；
