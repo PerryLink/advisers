@@ -27,6 +27,9 @@
 （实测 token 直接调用返回 `EOTP`），因此 agent 无法代为执行。本仓提供交互式工具：
 
 Windows PowerShell 用户用 `scripts/windows-clean-staged.ps1`（同样先列后清，支持 -Limit 试跑）。
+若要无提示批量清理，可临时创建 npm automation token（bypass 2FA），用
+`-PromptToken` 隐藏粘贴后执行，完成后立即在 npmjs.com 撤销该 token；若 npm 拒绝 automation
+token 执行 staged reject（EOTP），退回浏览器逐条方式或分批处理。
 
 ~~~bash
 # 1) 只列出（默认只看 Advisers 六包）

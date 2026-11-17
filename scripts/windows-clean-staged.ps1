@@ -11,6 +11,10 @@
 #   powershell -ExecutionPolicy Bypass -File .\scripts\windows-clean-staged.ps1 -Apply -Limit 3
 #   powershell -ExecutionPolicy Bypass -File .\scripts\windows-clean-staged.ps1 -Apply
 #   powershell -ExecutionPolicy Bypass -File .\scripts\windows-clean-staged.ps1 -Apply -All -Force
+#
+# Fast path: create a temporary npm *automation* token (bypasses 2FA for this run),
+# paste it hidden, clean everything, then revoke the token on npmjs.com:
+#   powershell -ExecutionPolicy Bypass -File .\scripts\windows-clean-staged.ps1 -PromptToken -Apply
 
 [CmdletBinding()]
 param(
@@ -18,7 +22,8 @@ param(
   [switch]$All,
   [switch]$Force,
   [int]$Limit = 0,
-  [string]$Registry = 'https://registry.npmjs.org/'
+  [string]$Registry = 'https://registry.npmjs.org/',
+  [switch]$PromptToken
 )
 
 $ErrorActionPreference = 'Stop'
@@ -33,7 +38,15 @@ if ($All -and -not $Force) { throw '-All touches other projects; pass -Force to 
 
 $oldRc = $env:NPM_CONFIG_USERCONFIG
 $tmpRc = $null
+$promptedToken = $false
 try {
+  if ($PromptToken) {
+    $secure = Read-Host -AsSecureString -Prompt 'Paste npm automation token (input hidden)'
+    $bstr = [Runtime.InteropServices.Marshal]::SecureStringToBSTR($secure)
+    try { $env:NPM_TOKEN = [Runtime.InteropServices.Marshal]::PtrToStringBSTR($bstr) } finally { [Runtime.InteropServices.Marshal]::ZeroFreeBSTR($bstr) }
+    $promptedToken = $true
+    Write-Host 'Using the prompted token for this run only.'
+  }
   if ($env:NPM_TOKEN) {
     $tmpRc = Join-Path $env:TEMP ('advisers-npmrc-' + [guid]::NewGuid().ToString('n') + '.npmrc')
     $nl = [Environment]::NewLine
@@ -95,4 +108,5 @@ try {
 } finally {
   if ($tmpRc -and (Test-Path $tmpRc)) { Remove-Item -Force $tmpRc }
   if ($null -ne $oldRc) { $env:NPM_CONFIG_USERCONFIG = $oldRc } else { Remove-Item Env:NPM_CONFIG_USERCONFIG -ErrorAction SilentlyContinue }
+  if ($promptedToken) { Remove-Item Env:NPM_TOKEN -ErrorAction SilentlyContinue }
 }
