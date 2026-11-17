@@ -1,16 +1,27 @@
-name: publish
+name: release-gate
+
+# Manual pre-release gate. This workflow NEVER publishes: staged publishing needs
+# the npm account owner's OTP in their own terminal after the stage ids exist.
 on:
   workflow_dispatch:
-    # Publication is human-OTP staged approval; do not re-enable tag triggers
-    # until Trusted Publishing is configured for all packages.
+    inputs:
+      release_tag:
+        description: "planned npm dist-tag (latest or next)"
+        required: true
+        default: latest
+        type: choice
+        options: [latest, next]
+
 permissions:
   contents: read
-  id-token: write
+
 jobs:
-  publish:
+  gate:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
       - uses: pnpm/action-setup@v4
         with:
           version: 12.16.1
@@ -18,11 +29,18 @@ jobs:
         with:
           node-version: 24
           cache: pnpm
-          registry-url: https://registry.npmjs.org
       - run: pnpm install --frozen-lockfile
       - run: pnpm -r --if-present run build
       - run: pnpm -r --if-present run typecheck
       - run: pnpm -r --if-present run test
-      - run: node scripts/release.mjs
-        env:
-          RELEASE_TAG: next
+      - run: node scripts/pack-smoke.mjs
+      - run: node scripts/check-docs.mjs
+      - run: node scripts/check-release.mjs --stable --require-tag
+      - run: node scripts/security-suite.mjs
+      - run: node scripts/verify-office.mjs
+      - name: Manual publish instructions
+        run: |
+          echo "Gate passed for tag ${{ inputs.release_tag }}."
+          echo "This workflow does not publish. On a clean tagged checkout run:"
+          echo "  RELEASE_TAG=${{ inputs.release_tag }} NPM_TOKEN=... node scripts/release.mjs"
+          echo "Then approve each stage id in your own terminal (OTP is human-only)."

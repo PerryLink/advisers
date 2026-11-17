@@ -25,5 +25,6 @@ jobs:
       - run: pnpm -r --if-present run test
       - run: node scripts/pack-smoke.mjs
       - run: node scripts/check-docs.mjs
+      - run: node scripts/check-release.mjs
       - run: node scripts/verify-office.mjs
       - run: node scripts/security-suite.mjs

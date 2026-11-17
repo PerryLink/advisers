@@ -12,6 +12,8 @@
     "demo": "node --experimental-strip-types examples/demo.ts",
     "verify:office": "node scripts/verify-office.mjs",
     "release": "node scripts/release.mjs",
+    "set-version": "node scripts/set-version.mjs",
+    "check:release": "node scripts/check-release.mjs",
     "test:security": "node scripts/security-suite.mjs"
   },
   "devDependencies": {

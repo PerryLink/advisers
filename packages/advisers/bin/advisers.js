@@ -95,6 +95,7 @@ function saveJson(ledger) {
 
 function openStore() {
   if (!activeStore) {
+    ensureHome()
     activeStore = new SqliteStore(DB)
     try { chmodSync(DB, 0o600) } catch {}
   }
@@ -656,9 +657,9 @@ function printPrivacy(args = []) {
       ['home exists', existsSync(HOME)],
       ['database exists', existsSync(DB)],
       ['audit verified', Boolean(audit?.ok)],
-      ['telemetry disabled', true],
-      ['network only explicit', true],
-      ['secret matter fail-closed', true],
+      ['telemetry disabled', facts.telemetry === 'none'],
+      ['no default network egress', facts.default_egress === 'none'],
+      ['secret matter fail-closed', (() => { try { return Boolean(egressDeniedReason({ secrecy: 1 }, 'prove')) && !egressDeniedReason({ secrecy: 0 }, 'prove') } catch { return false } })()],
     ]
     let failed = 0
     for (const [name, ok] of checks) { if (!ok) failed++; console.log(`[${ok ? 'PASS' : 'FAIL'}] ${name}`) }
@@ -1474,6 +1475,9 @@ async function brief(text, deep = false) {
   console.log(core.renderIntentBrief(brief))
   console.log('\n' + core.renderReadback(brief))
   if (deep && process.env.ADVISERS_API_KEY) {
+    const briefLedger = loadLedger()
+    const briefDenied = egressDeniedReason(briefLedger.getMatter(activeMatterId(briefLedger)), 'brief --deep')
+    if (briefDenied) { console.error(briefDenied); process.exitCode = 1; return }
     try {
       const response = await chatCompletion({
         apiKey: process.env.ADVISERS_API_KEY,
@@ -1706,6 +1710,9 @@ async function documentReview(args) {
   if (!file) { console.error('usage: advisers review <file> --request "..."'); process.exitCode = 1; return }
   const apiKey = process.env.ADVISERS_API_KEY
   if (!apiKey) { console.error('document review requires ADVISERS_API_KEY'); process.exitCode = 1; return }
+  const reviewLedger = loadLedger()
+  const reviewDenied = egressDeniedReason(reviewLedger.getMatter(activeMatterId(reviewLedger)), 'review')
+  if (reviewDenied) { console.error(reviewDenied); process.exitCode = 1; return }
   let mod
   if (process.env.ADVISERS_OFFICE_LOCAL === '1') mod = await import('../../office/dist/index.js')
   else { try { mod = await import('advisers-office') } catch { mod = await import('../../office/dist/index.js') } }
@@ -2792,7 +2799,13 @@ if (!command) {
 } else if (command === 'learn') {
   const sub = args[0]
   const store = dbStore()
-  if (sub === 'ls') {
+  let learnDenied = null
+  if (sub === 'review') {
+    const learnLedger = loadLedger()
+    learnDenied = egressDeniedReason(learnLedger.getMatter(activeMatterId(learnLedger)), 'learn review')
+  }
+  if (sub === 'review' && learnDenied) { console.error(learnDenied); process.exitCode = 1 }
+  else if (sub === 'ls') {
     for (const r of store?.listTaskRuns(20) ?? []) console.log(`${r.id}\t${r.outcome}\t${r.tools.map((t) => t.name).join(',')}\t${r.task.slice(0, 60)}`)
   } else if (sub === 'review') {
     const run = store?.listTaskRuns(100).find((r) => r.id === args[1])
