@@ -76,7 +76,9 @@ the internal release evidence retained outside this repository.
 
 - `pnpm -r build` and `pnpm -r typecheck`: exit 0.
 - `node scripts/pack-smoke.mjs`: PASS for all six packages (`advisers@0.2.0`: 53 files /
-  41 local imports).
+  41 local imports). Note: the 0.2.0 smoke skipped relative imports that resolve outside a
+  package's own directory, so it did not catch the `dsh-advisers` import defect listed under
+  Known issues; the 0.2.1 fix wave hardens it.
 - `node scripts/check-docs.mjs`: PASS (`0.2.0`).
 - `node scripts/check-tos.mjs --release`: PASS (TOS v2026.11.2, effective 2026-11-17).
 - `node scripts/check-licenses.mjs`: PASS (PolyForm-NC + CC-BY-NC-SA, 203 third-party
@@ -89,18 +91,40 @@ the internal release evidence retained outside this repository.
 
 ### Known issues
 
+- **`dsh-advisers@0.2.0` cannot be loaded by a clean install** (packaging defect): the
+  published bundle imports `../advisers/lib/safety/index.js`, but that module is not in the
+  `dsh-advisers` tarball and `advisers` is not declared as a dependency, so
+  `npm install dsh-advisers@0.2.0` followed by an import fails with
+  `ERR_MODULE_NOT_FOUND`. The other five packages are unaffected. The fix is tracked for
+  the 0.2.1 packaging wave (not published yet); until then use the `advisers` CLI package.
+- **Node 22.13–22.15 do not work with the default SQLite ledger**: the published 0.2.0
+  packages declare `engines.node >= 22.13`, but `node:sqlite` in Node 22.13.x–22.15.x is
+  built without FTS5, so `status`/`today`/`doctor` exit 1 with
+  `sqlite unavailable: no such module: fts5`. Node 22.16+ (or Node 24) works. The corrected
+  engine floor is part of the 0.2.1 fix wave; `ADVISERS_STORE=json` is a workaround that
+  loses turns/search/audit.
+- **The README text embedded in the immutable 0.2.0 npm tarballs still says “staged pending
+  OTP”/“not published yet”** for `advisers`, `advisers-core` and `advisers-office`. The
+  release *is* published (`latest = next = 0.2.0`, 2026-11-17) and the repository copies are
+  corrected; the already-published 0.2.0 tarball text cannot be changed.
+- **Release-status correction (2026-11-17)**: the six packages were promoted to npm
+  `latest` on 2026-11-17 by the account owner (OTP approval in a browser flow). Future
+  promotions still require that human approval step; no agent can perform it. An earlier
+  draft of this section said “the release is not on `latest` until then”; that sentence was
+  stale and is corrected here rather than silently removed.
 - The legal texts (TOS v2026.11.2 / PRIVACY / DISCLAIMER / SAFETY) were finalized by the
   release lead acting as legal owner; an external-lawyer review is still recommended before
   commercial rollout. They are not a compliance certification.
 - No independent human gold standard for extraction/review quality and no real 5–10
   consultant dogfood yet: the published evaluation is synthetic plus author-run.
   Real-account/WS/Office-L3 validation is still pending.
-- Promoting `latest` requires the npm account owner's OTP approval in a browser flow; no
-  agent can perform it. The release is not on `latest` until then.
 - `dsh-advisers` depends on the DSH preview line (`@deepseek-ai/dsh-tools` rc) rather than a
   stable upstream; disclosed here as a known constraint.
+- 0.2.0 has no npm provenance attestation and the manual `release-gate` workflow was not run
+  for the `v0.2.0` tag; Trusted Publishing is a target, not current behavior.
 - Historic preview state that should not be read as current: the last Apache-2.0 preview
-  (`.71`) is published only on `next`, and older staged builds are not part of 0.2.0.
+  (`advisers@0.2.0-preview.71`) remains installable by exact version, but `next` now points
+  at 0.2.0 and older staged builds are not part of 0.2.0.
 
 ### Prior-version licence mapping
 

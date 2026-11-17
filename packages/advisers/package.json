@@ -20,7 +20,8 @@
   },
   "exports": {
     ".": "./index.js",
-    "./package.json": "./package.json"
+    "./package.json": "./package.json",
+    "./lib/safety/index.js": "./lib/safety/index.js"
   },
   "files": [
     "index.js",
@@ -53,7 +54,7 @@
     "access": "public"
   },
   "engines": {
-    "node": ">=22.13"
+    "node": ">=22.16"
   },
   "scripts": {
     "test": "node --experimental-strip-types --test test/*.test.js"

@@ -147,11 +147,17 @@ export async function research({
       request.catch?.(() => {})
       const response = await Promise.race([request, deadline])
       if (!response.ok) {
-        const raw = await response.text().catch(() => '')
+        // Never copy the upstream body into the error message (privacy audit
+        // P1-2, 2026-11-17). A provider 401 can echo the submitted API key and
+        // the body may contain control characters; both used to reach stderr,
+        // CI logs and screenshots through the uncaught error. Only stable
+        // fields (status + code) are kept. The body is discarded.
+        try { await response.body?.cancel?.() } catch {}
         const retryable = RETRY_STATUS.has(response.status)
-        const error = new ResearchError(`research HTTP ${response.status}: ${raw.slice(0, 300)}`, {
+        const code = response.status === 401 || response.status === 403 ? 'AUTH' : response.status === 429 ? 'RATE_LIMITED' : response.status === 400 ? 'INVALID_REQUEST' : 'UPSTREAM'
+        const error = new ResearchError(`research HTTP ${response.status} (${code})`, {
           status: response.status,
-          code: response.status === 401 || response.status === 403 ? 'AUTH' : response.status === 429 ? 'RATE_LIMITED' : response.status === 400 ? 'INVALID_REQUEST' : 'UPSTREAM',
+          code,
           retryable,
         })
         if (!retryable || attempt === retries) throw error

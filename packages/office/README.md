@@ -10,6 +10,7 @@ this package produces a real, editable file:
 | `buildPptx(spec)` | PowerPoint `.pptx` (cover, bullets, tables, speaker notes) |
 | `buildMermaid(spec)` | Mermaid source (`flowchart`, `mindmap`, `gantt`) |
 | `buildDrawio(spec)` | draw.io / diagrams.net XML (editable Visio alternative) |
+| `buildXmind(spec)` | XMind mind map (`.xmind`; minimal XMind 2020+ file, no styling) |
 | `validateOffice(buffer, kind)` | ZIP/OOXML sanity check |
 | `containsText(buffer, text)` | assert that the text made it into the package |
 
@@ -32,8 +33,8 @@ const check = await validateOffice(buffer, 'docx')
 ## CLI
 
 ```sh
-# stable channel after the 0.2.0 approval: advisers@latest / advisers-office@latest
-# pre-release channel: advisers@next / advisers-office@next
+# stable channel: advisers@latest / advisers-office@latest (0.2.0)
+# pre-release channel: advisers@next / advisers-office@next (currently also 0.2.0)
 npm i -g advisers@latest advisers-office@latest
 advisers office docx spec.json out.docx
 advisers office xlsx spec.json out.xlsx
@@ -47,7 +48,7 @@ templates. CJK fonts default to Microsoft YaHei, with a system fallback.
 
 ## Status
 
-`0.2.0` (stable release candidate, staged pending OTP). Builders: DOCX/XLSX/PPTX/Mermaid/draw.io/XMind; 7 templates; `readOffice`/`editOffice`/`verifyOffice`. Structural verification only (no Word/WPS/LibreOffice application layer in this package).
+`0.2.0` is the current stable release (published on npm `latest` on 2026-11-17). Builders: DOCX/XLSX/PPTX/Mermaid/draw.io/XMind; 7 templates; `readOffice`/`editOffice`/`verifyOffice`. Structural verification only (no Word/WPS/LibreOffice application layer in this package).
 
 ## License
 

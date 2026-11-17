@@ -214,7 +214,7 @@ const classifySite = createClassifier({ ruleset, hmacKey: auditKey })
 - `ADVISERS_SAFETY_CLOUD=0` 只关闭 DeepSeek 的 `safety_check` 网络侧参数，**不关闭本地规则**；CSAM 硬拦不可通过配置关闭。
 - 误报规则可通过 `resolveRuleset()` 的 JSON 覆盖禁用（CSAM/block 白名单不可放宽）；`advisers safety report`（误报反馈 CLI）仍为 0.2.1 计划。
 - **上游 `safety_check` 兼容性 TODO**：参数按 DeepSeek 官方文档（2026-11-17）添加，仅用于 DeepSeek 通道；尚未做活体灰度验证（研究报告 §10-R1）。若上游发现不兼容，用 `ADVISERS_SAFETY_CLOUD=0` 关闭即可，本地规则不受影响；不要删除或改写请求其余字段。
-- **dsh-advisers 打包 TODO**：`packages/dsh-advisers/index.js` 以 monorepo 相对路径引用 `packages/advisers/lib/safety/`（本轮不改 `package.json`，未新增 npm 依赖）。独立发布 `dsh-advisers` 时需把 safety 模块随包提供或在 `package.json` 声明依赖；在此之前 DSH 插件按本仓 workspace 使用。
+- **dsh-advisers 打包（0.2.1 已修）**：`packages/dsh-advisers/index.js` 改为从发布包 `advisers` 的公开子路径 `advisers/lib/safety/index.js` 引用本模块；`dsh-advisers/package.json` 显式声明 `"advisers": "0.2.0"` 依赖，`advisers/package.json` 增加 `"./lib/safety/index.js"` export 子路径（0.2.0 的 `../advisers/lib/safety/index.js` 相对引用在干净安装后 `ERR_MODULE_NOT_FOUND`）。`pack-smoke` 不再放行跨包相对 import，`verify-release` 对每包做 `import()` 冒烟（含 `dsh-advisers`）。
 
 ## 9. 审计与可解释
 

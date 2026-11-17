@@ -1,7 +1,8 @@
 # Advisers architecture
 
-> Status: 0.2 preview. This document fixes the vocabulary and the invariants;
-> the implementation is allowed to be smaller than the document.
+> Status: 0.2.0 (published on npm `latest` on 2026-11-17). This document fixes the
+> vocabulary and the invariants; the implementation is allowed to be smaller than the
+> document.
 
 ## 1. The shape
 
@@ -24,8 +25,10 @@
 - **Three ledgers**: user (who you are), commitments (who owes whom), routines
   (how this kind of work is done here).
 - **Two loops**: foreground (listen → answer/act → receipt → ledger) and
-  background design target (nightly reconcile → diff → next-day confirmation);
-  **not scheduled in 0.2 — no daemon/cron in code.**
+  background (nightly reconcile → diff → next-day confirmation) as a **design target**
+  only. 0.2.0 has **no daemon**; the only scheduled thing is the opt-in
+  `remind install --apply` user-level scheduler entry (cron on Linux, Task Scheduler on
+  Windows) that emits reminders.
 - **Matter is a dimension, not a fourth ledger.** Commitments, facts, and
   decisions carry `matterId`; the global user model does not.
 
@@ -124,16 +127,16 @@ adding a `MatterLink` table after the fact is a migration, adding it now is free
 The earlier plan put routines at 1.0; that makes the product a commitment
 tracker for a year. Routines must appear by 0.2 to keep the "intern" promise.
 
-## 9. Current limits (0.2 preview)
+## 9. Current limits (0.2.0)
 
 - Ledger is persisted in SQLite (`advisers/lib/sqlite.js`); JSON mode is a fallback but loses turns/search/audit.
 - CLI calls the model only when `ADVISERS_API_KEY` is set; without a key it records/search/builds but does not create promises or artifacts from natural language.
-- `dsh-advisers` implements `advisers_brief` + `advisers_office`; it is a thin adapter, not a second product.
+- `dsh-advisers` implements five tools (`advisers_brief`, `advisers_office`, `advisers_today`, `advisers_who`, `advisers_evidence`); it is a thin adapter, not a second product. The published 0.2.0 npm bundle has a known packaging defect — see CHANGELOG known issues.
 - `secrecy` is stored; hard retrieval gating is partial. Audience scoping is enforced for preferences.
 - Permit/GatedLink exist but are **not yet a mandatory boundary on every send path**.
 - Deletion cascade covers sessions/turns/summaries/runs/nudges/deliveries + facts/title and candidate payloads; commitment/link/update/audit content redaction is partial.
-- Office verification is structural (OPC/XML/rels/content types). Windows/Word/WPS open validation is manual and still pending.
-- No real IM account, Windows/WPS, or 5-user dogfood validation yet.
+- Office verification is structural (OPC/XML/rels/content types). Open validation is manual: WPS Writer, Spreadsheet and Presentation opened and extracted the generated files (2026-11-14). Microsoft Office is not installed on the test host and Office application-layer validation is still pending.
+- No real IM account and no 5-user dogfood validation yet.
 
 ## 10. Intent, Office, and Affect policy
 
@@ -155,4 +158,4 @@ These are first-class layers, not prompt tricks.
 
 The chief-of-staff protocol (receive → clarify → plan → execute → report →
 review) is the interaction contract; the current runtime implements the
-`IntentBrief` half and leaves the full state machine for 0.2.
+`IntentBrief` half and leaves the full state machine for a later release.

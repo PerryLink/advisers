@@ -4,9 +4,10 @@ import { buildDocx, buildPptx, buildXlsx, buildXmind, buildMermaid, buildDrawio,
 import { lstatSync, mkdirSync, realpathSync, writeFileSync } from 'node:fs'
 import { dirname, isAbsolute, relative, resolve } from 'node:path'
 // Content safety (docs/CONTENT-SAFETY.md section 8). dsh-advisers consumes the
-// same local rule layer as the CLI; packaging keeps the two workspace packages
-// together (see section 8's packaging note).
-import { classify } from '../advisers/lib/safety/index.js'
+// same local rule layer as the CLI through the published `advisers` package
+// (an explicit dependency plus the "./lib/safety/index.js" export subpath), so a
+// clean npm/pnpm install of the tarball can resolve it.
+import { classify } from 'advisers/lib/safety/index.js'
 
 export const name = 'advisers'
 export const inject = ['tools']

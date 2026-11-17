@@ -52,7 +52,7 @@ turn natural language into commitments or artifacts.
 - DOCX/XLSX/PPTX/Mermaid/draw.io/XMind builders, 7 templates, read/edit/verify in `advisers-office`;
 - turns + session summaries + FTS search; opening protocol; `/resume`;
 - commitment ledger + `commit add/ls/done`, `tick`, `snooze`, nudge outcomes;
-- `/memory`, `/week`, `/digest`, `/diff`, `/undo`, `/learn review`;
+- `/memory`, `/week`, `/digest`, `/diff`, `/undo`; CLI: `learn ls`, `learn review <id>`;
 - routine draft/approve/patch/curator + active routine index + `routine_view`;
 - local agent loop with Office/file tools, `commitment_add`, `search_turns`; attachments (txt/md/docx/xlsx/pptx/pdf); optional model via `ADVISERS_API_KEY` / `ADVISERS_BASE_URL` / `ADVISERS_MODEL`;
 - `advisers pet-brief` read-only redacted projection for the desktop-pet consumer (contract v0.2: `schemaVersion: 2` + `displayPolicy`, default `private`; `--json`/`--out`/`--check [--strict]`/`--print-schema`/`--display-policy`; `secrecy >= 2` excluded; 5-minute TTL; v0.1 briefs readable as legacy); no UI wiring yet;

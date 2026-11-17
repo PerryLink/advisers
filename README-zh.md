@@ -28,7 +28,7 @@ Advisers 不是聊天框，也不是情感陪伴。它维护三本账：
 
 `0.2.0` 是 2026-11-17 的**当前稳定版**：8 个 workspace 包统一为 `0.2.0`。其中 6 个发布包为 `advisers`、`advisers-core`、`advisers-office`、`advisers-policy-strict`、`advisers-bridge-hermes`、`dsh-advisers`；两个私有 `advisers-link-*` 包保持同版本但不发布。六包均已发布到 npm **`latest` = `0.2.0`**（账号所有者本人于 2026-11-17 完成 OTP 批准）；registry tarball、许可文件与全新 prefix 安装已用 `scripts/verify-release.mjs` 验证（80/80，含安装 smoke）。
 
-> 需要 **Node >= 22.13**；Windows/PowerShell/BOM 说明见 [docs/QUICKSTART.md](docs/QUICKSTART.md)。
+> 需要 **Node >= 22.16**；Windows/PowerShell/BOM 说明见 [docs/QUICKSTART.md](docs/QUICKSTART.md)。
 
 - SQLite 账本 `~/.advisers/state.db`；
 - turns + 会话摘要 + FTS 检索；开场协议；

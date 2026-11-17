@@ -18,6 +18,12 @@
  * every checksum — that is what an external signature/anchor would add, and the
  * README must disclose when there is none.
  *
+ * Anchors (manifest.anchors) are NOT verified by this tool (security audit
+ * SEC2-05, 2026-11-17): only their shape and their file digest cross-check are
+ * validated, and the proof itself is opaque. A pack with recorded anchors is
+ * therefore reported as anchorsVerified:false / anchored:false with an explicit
+ * warning; the adapter named in each anchor must verify its proof out of band.
+ *
  * The verifier deliberately does not trust manifest.json before SHA256SUMS
  * matches: checksums are verified first, then the manifest schema is checked.
  */
@@ -391,7 +397,7 @@ function validateEvidence(evidence, errors) {
   }
 }
 
-function validateReceiptManifest(manifest, sums, errors) {
+function validateReceiptManifest(manifest, sums, errors, result) {
   if (!isPlainObject(manifest)) {
     addError(errors, 'schema: manifest.json must be a JSON object')
     return
@@ -453,7 +459,15 @@ function validateReceiptManifest(manifest, sums, errors) {
   }
 
   if (!Array.isArray(manifest.anchors)) addError(errors, 'schema: manifest.anchors must be an array')
-  else manifest.anchors.forEach((anchor, index) => validateAnchor(anchor, index, sums, errors))
+  else {
+    result.anchorsRecorded = manifest.anchors.length
+    manifest.anchors.forEach((anchor, index) => validateAnchor(anchor, index, sums, errors))
+    if (manifest.anchors.length > 0) {
+      // Never present a recorded anchor as verified: the proof was not checked
+      // against the named adapter (SEC2-05).
+      result.warnings.push('anchors are recorded but NOT cryptographically verified by this tool; verify each proof with the adapter that issued it and do not treat this pack as externally anchored')
+    }
+  }
 
   validateEvidence(manifest.evidence, errors)
 
@@ -477,7 +491,8 @@ function validateReceiptManifest(manifest, sums, errors) {
  * @param {string} dir pack directory produced by buildReceiptPack({outDir})
  * @returns {{ok: boolean, errors: string[], warnings: string[], dir: string,
  *            fileCount: number, checksumCount: number, files: string[],
- *            checksums: Record<string, string>, manifest: object|null}}
+ *            checksums: Record<string, string>, manifest: object|null,
+ *            anchorsRecorded: number, anchorsVerified: boolean, anchored: boolean}}
  */
 export function verifyReceiptPackDir(dir) {
   const errors = []
@@ -493,6 +508,11 @@ export function verifyReceiptPackDir(dir) {
     files,
     checksums: {},
     manifest: null,
+    // Anchors are recorded, never verified, by this offline tool (SEC2-05).
+    // `ok` covers pack integrity only; it must not be read as "anchored".
+    anchorsRecorded: 0,
+    anchorsVerified: false,
+    anchored: false,
   }
   let root
   try {
@@ -589,7 +609,7 @@ export function verifyReceiptPackDir(dir) {
     return result
   }
   result.manifest = manifest
-  validateReceiptManifest(manifest, parsed.entries, errors)
+  validateReceiptManifest(manifest, parsed.entries, errors, result)
 
   // Size statements in the manifest must match the bytes on disk.
   if (isPlainObject(manifest)) {

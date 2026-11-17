@@ -169,7 +169,9 @@ export class AdvisersRuntime implements LinkHost {
     const related = this.ledger.listLinks(matter.id, false).flatMap((link) => {
       const otherId = link.fromMatter === matter.id ? link.toMatter : link.fromMatter
       const other = this.ledger.getMatter(otherId)
-      return other ? [{ matterId: other.id, title: other.title, why: `${link.type} link` }] : []
+      // Pass the related matter's secrecy so assembleContext can keep a
+      // protected title out of the model prompt (privacy audit P1-3).
+      return other ? [{ matterId: other.id, title: other.title, why: `${link.type} link`, secrecy: other.secrecy }] : []
     })
     const audience = event.conversationType === 'email' || event.conversationType === 'dm'
       ? `${event.linkId}:${event.sender.id}`

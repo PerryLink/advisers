@@ -1,6 +1,6 @@
 import { readFile, stat } from 'node:fs/promises'
 import { existsSync, lstatSync, realpathSync } from 'node:fs'
-import { extname, isAbsolute, relative, resolve } from 'node:path'
+import { basename, extname, isAbsolute, relative, resolve } from 'node:path'
 import JSZip from 'jszip'
 import { runLocalOcr, ocrConfigured } from './ocr.js'
 import { classify, safetyErrorFrom } from './safety/index.js'
@@ -244,7 +244,10 @@ export async function extractAttachment(input, { cwd = process.cwd(), hmacKey } 
   if (!info.isFile()) throw new Error(`not a file: ${input}`)
   if (info.size > MAX_FILE_BYTES) throw new Error(`attachment is larger than 10 MB: ${input}`)
   const ext = extname(path).toLowerCase()
-  const name = path.split('/').pop()
+  // path.basename is separator-aware; the old split('/') kept the whole path on
+  // Windows, leaking an absolute path into the attachment name (robustness
+  // audit P2-6, 2026-11-17).
+  const name = basename(path)
   if (TEXT_EXT.has(ext)) {
     const raw = await readFile(path, 'utf8')
     const { text, truncated } = truncate(raw)

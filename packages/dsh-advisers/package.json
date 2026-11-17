@@ -45,6 +45,7 @@
     }
   },
   "engines": {
+    "node": ">=22.16",
     "dsh": ">=0.2.1-rc.5 <0.3.0"
   },
   "peerDependencies": {
@@ -53,6 +54,7 @@
   },
   "peerDependenciesMeta": {},
   "dependencies": {
+    "advisers": "0.2.0",
     "advisers-core": "0.2.0",
     "advisers-office": "0.2.0",
     "@deepseek-ai/dsh-tools": "0.2.2-rc.2"

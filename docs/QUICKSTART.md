@@ -24,13 +24,13 @@
 
 ## Requirements
 
-- Node **>= 22.13** (Node 24 recommended). `node:sqlite` is not available on 22.5–22.12.
+- Node **>= 22.16** (Node 24 recommended). `node:sqlite` is unavailable before 22.13 and lacks FTS5 on 22.13–22.15; the default SQLite ledger needs 22.16+.
 - `pnpm` 12.x (`corepack enable`)
 - Windows Terminal + PowerShell 7 recommended (PowerShell 5.1 works with the BOM note below)
 - Optional: DeepSeek-compatible API key for natural-language tasks and model-generated commitments
 
 ```powershell
-node -v      # must be >= 22.13
+node -v      # must be >= 22.16
 npm -v
 ```
 
@@ -112,7 +112,7 @@ If `advisers-office` is missing, install it explicitly (`advisers-office@latest`
 
 | Symptom | Fix |
 |---|---|
-| `No such built-in module: node:sqlite` | Node < 22.13; install Node 24 LTS |
+| `No such built-in module: node:sqlite` / `no such module: fts5` | Node < 22.16; install Node 24 LTS |
 | `advisers-office is not installed` | `npm i -g advisers-office@latest` (`@next` before promotion), or set `ADVISERS_OFFICE_LOCAL=1` from checkout |
 | `SyntaxError: Unexpected token '﻿'` | JSON has BOM; write UTF-8 without BOM |
 | Chinese output is garbled | `chcp 65001`; use Windows Terminal |

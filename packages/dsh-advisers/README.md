@@ -17,8 +17,8 @@ It does **not** send messages or write the ledger. The three read-only tools onl
 
 | Tool | Kind | Arguments | Returns |
 |---|---|---|---|
-| `advisers_brief` | read-only (no ledger) | `text` (string, required) | IntentBrief fields |
-| `advisers_office` | write (workspace-confined) | `kind`, `out`, `spec` (required) | `{ ok, path, bytes }` |
+| `advisers_brief` | read-only (no ledger) | `text` (string, required) | IntentBrief fields, or `{ ok: false, error }` when content safety blocks |
+| `advisers_office` | write (workspace-confined) | `kind`, `out`, `spec` (required) | `{ ok, path, bytes }`, or `{ ok: false, error }` when content safety blocks |
 | `advisers_today` | read-only | none | `{ ok, data }` with `now`, `timezone`, `localDay`, `counts`, `overdue`, `today`, `week`, `waiting`, `noDue`, optional `next`, `truncated` |
 | `advisers_who` | read-only | none | `{ ok, data }` with `counts` (`mine`/`waiting`/`open`), `mine`, `waiting`, `truncated` |
 | `advisers_evidence` | read-only | `id` (string, required) | `{ ok, data }` with `id`, `kind`, `record`, `sources`, `missing`, `counts`, `verified: false`, `truncated` |
@@ -48,10 +48,17 @@ domain exception:
 | `UNKNOWN_ID_PREFIX` | Evidence id is not `cm_…`, `fact_…`, or `pref_…`. |
 | `EVIDENCE_NOT_FOUND` | No commitment/fact/preference with that id exists in the ledger. |
 | `INTERNAL_ERROR` | Unexpected ledger/read failure; the tool stays up and reports it. |
+| `CONTENT_BLOCKED` | `advisers_brief`/`advisers_office` input was blocked by the local content-safety layer. The error carries `surface`, `ruleIds`, and `rulesetVersion`; the original text is never echoed. |
 
 Schema-invalid arguments (for example a missing required `id`) are rejected by
 the host tool runtime as `INVALID_ARGS` before the body runs. Neither path throws
 a bare exception at the model.
+
+The content-safety layer is the same local rule set the CLI uses
+(`docs/CONTENT-SAFETY.md`). `advisers_brief` classifies `text`; `advisers_office`
+classifies `{ kind, out, spec }` with the `dsh.tool` surface. A blocked call
+returns `{ ok: false, error: { code: "CONTENT_BLOCKED", surface, ruleIds,
+rulesetVersion } }` and does not write a file; benign input is unchanged.
 
 ### Data source and audit
 
@@ -123,8 +130,9 @@ dsh plugin --profile main add dsh-advisers advisers-core
 dsh --profile main --dump-config   # should show a "# == dsh-advisers" layer
 ```
 
-`advisers-core` must be resolvable next to the bundle in the profile. For a
-local checkout:
+`advisers`, `advisers-core` and `advisers-office` are regular dependencies of this
+package, so a normal npm/pnpm install of `dsh-advisers` brings them along. For a
+local checkout (run `pnpm install` once so the workspace links exist):
 
 ```sh
 dsh plugin --profile smoke add /path/to/advisers/packages/core /path/to/advisers/packages/dsh-advisers
@@ -133,9 +141,23 @@ dsh plugin --profile smoke add /path/to/advisers/packages/core /path/to/advisers
 ## Manifest
 
 - `dsh.bundle.patch = ./cordis.patch.yml`
+- `engines.node = >=22.16` (the default SQLite ledger needs FTS5, available from Node 22.16)
 - `engines.dsh = >=0.2.1-rc.5 <0.3.0`
-- runtime dependency: `advisers-core` (plus `advisers-office` for the office tool)
+- runtime dependencies: `advisers` (content-safety rule layer), `advisers-core`, `advisers-office`
 - peer deps: `@deepseek-ai/cordis`, `@deepseek-ai/dsh-tools`
+
+## Content-safety dependency (0.2.1 packaging)
+
+The bundle imports `classify` from `advisers/lib/safety/index.js`. That specifier
+is a **published export subpath** of the `advisers` package, declared as an
+explicit dependency (`"advisers": "0.2.0"` in `package.json` and
+`"./lib/safety/index.js": "./lib/safety/index.js"` in `advisers`' `exports`).
+A clean `npm install`/`pnpm add` of the `dsh-advisers` tarball therefore resolves
+the rule layer from the nested `advisers` dependency instead of relying on a
+monorepo-relative path (0.2.0 shipped `../advisers/lib/safety/index.js` and failed
+with `ERR_MODULE_NOT_FOUND` after a clean install). `scripts/verify-release.mjs`
+now imports every published package, including this one, from a temp prefix and
+fails the release on error.
 
 ## Smoke
 

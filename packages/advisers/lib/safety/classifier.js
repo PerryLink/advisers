@@ -21,10 +21,17 @@
  *     severity: 'none' | 'low' | 'medium' | 'high' | 'critical',
  *     crisis: boolean,               // self-harm: show crisis hint, never block
  *     downgraded: boolean,
- *     truncated: boolean,
+ *     truncated: boolean,            // true when only the first maxChars were scanned
  *     hits: [{ ruleId, category, subtype, code, severity, action, confidence,
  *              hardBlock, crisis, downgraded }]
  *   }
+ *
+ * Truncation fails CLOSED (content-safety audit SEC2-02, 2026-11-17): when the
+ * input is longer than maxChars the tail is unscannable, so a benign-looking
+ * prefix is never returned as 'allow'. Egress surfaces (text that can leave the
+ * machine, see SURFACES) return 'block' with code INPUT_TRUNCATED; local-file
+ * surfaces return 'confirm' and let the caller decide. The escalation only ever
+ * raises the action of an existing decision.
  *
  * The caller owns the audit key: pass { hmacKey } to get an evidenceHash.
  * Without a key evidenceHash is null (never a plaintext or unkeyed fallback).
@@ -237,14 +244,58 @@ function allowResult(views, surface, ruleset, truncated) {
   }
 }
 
+/** The stable fail-closed decision for a truncated payload on an egress surface. */
+function truncationBlockResult(surface, ruleset) {
+  return {
+    action: 'block',
+    categories: [],
+    ruleIds: [],
+    confidence: 0.5,
+    evidenceHash: null,
+    code: 'INPUT_TRUNCATED',
+    rulesetVersion: ruleset.version,
+    rulesetDigest: ruleset.digest,
+    surface,
+    severity: 'medium',
+    crisis: false,
+    downgraded: false,
+    truncated: true,
+    hits: [],
+  }
+}
+
+/**
+ * Fail closed when the text was truncated: the unscanned tail could contain a
+ * hard-block rule hit, so the prefix result cannot be trusted as 'allow'.
+ * Egress surfaces refuse the payload outright (and skip the expensive prefix
+ * scan: the verdict does not depend on it); local-file surfaces keep scanning
+ * so a hard block in the scanned prefix still wins, then ask for confirmation.
+ * Escalation only raises an action, never lowers one.
+ */
+function applyTruncationFailClosed(result, policy) {
+  if (!result.truncated) return result
+  const floor = policy.egress ? 'block' : 'confirm'
+  if (rankOf(result.action) >= rankOf(floor)) return result
+  return {
+    ...result,
+    action: floor,
+    code: 'INPUT_TRUNCATED',
+    severity: result.severity === 'none' ? 'medium' : result.severity,
+    confidence: Math.max(result.confidence, 0.5),
+  }
+}
+
 function runClassify(ruleset, text, options = {}) {
   const surface = normalizeSurface(options.surface)
   const policy = SURFACES[surface] || SURFACES.unknown
   const maxChars = Number.isInteger(options.maxChars) && options.maxChars > 0 ? options.maxChars : MAX_SCAN_CHARS
   const raw = String(text == null ? '' : text)
   const truncated = raw.length > maxChars
+  // Egress + truncation can only end in block, so settle it before the rule
+  // scan (deterministic and bounded even for a multi-megabyte paste).
+  if (truncated && policy.egress) return truncationBlockResult(surface, ruleset)
   const views = normalizeText(truncated ? raw.slice(0, maxChars) : raw)
-  if (!views.compact) return allowResult(views, surface, ruleset, truncated)
+  if (!views.compact) return applyTruncationFailClosed(allowResult(views, surface, ruleset, truncated), policy)
 
   const contextDowngrade = hasContextDowngrade(views)
   const hits = []
@@ -308,7 +359,7 @@ function runClassify(ruleset, text, options = {}) {
     : 0
   const evidenceHash = hmacEvidence(ordered.map((hit) => hit.snippet), options.hmacKey)
 
-  return {
+  const result = {
     action,
     categories,
     ruleIds,
@@ -335,6 +386,7 @@ function runClassify(ruleset, text, options = {}) {
       downgraded: hit.downgraded,
     })),
   }
+  return applyTruncationFailClosed(result, policy)
 }
 
 /**

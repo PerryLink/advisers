@@ -4,8 +4,10 @@
  *
  * Checks the official registry for the expected dist-tag, verifies each
  * tarball against its dist.shasum / dist.integrity, checks license files and
- * the SPDX license field, and optionally installs the CLI into a temp prefix
- * and runs a version/consent smoke test.
+ * the SPDX license field, and optionally installs the published packages into a
+ * temp prefix: the CLI gets a version/consent smoke test, and every requested
+ * package is dynamically imported from that clean prefix (regression guard for
+ * dsh-advisers@0.2.0, whose bundle could not be imported after a clean install).
  *
  * Usage:
  *   node scripts/verify-release.mjs [--version 0.2.0] [--tag latest]
@@ -13,6 +15,10 @@
  *        [--expected-license PolyForm-Noncommercial-1.0.0]
  *        [--skip-install] [--json]
  *
+ * --skip-install skips both network install phases (CLI smoke + per-package
+ * import smoke) and keeps the registry metadata/tarball verification.
+ *
+
  * Exit 0 only when every requested package passes every check.
  */
 import { spawnSync } from 'node:child_process'
@@ -112,11 +118,59 @@ async function installSmoke(workRoot) {
   check('install-smoke', help.status === 0 && String(help.stdout).includes('tos'), 'installed help lists the tos command');
 }
 
+/**
+ * Import every requested package from a clean temp prefix. This is the release
+ * guard for bundles that pass metadata/shasum checks but cannot load after a
+ * clean install (dsh-advisers@0.2.0 imported a monorepo-relative safety file).
+ */
+async function importSmoke(workRoot) {
+  const prefix = join(workRoot, 'import-smoke');
+  mkdirSync(prefix, { recursive: true });
+  const env = { ...process.env };
+  delete env.NODE_TEST_CONTEXT;
+  const specifiers = packages.map((name) => name + '@' + version);
+  const inst = spawnSync(
+    'npm',
+    ['install', '--prefix', prefix, '--no-audit', '--no-fund', '--registry', registry, ...specifiers],
+    { encoding: 'utf8', timeout: 600000 },
+  );
+  if (inst.status !== 0) {
+    check('import-smoke', false, 'npm install failed: ' + ((inst.stderr || '') + (inst.stdout || '')).slice(-500));
+    return;
+  }
+  for (const name of packages) {
+    const probe = [
+      'const m = await import(' + JSON.stringify(name) + ');',
+      'const keys = Object.keys(m);',
+      "if (!keys.length) throw new Error('no named exports');",
+      name === 'dsh-advisers'
+        ? "if (typeof m.apply !== 'function' || typeof m.version !== 'string') throw new Error('missing apply()/version export');"
+        : '',
+      'console.log(JSON.stringify({ exports: keys.length }));',
+    ].filter(Boolean).join(' ');
+    const run = spawnSync(process.execPath, ['--input-type=module', '-e', probe], {
+      cwd: prefix,
+      env,
+      encoding: 'utf8',
+      timeout: 120000,
+    });
+    if (run.status === 0) {
+      check(name, true, 'import(' + name + ') from a clean temp prefix succeeds ' + String(run.stdout).trim().slice(0, 120));
+    } else {
+      const detail = String(run.stderr || '').trim().split('\n').slice(-3).join(' | ');
+      check(name, false, 'import(' + name + ') failed: ' + detail.slice(0, 500));
+    }
+  }
+}
+
 const workRoot = mkdtempSync(join(tmpdir(), 'advisers-verify-release-'));
 let result = {};
 try {
   for (const name of packages) result[name] = await verifyPackage(name, workRoot);
-  if (!skipInstall) await installSmoke(workRoot);
+  if (!skipInstall) {
+    await installSmoke(workRoot);
+    await importSmoke(workRoot);
+  }
 } finally {
   rmSync(workRoot, { recursive: true, force: true });
 }

@@ -11,6 +11,31 @@ import { spawn } from 'node:child_process'
 import { statSync } from 'node:fs'
 import { resolve, isAbsolute, relative } from 'node:path'
 
+/**
+ * Environment for the adapter subprocess: an explicit allowlist.
+ *
+ * The adapter is a local third-party program (e.g. an OCR engine). Inheriting
+ * process.env would hand it every Advisers secret — ADVISERS_API_KEY,
+ * ADVISERS_AUDIT_KEY (the audit HMAC key), vault/sync/export passphrases and
+ * provider URLs (security audit SEC2-03, 2026-11-17). Only OS/runtime basics
+ * needed to start a program are passed through; credentials never are.
+ */
+const ADAPTER_ENV_KEYS = Object.freeze([
+  'PATH', 'Path', 'PATHEXT', 'COMSPEC', 'SYSTEMROOT', 'SystemRoot', 'windir',
+  'HOME', 'USERPROFILE', 'HOMEDRIVE', 'HOMEPATH', 'APPDATA', 'LOCALAPPDATA',
+  'TEMP', 'TMP', 'TMPDIR', 'LANG', 'LC_ALL', 'LC_CTYPE', 'LC_MESSAGES', 'TZ',
+  'PSModulePath',
+])
+
+function adapterEnv(source = process.env) {
+  const env = {}
+  for (const key of ADAPTER_ENV_KEYS) {
+    const value = source?.[key]
+    if (typeof value === 'string' && value) env[key] = value
+  }
+  return env
+}
+
 export const MAX_OCR_BYTES = 200_000
 export const MAX_OCR_MS = 30_000
 
@@ -32,7 +57,7 @@ export async function runLocalOcr(file, { cmd = process.env.ADVISERS_OCR_CMD, ti
   if (!cmd) throw new Error('OCR is not configured; set ADVISERS_OCR_CMD to a local OCR executable (no cloud OCR is used)')
   const abs = assertOcrPath(file, cwd)
   return await new Promise((resolvePromise, reject) => {
-    const child = spawn(cmd, [abs], { stdio: ['ignore', 'pipe', 'pipe'], timeout: timeoutMs, windowsHide: true })
+    const child = spawn(cmd, [abs], { stdio: ['ignore', 'pipe', 'pipe'], timeout: timeoutMs, windowsHide: true, env: adapterEnv() })
     let out = '', err = ''
     child.stdout.on('data', (b) => { out += b.toString('utf8'); if (out.length > MAX_OCR_BYTES) { child.kill(); reject(new Error(`OCR output exceeds ${MAX_OCR_BYTES} chars`)) } })
     child.stderr.on('data', (b) => { err += b.toString('utf8') })

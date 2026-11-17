@@ -8,6 +8,14 @@ export interface RelatedCardInput {
   matterId?: string
   title: string
   why: string
+  /**
+   * Secrecy level of the related matter (0..3). A related matter's title may
+   * only be put in the prompt when it is 0 (public metadata); higher levels are
+   * reduced to the opaque matter id. Omitted means "unknown" and is treated as
+   * protected (fail closed), so a caller that forgets the field cannot leak a
+   * protected title into a model request (privacy audit P1-3, 2026-11-17).
+   */
+  secrecy?: number
 }
 
 export interface AssembleInput {
@@ -90,15 +98,23 @@ export function assembleContext(input: AssembleInput): TurnContext {
       '</routine-index>',
     )
   }
-  const hints: AssociationHint[] = (input.related ?? []).slice(0, 3).map((r) => ({
-    title: r.title,
-    why: r.why,
-    matterId: r.matterId,
-  }))
+  // Association hints cross a trust boundary (they are sent to the model), so
+  // only secrecy=0 matters may contribute a title. A protected matter (or an
+  // unknown level, fail closed) is reduced to its opaque id: titles routinely
+  // carry client/project names (privacy audit P1-3, 2026-11-17).
+  const hints: AssociationHint[] = []
+  for (const r of input.related ?? []) {
+    if (hints.length >= 3) break
+    if (r.secrecy === 0) {
+      hints.push({ title: r.title, why: r.why, matterId: r.matterId })
+    } else if (r.matterId) {
+      hints.push({ title: '', why: r.why, matterId: r.matterId })
+    }
+  }
   if (hints.length) {
     parts.push(
       '<association-hints>',
-      hints.map((h) => `- ${h.title}: ${h.why}`).join('\n'),
+      hints.map((h) => (h.title ? `- ${h.title}: ${h.why}` : `- matter ${h.matterId ?? '(hidden)'}: ${h.why}`)).join('\n'),
       'These are hints only. Do not read or repeat the other matter body unless the user asks.',
       '</association-hints>',
     )

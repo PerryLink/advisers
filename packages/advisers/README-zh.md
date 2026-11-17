@@ -42,9 +42,9 @@ CLI 是**本地秘书运行时**：一个 REPL、用户账/承诺账/流程账�
 - soul 位于 `~/.advisers/soul.md`，人类独占；
 - turns + 摘要 + FTS 检索；开场协议；`/resume`；
 - 承诺账 + `commit add/ls/done`、`tick`、`snooze`、nudge outcome；
-- `/memory`、`/week`、`/digest`、`/diff`、`/undo`、`/learn review`；
+- `/memory`、`/week`、`/digest`、`/diff`、`/undo`；CLI：`learn ls`、`learn review <id>`；
 - routine draft/approve/patch/curator + active routine index + `routine_view`；
-- `advisers-office` 提供 DOCX/XLSX/PPTX/Mermaid/draw.io/XMind builder 与 5 个模板；
+- `advisers-office` 提供 DOCX/XLSX/PPTX/Mermaid/draw.io/XMind builder 与 7 个模板；
 - `advisers pet-brief`：只读脱敏 Pet Brief 投影（契约 v0.2：`schemaVersion: 2` + `displayPolicy`，默认 `private`；`--json`/`--out`/`--check [--strict]`/`--print-schema`/`--display-policy`；`secrecy >= 2` 全排除；5 分钟 TTL；v0.1 brief 按 legacy 可读；未接桌宠 UI）；
 - 真实 IM/Office 打开验证仍未完成。
 

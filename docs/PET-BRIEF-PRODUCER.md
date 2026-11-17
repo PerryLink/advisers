@@ -1,12 +1,11 @@
 # Pet Brief producer (Advisers → 桌宠 consumer)
 
-状态：**producer 已实现并发布**——`advisers@0.2.0-preview.71`（npm `next`，2026-11-17）随包发布契约 v0.1 producer；
-**本仓源码树已升级契约 v0.2**（`schemaVersion: 2` + `displayPolicy`，待下一次发布）。
-消费者：**Advisers 仓内无消费端**；私有仓 `PerryLink/desktop-games`（Pearl）已于 **2026-11-16** 接线（pre-GA、未公开、不随 Advisers 发布物分发）。详见 [`PET-BRIEF-CONSUMERS.md`](PET-BRIEF-CONSUMERS.md)。
+状态：**producer 已实现并发布**——`advisers@0.2.0`（npm `latest`，2026-11-17）随包发布契约 v0.2 producer（`schemaVersion: 2` + `displayPolicy`）；v0.1 brief 仍按 legacy 可读。
+消费者：**Advisers 仓内无消费端**；唯一已接消费端是私有桌面宠物仓（Pearl/Famling 方向，pre-GA、未公开、不随 Advisers 发布物分发），已于 2026-11-16 接线，并于 2026-11-17 接受 `schemaVersion 1|2`。详见 [`PET-BRIEF-CONSUMERS.md`](PET-BRIEF-CONSUMERS.md)。
 
-契约版本：**v0.2（2026-11-17，proposal + producer 参考实现）**；v0.1（2026-11-14，design contract）保持可读兼容。
+契约版本：**v0.2（2026-11-17，契约文本 + producer 实现，随 `0.2.0` 发布）**；v0.1（2026-11-14，design contract）保持可读兼容。
 契约快照（公开、合成样例）：[`docs/pet-brief/`](pet-brief/README.md)（`schema-v0.2.json` / `example-v0.2.json` / `testcases-v0.2.json`）。
-v0.1 canonical 仍以私有 `PerryLink/famling` `docs/` 为准，本机快照 sha：PET-BRIEF.md `8698dd0c`、schema `5ec912cc`、example `12c1ecf4`、testcases `bcec4c94`/`47e86a88`（2026-11-15 复制）。
+v0.1 canonical 位于私有消费端契约目录（不随本仓库发布）；本仓只保留公开的 v0.2 快照。
 
 > `advisers brief` 是 **IntentBrief**（可 `--deep` 调模型），与 Pet Brief 无关，不要混用。
 
@@ -91,7 +90,7 @@ advisers pet-brief                     # 人类可读摘要（不输出完整 br
 | `none` | 用户要求完全隐藏 | **不得渲染/保留任何 brief 派生内容**（文本、语音、mood/计数派生态），等价于禁用 |
 
 - 缺失 `displayPolicy`（v0.1 brief）按 `private` 处理；`buildPetBrief` 永远显式写出该字段。
-- `public` 只能显式选择：`buildPetBrief(ledger, { displayPolicy: 'public' })`（未来 CLI `--display-policy`）。
+- `public` 只能显式选择：`buildPetBrief(ledger, { displayPolicy: 'public' })`（CLI `--display-policy public`；见 §1.1）。
 
 ### 4.2 旁观者可见性风险（新维度）
 
@@ -99,30 +98,30 @@ advisers pet-brief                     # 人类可读摘要（不输出完整 br
 
 - 详情面板会直接渲染 `today[].title`、`commitments[].who/what/due/risk`、`risks[].summary`；即便姓名已换成 `某客户`，“某客户 · 发报价 · 今天到期 · high”仍是可被旁观者读到的工作信息。
 - `mood`/风险计数本身是**工作压力侧信道**；`private`/`none` 下应可隐藏或不使用。
-- **producer 无法感知旁观者/屏幕共享**，因此 `displayPolicy` 是**契约约束**而非技术强制；执行责任在 consumer（自动收起、一键隐藏、屏幕共享检测）。当前已接消费端还没有这些行为（见 `PET-BRIEF-CONSUMERS.md` §4 风险 R1）。
+- **producer 无法感知旁观者/屏幕共享**，因此 `displayPolicy` 是**契约约束**而非技术强制；执行责任在 consumer（自动收起、一键隐藏、屏幕共享检测）。已接消费端现已实现 `private` 自动收起/失焦隐藏与 `none` 禁用（2026-11-17），显式屏幕共享/录制检测仍未实现（见 `PET-BRIEF-CONSUMERS.md` §4 风险 R1）。
 
-## 5. 验收（本机实测 2026-11-17）
+## 5. 验收（2026-11-17 实测）
 
 ```sh
-cd /mnt/d/Projects/dsh/plugins/advisers/packages/advisers
+cd packages/advisers
 node --experimental-strip-types --test test/pet-brief.test.js   # 28/28 pass（含 v0.2 CLI 选项）
 # 仓根全量：pnpm -r test → 456 tests / 456 pass / 0 fail（8 packages；其中 packages/advisers 334/334）
 ```
 
 - 覆盖：契约字段/上限/置信度/时区+TTL/禁止字段/重复 id/counts 一致性/空账本/确定性；姓名与证据 quote 不泄漏；secrecy≥2 全排除；`--json` 只读（DB SHA-256 不变）；`--out` 0600 原子且无临时残留；`--check` 通过/拒绝；缺库/用法错误机器可读。
 - v0.2 新增覆盖：`displayPolicy` 默认 `private` / 显式三态 / 非法枚举拒绝；v0.1 brief 接受且返回 `W_LEGACY_SCHEMA_VERSION`+`W_MISSING_DISPLAY_POLICY`（不 fail）；`acceptLegacy:false` 与 `requireDisplayPolicy:true` 严格模式 fail closed；公开 schema 快照与实现常量一致；example 被 `validatePetBrief` 接受；26 条契约向量逐条对照；CLI 新选项（`--display-policy` 三态/非法值、`--check --strict`、`--print-schema` 与快照深度相等、`--check` warnings 不改变退出码）。
-- 消费者侧的 20 条 v0.1 契约向量在 desktop-games `tests/pet-brief-consumer.test.ts` 中执行（见该仓 `docs/contracts/pet-brief/README.md`）；v0.2 的 `displayPolicy` 向量见本仓 `docs/pet-brief/testcases-v0.2.json`（consumer 待同步，见 `PET-BRIEF-CONSUMERS.md`）。
+- 消费者侧的 20 条 v0.1 契约向量与 v0.2 `displayPolicy` 向量在私有消费端的 consumer 测试中执行（2026-11-17 跨仓核对 16/16 pass，不在本仓 CI 中运行）；本仓公开的 v0.2 向量见 `docs/pet-brief/testcases-v0.2.json`。
 
 ## 6. 已知限制 / 未做
 
-- **npm 发布**：v0.1 producer 已随 `advisers@0.2.0-preview.71` 发布（npm `next`，2026-11-17）；本仓 v0.2 改动尚未发布（下一次 preview 携带）。
+- **npm 发布**：v0.2 producer 已随 `advisers@0.2.0` 发布（npm `latest`，2026-11-17）；v0.1 brief 仍按 legacy 可读。
 - **未做真实数据集成**：测试用合成 fixture + 临时 store；没有在真实用户账本上跑过（隐私边界：不应提交真实数据）。
-- **消费端不在本仓**：Advisers 仓无桌宠 UI/传输实现；私有消费端 desktop-games 已接线但 **pre-GA、未公开**，其 README/合同文档部分滞后于代码（见 `PET-BRIEF-CONSUMERS.md`）。
-- **消费者版本兼容风险**：desktop-games 当前硬校验 `schemaVersion === 1`，会拒绝 v0.2 输出（SCHEMA_VERSION→idle）；发布 v0.2 producer 前须先升级 consumer 接受 `1|2`（见 `PET-BRIEF-CONSUMERS.md` §4 R2）。
+- **消费端不在本仓**：Advisers 仓无桌宠 UI/传输实现；唯一已接消费端是私有、pre-GA、未公开的桌面宠物仓，其内部文档可能滞后于代码（见 `PET-BRIEF-CONSUMERS.md`）。
+- **消费者版本兼容（已解决）**：消费端已于 2026-11-17 升级为接受 `schemaVersion 1|2`，缺失 `displayPolicy` 按 `private` 处理，v0.2 输出不再被判 `SCHEMA_VERSION`；后续可再考虑只接受 v2（见 `PET-BRIEF-CONSUMERS.md` §2）。
 - **脱敏是启发式**：只覆盖“已知人名值 + 常见 `<动词><姓><职务>` 文本”；不含 NER/全量姓名库，极限 case 可能漏掉 title/action 中的陌生姓名。若需默认全文本脱敏，应改契约（opt-in 策略）而不是本投影。
 - **suggestedLines 可追溯性**：producer 侧用“2 字连续片段”约束；consumer 再独立校验（claims guard），仍属启发式而非语义证明。
-- **displayPolicy 只是契约**：producer 无法强制 consumer 行为；v0.2 已接消费者尚未实现自动收起/一键隐藏/屏幕共享检测。
-- 若 famling/desktop-games 冻结新版契约，需同步 `lib/pet-brief.js` 的常量与校验（`schemaVersion` 闸门会拒绝未知 major）。
+- **displayPolicy 是契约而非强制**：producer 无法强制 consumer 行为。已接消费端实现了 `private` 30 秒自动收起、失焦/页面不可见隐藏与 `none` 完全不显示（2026-11-17）；显式屏幕共享/录制检测仍未实现。
+- 若消费端冻结新版契约，需同步 `lib/pet-brief.js` 的常量与校验（`schemaVersion` 闸门会拒绝未知 major）。
 
 ## 7. 版本兼容策略（v0.1 → v0.2 迁移）
 
@@ -133,11 +132,11 @@ node --experimental-strip-types --test test/pet-brief.test.js   # 28/28 pass（�
 | 未知 major | ≥3 | — | `E_SCHEMA_VERSION`（fail closed） |
 
 - **warning 不改变 `ok`/退出码**：`--check` 对旧 brief 报 warning 而非 fail。
-- 迁移顺序（建议）：`consumer 接受 v1|v2` → 发布 v0.2 producer → 一段时间后 `consumer 只接受 v2` / producer 可选只发行 v2。
-- 契约版本与包版本解耦：`schemaVersion` 是契约 major；`advisers` 包版本是发布渠道版本（当前 `0.2.0-preview.71`）。
+- 迁移顺序（现状 2026-11-17）：① consumer 接受 v1|v2 — 已完成；② 发布 v0.2 producer — 已随 `0.2.0` 发布；③ consumer 实现 displayPolicy 行为并最终只接受 v2 — 展示约束已实现，只收 v2 尚未开始。
+- 契约版本与包版本解耦：`schemaVersion` 是契约 major；`advisers` 包版本是发布渠道版本（当前 `0.2.0`）。
 
 ## 8. 链接
 
 - 公开契约快照：[`docs/pet-brief/`](pet-brief/README.md)（schema v0.2 / example / testcases / 版本矩阵）
 - 消费者清单与验收向量：[`docs/PET-BRIEF-CONSUMERS.md`](PET-BRIEF-CONSUMERS.md)
-- 私有消费仓（只读参考）：`/mnt/d/Projects/dsh/desktop-games` `src/presence/pet-brief.ts`、`src/pet/advisers/face.ts`、`docs/contracts/pet-brief/`
+- 私有消费端：不在本仓库，其实现与契约文件不随本仓发布，因此这里不引用内部路径。

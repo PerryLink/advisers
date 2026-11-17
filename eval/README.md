@@ -6,7 +6,7 @@ Every script fails fast (exit 1, one line on stderr) when no key is configured.
 
 ## Requirements
 
-- Node >= 22.13 (`node:sqlite`). Repo dependencies installed (`pnpm install`).
+- Node >= 22.16 (`node:sqlite` with FTS5). Repo dependencies installed (`pnpm install`).
 - A real key in `ADVISERS_API_KEY` (or `DEEPSEEK_API_KEY`). Never commit a key,
   and never copy one into results/notes.
 - Every script creates a throw-away `ADVISERS_HOME` under the OS temp dir, runs

@@ -47,7 +47,7 @@
 
 完整 CLM/e-sign/CA 牌照；AI 硬件/常驻录音/屏幕全量记忆；插件市场军备；团队/SSO/
 私有化；全功能 GUI/移动 App；自动代发/自动改期；通用聊天/情感陪伴；coding-agent
-全能竞赛。理由见 `01-research/advisers-competitive-2026-11-14/99-SYNTHESIS.md` §8。
+全能竞赛。依据为内部竞品研究，不随本仓库发布。
 
 ## Pricing / channel (research recommendation, not a commitment)
 

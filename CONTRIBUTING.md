@@ -66,7 +66,7 @@ node --experimental-strip-types examples/demo.ts
 node scripts/check-tos.mjs   # TOS manifest / packaged copies / legal-doc links
 ```
 
-Node **>= 22.13** is required (`node:sqlite`); Node 24 LTS recommended. The DSH
+Node **>= 22.16** is required (`node:sqlite` with FTS5; 22.13–22.15 lose the default SQLite ledger); Node 24 LTS recommended. The DSH
 distribution additionally requires Node 24.9+ and a compatible DSH 0.2.2-rc.x.
 
 ## Commits
@@ -78,8 +78,10 @@ distribution additionally requires Node 24.9+ and a compatible DSH 0.2.2-rc.x.
 ## Releases
 
 Release order is `advisers-core` → `advisers-office` → `advisers-policy-strict`
-→ `advisers-bridge-hermes` → `advisers` → `dsh-advisers`. Versions are per-package,
-not lockstep; see `docs/RELEASE-EVIDENCE.md`.
+→ `advisers-bridge-hermes` → `advisers` → `dsh-advisers`. The eight workspace
+packages (the six published packages plus the private `advisers-link-email` and
+`advisers-link-feishu`) are **lockstep**: they share one version and exact internal
+pins. `scripts/check-release.mjs` enforces the shared version and the pins.
 
 Current flow is local `npm stage publish --tag next` + human OTP approval; the
 GitHub `publish` workflow is manual and cannot approve stages. Trusted Publishing

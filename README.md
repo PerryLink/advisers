@@ -52,7 +52,7 @@ are not published. All six published packages are live on npm **`latest` = `0.2.
 license files and a fresh-prefix install were verified with
 `scripts/verify-release.mjs` (80/80 checks, including an install smoke test).
 
-> Requires **Node >= 22.13**. See [docs/QUICKSTART.md](docs/QUICKSTART.md) for Windows/PowerShell and BOM notes.
+> Requires **Node >= 22.16**. See [docs/QUICKSTART.md](docs/QUICKSTART.md) for Windows/PowerShell and BOM notes.
 
 - `advisers` CLI: local REPL, `chat`, `office`, `template`, `routine`, `link`, `bridge`, `soul`, `ls`, `why`, `forget`, `export`;
 - SQLite at `~/.advisers/state.db` (JSON fallback with `ADVISERS_STORE=json`);

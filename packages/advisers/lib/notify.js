@@ -11,9 +11,35 @@ import { existsSync } from 'node:fs'
 import { spawn } from 'node:child_process'
 import { localDay } from './remind.js'
 
+/**
+ * Environment for the notification subprocess: an explicit allowlist.
+ *
+ * The command is a local third-party program (custom notifier, osascript,
+ * notify-send, powershell). Inheriting process.env would hand it every Advisers
+ * secret — ADVISERS_API_KEY, ADVISERS_AUDIT_KEY (the audit HMAC key),
+ * vault/sync/export passphrases and provider URLs (security audit SEC2-03,
+ * 2026-11-17). Only OS/runtime basics needed to start a program are passed
+ * through; credentials never are.
+ */
+const ADAPTER_ENV_KEYS = Object.freeze([
+  'PATH', 'Path', 'PATHEXT', 'COMSPEC', 'SYSTEMROOT', 'SystemRoot', 'windir',
+  'HOME', 'USERPROFILE', 'HOMEDRIVE', 'HOMEPATH', 'APPDATA', 'LOCALAPPDATA',
+  'TEMP', 'TMP', 'TMPDIR', 'LANG', 'LC_ALL', 'LC_CTYPE', 'LC_MESSAGES', 'TZ',
+  'PSModulePath',
+])
+
+function adapterEnv(source = process.env) {
+  const env = {}
+  for (const key of ADAPTER_ENV_KEYS) {
+    const value = source?.[key]
+    if (typeof value === 'string' && value) env[key] = value
+  }
+  return env
+}
+
 function run(cmd, args, timeoutMs = 5000) {
   return new Promise((resolve, reject) => {
-    const child = spawn(cmd, args, { stdio: ['ignore', 'ignore', 'pipe'], timeout: timeoutMs, windowsHide: true })
+    const child = spawn(cmd, args, { stdio: ['ignore', 'ignore', 'pipe'], timeout: timeoutMs, windowsHide: true, env: adapterEnv() })
     let err = ''
     child.stderr.on('data', (b) => { err += b.toString('utf8') })
     child.on('error', reject)

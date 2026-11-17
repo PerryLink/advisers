@@ -646,7 +646,9 @@ test('classify never throws on odd input and reports truncation', () => {
   assert.equal(classify('好'.repeat(200)).truncated, false)
   const truncated = classify('好'.repeat(200), { maxChars: 10 })
   assert.equal(truncated.truncated, true)
-  assert.equal(truncated.action, 'allow')
+  // SEC2-02 (2026-11-17): the unscanned tail must not be reported as allow.
+  assert.equal(truncated.action, 'block')
+  assert.equal(truncated.code, 'INPUT_TRUNCATED')
   assert.equal(normalizeSurface('chat'), 'chat.input')
   assert.equal(normalizeSurface('nonsense-surface'), 'unknown')
   assert.equal(surfacePolicy('attachments.text').localFile, true)

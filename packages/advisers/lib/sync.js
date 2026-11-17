@@ -11,7 +11,8 @@
  */
 import { chmodSync, closeSync, copyFileSync, existsSync, fsyncSync, mkdirSync, openSync, readFileSync, readdirSync, renameSync, rmSync, statSync, writeFileSync } from 'node:fs'
 import { createHash } from 'node:crypto'
-import { basename, join } from 'node:path'
+import { basename, dirname, join } from 'node:path'
+import { DatabaseSync } from 'node:sqlite'
 import { decryptJson, encryptJson, isVaultEnvelope } from './vault.js'
 
 /** fsync a directory entry so a rename survives a crash. */
@@ -35,6 +36,41 @@ function writeAtomic(file, data, { mode = 0o600 } = {}) {
   }
   try { chmodSync(file, mode) } catch {}
   fsyncDir(join(file, '..'))
+}
+
+const PULL_TMP_PREFIX = '.advisers-pull-verify-'
+
+/**
+ * Verify that a database file is a structurally valid SQLite database before it
+ * is allowed to replace the main database (robustness audit P1-4, 2026-11-17).
+ *
+ * The snapshot SHA-256 only proves the envelope payload is self-consistent; a
+ * byte-corrupted payload is still "consistent" after re-encryption and used to
+ * be installed as the live library. PRAGMA quick_check is O(file) and catches
+ * corrupt b-trees/pages. The original file is only opened read-only.
+ */
+function assertDatabaseIntegrity(file) {
+  let db
+  try {
+    db = new DatabaseSync(file, { readOnly: true })
+    const row = db.prepare('PRAGMA quick_check').get()
+    const verdict = String(row?.quick_check ?? 'unknown').slice(0, 120)
+    if (verdict !== 'ok') throw new Error(`quick_check reported ${verdict}`)
+  } catch (error) {
+    throw new Error(`snapshot database failed the integrity check: ${String(error?.message ?? error).slice(0, 200)}`)
+  } finally {
+    try { db?.close() } catch {}
+  }
+}
+
+/** Put the pre-pull database (and its WAL/SHM siblings) back after a failed replace. */
+function restoreBackup(backup, dbPath) {
+  copyFileSync(backup, dbPath)
+  for (const suffix of ['-wal', '-shm']) {
+    if (existsSync(backup + suffix)) copyFileSync(backup + suffix, dbPath + suffix)
+    else { try { rmSync(dbPath + suffix) } catch {} }
+  }
+  try { chmodSync(dbPath, 0o600) } catch {}
 }
 
 export const SYNC_PREFIX = 'advisers-'
@@ -113,17 +149,53 @@ export function pullSnapshot({ dir, dbPath, passphrase, file, force = false, loc
       if (localAt > snapshotAt) throw new Error(`local database was written after snapshot ${chosen.name} (local ${new Date(localAt).toISOString()} > snapshot ${new Date(snapshotAt).toISOString()}); refusing to overwrite. If those local writes matter, back them up/export them first; re-run with --force to overwrite anyway (a backup is kept).`)
     }
   }
+  const parent = dirname(dbPath)
+  mkdirSync(parent, { recursive: true, mode: 0o700 })
+  // Stage the snapshot bytes next to the live database and verify them BEFORE
+  // anything replaces the library (robustness audit P1-4). The backup copy is
+  // taken first and kept on every failure path; the live WAL/SHM are only
+  // removed once the staged database has passed the integrity check.
+  const tmp = join(parent, `${PULL_TMP_PREFIX}${process.pid}-${Math.random().toString(36).slice(2, 8)}`)
   let backup = null
-  if (existsSync(dbPath)) {
-    backup = `${dbPath}.before-sync-${Date.now()}`
-    copyFileSync(dbPath, backup)
-    for (const suffix of ['-wal', '-shm']) {
-      try { if (existsSync(dbPath + suffix)) copyFileSync(dbPath + suffix, backup + suffix) } catch {}
+  try {
+    writeFileSync(tmp, bytes, { mode: 0o600, flush: true })
+    const hadLocal = existsSync(dbPath)
+    if (hadLocal) {
+      backup = `${dbPath}.before-sync-${Date.now()}`
+      copyFileSync(dbPath, backup)
+      for (const suffix of ['-wal', '-shm']) {
+        try { if (existsSync(dbPath + suffix)) copyFileSync(dbPath + suffix, backup + suffix) } catch {}
+      }
+    }
+    try {
+      assertDatabaseIntegrity(tmp)
+    } catch (error) {
+      throw new Error(`refusing to replace the local database: ${error.message}`)
     }
     for (const suffix of ['-wal', '-shm']) { try { rmSync(dbPath + suffix) } catch {} }
-  } else {
-    mkdirSync(join(dbPath, '..'), { recursive: true, mode: 0o700 })
+    try {
+      // Rename the verified bytes into place (same directory: atomic).
+      renameSync(tmp, dbPath)
+      try { chmodSync(dbPath, 0o600) } catch {}
+      fsyncDir(parent)
+    } catch (error) {
+      // A failure after the rename must never leave a half-installed library:
+      // restore the pre-pull database and keep the backup for inspection.
+      let restored = false
+      try {
+        if (hadLocal && backup) {
+          restoreBackup(backup, dbPath)
+          restored = true
+        } else {
+          rmSync(dbPath, { force: true })
+          restored = true
+        }
+      } catch {}
+      const hint = restored ? 'the previous local database was restored' : 'restore the backup manually from ' + String(backup)
+      throw new Error(`failed to install the verified snapshot; ${hint}: ${error.message}`)
+    }
+    return { file: chosen.name, sha256, changed: true, backup, device: payload.device, createdAt: payload.createdAt }
+  } finally {
+    try { if (existsSync(tmp)) rmSync(tmp) } catch {}
   }
-  writeAtomic(dbPath, bytes, { mode: 0o600 })
-  return { file: chosen.name, sha256, changed: true, backup, device: payload.device, createdAt: payload.createdAt }
 }
