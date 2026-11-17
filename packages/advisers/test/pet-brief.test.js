@@ -10,8 +10,16 @@ import { Ledger } from '../../core/dist/index.js'
 import { SqliteStore } from '../lib/sqlite.js'
 import { readLedgerSnapshotReadOnly } from '../lib/pet-brief-store.js'
 import {
+  PET_BRIEF_DEFAULT_DISPLAY_POLICY,
+  PET_BRIEF_DISPLAY_POLICIES,
+  PET_BRIEF_LEGACY_SCHEMA_VERSION,
   PET_BRIEF_MAX_ITEMS,
+  PET_BRIEF_MAX_LINE_LENGTH,
+  PET_BRIEF_MAX_SUGGESTED_LINES,
   PET_BRIEF_MIN_CONFIDENCE,
+  PET_BRIEF_MOODS,
+  PET_BRIEF_SCHEMA_VERSION,
+  PET_BRIEF_SCHEMA_VERSIONS,
   PET_BRIEF_TTL_MS,
   buildPetBrief,
   validatePetBrief,
@@ -21,6 +29,11 @@ import {
 const bin = fileURLToPath(new URL('../bin/advisers.js', import.meta.url))
 const NOW = '2026-11-15T10:00:00+08:00'
 const NOW_MS = Date.parse(NOW)
+/** Public contract snapshot lives in the repo docs/ directory (not shipped in the npm tarball). */
+const contractDir = fileURLToPath(new URL('../../../docs/pet-brief/', import.meta.url))
+const contractJson = (name) => JSON.parse(readFileSync(join(contractDir, name), 'utf8'))
+/** Inside the example/testcases TTL (generatedAt 09:00, expiresAt 09:05 +08:00). */
+const CONTRACT_NOW = Date.parse('2026-11-17T09:02:00+08:00')
 
 function fixture(options = {}) {
   const ledger = new Ledger()
@@ -136,8 +149,10 @@ test('pet-brief: valid projection satisfies the contract and TTL', () => {
   const result = buildPetBrief(fixture().ledger, { now: NOW_MS })
   const checked = validatePetBrief(result, { now: NOW_MS })
   assert.deepEqual(checked.errors, [])
-  assert.equal(result.schemaVersion, 1)
+  assert.deepEqual(checked.warnings, [])
+  assert.equal(result.schemaVersion, 2)
   assert.equal(result.source, 'advisers')
+  assert.equal(result.displayPolicy, 'private', 'displayPolicy must default to private')
   assert.match(result.generatedAt, /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d+)?Z$/)
   assert.equal(Date.parse(result.expiresAt) - Date.parse(result.generatedAt), PET_BRIEF_TTL_MS)
   assert.ok(['calm', 'focused', 'concerned', 'pleased'].includes(result.mood))
@@ -244,7 +259,7 @@ test('pet-brief validate: rejects bad schema/version/time/fields/counts/ids', ()
   const clone = () => JSON.parse(JSON.stringify(base))
   const cases = [
     ['malformed JSON', '{"', 'E_MALFORMED_JSON'],
-    ['unknown schema', (() => { const b = clone(); b.schemaVersion = 2; return b })(), 'E_SCHEMA_VERSION'],
+    ['unknown schema', (() => { const b = clone(); b.schemaVersion = 3; return b })(), 'E_SCHEMA_VERSION'],
     ['forbidden reasoning', (() => { const b = clone(); b.reasoning = 'hidden'; return b })(), 'E_FORBIDDEN_FIELD'],
     ['forbidden api_key', (() => { const b = clone(); b.api_key = 'sk-test'; return b })(), 'E_FORBIDDEN_FIELD'],
     ['expired', (() => { const b = clone(); b.generatedAt = '2020-01-01T00:00:00+08:00'; b.expiresAt = '2020-01-01T00:05:00+08:00'; return b })(), 'E_EXPIRED'],
@@ -289,6 +304,127 @@ test('pet-brief validate: schema-valid low-confidence item is accepted (consumer
 })
 
 // ---------------------------------------------------------------------------
+// contract v0.2 — displayPolicy, legacy compatibility, public snapshot
+// ---------------------------------------------------------------------------
+
+test('pet-brief v0.2: producers emit schemaVersion 2 with displayPolicy private by default', () => {
+  const { ledger } = fixture()
+  const brief = buildPetBrief(ledger, { now: NOW_MS })
+  assert.equal(PET_BRIEF_SCHEMA_VERSION, 2)
+  assert.deepEqual(PET_BRIEF_SCHEMA_VERSIONS, [1, 2])
+  assert.equal(brief.schemaVersion, PET_BRIEF_SCHEMA_VERSION)
+  assert.equal(PET_BRIEF_DEFAULT_DISPLAY_POLICY, 'private')
+  assert.equal(brief.displayPolicy, 'private')
+  assert.deepEqual(validatePetBrief(brief, { now: NOW_MS }).warnings, [])
+  for (const policy of PET_BRIEF_DISPLAY_POLICIES) {
+    const built = buildPetBrief(ledger, { now: NOW_MS, displayPolicy: policy })
+    assert.equal(built.displayPolicy, policy)
+    assert.equal(validatePetBrief(built, { now: NOW_MS }).ok, true, policy)
+  }
+  assert.throws(() => buildPetBrief(ledger, { now: NOW_MS, displayPolicy: 'audience' }), TypeError)
+})
+
+test('pet-brief v0.2: invalid displayPolicy is rejected, missing is a warning by default', () => {
+  const base = buildPetBrief(fixture().ledger, { now: NOW_MS })
+  const invalid = validatePetBrief({ ...base, displayPolicy: 'audience' }, { now: NOW_MS })
+  assert.equal(invalid.ok, false)
+  assert.ok(invalid.errors.some((error) => error.code === 'E_ENUM' && error.path === '$.displayPolicy'), JSON.stringify(invalid.errors))
+
+  const missing = { ...base }
+  delete missing.displayPolicy
+  const lenient = validatePetBrief(missing, { now: NOW_MS })
+  assert.equal(lenient.ok, true, JSON.stringify(lenient.errors))
+  assert.ok(lenient.warnings.some((warning) => warning.code === 'W_MISSING_DISPLAY_POLICY'))
+
+  const strict = validatePetBrief(missing, { now: NOW_MS, requireDisplayPolicy: true })
+  assert.equal(strict.ok, false)
+  assert.ok(strict.errors.some((error) => error.code === 'E_DISPLAY_POLICY'))
+})
+
+test('pet-brief v0.2: legacy v0.1 briefs are accepted with warnings, unknown versions fail closed', () => {
+  const base = buildPetBrief(fixture().ledger, { now: NOW_MS })
+  const legacy = { ...base, schemaVersion: PET_BRIEF_LEGACY_SCHEMA_VERSION }
+  delete legacy.displayPolicy
+  const checked = validatePetBrief(legacy, { now: NOW_MS })
+  assert.equal(checked.ok, true, JSON.stringify(checked.errors))
+  const codes = checked.warnings.map((warning) => warning.code)
+  assert.ok(codes.includes('W_LEGACY_SCHEMA_VERSION'), JSON.stringify(codes))
+  assert.ok(codes.includes('W_MISSING_DISPLAY_POLICY'), JSON.stringify(codes))
+  assert.deepEqual(checked.brief, legacy, 'validation must not rewrite the document')
+
+  const strict = validatePetBrief(legacy, { now: NOW_MS, acceptLegacy: false })
+  assert.equal(strict.ok, false)
+  assert.ok(strict.errors.some((error) => error.code === 'E_SCHEMA_VERSION'))
+
+  const future = validatePetBrief({ ...base, schemaVersion: 3 }, { now: NOW_MS })
+  assert.equal(future.ok, false)
+  assert.ok(future.errors.some((error) => error.code === 'E_SCHEMA_VERSION'))
+})
+
+test('pet-brief v0.2: public schema snapshot matches the implementation constants', () => {
+  const schema = contractJson('schema-v0.2.json')
+  assert.equal(schema.$schema, 'https://json-schema.org/draft/2020-12/schema')
+  assert.equal(schema.additionalProperties, false)
+  assert.equal(schema.properties.schemaVersion.const, PET_BRIEF_SCHEMA_VERSION)
+  assert.ok(schema.required.includes('displayPolicy'))
+  assert.deepEqual(schema.properties.displayPolicy.enum, PET_BRIEF_DISPLAY_POLICIES)
+  assert.equal(schema.properties.displayPolicy.default, PET_BRIEF_DEFAULT_DISPLAY_POLICY)
+  for (const section of ['today', 'commitments', 'risks', 'facts']) {
+    assert.equal(schema.properties[section].maxItems, PET_BRIEF_MAX_ITEMS, section)
+    assert.equal(schema.properties[section].items.additionalProperties, false, section)
+  }
+  for (const [name, property] of Object.entries(schema.properties.counts.properties)) {
+    assert.equal(property.maximum, PET_BRIEF_MAX_ITEMS, name)
+  }
+  assert.equal(schema.properties.suggestedLines.maxItems, PET_BRIEF_MAX_SUGGESTED_LINES)
+  assert.equal(schema.properties.suggestedLines.items.maxLength, PET_BRIEF_MAX_LINE_LENGTH)
+  assert.deepEqual(schema.properties.mood.enum, PET_BRIEF_MOODS)
+  assert.equal(schema.properties.redactions.maxItems, 10)
+})
+
+test('pet-brief v0.2: contract example is accepted by the producer validator', () => {
+  const example = contractJson('example-v0.2.json')
+  assert.equal(example.schemaVersion, PET_BRIEF_SCHEMA_VERSION)
+  assert.equal(example.displayPolicy, 'private')
+  const checked = validatePetBrief(example, { now: CONTRACT_NOW })
+  assert.equal(checked.ok, true, JSON.stringify(checked.errors))
+  assert.deepEqual(checked.warnings, [])
+  assert.ok(example.redactions.length > 0)
+  assert.ok(!JSON.stringify(example).includes('王工'), 'examples must stay synthetic/redacted')
+})
+
+test('pet-brief v0.2: contract test vectors behave as documented', () => {
+  const vectors = contractJson('testcases-v0.2.json')
+  assert.equal(vectors.contractVersion, 'v0.2')
+  assert.equal(vectors.base.schemaVersion, PET_BRIEF_SCHEMA_VERSION)
+  assert.equal(vectors.base.displayPolicy, 'private')
+  assert.equal(vectors.cases.length, 26)
+  const seen = new Set()
+  for (const testCase of vectors.cases) {
+    assert.ok(!seen.has(testCase.id), `duplicate vector id: ${testCase.id}`)
+    seen.add(testCase.id)
+    if (testCase.expect === 'skip') continue // consumer opt-out: no read; producer validator not applicable
+    let input
+    if (typeof testCase.raw === 'string') input = testCase.raw
+    else {
+      input = structuredClone(vectors.base)
+      Object.assign(input, structuredClone(testCase.overrides ?? {}))
+      for (const key of testCase.remove ?? []) delete input[key]
+    }
+    const checked = validatePetBrief(input, { now: CONTRACT_NOW })
+    if (testCase.expect === 'reject') {
+      assert.equal(checked.ok, false, `${testCase.id} should be rejected`)
+      assert.ok(checked.errors.some((error) => error.code === testCase.errorCode), `${testCase.id}: expected ${testCase.errorCode}, got ${JSON.stringify(checked.errors)}`)
+    } else {
+      assert.equal(checked.ok, true, `${testCase.id}: ${JSON.stringify(checked.errors)}`)
+      for (const code of testCase.warningCodes ?? []) {
+        assert.ok(checked.warnings.some((warning) => warning.code === code), `${testCase.id}: missing warning ${code}`)
+      }
+    }
+  }
+})
+
+// ---------------------------------------------------------------------------
 // atomic file write
 // ---------------------------------------------------------------------------
 
@@ -322,6 +458,8 @@ test('pet-brief CLI: --json is a valid brief and the store is read-only', () => 
     const before = sha256(db)
     const out = run(home, ['pet-brief', '--json'], work)
     const brief = JSON.parse(out)
+    assert.equal(brief.schemaVersion, PET_BRIEF_SCHEMA_VERSION)
+    assert.equal(brief.displayPolicy, 'private')
     assert.equal(validatePetBrief(brief, { now: Date.now() }).ok, true)
     assert.ok(!out.includes('王工'), 'CLI JSON must not leak client names')
     assert.ok(!out.includes('机密原话'), 'CLI JSON must not leak evidence quotes')
@@ -370,6 +508,25 @@ test('pet-brief CLI: --check passes on generated brief and rejects a tampered fi
     const codes = report.errors.map((error) => error.code)
     assert.ok(codes.includes('E_FORBIDDEN_FIELD'), JSON.stringify(codes))
     assert.ok(codes.includes('E_EXPIRED'), JSON.stringify(codes))
+  } finally {
+    rmSync(root, { recursive: true, force: true })
+  }
+})
+
+test('pet-brief CLI: --check accepts a legacy v0.1 brief (warnings never fail the check)', () => {
+  const { root, home, work } = setupStore()
+  try {
+    writeSqliteFixture(home, fixture().ledger)
+    const current = JSON.parse(run(home, ['pet-brief', '--json'], work))
+    const legacy = { ...current, schemaVersion: PET_BRIEF_LEGACY_SCHEMA_VERSION }
+    delete legacy.displayPolicy
+    const legacyPath = join(work, 'legacy-v0.1.json')
+    writeFileSync(legacyPath, JSON.stringify(legacy))
+    const checked = runRaw(home, ['pet-brief', '--check', '--in', legacyPath], work)
+    assert.equal(checked.status, 0, checked.stderr)
+    const report = JSON.parse(checked.stdout)
+    assert.equal(report.ok, true)
+    assert.deepEqual(report.errors, [])
   } finally {
     rmSync(root, { recursive: true, force: true })
   }

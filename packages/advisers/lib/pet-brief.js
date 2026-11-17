@@ -1,6 +1,6 @@
 /**
  * Pet Brief producer — read-only, redacted, expiring projection from the
- * Advisers ledger to Famling / Pearl (contract v0.1, docs/PET-BRIEF.md).
+ * Advisers ledger to desktop-pet consumers (contract v0.2, docs/PET-BRIEF-PRODUCER.md).
  *
  * Pure functions: no network, no model call, no ledger writes. The caller
  * supplies the ledger (loaded read-only by the CLI) and an injectable `now`.
@@ -10,13 +10,23 @@
  * - facts below 0.7 confidence are dropped before output;
  * - person/client names are masked to `某客户` by default and never echoed back;
  * - no reasoning, prompts, secrets, document bodies, or emotional fields;
- * - every suggested line is built from a field that is present in the brief.
+ * - every suggested line is built from a field that is present in the brief;
+ * - `displayPolicy` states who may see the brief (public/private/none); it
+ *   defaults to `private` and is never `public` unless explicitly requested.
  */
 import { chmodSync, closeSync, fsyncSync, mkdirSync, openSync, renameSync, unlinkSync, writeSync } from 'node:fs'
 import { basename, dirname, join } from 'node:path'
 import { localDay } from './remind.js'
 
-export const PET_BRIEF_SCHEMA_VERSION = 1
+export const PET_BRIEF_SCHEMA_VERSION = 2
+/** v0.1 briefs (contract before `displayPolicy`) are still accepted with warnings. */
+export const PET_BRIEF_LEGACY_SCHEMA_VERSION = 1
+/** Schema versions `validatePetBrief` can read (v0.1 = legacy, warnings only). */
+export const PET_BRIEF_SCHEMA_VERSIONS = [PET_BRIEF_LEGACY_SCHEMA_VERSION, PET_BRIEF_SCHEMA_VERSION]
+/** Contract v0.2 display policy: who may see brief-derived content. */
+export const PET_BRIEF_DISPLAY_POLICIES = ['public', 'private', 'none']
+/** Safe default: never `public` unless the user explicitly opts in. */
+export const PET_BRIEF_DEFAULT_DISPLAY_POLICY = 'private'
 export const PET_BRIEF_SOURCE = 'advisers'
 export const PET_BRIEF_TTL_MS = 5 * 60_000
 export const PET_BRIEF_MAX_ITEMS = 10
@@ -33,7 +43,7 @@ export const PET_BRIEF_FORBIDDEN_KEYS = [
 ]
 
 const ROOT_KEYS = [
-  'schemaVersion', 'generatedAt', 'expiresAt', 'source', 'counts',
+  'schemaVersion', 'generatedAt', 'expiresAt', 'source', 'displayPolicy', 'counts',
   'today', 'commitments', 'risks', 'facts', 'mood', 'suggestedLines', 'redactions',
 ]
 const ITEM_KEYS = {
@@ -145,7 +155,8 @@ const RISK_RANK = { low: 1, medium: 2, high: 3 }
  * @param {number} [options.ttlMs]
  * @param {number} [options.maxItems]
  * @param {number} [options.minConfidence]
- * @returns {object} contract v0.1 brief (no writes, no network).
+ * @param {'public'|'private'|'none'} [options.displayPolicy='private'] who may see the brief
+ * @returns {object} contract v0.2 brief (no writes, no network).
  */
 export function buildPetBrief(ledger, options = {}) {
   if (!ledger || typeof ledger.listCommitments !== 'function') throw new TypeError('buildPetBrief requires a ledger')
@@ -153,6 +164,10 @@ export function buildPetBrief(ledger, options = {}) {
   const ttlMs = Number.isFinite(options.ttlMs) ? options.ttlMs : PET_BRIEF_TTL_MS
   const maxItems = Number.isFinite(options.maxItems) ? options.maxItems : PET_BRIEF_MAX_ITEMS
   const minConfidence = Number.isFinite(options.minConfidence) ? options.minConfidence : PET_BRIEF_MIN_CONFIDENCE
+  const displayPolicy = options.displayPolicy ?? PET_BRIEF_DEFAULT_DISPLAY_POLICY
+  if (!PET_BRIEF_DISPLAY_POLICIES.includes(displayPolicy)) {
+    throw new TypeError(`displayPolicy must be one of ${PET_BRIEF_DISPLAY_POLICIES.join('|')}`)
+  }
   const limit = Math.max(1, Math.min(PET_BRIEF_MAX_ITEMS, Math.trunc(maxItems)))
   const today = localDay(new Date(nowMs).toISOString())
 
@@ -330,6 +345,7 @@ export function buildPetBrief(ledger, options = {}) {
     generatedAt,
     expiresAt,
     source: PET_BRIEF_SOURCE,
+    displayPolicy,
     counts: {
       today: todayItems.length,
       commitments: commitmentItems.length,
@@ -376,7 +392,7 @@ function checkForbiddenKeys(value, path, errors) {
 function checkUnknownKeys(value, allowed, path, errors) {
   if (!isPlainObject(value)) return
   for (const key of Object.keys(value)) {
-    if (!allowed.includes(key)) errors.push(issue('E_UNKNOWN_FIELD', `${path}.${key}`, `field is not in contract v0.1: ${key}`))
+    if (!allowed.includes(key)) errors.push(issue('E_UNKNOWN_FIELD', `${path}.${key}`, `field is not in contract v0.2: ${key}`))
   }
 }
 
@@ -402,34 +418,56 @@ function checkConfidence(value, path, errors) {
 }
 
 /**
- * Validate a brief against contract v0.1 (schema + freshness + forbidden data).
+ * Validate a brief against contract v0.2 (schema + freshness + forbidden data).
  * Used by `advisers pet-brief --check` and by tests; the consumer re-validates.
+ *
+ * Backward compatibility: contract v0.1 briefs (`schemaVersion: 1`, no
+ * `displayPolicy`) are accepted by default with a `W_LEGACY_SCHEMA_VERSION`
+ * warning and a `W_MISSING_DISPLAY_POLICY` warning; missing `displayPolicy`
+ * always means the safe default `private` and never fails the check unless the
+ * caller opts into `requireDisplayPolicy`. Unknown versions still fail closed.
  *
  * @param {unknown|string} value parsed brief, or raw JSON text
  * @param {object} [options]
  * @param {number|string|Date} [options.now]
  * @param {boolean} [options.allowExpired] skip the freshness gate (schema check only)
- * @returns {{ok: boolean, errors: Array<{code: string, path: string, message: string}>, brief?: object}}
+ * @param {boolean} [options.acceptLegacy=true] accept v0.1 briefs with warnings; false fails closed
+ * @param {boolean} [options.requireDisplayPolicy=false] make a missing displayPolicy an error
+ * @returns {{ok: boolean, errors: Array<{code: string, path: string, message: string}>, warnings: Array<{code: string, path: string, message: string}>, brief?: object}}
  */
 export function validatePetBrief(value, options = {}) {
   const errors = []
+  const warnings = []
   let brief = value
   if (typeof value === 'string') {
     try {
       brief = JSON.parse(value)
     } catch (error) {
-      return { ok: false, errors: [issue('E_MALFORMED_JSON', '$', `invalid JSON: ${error.message}`)], brief: undefined }
+      return { ok: false, errors: [issue('E_MALFORMED_JSON', '$', `invalid JSON: ${error.message}`)], warnings: [], brief: undefined }
     }
   }
   if (!isPlainObject(brief)) {
-    return { ok: false, errors: [issue('E_TYPE', '$', 'brief must be a JSON object')], brief: undefined }
+    return { ok: false, errors: [issue('E_TYPE', '$', 'brief must be a JSON object')], warnings: [], brief: undefined }
   }
 
   checkForbiddenKeys(brief, '$', errors)
   checkUnknownKeys(brief, ROOT_KEYS, '$', errors)
 
-  if (brief.schemaVersion !== PET_BRIEF_SCHEMA_VERSION) {
-    errors.push(issue('E_SCHEMA_VERSION', '$.schemaVersion', `unsupported schemaVersion (expected ${PET_BRIEF_SCHEMA_VERSION})`))
+  if (brief.schemaVersion === PET_BRIEF_LEGACY_SCHEMA_VERSION) {
+    if (options.acceptLegacy === false) {
+      errors.push(issue('E_SCHEMA_VERSION', '$.schemaVersion', 'schemaVersion 1 is legacy (contract v0.1) and acceptance is disabled'))
+    } else {
+      warnings.push(issue('W_LEGACY_SCHEMA_VERSION', '$.schemaVersion', 'brief uses legacy schemaVersion 1 (contract v0.1); accepted, missing displayPolicy means "private"'))
+    }
+  } else if (brief.schemaVersion !== PET_BRIEF_SCHEMA_VERSION) {
+    errors.push(issue('E_SCHEMA_VERSION', '$.schemaVersion', `unsupported schemaVersion (expected 2, legacy 1 allowed with warnings)`))
+  }
+  if (brief.displayPolicy === undefined) {
+    const message = 'displayPolicy is missing; consumers must treat it as "private" (legacy v0.1 brief)'
+    if (options.requireDisplayPolicy === true) errors.push(issue('E_DISPLAY_POLICY', '$.displayPolicy', message))
+    else warnings.push(issue('W_MISSING_DISPLAY_POLICY', '$.displayPolicy', message))
+  } else if (!PET_BRIEF_DISPLAY_POLICIES.includes(brief.displayPolicy)) {
+    errors.push(issue('E_ENUM', '$.displayPolicy', 'displayPolicy must be public|private|none'))
   }
   if (brief.source !== PET_BRIEF_SOURCE) errors.push(issue('E_SOURCE', '$.source', 'source must be "advisers"'))
 
@@ -531,7 +569,7 @@ export function validatePetBrief(value, options = {}) {
     })
   }
 
-  return { ok: errors.length === 0, errors, brief }
+  return { ok: errors.length === 0, errors, warnings, brief }
 }
 
 function parseIsoWithZone(value, path, errors) {

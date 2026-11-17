@@ -1,0 +1,440 @@
+{
+  "schemaVersion": 2,
+  "contractVersion": "v0.2",
+  "description": "Pet Brief contract v0.2 test vectors. `base` is a valid brief; each case applies root-level `overrides`, deletes keys in `remove`, or supplies `raw`. `expect`: accept | accept_omit | accept_warn | reject | fallback | skip. Producer validator covers accept/accept_omit/accept_warn/reject; fallback and skip are consumer-side policy vectors kept here for consumer contract tests.",
+  "syntheticData": "All ids, names and facts are synthetic. Names use the `某客户` placeholder; no real client data is present.",
+  "base": {
+    "schemaVersion": 2,
+    "generatedAt": "2026-11-17T09:00:00+08:00",
+    "expiresAt": "2026-11-17T09:05:00+08:00",
+    "source": "advisers",
+    "displayPolicy": "private",
+    "counts": {
+      "today": 1,
+      "commitments": 1,
+      "risks": 1,
+      "facts": 1
+    },
+    "today": [
+      {
+        "id": "matter_01",
+        "title": "给某客户发报价",
+        "status": "open"
+      }
+    ],
+    "commitments": [
+      {
+        "id": "commit_01",
+        "matter": "matter_01",
+        "who": "某客户",
+        "what": "发报价",
+        "due": "2026-11-17",
+        "risk": "high",
+        "confidence": 0.92
+      }
+    ],
+    "risks": [
+      {
+        "id": "risk_01",
+        "level": "high",
+        "summary": "报价今天到期，尚未发出",
+        "evidence": "commit_01",
+        "confidence": 0.88
+      }
+    ],
+    "facts": [
+      {
+        "id": "fact_01",
+        "subject": "某客户",
+        "predicate": "prefers",
+        "value": "PDF 报价",
+        "confidence": 0.9
+      }
+    ],
+    "mood": "focused",
+    "suggestedLines": [
+      "某客户的报价，今天到期。"
+    ],
+    "redactions": [
+      "客户名已替换为“某客户”",
+      "不包含文档正文、邮件正文、聊天记录"
+    ]
+  },
+  "cases": [
+    {
+      "id": "valid",
+      "expect": "accept",
+      "overrides": {}
+    },
+    {
+      "id": "empty",
+      "expect": "accept",
+      "overrides": {
+        "counts": {
+          "today": 0,
+          "commitments": 0,
+          "risks": 0,
+          "facts": 0
+        },
+        "today": [],
+        "commitments": [],
+        "risks": [],
+        "facts": [],
+        "suggestedLines": []
+      }
+    },
+    {
+      "id": "expired",
+      "expect": "reject",
+      "errorCode": "E_EXPIRED",
+      "overrides": {
+        "generatedAt": "2026-11-17T08:50:00+08:00",
+        "expiresAt": "2026-11-17T08:55:00+08:00"
+      }
+    },
+    {
+      "id": "malformed_json",
+      "expect": "reject",
+      "errorCode": "E_MALFORMED_JSON",
+      "raw": "{"
+    },
+    {
+      "id": "unknown_schema",
+      "expect": "reject",
+      "errorCode": "E_SCHEMA_VERSION",
+      "overrides": {
+        "schemaVersion": 99
+      }
+    },
+    {
+      "id": "too_many_commitments",
+      "expect": "reject",
+      "errorCode": "E_MAX_ITEMS",
+      "overrides": {
+        "counts": {
+          "today": 1,
+          "commitments": 11,
+          "risks": 1,
+          "facts": 1
+        },
+        "commitments": [
+          {
+            "id": "c01",
+            "matter": "matter_01",
+            "who": "某客户",
+            "what": "动作 1",
+            "due": "2026-11-17",
+            "risk": "low",
+            "confidence": 0.9
+          },
+          {
+            "id": "c02",
+            "matter": "matter_01",
+            "who": "某客户",
+            "what": "动作 2",
+            "due": "2026-11-17",
+            "risk": "low",
+            "confidence": 0.9
+          },
+          {
+            "id": "c03",
+            "matter": "matter_01",
+            "who": "某客户",
+            "what": "动作 3",
+            "due": "2026-11-17",
+            "risk": "low",
+            "confidence": 0.9
+          },
+          {
+            "id": "c04",
+            "matter": "matter_01",
+            "who": "某客户",
+            "what": "动作 4",
+            "due": "2026-11-17",
+            "risk": "low",
+            "confidence": 0.9
+          },
+          {
+            "id": "c05",
+            "matter": "matter_01",
+            "who": "某客户",
+            "what": "动作 5",
+            "due": "2026-11-17",
+            "risk": "low",
+            "confidence": 0.9
+          },
+          {
+            "id": "c06",
+            "matter": "matter_01",
+            "who": "某客户",
+            "what": "动作 6",
+            "due": "2026-11-17",
+            "risk": "low",
+            "confidence": 0.9
+          },
+          {
+            "id": "c07",
+            "matter": "matter_01",
+            "who": "某客户",
+            "what": "动作 7",
+            "due": "2026-11-17",
+            "risk": "low",
+            "confidence": 0.9
+          },
+          {
+            "id": "c08",
+            "matter": "matter_01",
+            "who": "某客户",
+            "what": "动作 8",
+            "due": "2026-11-17",
+            "risk": "low",
+            "confidence": 0.9
+          },
+          {
+            "id": "c09",
+            "matter": "matter_01",
+            "who": "某客户",
+            "what": "动作 9",
+            "due": "2026-11-17",
+            "risk": "low",
+            "confidence": 0.9
+          },
+          {
+            "id": "c10",
+            "matter": "matter_01",
+            "who": "某客户",
+            "what": "动作 10",
+            "due": "2026-11-17",
+            "risk": "low",
+            "confidence": 0.9
+          },
+          {
+            "id": "c11",
+            "matter": "matter_01",
+            "who": "某客户",
+            "what": "动作 11",
+            "due": "2026-11-17",
+            "risk": "low",
+            "confidence": 0.9
+          }
+        ]
+      }
+    },
+    {
+      "id": "low_confidence_omit",
+      "expect": "accept_omit",
+      "overrides": {
+        "commitments": [
+          {
+            "id": "commit_01",
+            "matter": "matter_01",
+            "who": "某客户",
+            "what": "发报价",
+            "due": "2026-11-17",
+            "risk": "low",
+            "confidence": 0.69
+          }
+        ]
+      }
+    },
+    {
+      "id": "forbidden_reasoning",
+      "expect": "reject",
+      "errorCode": "E_FORBIDDEN_FIELD",
+      "overrides": {
+        "reasoning": "hidden chain of thought"
+      }
+    },
+    {
+      "id": "forbidden_secret",
+      "expect": "reject",
+      "errorCode": "E_FORBIDDEN_FIELD",
+      "overrides": {
+        "api_key": "sk-test"
+      }
+    },
+    {
+      "id": "high_risk_remind",
+      "expect": "accept",
+      "overrides": {
+        "risks": [
+          {
+            "id": "risk_01",
+            "level": "high",
+            "summary": "今天到期",
+            "evidence": "commit_01",
+            "confidence": 0.95
+          }
+        ]
+      }
+    },
+    {
+      "id": "no_risk",
+      "expect": "accept",
+      "overrides": {
+        "counts": {
+          "today": 1,
+          "commitments": 1,
+          "risks": 0,
+          "facts": 1
+        },
+        "risks": []
+      }
+    },
+    {
+      "id": "unknown_line_source",
+      "expect": "fallback",
+      "overrides": {
+        "suggestedLines": [
+          "这件事不在 brief 里。"
+        ]
+      }
+    },
+    {
+      "id": "redacted",
+      "expect": "accept",
+      "overrides": {
+        "redactions": [
+          "客户名已脱敏",
+          "无正文"
+        ]
+      }
+    },
+    {
+      "id": "ttl_boundary",
+      "expect": "reject",
+      "errorCode": "E_TIME_ORDER",
+      "overrides": {
+        "expiresAt": "2026-11-17T09:00:00+08:00"
+      }
+    },
+    {
+      "id": "missing_timezone",
+      "expect": "reject",
+      "errorCode": "E_TIME_FORMAT",
+      "overrides": {
+        "generatedAt": "2026-11-17T09:00:00"
+      }
+    },
+    {
+      "id": "invalid_mood",
+      "expect": "reject",
+      "errorCode": "E_ENUM",
+      "overrides": {
+        "mood": "happy"
+      }
+    },
+    {
+      "id": "duplicate_ids",
+      "expect": "reject",
+      "errorCode": "E_DUP_ID",
+      "overrides": {
+        "counts": {
+          "today": 1,
+          "commitments": 2,
+          "risks": 1,
+          "facts": 1
+        },
+        "commitments": [
+          {
+            "id": "dup",
+            "matter": "matter_01",
+            "who": "某客户",
+            "what": "发报价",
+            "due": "2026-11-17",
+            "risk": "low",
+            "confidence": 0.9
+          },
+          {
+            "id": "dup",
+            "matter": "matter_01",
+            "who": "团队",
+            "what": "发纪要",
+            "due": "2026-11-18",
+            "risk": "low",
+            "confidence": 0.9
+          }
+        ]
+      }
+    },
+    {
+      "id": "counts_mismatch",
+      "expect": "reject",
+      "errorCode": "E_COUNTS",
+      "overrides": {
+        "counts": {
+          "today": 1,
+          "commitments": 9,
+          "risks": 1,
+          "facts": 1
+        }
+      }
+    },
+    {
+      "id": "expires_before_generated",
+      "expect": "reject",
+      "errorCode": "E_TIME_ORDER",
+      "overrides": {
+        "expiresAt": "2026-11-17T08:00:00+08:00"
+      }
+    },
+    {
+      "id": "user_opt_out",
+      "expect": "skip",
+      "note": "consumer-side policy test: with the toggle off the consumer must not read the file; the producer validator has no opinion"
+    },
+    {
+      "id": "legacy_v0_1",
+      "expect": "accept_warn",
+      "warningCodes": [
+        "W_LEGACY_SCHEMA_VERSION",
+        "W_MISSING_DISPLAY_POLICY"
+      ],
+      "remove": [
+        "displayPolicy"
+      ],
+      "overrides": {
+        "schemaVersion": 1
+      }
+    },
+    {
+      "id": "missing_display_policy",
+      "expect": "accept_warn",
+      "warningCodes": [
+        "W_MISSING_DISPLAY_POLICY"
+      ],
+      "remove": [
+        "displayPolicy"
+      ]
+    },
+    {
+      "id": "invalid_display_policy",
+      "expect": "reject",
+      "errorCode": "E_ENUM",
+      "overrides": {
+        "displayPolicy": "audience"
+      }
+    },
+    {
+      "id": "default_policy_private",
+      "expect": "accept",
+      "overrides": {
+        "displayPolicy": "private"
+      }
+    },
+    {
+      "id": "display_public",
+      "expect": "accept",
+      "overrides": {
+        "displayPolicy": "public"
+      }
+    },
+    {
+      "id": "display_none",
+      "expect": "accept",
+      "overrides": {
+        "displayPolicy": "none"
+      }
+    }
+  ]
+}

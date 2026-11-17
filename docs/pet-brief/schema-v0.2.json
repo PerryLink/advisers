@@ -1,0 +1,290 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/PerryLink/advisers/docs/pet-brief/schema-v0.2.json",
+  "title": "Advisers Pet Brief (contract v0.2)",
+  "description": "Read-only, redacted, expiring projection from Advisers to a desktop-pet consumer. No reasoning, secrets, documents, or emotional fields. v0.2 adds displayPolicy (public|private|none); v0.1 briefs had schemaVersion 1 and no displayPolicy.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schemaVersion",
+    "generatedAt",
+    "expiresAt",
+    "source",
+    "displayPolicy",
+    "counts",
+    "today",
+    "commitments",
+    "risks",
+    "facts",
+    "mood",
+    "suggestedLines",
+    "redactions"
+  ],
+  "properties": {
+    "schemaVersion": {
+      "type": "integer",
+      "const": 2,
+      "description": "Contract v0.2. v0.1 = 1 is accepted by the producer validator as legacy with warnings; consumers are not required to accept it."
+    },
+    "generatedAt": {
+      "type": "string",
+      "format": "date-time"
+    },
+    "expiresAt": {
+      "type": "string",
+      "format": "date-time",
+      "description": "generatedAt + 5 min by default; consumers discard the brief when now >= expiresAt."
+    },
+    "source": {
+      "type": "string",
+      "const": "advisers"
+    },
+    "displayPolicy": {
+      "type": "string",
+      "enum": [
+        "public",
+        "private",
+        "none"
+      ],
+      "default": "private",
+      "description": "Who may see brief-derived content. public: may be shown whenever the pet is visible (still redacted). private (default): only in a personal/no-bystander context; the consumer must auto-collapse, one-click hide and hide during screen sharing/recording. none: consumer must not render or retain any brief-derived content (treat as disabled). Missing (legacy v0.1) means private."
+    },
+    "counts": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "today",
+        "commitments",
+        "risks",
+        "facts"
+      ],
+      "properties": {
+        "today": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 10
+        },
+        "commitments": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 10
+        },
+        "risks": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 10
+        },
+        "facts": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 10
+        }
+      }
+    },
+    "today": {
+      "type": "array",
+      "maxItems": 10,
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "id",
+          "title",
+          "status"
+        ],
+        "properties": {
+          "id": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 64
+          },
+          "title": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 80
+          },
+          "status": {
+            "type": "string",
+            "enum": [
+              "open",
+              "doing",
+              "done"
+            ]
+          }
+        }
+      }
+    },
+    "commitments": {
+      "type": "array",
+      "maxItems": 10,
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "id",
+          "matter",
+          "who",
+          "what",
+          "due",
+          "risk",
+          "confidence"
+        ],
+        "properties": {
+          "id": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 64
+          },
+          "matter": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 64
+          },
+          "who": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 40
+          },
+          "what": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 80
+          },
+          "due": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 32
+          },
+          "risk": {
+            "type": "string",
+            "enum": [
+              "low",
+              "medium",
+              "high"
+            ]
+          },
+          "confidence": {
+            "type": "number",
+            "minimum": 0,
+            "maximum": 1
+          }
+        }
+      }
+    },
+    "risks": {
+      "type": "array",
+      "maxItems": 10,
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "id",
+          "level",
+          "summary",
+          "evidence",
+          "confidence"
+        ],
+        "properties": {
+          "id": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 64
+          },
+          "level": {
+            "type": "string",
+            "enum": [
+              "low",
+              "medium",
+              "high"
+            ]
+          },
+          "summary": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 80
+          },
+          "evidence": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 64
+          },
+          "confidence": {
+            "type": "number",
+            "minimum": 0,
+            "maximum": 1
+          }
+        }
+      }
+    },
+    "facts": {
+      "type": "array",
+      "maxItems": 10,
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "id",
+          "subject",
+          "predicate",
+          "value",
+          "confidence"
+        ],
+        "properties": {
+          "id": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 64
+          },
+          "subject": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 40
+          },
+          "predicate": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 40
+          },
+          "value": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 80
+          },
+          "confidence": {
+            "type": "number",
+            "minimum": 0,
+            "maximum": 1
+          }
+        }
+      }
+    },
+    "mood": {
+      "type": "string",
+      "enum": [
+        "calm",
+        "focused",
+        "concerned",
+        "pleased"
+      ],
+      "description": "Workload-only rendering hint, never an emotional state about the user."
+    },
+    "suggestedLines": {
+      "type": "array",
+      "maxItems": 3,
+      "items": {
+        "type": "string",
+        "minLength": 1,
+        "maxLength": 40
+      }
+    },
+    "redactions": {
+      "type": "array",
+      "maxItems": 10,
+      "items": {
+        "type": "string",
+        "minLength": 1,
+        "maxLength": 80
+      }
+    }
+  }
+}

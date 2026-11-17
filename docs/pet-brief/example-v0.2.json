@@ -1,0 +1,88 @@
+{
+  "schemaVersion": 2,
+  "generatedAt": "2026-11-17T09:00:00+08:00",
+  "expiresAt": "2026-11-17T09:05:00+08:00",
+  "source": "advisers",
+  "displayPolicy": "private",
+  "counts": {
+    "today": 2,
+    "commitments": 2,
+    "risks": 3,
+    "facts": 1
+  },
+  "today": [
+    {
+      "id": "matter_01",
+      "title": "给某客户发报价",
+      "status": "doing"
+    },
+    {
+      "id": "matter_02",
+      "title": "整理周会纪要",
+      "status": "doing"
+    }
+  ],
+  "commitments": [
+    {
+      "id": "commit_01",
+      "matter": "matter_02",
+      "who": "团队",
+      "what": "发周会纪要",
+      "due": "2026-11-17",
+      "risk": "high",
+      "confidence": 0.95
+    },
+    {
+      "id": "commit_02",
+      "matter": "matter_01",
+      "who": "某客户",
+      "what": "发报价",
+      "due": "2026-11-17",
+      "risk": "high",
+      "confidence": 0.95
+    }
+  ],
+  "risks": [
+    {
+      "id": "risk_commit_01",
+      "level": "high",
+      "summary": "团队的发周会纪要已逾期",
+      "evidence": "commit_01",
+      "confidence": 0.95
+    },
+    {
+      "id": "risk_commit_02",
+      "level": "high",
+      "summary": "某客户的发报价今天到期",
+      "evidence": "commit_02",
+      "confidence": 0.9
+    },
+    {
+      "id": "risk_cluster_20261117",
+      "level": "medium",
+      "summary": "2026-11-17 有 2 个截止",
+      "evidence": "commit_01",
+      "confidence": 0.72
+    }
+  ],
+  "facts": [
+    {
+      "id": "fact_01",
+      "subject": "某客户",
+      "predicate": "prefers",
+      "value": "PDF 报价",
+      "confidence": 0.9
+    }
+  ],
+  "mood": "concerned",
+  "suggestedLines": [
+    "团队的发周会纪要已逾期。",
+    "某客户的发报价，今天到期。",
+    "某客户：PDF 报价"
+  ],
+  "redactions": [
+    "不含文档正文、邮件正文、聊天记录",
+    "不含模型推理、系统提示或原始提示词",
+    "联系人/客户名默认不进入 brief"
+  ]
+}
