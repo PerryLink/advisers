@@ -51,7 +51,7 @@
 
 ## Pricing / channel (research recommendation, not a commitment)
 
-Apache-2.0 core free; optional local pro/support subscription at a personal price point
+PolyForm-NC core free for noncommercial use; commercial use requires a separate commercial license; optional local pro/support subscription at a personal price point
 (roughly $10–40/month), not per-seat enterprise. Channel: independent-consultant
 communities, open source, DSH/agent ecosystem; make `.ics` reminders and evidence
 packs the customer-visible artifacts.

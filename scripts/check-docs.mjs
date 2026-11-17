@@ -8,16 +8,30 @@
  * with package.json.
  */
 import { readFileSync, existsSync } from 'node:fs'
+import { createHash } from 'node:crypto'
 import { join } from 'node:path'
 
 const root = new URL('..', import.meta.url).pathname
 const read = (file) => readFileSync(join(root, file), 'utf8')
+const readIfExists = (file) => (existsSync(join(root, file)) ? read(file) : '')
 const json = (file) => JSON.parse(read(file))
 const failures = []
 const check = (name, ok, detail = '') => {
   if (!ok) failures.push(`${name}${detail ? `: ${detail}` : ''}`)
   console.log(`${ok ? 'PASS' : 'FAIL'} ${name}${detail && !ok ? ` — ${detail}` : ''}`)
 }
+
+// License policy (0.2.0 migration, 2026-11-17): software is PolyForm Noncommercial
+// 1.0.0 and docs/data/design is CC BY-NC-SA 4.0. This is source-available, NOT an
+// OSI-approved open source project. Historical notes (CHANGELOG older sections,
+// eval/results/**, docs/HANDOFF-*, NOTICE version mapping) are intentionally not
+// scanned for the old license names.
+const LICENSE_ID = 'PolyForm-Noncommercial-1.0.0'
+const DOCS_LICENSE_ID = 'CC-BY-NC-SA-4.0'
+const POLYFORM_URL = 'https://polyformproject.org/licenses/noncommercial/1.0.0'
+const CC_URL = 'https://creativecommons.org/licenses/by-nc-sa/4.0/legalcode.en'
+const COMMERCIAL_URL = 'https://github.com/PerryLink/advisers/issues'
+const sha256 = (file) => createHash('sha256').update(readFileSync(join(root, file))).digest('hex')
 
 const packages = {
   'advisers-core': { dir: 'packages/core', versionFile: 'package.json' },
@@ -34,7 +48,7 @@ const versions = {}
 for (const [name, meta] of Object.entries(packages)) {
   const pkg = json(join(meta.dir, meta.versionFile))
   if (pkg.name !== name) failures.push(`${meta.dir}: package name ${pkg.name} != expected ${name}`)
-  check(`${meta.dir} license field`, pkg.license === 'Apache-2.0', `found ${pkg.license}`)
+  check(`${meta.dir} license field`, pkg.license === LICENSE_ID, `found ${pkg.license}`)
   versions[name] = pkg.version
 }
 
@@ -63,7 +77,7 @@ for (const [file, field, dep, expected] of pinChecks) {
   check(`${file} ${field}.${dep}`, found === expected, `found ${found}, expected ${expected}`)
 }
 
-// Publishable packages must ship the Apache-2.0 license texts (switch 2026-11-16).
+// License files: software PolyForm-Noncommercial-1.0.0 + docs CC-BY-NC-SA-4.0.
 const licensePackages = [
   'packages/core',
   'packages/office',
@@ -72,21 +86,89 @@ const licensePackages = [
   'packages/advisers',
   'packages/dsh-advisers',
 ]
-const rootLicense = read('LICENSE')
-const rootNotice = read('NOTICE')
+const rootLicenseText = read('LICENSE')
+check(
+  'LICENSE is the PolyForm Noncommercial License 1.0.0 text',
+  rootLicenseText.includes('PolyForm Noncommercial License 1.0.0') && rootLicenseText.includes(POLYFORM_URL),
+)
+check('LICENSE no longer contains the Apache License text', !rootLicenseText.includes('Apache License'))
+
+const rootNoticeText = read('NOTICE')
+check('NOTICE contains the Required Notice line', rootNoticeText.includes('Required Notice:'))
+check('NOTICE names both licenses', rootNoticeText.includes('PolyForm') && rootNoticeText.includes('CC BY-NC-SA 4.0'))
+check('NOTICE says the project is not open source', /not open source/i.test(rootNoticeText))
+check(
+  'NOTICE documents the non-retroactive history',
+  /not retroactive/i.test(rootNoticeText) && rootNoticeText.includes('advisers@0.2.0-preview.71'),
+)
+
+const docsLicenseText = readIfExists('LICENSE-DOCS')
+check(
+  'LICENSE-DOCS is the CC BY-NC-SA 4.0 legal code',
+  docsLicenseText.includes('Attribution-NonCommercial-ShareAlike 4.0 International') && docsLicenseText.includes(CC_URL),
+)
+
+const licensingText = readIfExists('LICENSING.md')
+check('LICENSING.md contains both SPDX ids', licensingText.includes(LICENSE_ID) && licensingText.includes(DOCS_LICENSE_ID))
+check('LICENSING.md says the project is not open source (EN+ZH)', /not open source/i.test(licensingText) && licensingText.includes('非开源'))
+check('LICENSING.md records the current LICENSE/NOTICE sha256', licensingText.includes(sha256('LICENSE')) && licensingText.includes(sha256('NOTICE')))
+check('LICENSING.md points at the commercial-license channel', licensingText.includes(COMMERCIAL_URL))
+
+// Published packages ship byte-identical copies of the root LICENSE/NOTICE and list
+// all three required tarball files in their files allowlist.
+const rootHashes = { LICENSE: sha256('LICENSE'), NOTICE: sha256('NOTICE') }
 for (const dir of licensePackages) {
   const pkg = json(dir + '/package.json')
   const licenseFile = dir + '/LICENSE'
-  check(licenseFile + ' matches root LICENSE', existsSync(join(root, licenseFile)) && read(licenseFile) === rootLicense)
+  check(licenseFile + ' sha256 matches root LICENSE', existsSync(join(root, licenseFile)) && sha256(licenseFile) === rootHashes.LICENSE)
   const noticeFile = dir + '/NOTICE'
-  check(noticeFile + ' matches root NOTICE', existsSync(join(root, noticeFile)) && read(noticeFile) === rootNotice)
-  check(dir + ' files allowlist includes NOTICE', Array.isArray(pkg.files) && pkg.files.includes('NOTICE'))
-  const readmeFile = dir + '/README.md'
-  check(readmeFile + ' mentions Apache-2.0', existsSync(join(root, readmeFile)) && /Apache/.test(read(readmeFile)))
+  check(noticeFile + ' sha256 matches root NOTICE', existsSync(join(root, noticeFile)) && sha256(noticeFile) === rootHashes.NOTICE)
+  check(noticeFile + ' contains the Required Notice line', existsSync(join(root, noticeFile)) && read(noticeFile).includes('Required Notice:'))
+  const required = ['LICENSE', 'NOTICE', 'THIRD-PARTY-NOTICES.md']
+  check(dir + ' files allowlist includes LICENSE, NOTICE and THIRD-PARTY-NOTICES.md', Array.isArray(pkg.files) && required.every((file) => pkg.files.includes(file)))
 }
-for (const file of ['README.md', 'README-zh.md']) {
-  check(file + ' license is Apache-2.0', /Apache/.test(read(file)))
+
+// Every current README license section must describe the PolyForm software license.
+const readmeLicenseFiles = [
+  'README.md',
+  'README-zh.md',
+  ...licensePackages.map((dir) => dir + '/README.md'),
+  'packages/advisers/README-zh.md',
+  'packages/link-feishu/README.md',
+]
+for (const file of readmeLicenseFiles) {
+  check(file + ' license section mentions PolyForm', /PolyForm/.test(read(file)))
 }
+
+// Current-state docs must not present Apache-2.0/MIT as the current license. The
+// patterns below deliberately do not match historical sentences such as
+// "Apache-2.0 for advisers@0.2.0-preview.71" or competitor descriptions.
+const staleLicenseClaims = [
+  [/this and future versions are Apache-2\.0/i, 'claims future versions are Apache-2.0'],
+  [/本版本及后续版本为\s*Apache-2\.0/, 'claims future versions are Apache-2.0 (zh)'],
+  [/Licensed under the Apache License/i, 'presents Apache-2.0 as the license'],
+  [/Apache License, Version 2\.0\./, 'presents Apache-2.0 as the license'],
+  [/Apache-2\.0 core (?:free|stays free)/i, 'claims an Apache-2.0 core'],
+]
+const currentDocs = [
+  'README.md',
+  'README-zh.md',
+  'docs/QUICKSTART.md',
+  'docs/POSITIONING.md',
+  'docs/PRICING-CHANNEL.md',
+  ...licensePackages.map((dir) => dir + '/README.md'),
+  'packages/advisers/README-zh.md',
+]
+const stale = []
+for (const file of currentDocs) {
+  const lines = read(file).split('\n')
+  for (let index = 0; index < lines.length; index += 1) {
+    for (const [re, label] of staleLicenseClaims) {
+      if (re.test(lines[index])) stale.push(file + ':' + (index + 1) + ' ' + label)
+    }
+  }
+}
+check('current docs do not claim Apache-2.0/MIT as the current license', stale.length === 0, stale.join('; '))
 
 // The current version must be the one the user-facing docs advertise.
 const version = versions['advisers']

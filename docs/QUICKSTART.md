@@ -4,6 +4,10 @@
 > The public `@next` tag currently points at an old 0.1 preview; do not judge this build by it.
 > Until approval, run from the checkout as shown below.
 
+> **Before you start** — read the [Terms of Service](TOS.md) (v2026.11.1),
+> [Disclaimer](DISCLAIMER.md), and [Safety & content review](SAFETY.md). AI output can be
+> wrong; illegal, infringing, deceptive, or unlabeled synthetic content is prohibited.
+
 ## Requirements
 
 - Node **>= 22.13** (Node 24 recommended). `node:sqlite` is not available on 22.5–22.12.

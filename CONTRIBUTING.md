@@ -3,6 +3,22 @@
 Advisers is a small, security-sensitive runtime. Read `docs/ARCHITECTURE.md`
 and `SECURITY.md` before changing code.
 
+## Legal notice for extensions
+
+Advisers extensions must carry the legal-notice block from
+[`templates/legal-notice-code-template.md`](templates/legal-notice-code-template.md) and
+must not remove or bypass the content-safety review, the local audit chain, or
+AI-generated-content labels. Third-party extensions/DLC must declare author, licence,
+`tosVersion`, permissions, and a content-safety statement in their manifest; see the
+[Terms of Service](docs/TOS.md) (v2026.11.1) and
+[Safety & content review](docs/SAFETY.md).
+
+- Do not use or ship extensions for unlawful, infringing, deceptive, harassing, or
+  unlabeled synthetic content, or to evade consent/egress/permission checks.
+- Do not remove, tamper with, forge, or hide AI-generated-content labels.
+- Rendered/template outputs that leave the machine need the sender's own review and the
+  applicable AI-content labels.
+
 ## Architecture rules (enforced by tests)
 
 1. `packages/core/src/**` may import only relative paths or `node:*`. It must
@@ -23,6 +39,7 @@ pnpm -r run typecheck
 pnpm -r run test
 pnpm -r run build
 node --experimental-strip-types examples/demo.ts
+node scripts/check-tos.mjs   # TOS manifest / packaged copies / legal-doc links
 ```
 
 Node **>= 22.13** is required (`node:sqlite`); Node 24 LTS recommended. The DSH

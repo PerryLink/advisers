@@ -37,5 +37,15 @@ https://github.com/PerryLink/advisers
 
 ## 许可
 
-Apache License, Version 2.0，见 [LICENSE](LICENSE) 与 [NOTICE](NOTICE)。
-此前以 MIT 发布的版本仍为 MIT；本版本及后续版本为 Apache-2.0。
+软件采用 [PolyForm Noncommercial License 1.0.0](LICENSE)（SPDX
+`PolyForm-Noncommercial-1.0.0`），见 [LICENSE](LICENSE) 与 [NOTICE](NOTICE)。这是
+**源码可见、非开源**的许可，不是 OSI 认证的开源许可；商业使用需另行取得商业授权
+（在 <https://github.com/PerryLink/advisers/issues> 提出申请）。
+
+仓库的文档、评测数据与设计材料采用
+[CC BY-NC-SA 4.0](https://github.com/PerryLink/advisers/blob/main/LICENSE-DOCS)；
+本包 README 随软件分发，适用 PolyForm NC。第三方组件保留各自许可，见
+[THIRD-PARTY-NOTICES.md](THIRD-PARTY-NOTICES.md)。
+
+0.2.0 之前发布的版本保留原许可（MIT；`advisers@0.2.0-preview.71` 为
+Apache-2.0），不追溯。详见仓库 LICENSING.md、LICENSE-DOCS 与 NOTICE。

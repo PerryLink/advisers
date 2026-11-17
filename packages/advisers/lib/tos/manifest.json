@@ -1,0 +1,21 @@
+{
+  "schema": "advisers.tos/1",
+  "version": "2026.11.1",
+  "effectiveFrom": "2026-11-17",
+  "language": "zh-CN",
+  "canonical": "docs/TOS.md",
+  "shortNotice": "docs/DISCLAIMER.md",
+  "safety": "docs/SAFETY.md",
+  "files": [
+    {
+      "path": "terms.zh-CN.md",
+      "source": "docs/TOS.md",
+      "sha256": "cf01f3f9e246befb10f01d6796c77f87043e1d9c4111d189e89d91cdc9576316"
+    },
+    {
+      "path": "summary.zh-CN.md",
+      "source": "docs/DISCLAIMER.md",
+      "sha256": "019adf780c881679d4acb7aa1a755bbce7fc2f7a5cece26a83c12d8e9ad0a90a"
+    }
+  ]
+}

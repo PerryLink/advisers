@@ -2,6 +2,12 @@
 
 **一个本地优先、可审计、中文 Office 优先的单窗口工作秘书 runtime。**
 
+> **AI 与合规提示** —— Advisers 是本地优先的工作助手，不是情感陪伴，也不提供法律、医疗、
+> 金融等专业意见；AI 输出可能出错，使用前请自行核验。禁止用于违法、侵权、欺诈、骚扰、
+> 伪造或未标识合成内容等用途；未成年人须经监护人同意。
+> 详见[服务条款](docs/TOS.md)（v2026.11.1）、[免责声明](docs/DISCLAIMER.md)、
+> [安全与内容审核说明](docs/SAFETY.md)；许可拆分见 [LICENSING.md](LICENSING.md)。
+
 Advisers 不是聊天框，也不是情感陪伴。它维护三本账：
 
 - **用户账**：你是谁、偏好、边界、证据；
@@ -52,5 +58,16 @@ advisers verify out.docx
 
 ## 许可
 
-Apache License, Version 2.0，见 [LICENSE](LICENSE) 与 [NOTICE](NOTICE)。
-此前以 MIT 发布的版本仍为 MIT；本版本及后续版本为 Apache-2.0。
+Advisers 是**源码可见、非开源（source-available）**项目。自 `0.2.0` 起采用双许可模型（均不追溯）：
+
+- **软件**（`packages/**`、`scripts/**`、`.github/**`、各包 manifest，以及 npm tarball 内的
+  README/NOTICE/THIRD-PARTY-NOTICES）：
+  [PolyForm Noncommercial License 1.0.0](https://polyformproject.org/licenses/noncommercial/1.0.0)
+  （SPDX：`PolyForm-Noncommercial-1.0.0`），仅限非商业用途；营利机构的使用需另行取得商业授权。
+- **文档 / 数据 / 设计**（根文档、`docs/**`、`eval/**`、`examples/**`、`templates/**`）：
+  [CC BY-NC-SA 4.0](https://creativecommons.org/licenses/by-nc-sa/4.0/)（SPDX：`CC-BY-NC-SA-4.0`），
+  须署名、非商业使用、相同方式共享。
+
+历史版本保留原许可：MIT 版本仍为 MIT，`advisers@0.2.0-preview.71`（Apache-2.0）仍为 Apache-2.0。
+完整策略、Required Notice 与商业授权渠道见 [LICENSE](LICENSE)、[LICENSE-DOCS](LICENSE-DOCS)、
+[NOTICE](NOTICE) 与 [LICENSING.md](LICENSING.md)。

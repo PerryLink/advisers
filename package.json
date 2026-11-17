@@ -3,6 +3,7 @@
   "private": true,
   "version": "0.0.0",
   "description": "Monorepo for Advisers: a staff of AI advisers built on cordis.",
+  "license": "PolyForm-Noncommercial-1.0.0",
   "type": "module",
   "packageManager": "pnpm@12.16.1",
   "scripts": {
@@ -14,6 +15,8 @@
     "release": "node scripts/release.mjs",
     "set-version": "node scripts/set-version.mjs",
     "check:release": "node scripts/check-release.mjs",
+    "check:licenses": "node scripts/check-licenses.mjs",
+    "check:tos": "node scripts/check-tos.mjs",
     "test:security": "node scripts/security-suite.mjs"
   },
   "devDependencies": {

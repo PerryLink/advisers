@@ -2,6 +2,13 @@
 
 **A staff of AI advisers — a local-first, auditable personal secretary runtime.**
 
+> **AI & compliance notice** — Advisers is a local-first work assistant, not a companion,
+> lawyer, doctor, or financial adviser. AI output can be wrong; verify before use.
+> Illegal, infringing, fraudulent, harassing, or forged use is prohibited; distribute
+> AI-generated content only with the required labels. Minors need guardian consent.
+> See [Terms of Service](docs/TOS.md) (v2026.11.1), [Disclaimer](docs/DISCLAIMER.md),
+> [Safety & content review](docs/SAFETY.md); licence split: [LICENSING.md](LICENSING.md).
+
 Advisers is not another chat window. It is a small staff of specialist advisers
 (memory, commitments, routines) that share one continuous conversation and keep
 three ledgers:
@@ -81,6 +88,21 @@ promoted.
 
 ## License
 
-Apache License, Version 2.0. See [LICENSE](LICENSE) and [NOTICE](NOTICE).
-Prior MIT releases remain MIT; this and future versions are Apache-2.0.
+Advisers is **source-available, not open source**. From `0.2.0` the licenses are split
+(neither is retroactive):
+
+- **Software** — `packages/**`, `scripts/**`, `.github/**`, package manifests, and the
+  README/NOTICE/THIRD-PARTY-NOTICES shipped in npm tarballs:
+  [PolyForm Noncommercial License 1.0.0](https://polyformproject.org/licenses/noncommercial/1.0.0)
+  (SPDX: `PolyForm-Noncommercial-1.0.0`). Noncommercial use only; use by or for a
+  for-profit organization requires a separate commercial license.
+- **Documentation, data and design** — root docs, `docs/**`, `eval/**`, `examples/**`,
+  `templates/**`: [CC BY-NC-SA 4.0](https://creativecommons.org/licenses/by-nc-sa/4.0/)
+  (SPDX: `CC-BY-NC-SA-4.0`). Attribution, noncommercial use and ShareAlike apply.
+
+Prior releases keep the licenses they were published under: MIT releases stay MIT and
+`advisers@0.2.0-preview.71` (Apache-2.0) stays Apache-2.0. See [LICENSE](LICENSE),
+[LICENSE-DOCS](LICENSE-DOCS), [NOTICE](NOTICE) and [LICENSING.md](LICENSING.md) for the
+definitive policy, required notices and the commercial-licensing channel.
+
 Advisers is an independent core, not coupled to the famling desktop pet.

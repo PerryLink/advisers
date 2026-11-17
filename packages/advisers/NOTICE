@@ -1,9 +1,34 @@
 Advisers
 Copyright 2026 PerryLink contributors
+https://github.com/PerryLink/advisers
 
-This product includes software developed by PerryLink contributors.
-Licensed under the Apache License, Version 2.0 (see LICENSE).
+Required Notice: Copyright 2026 PerryLink contributors (https://github.com/PerryLink/advisers)
 
-Prior releases published under the MIT License remain available under MIT;
-this NOTICE and the Apache-2.0 LICENSE apply to this and future versions.
+Software: PolyForm Noncommercial License 1.0.0
+(SPDX: PolyForm-Noncommercial-1.0.0). Terms: LICENSE in this distribution, or
+https://polyformproject.org/licenses/noncommercial/1.0.0
+
+Documentation, evaluation data and design materials are licensed under
+Creative Commons Attribution-NonCommercial-ShareAlike 4.0 International
+(SPDX: CC-BY-NC-SA-4.0). See LICENSE-DOCS and LICENSING.md in the repository
+(https://github.com/PerryLink/advisers).
+
+License history (NOT retroactive): releases published before 0.2.0 keep the
+licenses they were published under.
+  MIT: advisers 0.0.1 through 0.1.0-preview.4; advisers-core (all earlier
+  releases); advisers-office 0.1.0-preview.1/.2 and 0.2.0-preview.14;
+  advisers-policy-strict 0.2.0-preview.12; dsh-advisers 0.0.1 through
+  0.1.0-preview.3.
+  Apache-2.0: advisers@0.2.0-preview.71.
+  0.2.0 and later: PolyForm Noncommercial 1.0.0 (software) and
+  CC BY-NC-SA 4.0 (docs/data/design).
+
+Third-party components keep their own licenses; see THIRD-PARTY-NOTICES.md.
+jszip is used under its MIT option (its SPDX expression is
+MIT OR GPL-3.0-or-later).
+
+This is source-available software, not open source: it is not an OSI-approved
+open source project. Commercial use requires a separate commercial license:
+open an issue at https://github.com/PerryLink/advisers/issues.
+
 Advisers is an independent core and does not depend on the famling/desktop pet.

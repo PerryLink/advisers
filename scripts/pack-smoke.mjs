@@ -14,6 +14,13 @@ import { execFileSync } from 'node:child_process'
 import { readFileSync, statSync } from 'node:fs'
 import { dirname, join, relative, resolve, sep } from 'node:path'
 
+// License migration (0.2.0): every tarball must carry the software license, the
+// required notice and the generated third-party notices, and must not ship the old
+// Apache-2.0 text.
+const LICENSE_ID = 'PolyForm-Noncommercial-1.0.0'
+const REQUIRED_FILES = ['LICENSE', 'NOTICE', 'THIRD-PARTY-NOTICES.md']
+const POLYFORM_MARKER = 'PolyForm Noncommercial License 1.0.0'
+
 const packages = [
   { dir: 'packages/core', name: 'advisers-core', entries: ['dist/index.js'] },
   { dir: 'packages/office', name: 'advisers-office', entries: ['dist/index.js'] },
@@ -82,13 +89,21 @@ for (const { dir, name, entries } of packages) {
     const packed = new Set(info.files.map((f) => f.path))
     if (!packed.has('package.json')) throw new Error('missing package.json in tarball')
 
+    const pkg = JSON.parse(readFileSync(resolve(dir, 'package.json'), 'utf8'))
+    if (pkg.license !== LICENSE_ID) throw new Error('package.json license is ' + String(pkg.license) + ', expected ' + LICENSE_ID)
+    const missingRequired = REQUIRED_FILES.filter((file) => !packed.has(file))
+    if (missingRequired.length) throw new Error('tarball is missing required license file(s): ' + missingRequired.join(', '))
+    const licenseText = readFileSync(resolve(dir, 'LICENSE'), 'utf8')
+    if (!licenseText.includes(POLYFORM_MARKER)) throw new Error('LICENSE does not contain the PolyForm Noncommercial 1.0.0 text')
+    if (licenseText.includes('Apache License')) throw new Error('LICENSE still contains the Apache License text')
+
     const reachable = reachableFiles(resolve(dir), entries)
     const missing = reachable
       .map((file) => relative(resolve(dir), file).split(sep).join('/'))
       .filter((file) => !packed.has(file))
     if (missing.length) throw new Error(`tarball is missing imported runtime file(s): ${missing.join(', ')}`)
 
-    console.log(`PASS ${name}@${info.version} (${packed.size} files, ${reachable.length} local imports checked)`)
+    console.log(`PASS ${name}@${info.version} (${packed.size} files incl. LICENSE/NOTICE/THIRD-PARTY-NOTICES.md, license=${pkg.license}, ${reachable.length} local imports checked)`)
   } catch (error) {
     failed = true
     console.error(`FAIL ${name}: ${String(error.stderr || error.message).slice(0, 800)}`)
