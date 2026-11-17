@@ -10,7 +10,7 @@
 # 从 checkout 运行：
 #   corepack pnpm install && corepack pnpm -r build
 #   ADVISERS_OFFICE_LOCAL=1 node packages/advisers/bin/advisers.js status
-# preview/RC 构建在 `next` 渠道：
+# preview/RC 构建使用 `next` 渠道（发布后 `next` 也指向 0.2.0）：
 #   npm i -g --registry=https://registry.npmjs.org advisers@next advisers-office@next
 advisers soul init
 advisers brief "做一份 Q4 预算 Excel，周五前给老板"

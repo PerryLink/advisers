@@ -55,7 +55,7 @@ Advisers 不是聊天框，也不是情感陪伴。它维护三本账：
 #   ADVISERS_OFFICE_LOCAL=1 node packages/advisers/bin/advisers.js status
 # 从 npm 安装（稳定渠道 = 默认 `latest`，现为 0.2.0）：
 #   npm i -g --registry=https://registry.npmjs.org advisers@latest advisers-office@latest
-# preview/RC 构建在 `next` 渠道：
+# preview/RC 构建使用 `next` 渠道（发布后 `next` 也指向 0.2.0）：
 #   npm i -g --registry=https://registry.npmjs.org advisers@next advisers-office@next
 advisers soul init
 advisers commit add "周五前发报价给王工" --quote "周五前发报价给王工" --due 2026-11-13T18:00:00+08:00

@@ -238,8 +238,8 @@ export ADVISERS_HOME=/tmp/adv-home-0.2.0
 4. **Windows smoke**（首个目标平台）：按 docs/WINDOWS-SMOKE.md 在 PowerShell 7 + Node ≥22.13
    重复第 3 步，记录 chcp 65001 与 BOM 用例；PowerShell 5.1 抽查一次。无法实机时在 E11
    明确写“未验证”。
-5. **tags 收尾（可选，按发布决策）**：npm dist-tag add <pkg>@0.2.0 next --registry ... 六包，
-   避免 @next 仍停在旧 preview；旧 preview 版本不再改动。
+5. **tags 收尾（2026-11-17 已执行）**：六包 `npm dist-tag add <pkg>@0.2.0 next` 已完成，
+   `latest` 与 `next` 均为 0.2.0；旧 preview 版本不再改动。
 6. **证据落盘**：按 eval/results/E11-release-2026-11-17.md 模板填 commit/tag、CI、六包 stage
    id/shasum、install smoke、偏差与未完成项；commit docs(release): record 0.2.0 并 push 三端。
 7. **README 状态**：把状态段从 “release candidate / staged pending OTP” 改为 published，安装
@@ -256,8 +256,10 @@ export ADVISERS_HOME=/tmp/adv-home-0.2.0
 | 依赖顺序错（advisers 先于 core） | 立即把对应包 dist-tag add 回上一版，依赖 approve 后再重指 0.2.0 | 六包 latest 同版本 |
 | 镜像/缓存滞后 | 所有查询显式官方 registry 或 curl；用户安装加 --registry | 官方 registry 返回 0.2.0 |
 
-> 旧 staged 积压（本仓六包历史版本）不要批量 reject：与 stable 无关，且逐条 reject 需 OTP；
-> 由 owner 另行书面授权后处理，E11 记录“未清理 + 原因 + 后续计划”。
+> 旧 staged 积压（本仓六包历史版本）与 stable 无关，且逐条 reject 需 owner 2FA。清理工具：
+> `node scripts/staged-backlog.mjs`（默认只看六包，`--apply` 交互式逐条 reject，`--all` 含
+> 其他项目）。快照与说明见 `eval/results/staged-backlog-2026-11-17.md`；清理前先确认没有
+> 仍需保留的 staged 候选。
 
 ## 附：验收清单（复制到发布日志）
 

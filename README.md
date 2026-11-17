@@ -82,7 +82,7 @@ cd advisers && corepack pnpm install && corepack pnpm -r build
 ADVISERS_OFFICE_LOCAL=1 node packages/advisers/bin/advisers.js status
 # From npm (stable channel = default `latest`, now 0.2.0):
 #   npm i -g --registry=https://registry.npmjs.org advisers@latest advisers-office@latest
-# Pre-release/RC builds live on the `next` channel:
+# Pre-release/RC builds used the `next` channel (after release it also points at 0.2.0):
 #   npm i -g --registry=https://registry.npmjs.org advisers@next advisers-office@next
 advisers
 # or one-shot:
