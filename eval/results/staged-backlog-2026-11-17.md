@@ -27,9 +27,18 @@
 （实测 token 直接调用返回 `EOTP`），因此 agent 无法代为执行。本仓提供交互式工具：
 
 Windows PowerShell 用户用 `scripts/windows-clean-staged.ps1`（同样先列后清，支持 -Limit 试跑）。
-若要无提示批量清理，可临时创建 npm automation token（bypass 2FA），用
-`-PromptToken` 隐藏粘贴后执行，完成后立即在 npmjs.com 撤销该 token；若 npm 拒绝 automation
-token 执行 staged reject（EOTP），退回浏览器逐条方式或分批处理。
+若要无提示批量清理，可临时创建 npm **Granular Access Token** 并勾选/加上 **Bypass 2FA**
+（旧版 UI 里的 Classic Automation token 已不再显示；2026-11 的 UI 改为 Granular 表单）：
+
+- UI：npmjs.com → Access Tokens → Generate New Token → Granular Access Token；
+  Permissions 选 Read and write（或仅六个包），Expiration 选 1 day，勾选 Bypass 2FA。
+- CLI（Windows PowerShell，会提示账号密码 + OTP）：
+  `npm.cmd token create --name advisers-staged-cleanup --bypass-2fa --packages-all --packages-and-scopes-permission read-write --expires 1`
+- 把输出的 token 用 `scripts/windows-clean-staged.ps1 -PromptToken -Apply` 隐藏粘贴执行；
+  完成后立刻 `npm.cmd token revoke <id>`（`npm.cmd token list` 可查 id）。
+
+若 npm 仍拒绝该 token 执行 staged reject（EOTP），说明该操作不在 bypass 范围内，退回
+浏览器逐条方式或分批处理（或直接保留 backlog，不影响安装）。
 
 ~~~bash
 # 1) 只列出（默认只看 Advisers 六包）
