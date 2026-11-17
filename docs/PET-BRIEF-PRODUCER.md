@@ -133,7 +133,7 @@ node --experimental-strip-types --test test/pet-brief.test.js   # 28/28 pass（�
 
 - **warning 不改变 `ok`/退出码**：`--check` 对旧 brief 报 warning 而非 fail。
 - 迁移顺序（现状 2026-11-17）：① consumer 接受 v1|v2 — 已完成；② 发布 v0.2 producer — 已随 `0.2.0` 发布；③ consumer 实现 displayPolicy 行为并最终只接受 v2 — 展示约束已实现，只收 v2 尚未开始。
-- 契约版本与包版本解耦：`schemaVersion` 是契约 major；`advisers` 包版本是发布渠道版本（当前 `0.2.0`）。
+- 契约版本与包版本解耦：`schemaVersion` 是契约 major；`advisers` 包版本是发布渠道版本（当前 `0.2.1`）。
 
 ## 8. 链接
 

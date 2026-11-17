@@ -1,7 +1,8 @@
 # Quickstart (Windows + PowerShell)
 
-> Current status: `0.2.0` is the **current stable release**, published on npm `@latest`.
-> All six published packages are lockstep at `0.2.0`; install with
+> Current status: `0.2.1` is the **current release**; it is staged to npm `@latest` and
+> awaits the account owner's OTP approval (`0.2.0` is still what `latest` serves until
+> then). All six published packages are lockstep at `0.2.1`; after promotion install with
 > `npm i -g --registry=https://registry.npmjs.org advisers@latest advisers-office@latest`.
 > The checkout instructions below remain valid for development builds.
 
@@ -94,11 +95,11 @@ node $A chat "做一份 Q4 汇报 PPT，放到 out\q4.pptx"
 ## B. Installed CLI (after npm approval)
 
 ```powershell
-# Stable channel after the owner approves 0.2.0 (default `latest` tag):
+# Stable channel after the owner approves 0.2.1 (default `latest` tag; 0.2.0 until then):
 npm i -g --registry=https://registry.npmjs.org advisers@latest advisers-office@latest
 # Pre-release channel (preview/RC builds land on `next` before promotion):
 # npm i -g --registry=https://registry.npmjs.org advisers@next advisers-office@next
-advisers --version    # expect 0.2.0 after approval
+advisers --version    # expect 0.2.1 after approval
 advisers status
 advisers soul init
 advisers template weekly weekly.json out\weekly.docx

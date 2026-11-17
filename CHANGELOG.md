@@ -1,5 +1,129 @@
 # Changelog
 
+## 0.2.1 (release candidate, 2026-11-17)
+
+Hardening release on the 0.2.0 stable line. `0.2.1` is the current release: the eight
+workspace packages are lockstep at `0.2.1`, internal pins/version constants/`pnpm-lock.yaml`
+follow, and it is being staged to npm `latest` pending the account owner's OTP approval
+(not published yet). The legal texts are unchanged from 0.2.0 (TOS v2026.11.2).
+
+### Fixed
+
+- **`dsh-advisers` packaging/import (0.2.0 defect fixed here)**: the published 0.2.0
+  bundle imported `../advisers/lib/safety/index.js`, a monorepo-relative path that is not
+  in the tarball and had no declared dependency, so `dsh-advisers@0.2.0` failed with
+  `ERR_MODULE_NOT_FOUND` after a clean install. The bundle now imports the published
+  export subpath `advisers/lib/safety/index.js`, `dsh-advisers` declares `advisers` as a
+  dependency, `advisers` exports `./lib/safety/index.js`, `pack-smoke` rejects static
+  cross-package relative imports, and `verify-release` imports every published package
+  (including `dsh-advisers`) from a temp prefix.
+- **Node engine floor `>=22.16`**: 0.2.0 declared `>=22.13`, but `node:sqlite` on Node
+  22.13–22.15 is built without FTS5, so the default SQLite ledger failed on
+  `status`/`today`/`doctor` (`no such module: fts5`). Packages now require Node >= 22.16
+  (Node 24 recommended); Node 22.13–22.15 are not supported, and a CLI guard reports the
+  real floor instead of an opaque failure.
+- **Single-writer instance lock / concurrent writes**: one SQLite writer per data home
+  (cross-process lock with wait/timeout and a stable `E_DB_LOCKED`), atomic/concurrent
+  write paths, and corrupt or 0-byte databases fail fast instead of being silently
+  replaced; `vault seal` takes the same lock so a running reader cannot lose writes.
+- **Bridge egress hardening**: `advisers bridge` applies the matter-secrecy egress gate
+  before any model call, strips absolute local attachment paths from outbound JSON,
+  quarantines >1 MiB inbox files before the library reads them, and creates bridge
+  files/directories 0600/0700.
+- **Research error redaction**: upstream response bodies (which can echo the submitted API
+  key or contain control characters) are discarded; the CLI prints only stable status/code
+  and a hint, never upstream text or stack traces.
+- **Hints secrecy**: association hints no longer inject another matter's body or title;
+  only `secrecy = 0` matters may contribute titles, and a below-clearance matter raises
+  `SecrecyError` instead of leaking content into the model request.
+- **Safety block is not persisted + safety audit**: a blocked input is classified before
+  `runtime.ingest()`/session-title writes, so it creates no matter/fact/session and is
+  audited as a keyed `actor: 'safety'` row without storing the original text; over-long
+  payloads fail closed on egress surfaces.
+- **Secrets are not inherited by subprocesses**: OCR/timestamp/notification adapters spawn
+  with an explicit environment allowlist, so `ADVISERS_API_KEY`, `ADVISERS_AUDIT_KEY`,
+  `ADVISERS_VAULT_PASSPHRASE` and the sync/TOS passphrases are not handed to child
+  processes.
+- **Receipt anchors marked unverified**: `evidence verify` still validates recorded anchor
+  schema/checksums, but reports `anchorsVerified: false` / `anchored: false` with an
+  explicit warning — a recorded anchor is never presented as cryptographically verified.
+- **Vault sealed/seal cleanup**: every command reports `E_VAULT_SEALED` when only the
+  ciphertext exists (and creates no empty database); `vault seal --remove` also removes
+  `-wal`/`-shm` and stale plaintext copies (`state.db.before-*`, `import-backup-*`) and
+  fails loudly if cleanup is incomplete.
+- **Sync pull integrity**: `sync pull` validates the snapshot envelope, payload and
+  local-write conflict before replacing the database; a partial/corrupt snapshot is refused
+  and the local database is kept.
+- **TOS revoke / data rights**: after `tos revoke`, the data-rights commands (`privacy`,
+  `export`, `audit`, `purge`) and other local-only commands stay usable — no re-consent
+  is required to export or delete your own data — and the audit row records the withdrawal.
+- **UI Host header**: the local read-only UI rejects non-loopback `Host` headers
+  (DNS-rebinding hardening) and only serves loopback clients.
+- **MCP EPIPE**: `advisers mcp --stdio` treats a closed client pipe (`EPIPE`) as a clean
+  shutdown instead of an uncaught exception / exit 1.
+- **`privacy --prove` scope**: the report claims only locally self-checked facts
+  (build-time statement, gate-function result) and explicitly labels surfaces it cannot
+  verify; it no longer implies network-level proof.
+- **`deliveries --pack --all`**: `--all` was parsed but never forwarded, so the documented
+  escape hatch was a no-op above the 2000-entry cap; it is now honoured (explicit opt-in)
+  while the bounded default stays.
+- **PDF determinism**: PDF `/CreationDate` and `/ModDate` are pinned to the supplied
+  generation time instead of the wall clock, so identical input produces identical bytes
+  (fixes the flaky PDF regression test and makes byte-level comparisons reliable).
+- **Lazy imports**: command-specific modules (model/agent, safety, Pet Brief, UI server,
+  IMAP, review, undo/diff, context) load on first use; `--version`/`--help` no longer pay
+  for the full import graph or create a data home.
+- **Bounded `tick`**: the nudge-outcome read now passes the candidate commitment ids and
+  uses `idx_nudges_commitment_at`, instead of windowing over the whole `nudges` table on
+  every tick.
+- **Office submodule loading**: `deliver --format pdf` no longer imports the office barrel
+  (PDF delivery also works without the optional office peer); `deliveries --pack` loads
+  only the `docx`/`validate` submodules; `doctor` probes module resolution instead of
+  importing the barrel.
+- **Benchmark / PERFORMANCE**: `scripts/bench.mjs` gained `--keep`/`--home`/`--bin`/
+  `--json` for A/B runs, and `docs/PERFORMANCE.md` records 0.2.1 vs 0.2.0 numbers plus the
+  regression tests that pin them.
+
+### Changed
+
+- **Lockstep 0.2.1**: all eight workspace packages (`advisers`, `advisers-core`,
+  `advisers-office`, `advisers-policy-strict`, `advisers-bridge-hermes`, `dsh-advisers`,
+  private `advisers-link-email`, `advisers-link-feishu`) are `0.2.1`; internal pins,
+  version constants and `pnpm-lock.yaml` follow.
+- **Version references**: user-facing READMEs/QUICKSTART advertise `0.2.1` with the npm
+  staged/OTP-pending status; `0.2.0` references are kept only in historical narrative.
+- **No legal-text change**: TOS v2026.11.2, PRIVACY, DISCLAIMER and SAFETY are unchanged
+  from 0.2.0; no new consent version is required for the 0.2.1 upgrade.
+- **Generated third-party notices**: the per-package `THIRD-PARTY-NOTICES.md` files were
+  regenerated (`node scripts/check-licenses.mjs --write`) so their embedded package
+  version says `0.2.1`; the dependency list itself is unchanged.
+
+### Verified (release candidate, 2026-11-17)
+
+All commands run from the release worktree; no source change is part of this version bump
+(only versions, docs and generated notices).
+
+- `pnpm -r build` and `pnpm -r typecheck`: exit 0.
+- Full test suite: 510/510 PASS on commit `83ea721` (run by the release lead; not re-run
+  here so the version-only worktree is verified by the static gates below).
+- `node scripts/pack-smoke.mjs`: PASS for all six packages (`advisers@0.2.1`: 53 files /
+  42 local imports; `dsh-advisers@0.2.1`: 7 files; 5 guarded cross-package development
+  fallbacks verified, no unguarded ones).
+- `node scripts/check-docs.mjs`: PASS (docs/version consistency `0.2.1`).
+- `node scripts/check-release.mjs`: PASS (release consistency `0.2.1`; lockstep, pins,
+  version constants).
+- `node scripts/check-tos.mjs --release`: PASS (TOS v2026.11.2, effective 2026-11-17 —
+  unchanged).
+- `node scripts/check-licenses.mjs`: PASS (PolyForm-NC 1.0.0 + CC BY-NC-SA 4.0, 203
+  third-party packages, `THIRD-PARTY-NOTICES.md` up to date).
+- `node scripts/security-suite.mjs`: 5/5 PASS. `node scripts/verify-office.mjs`: PASS
+  (the LibreOffice-backed PDF layer is reported "skipped (LibreOffice not found)", never
+  as a pass).
+- `node scripts/verify-release.mjs --skip-install`: pending — it verifies the published
+  registry tarballs for the version and `0.2.1` is not available there before the account
+  owner's OTP approval; it is re-run after promotion.
+- npm staging: pending the account owner's OTP approval; dist-tags are not promoted yet.
+
 ## 0.2.0 (published, 2026-11-17)
 
 First stable release of the 0.2.0 line: the six published packages are lockstep at `0.2.0`

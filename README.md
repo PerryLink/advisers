@@ -43,14 +43,15 @@ on any link package; adapters load one only when configured.
 
 ## Status
 
-`0.2.0` is the **current stable release** for the 2026-11-17 release: the eight workspace
-packages are lockstep at `0.2.0`. The six published packages are `advisers`,
-`advisers-core`, `advisers-office`, `advisers-policy-strict`, `advisers-bridge-hermes` and
-`dsh-advisers`; the two private `advisers-link-*` packages are held at the same version but
-are not published. All six published packages are live on npm **`latest` = `0.2.0`**
-(the account owner completed the npm OTP approval on 2026-11-17). Registry tarballs,
-license files and a fresh-prefix install were verified with
-`scripts/verify-release.mjs` (80/80 checks, including an install smoke test).
+`0.2.1` is the **current release** (2026-11-17): the eight workspace packages are lockstep
+at `0.2.1`. The six published packages are `advisers`, `advisers-core`,
+`advisers-office`, `advisers-policy-strict`, `advisers-bridge-hermes` and `dsh-advisers`;
+the two private `advisers-link-*` packages are held at the same version but are not
+published. `0.2.1` is being staged to npm **`latest`** and awaits the account owner's OTP
+approval — it is **not published yet**; `0.2.0` (published on 2026-11-17) remains what
+`latest` serves until that approval. Registry tarballs, license files and a fresh-prefix
+install for `0.2.0` were verified with `scripts/verify-release.mjs` (80/80 checks,
+including an install smoke test).
 
 > Requires **Node >= 22.16**. See [docs/QUICKSTART.md](docs/QUICKSTART.md) for Windows/PowerShell and BOM notes.
 
@@ -76,13 +77,14 @@ license files and a fresh-prefix install were verified with
 - real-account/WS/Office-L3 validation still pending.
 
 ```sh
-# 0.2.0 is published on npm @latest; or run from checkout:
+# 0.2.1 is staged to npm @latest pending the owner's OTP approval (0.2.0 is what
+# @latest serves until then); or run from checkout:
 git clone https://github.com/PerryLink/advisers.git
 cd advisers && corepack pnpm install && corepack pnpm -r build
 ADVISERS_OFFICE_LOCAL=1 node packages/advisers/bin/advisers.js status
-# From npm (stable channel = default `latest`, now 0.2.0):
+# From npm (stable channel = default `latest`, currently 0.2.0):
 #   npm i -g --registry=https://registry.npmjs.org advisers@latest advisers-office@latest
-# Pre-release/RC builds used the `next` channel (after release it also points at 0.2.0):
+# Pre-release/RC builds land on the `next` channel (currently also 0.2.0):
 #   npm i -g --registry=https://registry.npmjs.org advisers@next advisers-office@next
 advisers
 # or one-shot:
@@ -95,9 +97,10 @@ advisers bridge --dir "$BRIDGE_DIR"   # Hermes gateway bridge
 
 Local interaction: `advisers` starts a REPL; `/help`, `/status`, `/new`, `/brief`, `/debug`, `/quit`. With an API key the model can call local Office/file tools and report the generated paths. File writes are confined to the working directory, overwrites require confirmation unless `ADVISERS_FORCE=1`, and local tools do not send file contents to the model unless you attach/read them.
 
-npm tags: **`latest`** is the stable channel (still the old `0.0.4` placeholder until the
-owner approves 0.2.0), **`next`** is the pre-release channel where preview/RC builds land.
-Pin an exact version (`advisers@0.2.0`) when you need a reproducible install, and query
+npm tags: **`latest`** is the stable channel (currently `0.2.0`; `0.2.1` is staged and
+awaits the account owner's OTP approval), **`next`** is the pre-release channel where
+preview/RC builds land. Pin an exact version (`advisers@0.2.0` today, `advisers@0.2.1`
+after approval) when you need a reproducible install, and query
 the official registry directly
 (`npm view advisers dist-tags --registry=https://registry.npmjs.org/`) — mirrors can lag behind.
 

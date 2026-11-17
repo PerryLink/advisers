@@ -1,5 +1,8 @@
 # Performance
 
+> Status: measured for the `0.2.1` release (2026-11-17). The `0.2.0` tree is the "before"
+> baseline in the comparison below.
+
 How Advisers performs on the hot paths, how to reproduce the numbers, and which
 behaviour the regression tests pin. This is a developer/operator reference, not
 a service-level guarantee: the numbers below are one machine's measurements and
@@ -36,7 +39,7 @@ To compare two builds on identical data, generate the data once with
 and a different `--bin` (one process at a time; concurrent runs distort each
 other).
 
-## 0.2.1 baseline vs this release
+## 0.2.1 vs the 0.2.0 baseline
 
 Representative run: synthetic ledger at `--scale 5000` (5,000 facts, 2,500
 commitments, 5,000 turns, 8,000 evidence entries), 5 fresh child processes per

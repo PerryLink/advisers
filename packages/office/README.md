@@ -33,7 +33,7 @@ const check = await validateOffice(buffer, 'docx')
 ## CLI
 
 ```sh
-# stable channel: advisers@latest / advisers-office@latest (0.2.0)
+# stable channel: advisers@latest / advisers-office@latest (0.2.0 until 0.2.1 is approved)
 # pre-release channel: advisers@next / advisers-office@next (currently also 0.2.0)
 npm i -g advisers@latest advisers-office@latest
 advisers office docx spec.json out.docx
@@ -48,7 +48,7 @@ templates. CJK fonts default to Microsoft YaHei, with a system fallback.
 
 ## Status
 
-`0.2.0` is the current stable release (published on npm `latest` on 2026-11-17). Builders: DOCX/XLSX/PPTX/Mermaid/draw.io/XMind; 7 templates; `readOffice`/`editOffice`/`verifyOffice`. Structural verification only (no Word/WPS/LibreOffice application layer in this package).
+`0.2.1` is the current release (staged to npm `latest`, pending the account owner's OTP approval). Builders: DOCX/XLSX/PPTX/Mermaid/draw.io/XMind; 7 templates; `readOffice`/`editOffice`/`verifyOffice`. Structural verification only (no Word/WPS/LibreOffice application layer in this package).
 
 ## License
 
