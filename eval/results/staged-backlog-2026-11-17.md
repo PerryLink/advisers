@@ -3,7 +3,24 @@
 > 数据来源：`npm stage list --json --registry https://registry.npmjs.org/`（账号 perrylink），
 > 快照时间 2026-11-17。**清理需要 npm 账号所有者本人 2FA；agent 不代批、不接触 OTP。**
 
-## 六包 backlog（未清理）
+## 清理进度（2026-11-17 18:44 快照）
+
+用户随后通过 npmjs.com 的 Staged Packages 批量功能清理了一部分：
+
+| package | 原始 | 当前剩余 |
+|---|---|---|
+| advisers | 69 | 36 |
+| dsh-advisers | 25 | 13 |
+| advisers-core | 20 | 9 |
+| advisers-office | 12 | 7 |
+| advisers-bridge-hermes | 17 | 5 |
+| advisers-policy-strict | 11 | 2 |
+| **合计** | **154** | **72** |
+
+其他项目记录从 53 → 52（未处理）。剩余 72 条**不影响安装/latest/next**，可继续在
+npmjs.com → Settings → Staged Packages 批量清，也可以保留。
+
+## 六包 backlog（原始快照）
 
 | package | staged records | 最早 stagedAt | 最新 stagedAt |
 |---|---|---|---|
