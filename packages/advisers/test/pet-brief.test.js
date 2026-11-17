@@ -142,6 +142,13 @@ function runRaw(home, args, cwd, extra = {}) {
   })
 }
 
+/** Machine-readable CLI failures print one JSON object on stderr (after any Node warnings). */
+function errorPayload(result) {
+  const line = result.stderr.trim().split(/\r?\n/).filter(Boolean).find((entry) => entry.trim().startsWith('{'))
+  assert.ok(line, result.stderr)
+  return JSON.parse(line)
+}
+
 // ---------------------------------------------------------------------------
 // producer projection
 // ---------------------------------------------------------------------------
@@ -528,6 +535,91 @@ test('pet-brief CLI: --check accepts a legacy v0.1 brief (warnings never fail th
     const report = JSON.parse(checked.stdout)
     assert.equal(report.ok, true)
     assert.deepEqual(report.errors, [])
+    const warningCodes = report.warnings.map((warning) => warning.code)
+    assert.ok(warningCodes.includes('W_LEGACY_SCHEMA_VERSION'), JSON.stringify(warningCodes))
+    assert.ok(warningCodes.includes('W_MISSING_DISPLAY_POLICY'), JSON.stringify(warningCodes))
+  } finally {
+    rmSync(root, { recursive: true, force: true })
+  }
+})
+
+test('pet-brief CLI: --display-policy passes through public/private/none and rejects unknown values', () => {
+  const { root, home, work } = setupStore()
+  try {
+    writeSqliteFixture(home, fixture().ledger)
+    const defaultBrief = JSON.parse(run(home, ['pet-brief', '--json'], work))
+    assert.equal(defaultBrief.displayPolicy, PET_BRIEF_DEFAULT_DISPLAY_POLICY)
+    for (const policy of PET_BRIEF_DISPLAY_POLICIES) {
+      const brief = JSON.parse(run(home, ['pet-brief', '--json', '--display-policy', policy], work))
+      assert.equal(brief.displayPolicy, policy)
+      assert.equal(brief.schemaVersion, PET_BRIEF_SCHEMA_VERSION)
+      assert.equal(validatePetBrief(brief, { now: Date.now() }).ok, true)
+    }
+    const invalid = runRaw(home, ['pet-brief', '--json', '--display-policy', 'audience'], work)
+    assert.equal(invalid.status, 1)
+    assert.equal(invalid.stdout, '')
+    assert.equal(errorPayload(invalid).error.code, 'E_USAGE')
+
+    const good = join(work, 'good.json')
+    run(home, ['pet-brief', '--out', good], work)
+    const conflicting = runRaw(home, ['pet-brief', '--check', '--in', good, '--display-policy', 'public'], work)
+    assert.equal(conflicting.status, 1)
+    assert.equal(errorPayload(conflicting).error.code, 'E_USAGE')
+  } finally {
+    rmSync(root, { recursive: true, force: true })
+  }
+})
+
+test('pet-brief CLI: --check reports warnings (exit unchanged) and --strict fails closed', () => {
+  const { root, home, work } = setupStore()
+  try {
+    writeSqliteFixture(home, fixture().ledger)
+    const generated = JSON.parse(run(home, ['pet-brief', '--check'], work))
+    assert.equal(generated.ok, true)
+    assert.deepEqual(generated.errors, [])
+    assert.deepEqual(generated.warnings, [], 'a current v0.2 brief must have no warnings')
+
+    const strictGenerated = runRaw(home, ['pet-brief', '--check', '--strict'], work)
+    assert.equal(strictGenerated.status, 0, strictGenerated.stderr)
+    assert.equal(JSON.parse(strictGenerated.stdout).ok, true)
+
+    const legacy = JSON.parse(run(home, ['pet-brief', '--json'], work))
+    legacy.schemaVersion = PET_BRIEF_LEGACY_SCHEMA_VERSION
+    delete legacy.displayPolicy
+    const legacyPath = join(work, 'legacy-strict.json')
+    writeFileSync(legacyPath, JSON.stringify(legacy))
+
+    const lenient = runRaw(home, ['pet-brief', '--check', '--in', legacyPath], work)
+    assert.equal(lenient.status, 0, 'warnings must not change the exit code')
+    const lenientCodes = JSON.parse(lenient.stdout).warnings.map((warning) => warning.code)
+    assert.ok(lenientCodes.includes('W_LEGACY_SCHEMA_VERSION'), JSON.stringify(lenientCodes))
+    assert.ok(lenientCodes.includes('W_MISSING_DISPLAY_POLICY'), JSON.stringify(lenientCodes))
+
+    const strict = runRaw(home, ['pet-brief', '--check', '--in', legacyPath, '--strict'], work)
+    assert.equal(strict.status, 1, '--strict must reject legacy briefs')
+    const strictReport = JSON.parse(strict.stdout)
+    assert.equal(strictReport.ok, false)
+    const strictCodes = strictReport.errors.map((error) => error.code)
+    assert.ok(strictCodes.includes('E_SCHEMA_VERSION'), JSON.stringify(strictCodes))
+    assert.ok(strictCodes.includes('E_DISPLAY_POLICY'), JSON.stringify(strictCodes))
+
+    const strictNoCheck = runRaw(home, ['pet-brief', '--strict'], work)
+    assert.equal(strictNoCheck.status, 1)
+    assert.equal(errorPayload(strictNoCheck).error.code, 'E_USAGE')
+  } finally {
+    rmSync(root, { recursive: true, force: true })
+  }
+})
+
+test('pet-brief CLI: --print-schema prints the canonical v0.2 JSON Schema without a store', () => {
+  const { root, home, work } = setupStore()
+  try {
+    const schema = JSON.parse(run(home, ['pet-brief', '--print-schema'], work))
+    assert.deepEqual(schema, contractJson('schema-v0.2.json'), 'generated schema must equal the published snapshot')
+    assert.equal(existsSync(join(home, 'state.db')), false, '--print-schema must not touch the store')
+    const conflicting = runRaw(home, ['pet-brief', '--print-schema', '--json'], work)
+    assert.equal(conflicting.status, 1)
+    assert.equal(errorPayload(conflicting).error.code, 'E_USAGE')
   } finally {
     rmSync(root, { recursive: true, force: true })
   }

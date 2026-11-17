@@ -3,7 +3,7 @@
 状态（2026-11-17）：
 
 - **0.2.0 库**：MCP server 已从 `bin/advisers.js` 抽成可测试库 `packages/advisers/lib/mcp-server.js`（工厂 `createMcpServer({store, ledger, version, audit})`）。库提供 **5 个只读工具 + 2 个白名单工具 + 4 个只读 resources**。
-- **CLI 入口**：当前发布的 `advisers mcp --stdio` 仍是 bin 内的 5 只读工具（无 resources）；把 bin 接到同一库是后续提交，接线前请用仓库内的 `node scripts/mcp-dev.mjs` 验证新接口。本文不声称已发布版本包含 resources。
+- **CLI 入口（已接线，2026-11-17）**：`advisers mcp --stdio` 与库是同一实现——`bin/advisers.js` 只负责注入 home/store/ledger/version/audit，然后调用 `createMcpServer(...).serve()`；7 工具 + 4 resources 均从 CLI 可用（随下一次发布携带；npm `next` 上已发布的 preview 仍是旧 5 工具版）。仓库内的 `node scripts/mcp-dev.mjs` 保留为开发/双进程冒烟入口，不再是试用新接口的前提。
 - **性质**：stdio、本地、只读为主；不联网、不调模型、不读 API key，也不含 MCP client（不做通用 ingest/编排）。
 
 ## 0. 一句话
@@ -12,26 +12,28 @@
 
 ## 1. 入口
 
-### 1.1 已发布 CLI（5 只读工具）
+### 1.1 CLI（7 工具 + 4 resources，已接线）
 
 ```sh
 advisers mcp --stdio
 ```
 
-stdin 一行一个 JSON-RPC 请求，stdout 一行一个响应，stderr 只放进程诊断。使用 `ADVISERS_HOME`（默认 `~/.advisers`）下的 SQLite/审计链；每次 `tools/call` 会写一条审计行。
+stdin 一行一个 JSON-RPC 请求，stdout 一行一个响应，stderr 只放进程诊断。使用 `ADVISERS_HOME`（默认 `~/.advisers`）下的 SQLite/审计链；每次 `tools/call` 会写一条审计行，写调用在审计失败时 fail-closed（候选回滚、返回 `isError`）。
 
-### 1.2 仓库内库入口（7 工具 + resources，bin 接线前）
+### 1.2 仓库内库入口（开发/双进程冒烟）
 
 ```sh
 # 在仓库 checkout 根目录运行；scripts/ 不在 npm 包内，所以这只是开发入口
 ADVISERS_HOME=/tmp/advisers-mcp node scripts/mcp-dev.mjs
 ```
 
+`scripts/mcp-dev.mjs` 和 CLI 接线到同一个 `createMcpServer` 工厂、协议面相同；它用于在不经过 bin 时验证库，或做真实双进程 stdio 冒烟。
+
 首次运行会在 `ADVISERS_HOME` 下创建 `state.db` 与 `audit.key`；若已有旧版 `state.json`，会像 CLI 一样一次性迁移进 SQLite。
 
 ## 2. 客户端配置片段
 
-以下三种客户端都用同一份 stdio 配置；把命令换成 `node /path/to/advisers/scripts/mcp-dev.mjs` 即可在接线前试用库接口。
+以下三种客户端都用同一份 stdio 配置。仓库 checkout 里也可把命令换成 `node /path/to/advisers/scripts/mcp-dev.mjs`（开发入口，`scripts/` 不在 npm 包内）。
 
 ### 2.1 Claude Code
 
@@ -163,23 +165,19 @@ claude mcp add advisers -- advisers mcp --stdio
 
 ## 7. 未做（避免误解）
 
-- bin 接入本库（7 工具 + resources）尚未完成；当前 `advisers mcp --stdio` 只有 5 只读工具。
 - 不做 MCP client / 上游会议或邮件 ingest / OAuth / 订阅（`resources/subscribe`）。
 - 不提供 HTTP/SSE 传输，不做多租户或远程暴露。
 
-## 8. bin 接线点（给接线方，本代理未改 bin）
+## 8. bin 接线（已完成 2026-11-17）
 
-当前 bin 仍是旧实现：`packages/advisers/bin/advisers.js` 中 `mcpReply/mcpError/mcpTools/mcpServer`（2026-11-17 工作树约 2225–2285 行）与 dispatch 的 `else if (command === 'mcp')`（约 3024–3026 行）。切到本库的最小改法：
+`packages/advisers/bin/advisers.js` 已切到本库：旧的 `mcpReply/mcpError/mcpTools/mcpServer`（5 只读工具、无 resources、无审计失败回滚）已删除，dispatch 的 `else if (command === 'mcp')` 仍只接受 `--stdio`。接线代码（`lib/mcp-server.js` 经 `lazyModule` 懒加载，`--version` 等命令不付 MCP 依赖的启动成本）：
 
 ```js
-// bin/advisers.js 顶部 import 区
-import { createMcpServer } from '../lib/mcp-server.js'
-
-// 用下面这个 mcpServer() 替换旧实现（mcpReply/mcpError/mcpTools 变为死代码，可删）
 async function mcpServer() {
   ensureHome()
   const store = dbStore()
   const ledger = loadLedger()
+  const { createMcpServer } = await loadMcpServer()
   const server = createMcpServer({
     store,
     ledger,
@@ -190,13 +188,23 @@ async function mcpServer() {
 }
 ```
 
+验收命令（`tools/list` = 7、`resources/list` = 4、`initialize` 协议不变）：
+
+```sh
+printf '%s\n' \
+  '{"jsonrpc":"2.0","id":1,"method":"initialize","params":{}}' \
+  '{"jsonrpc":"2.0","id":2,"method":"tools/list"}' \
+  '{"jsonrpc":"2.0","id":3,"method":"resources/list"}' \
+  | advisers mcp --stdio
+```
+
 兼容性（旧 5 工具保持可用）：
 
 - 5 个旧工具的**名字、参数、返回数据形状逐字段一致**：`advisers_today` `{open, commitments[{id,debtor,creditor,action,dueAt}]}`；`advisers_commit_ls` 数组 `{id,status,action,dueAt,creditor}`；`advisers_who` `{mine,waiting}`；`advisers_evidence` 直通 `lib/evidence.js`；`advisers_remind` 仍返回 `buildReminders` 结果；只读调用的审计 action 仍是 `mcp.call`。
 - `tools/list` 只增不减（5 → 7）；旧客户端按工具名调用不受影响。`initialize` 的 `protocolVersion`/`serverInfo.name` 不变，`capabilities` 增加 resources。
 - 有意的行为差异：未知方法/参数的错误文案不再回显原始值；未知工具仍为 `-32602`；单行上限 1 MiB；未知 resource 返回 `-32002`。
-- 验收：现有 `test/cli-mcp-json.test.js` 应继续通过；可再手工跑
-  `printf '%s\n' '{"jsonrpc":"2.0","id":1,"method":"initialize","params":{}}' '{"jsonrpc":"2.0","id":2,"method":"tools/list"}' '{"jsonrpc":"2.0","id":3,"method":"resources/list"}' | advisers mcp --stdio`。
+- 写调用审计失败即 fail-closed：`audit` 绑定 `store.appendAudit`；回调抛错时候选被回滚，调用返回 `isError`，账本不变。
+- 自动化验收：`test/cli-mcp-json.test.js` 在真实 CLI 上覆盖 7 工具、4 resources、`-32601/-32602/-32002/-32700/-32600`、候选 pending-only、审计行与 1 MiB 行上限。
 
 集成说明（2026-11-17）：本库 `advisers_pack_verify` 校验的是 evidence-pack v1 目录（`manifest.json`/`README.txt`/`SHA256SUMS` + `receipt.docx` 存在性）。另一路工作已加入 delivery receipt pack v1.1（`lib/evidence.js` `buildReceiptPack` + `lib/receipt-verify.js` `verifyReceiptPackDir`）；等 `deliveries --pack` 切到 v1.1 后，建议把 `verifyReceipt(args)` 改为优先调用 `verifyReceiptPackDir`，并先剥离其 errors 中的绝对路径（该函数目前会把 `dir` 写进错误文案），保持“错误不回显路径”的约定。
 
@@ -204,7 +212,8 @@ async function mcpServer() {
 
 ```sh
 cd packages/advisers
-node --experimental-strip-types --test test/mcp-server.test.js
+node --experimental-strip-types --test test/mcp-server.test.js     # 库协议面
+node --experimental-strip-types --test test/cli-mcp-json.test.js  # 真实 CLI stdio 接线
 ```
 
-覆盖：initialize/tools/list（7）/resources/list（4）/resources/read、capture 只产生 pending 候选且不动账本、审计回调、参数错误码、回执目录校验与篡改检测、1 MiB 行上限、`scripts/mcp-dev.mjs` 的真实 stdio 双进程冒烟。
+覆盖：initialize/tools/list（7）/resources/list（4）/resources/read、capture 只产生 pending 候选且不动账本、审计回调与 fail-closed 回滚、参数错误码、回执目录校验与篡改检测、1 MiB 行上限、`scripts/mcp-dev.mjs` 的真实 stdio 双进程冒烟；`cli-mcp-json` 另在真实 `advisers mcp --stdio` 上覆盖同一协议面（7 工具/4 resources/错误码/审计行/行上限）。

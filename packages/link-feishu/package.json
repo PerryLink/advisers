@@ -1,6 +1,6 @@
 {
   "name": "advisers-link-feishu",
-  "version": "0.2.0-preview.1",
+  "version": "0.2.0",
   "private": true,
   "description": "Feishu/Lark Link provider for Advisers: official webhook events and message API.",
   "type": "module",

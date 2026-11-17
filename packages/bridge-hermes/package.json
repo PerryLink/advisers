@@ -1,6 +1,6 @@
 {
   "name": "advisers-bridge-hermes",
-  "version": "0.2.0-preview.22",
+  "version": "0.2.0",
   "private": false,
   "description": "File-based bridge from Advisers to the Hermes Agent messaging gateway.",
   "type": "module",
@@ -19,7 +19,7 @@
   },
   "license": "PolyForm-Noncommercial-1.0.0",
   "dependencies": {
-    "advisers-core": "0.2.0-preview.22"
+    "advisers-core": "0.2.0"
   },
   "types": "./dist/index.d.ts",
   "files": [

@@ -32,7 +32,9 @@ const check = await validateOffice(buffer, 'docx')
 ## CLI
 
 ```sh
-npm i -g advisers@next advisers-office@next
+# stable channel after the 0.2.0 approval: advisers@latest / advisers-office@latest
+# pre-release channel: advisers@next / advisers-office@next
+npm i -g advisers@latest advisers-office@latest
 advisers office docx spec.json out.docx
 advisers office xlsx spec.json out.xlsx
 advisers office pptx spec.json out.pptx
@@ -45,7 +47,7 @@ templates. CJK fonts default to Microsoft YaHei, with a system fallback.
 
 ## Status
 
-`0.2.0-preview.14`. Builders: DOCX/XLSX/PPTX/Mermaid/draw.io/XMind; 7 templates; `readOffice`/`editOffice`/`verifyOffice`. Structural verification only (no Word/WPS/LibreOffice application layer in this package).
+`0.2.0` (stable release candidate, staged pending OTP). Builders: DOCX/XLSX/PPTX/Mermaid/draw.io/XMind; 7 templates; `readOffice`/`editOffice`/`verifyOffice`. Structural verification only (no Word/WPS/LibreOffice application layer in this package).
 
 ## License
 

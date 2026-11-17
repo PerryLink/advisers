@@ -27,13 +27,13 @@ three ledgers:
 - **routine ledger** — how this kind of work is done here; routine changes can be reviewed as diffs before approval.
 
 The core is standalone (no cordis dependency). The DSH bundle is a thin,
-cordis-compatible host adapter (currently `advisers_brief` + `advisers_office`),
-not a feature-complete second product:
+cordis-compatible host adapter (five tools: `advisers_brief`, `advisers_office`,
+`advisers_today`, `advisers_who`, `advisers_evidence`), not a feature-complete second product:
 
 | Package | Role |
 |---|---|
 | `advisers` | primary runtime + CLI (no DSH dependency) |
-| `dsh-advisers` | thin DSH adapter (brief/office only; ledger not yet exposed) |
+| `dsh-advisers` | thin DSH adapter (brief/office + read-only today/who/evidence) |
 
 IM is a **Link SPI**, not a hard dependency. The repository currently ships
 `link-email` (draft-only email provider/transport) and `link-feishu` (Feishu
@@ -43,7 +43,14 @@ on any link package; adapters load one only when configured.
 
 ## Status
 
-`advisers@0.2.0-preview.71` (with `advisers-core@0.2.0-preview.22`, `advisers-policy-strict@0.2.0-preview.12`, `advisers-office@0.2.0-preview.14`) is **published** on npm; the `next` tag points at `.71` (owner-approved 2026-11-17, stage `3329a587-eb8b-467a-a184-7e1ce00e560b`). The public `latest` tag stays on the old placeholder:
+`0.2.0` is the **stable release candidate** for the 2026-11-17 release, **staged pending OTP approval**:
+the eight workspace packages are lockstep at `0.2.0`. The six published packages are
+`advisers`, `advisers-core`, `advisers-office`, `advisers-policy-strict`,
+`advisers-bridge-hermes` and `dsh-advisers`; the two private `advisers-link-*` packages are
+held at the same version but are not published. Nothing from this release is on `latest`
+yet (it still points at the old placeholder): the build is prepared for npm staging and the
+account owner approves it with OTP. The release owner updates this section to "published"
+only after that manual step.
 
 > Requires **Node >= 22.13**. See [docs/QUICKSTART.md](docs/QUICKSTART.md) for Windows/PowerShell and BOM notes.
 
@@ -60,21 +67,23 @@ on any link package; adapters load one only when configured.
 - `advisers evidence show` / `deliveries --pack` (manifest + SHA256SUMS + DOCX receipt) / `deliver --type ...` (DOCX/XLSX);
 - **delivery receipt pack v1.1**: `advisers deliveries --receipt [--out dir] [--ids ...] [--all] [--recipient ...]` copies the delivered files and records every SHA-256, the generator, verify results and recipient; `advisers evidence verify <dir>` verifies a pack offline (JSON, exit 0/1, no `~/.advisers`). Evidence entries default to a 2000 cap (`--ids`/`--all` control it); the old `deliveries --pack` evidence pack is unchanged. See `docs/DELIVERY-RECEIPT.md`.
 - **reminder/calendar wiring (0.2.0)**: `commit add/edit --remind-offsets "-1d,-2h,+0d09:00"` stores per-commitment VALARMs; `remind --deliver --notify` adds the opt-in webhook and records the last run in `~/.advisers/scheduler/status.json`; `remind install|uninstall|status [--apply]` prints a dry-run OS plan first and only registers a cron/schtasks entry with `--apply`; `today --calendar` expands RRULEs locally (all-day `全天`, recurring `（循环）`). `today`, `capture`, `memory candidates` and `verify` now have stable `--json` shapes (`docs/CLI-JSON.md`).
-- `advisers privacy --prove`, `advisers mcp --stdio`, `advisers ui`（本地只读视图） (read-only tools), and JSON output for status/commit/who/deliveries/remind/evidence.
-- `advisers pet-brief --json|--out [path]|--check [--in file]` projects a **read-only, redacted** Pet Brief (contract v0.1) for the desktop-pet consumer: `secrecy >= 2` matters excluded, facts below confidence 0.7 dropped, 5-minute TTL, 10-item caps; no model call, no network, no ledger writes. UI/transport is not wired yet. See `docs/PET-BRIEF-PRODUCER.md`.
+- `advisers privacy --prove`, `advisers mcp --stdio` (7 tools + 4 read-only resources, 1 MiB JSON-RPC line cap; candidate writes are pending-only and fail closed when the audit row cannot be written), `advisers ui`（本地只读视图）, and JSON output for status/commit/who/deliveries/remind/evidence.
+- `advisers pet-brief --json|--out [path]|--check [--strict]|--print-schema|--display-policy public|private|none` projects a **read-only, redacted** Pet Brief (contract v0.2: `schemaVersion: 2` + `displayPolicy`, default `private`; v0.1 briefs stay readable as legacy) for the desktop-pet consumer: `secrecy >= 2` matters excluded, facts below confidence 0.7 dropped, 5-minute TTL, 10-item caps; no model call, no network, no ledger writes. UI/transport is not wired yet. See `docs/PET-BRIEF-PRODUCER.md`.
 - each turn sends a `latest_reminder` date/weekday/location/language marker so relative dates are grounded;
 - thinking mode: `ADVISERS_THINKING=off|on|auto`, `ADVISERS_THINKING_EFFORT=low|high|max`; `reasoning_content` is kept in memory only for the current tool loop and is not written to turns/summaries/audit/export/backup. This does not control provider-side logs or OS crash dumps;
-- DSH bundle (`dsh-advisers`) with `advisers_brief` + `advisers_office`; email/Feishu link packages are **libraries not wired into the CLI**; optional strict policy pack (see `packages/policy-strict/README.md`);
-- Hermes bridge (`advisers-bridge-hermes`); npm `latest` is currently a placeholder until published;
+- DSH bundle (`dsh-advisers`) with five tools (`advisers_brief`, `advisers_office`, `advisers_today`, `advisers_who`, `advisers_evidence`); email/Feishu link packages are **libraries not wired into the CLI**; optional strict policy pack (see `packages/policy-strict/README.md`);
+- Hermes bridge (`advisers-bridge-hermes`); staged with the other five packages for `0.2.0`;
 - real-account/WS/Office-L3 validation still pending.
 
 ```sh
-# Current preview is published on npm `next`; run from checkout:
+# 0.2.0 is staged-pending-OTP; run from checkout until the owner approves:
 git clone https://github.com/PerryLink/advisers.git
 cd advisers && corepack pnpm install && corepack pnpm -r build
 ADVISERS_OFFICE_LOCAL=1 node packages/advisers/bin/advisers.js status
-# From npm:
-# npm i -g --registry=https://registry.npmjs.org advisers@next advisers-office@next
+# From npm, after the owner approves 0.2.0 (stable channel = default `latest`):
+#   npm i -g --registry=https://registry.npmjs.org advisers@latest advisers-office@latest
+# Pre-release/RC builds live on the `next` channel until then:
+#   npm i -g --registry=https://registry.npmjs.org advisers@next advisers-office@next
 advisers
 # or one-shot:
 advisers chat "做一份 Q4 汇报 PPT，放到 out/q4.pptx"
@@ -86,8 +95,11 @@ advisers bridge --dir "$BRIDGE_DIR"   # Hermes gateway bridge
 
 Local interaction: `advisers` starts a REPL; `/help`, `/status`, `/new`, `/brief`, `/debug`, `/quit`. With an API key the model can call local Office/file tools and report the generated paths. File writes are confined to the working directory, overwrites require confirmation unless `ADVISERS_FORCE=1`, and local tools do not send file contents to the model unless you attach/read them.
 
-The `latest` tag stays on the stable placeholder `0.0.4` until the preview is
-promoted.
+npm tags: **`latest`** is the stable channel (still the old `0.0.4` placeholder until the
+owner approves 0.2.0), **`next`** is the pre-release channel where preview/RC builds land.
+Pin an exact version (`advisers@0.2.0`) when you need a reproducible install, and query
+the official registry directly
+(`npm view advisers dist-tags --registry=https://registry.npmjs.org/`) — mirrors can lag behind.
 
 ## Security boundary
 
@@ -112,7 +124,8 @@ Advisers is **source-available, not open source**. From `0.2.0` the licenses are
   (SPDX: `CC-BY-NC-SA-4.0`). Attribution, noncommercial use and ShareAlike apply.
 
 Prior releases keep the licenses they were published under: MIT releases stay MIT and
-`advisers@0.2.0-preview.71` (Apache-2.0) stays Apache-2.0. See [LICENSE](LICENSE),
+releases published under Apache-2.0 before `0.2.0` (up to the 2026-11-17 preview) stay
+Apache-2.0. See [LICENSE](LICENSE),
 [LICENSE-DOCS](LICENSE-DOCS), [NOTICE](NOTICE) and [LICENSING.md](LICENSING.md) for the
 definitive policy, required notices and the commercial-licensing channel.
 

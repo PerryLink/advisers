@@ -1,8 +1,9 @@
 # Quickstart (Windows + PowerShell)
 
-> Current status: the `0.2.0-preview.*` packages are staged and awaiting npm OTP approval.
-> The public `@next` tag currently points at an old 0.1 preview; do not judge this build by it.
-> Until approval, run from the checkout as shown below.
+> Current status: `0.2.0` is the **stable release candidate** (staged pending OTP). All six
+> published packages are lockstep at `0.2.0`; the account owner's OTP approval is the only
+> remaining internal step. Until approval, run from the checkout as shown below: the public
+> `@latest` tag is still an old placeholder and `@next` may lag behind the staged build.
 
 > **Before you start** — read the [Terms of Service](TOS.md) (v2026.11.2),
 > [Disclaimer](DISCLAIMER.md), [Safety & content review](SAFETY.md), and
@@ -93,22 +94,26 @@ node $A chat "做一份 Q4 汇报 PPT，放到 out\q4.pptx"
 ## B. Installed CLI (after npm approval)
 
 ```powershell
-npm i -g --registry=https://registry.npmjs.org advisers@next advisers-office@next
-advisers --version
+# Stable channel after the owner approves 0.2.0 (default `latest` tag):
+npm i -g --registry=https://registry.npmjs.org advisers@latest advisers-office@latest
+# Pre-release channel (preview/RC builds land on `next` before promotion):
+# npm i -g --registry=https://registry.npmjs.org advisers@next advisers-office@next
+advisers --version    # expect 0.2.0 after approval
 advisers status
 advisers soul init
 advisers template weekly weekly.json out\weekly.docx
 advisers verify out\weekly.docx
 ```
 
-If `advisers-office` is missing, install it explicitly; the CLI does not pull it automatically.
+If `advisers-office` is missing, install it explicitly (`advisers-office@latest`, or
+`@next` before promotion); the CLI does not pull it automatically.
 
 ## C. Troubleshooting
 
 | Symptom | Fix |
 |---|---|
 | `No such built-in module: node:sqlite` | Node < 22.13; install Node 24 LTS |
-| `advisers-office is not installed` | `npm i -g advisers-office@next`, or set `ADVISERS_OFFICE_LOCAL=1` from checkout |
+| `advisers-office is not installed` | `npm i -g advisers-office@latest` (`@next` before promotion), or set `ADVISERS_OFFICE_LOCAL=1` from checkout |
 | `SyntaxError: Unexpected token '﻿'` | JSON has BOM; write UTF-8 without BOM |
 | Chinese output is garbled | `chcp 65001`; use Windows Terminal |
 | `model HTTP 401` | Key/base URL wrong; set `ADVISERS_API_KEY`, check `advisers status` |

@@ -7,12 +7,15 @@ routines.
 ## Install
 
 ```sh
-# Current preview is published on npm `next` (owner-approved 2026-11-17).
+# 0.2.0 is the stable release candidate (staged pending OTP); until the owner
+# approves it, run from checkout or install the pre-release `next` channel.
 # From checkout:
 #   corepack pnpm install && corepack pnpm -r build
 #   ADVISERS_OFFICE_LOCAL=1 node packages/advisers/bin/advisers.js status
-# From npm:
-npm i -g --registry=https://registry.npmjs.org advisers@next advisers-office@next
+# From npm, after approval (stable channel = default `latest`):
+#   npm i -g --registry=https://registry.npmjs.org advisers@latest advisers-office@latest
+# Pre-release/RC builds until then:
+#   npm i -g --registry=https://registry.npmjs.org advisers@next advisers-office@next
 advisers soul init
 advisers brief "做一份 Q4 预算 Excel，周五前给老板"
 advisers chat "周五前把报价发给王工"
@@ -42,7 +45,7 @@ turn natural language into commitments or artifacts.
 
 ## Status
 
-`0.2.0-preview.71` is published on npm (`next`):
+`0.2.0` is the stable release candidate (staged pending OTP; not published yet):
 
 - SQLite ledger at `~/.advisers/state.db` (JSON fallback with `ADVISERS_STORE=json`);
 - soul at `~/.advisers/soul.md`, human-owned;
@@ -54,7 +57,7 @@ turn natural language into commitments or artifacts.
 - `/memory`, `/week`, `/digest`, `/diff`, `/undo`, `/learn review`;
 - routine draft/approve/patch/curator + active routine index + `routine_view`;
 - local agent loop with Office/file tools, `commitment_add`, `search_turns`; attachments (txt/md/docx/xlsx/pptx/pdf); optional model via `ADVISERS_API_KEY` / `ADVISERS_BASE_URL` / `ADVISERS_MODEL`;
-- `advisers pet-brief` read-only redacted projection for the desktop-pet consumer (contract v0.1; `--json`/`--out`/`--check`; `secrecy >= 2` excluded; 5-minute TTL); no UI wiring yet;
+- `advisers pet-brief` read-only redacted projection for the desktop-pet consumer (contract v0.2: `schemaVersion: 2` + `displayPolicy`, default `private`; `--json`/`--out`/`--check [--strict]`/`--print-schema`/`--display-policy`; `secrecy >= 2` excluded; 5-minute TTL; v0.1 briefs readable as legacy); no UI wiring yet;
 - DSH bundle, email IMAP/draft, Feishu webhook, Hermes bridge; strict policy pack;
 - real-account/WS/Office-L3 validation still pending.
 
@@ -75,6 +78,6 @@ Documentation, evaluation data and design materials of the repository are licens
 package README ships with the software and is covered by PolyForm NC. Third-party
 components keep their own licenses: [THIRD-PARTY-NOTICES.md](THIRD-PARTY-NOTICES.md).
 
-Versions published before 0.2.0 keep their original licenses (MIT; Apache-2.0 for
-`advisers@0.2.0-preview.71`); the change is not retroactive. See the repository
-LICENSING.md, LICENSE-DOCS and NOTICE.
+Versions published before 0.2.0 keep their original licenses (MIT; Apache-2.0 for the
+preview releases published up to 2026-11-17); the change is not retroactive. See the
+repository LICENSING.md, LICENSE-DOCS and NOTICE.

@@ -64,7 +64,7 @@ turn store in this adapter; it never fabricates a turn body.
 If the runtime exposes an audit sink (`runtime.audit(event)`), each read call
 reports `{ actor: 'dsh', action: 'tool.read', allowed, reason }`. A missing or
 failing sink is a no-op and never turns a read into an error. The in-memory
-runtime in `advisers-core@0.2.0-preview.22` ships no audit sink, so by default
+runtime in `advisers-core@0.2.0` ships no audit sink, so by default
 these tools are strictly read-only.
 
 ## Examples

@@ -23,17 +23,17 @@
 - 不要引用/索引任何旧会话、旧 transcript 或旧 INDEX；只以本文件、仓库、CI、npm 实测为准。
 - 不要伪造完成；不能代做 OTP/真人金标/真实用户验收，需如实说需要我做什么。
 - 没有我同意前不要发布、不要 approve、不要改版本号、不要 push。
-- 重要背景（写交接时的实测）：HEAD 约 `c7e30a0`，代码 HEAD `64a7f82`；250 tests；版本仍是 `.70`；**staged `.70` 不包含另一个会话新增的 Pet Brief producer**。若你看到版本已是 `.71` 或更高，以 CHANGELOG/当前 stage 为准，不要把本文当现值。
-- 不要直接 approve `.70` 当成包含 Pet Brief 的版本；要包含它，先 bump `.71` 并重新 stage。
+- **2026-11-17 当前状态（以此为准）**：发布目标是 **`0.2.0` 稳定版候选（staged pending OTP）**；8 个 workspace 包已统一为 `0.2.0`，版本常量/文档/CHANGELOG 已更新，等待全量验证 → commit → tag `v0.2.0` → 三端 push → CI → npm staging → 账号所有者本人 OTP 批准。runbook 见 `docs/RELEASING.md`，证据草稿见 `eval/results/E11-release-2026-11-17.md`。
+- 历史背景（`.70`/`.71` 时期，仅作史实）：写交接时 HEAD 约 `c7e30a0`、代码 HEAD `64a7f82`、250 tests、版本 `.70`；staged `.70` 不包含当时新增的 Pet Brief producer；`0.2.0-preview.71` 曾于 2026-11-17 经账号所有者 OTP 批准发布到 npm `next`（stage `3329a587-eb8b-467a-a184-7e1ce00e560b`，历史事实）。不要把历史版本号当现值。
+- 不要 approve 旧的 staged 版本；`0.2.0` 必须重新 bump + 全量验证 + 重新 stage，并打 `v0.2.0` tag。
 - Gitee 公开 API 读回可能 404/受限；用 token 核实，不要假设三端已同步。
-- **2026-11-17 更新**：`0.2.0-preview.71` 已由账号所有者 OTP 批准并发布到 npm（`next`，stage `3329a587-eb8b-467a-a184-7e1ce00e560b`）；依赖 `advisers-core@.22`/`advisers-policy-strict@.12`/`advisers-office@.14` 同步发布。详见 `eval/results/E10-release-2026-11-16.md`。
 
 ## 我同意后，建议的第一批工作
 
-1. 核对三远端/CI，补 `.71` 版本、Pet Brief 的 README/CHANGELOG/docs；
-2. 跑全量测试 + build/typecheck + pack-smoke/check-docs/security-suite；
-3. commit、push GitHub/Gitee/GitCode；
-4. `npm stage publish .` 记录 stage id/shasum；
+1. 按 `docs/RELEASING.md` 执行：确认 0.2.0 版本/文档/CHANGELOG 一致，核对三远端/CI；
+2. 跑全量测试 + build/typecheck + pack-smoke/check-docs/check-tos --release/check-licenses/check-release/security-suite；
+3. commit、打 tag `v0.2.0`、push GitHub/Gitee/GitCode；
+4. `RELEASE_TAG=latest node scripts/release.mjs` 记录六个 stage id/shasum；
 5. 告诉我 approve 需要我本人 OTP，并带我完成；不要索要 OTP 明文。
 
 ## 如果我要你现在引导 npm approve（一步一步）

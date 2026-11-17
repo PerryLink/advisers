@@ -5,8 +5,12 @@
 ## 安装
 
 ```sh
-# 当前 preview 已发布到 npm `next`；从 npm 安装：
-npm i -g --registry=https://registry.npmjs.org advisers@next advisers-office@next
+# 0.2.0 是稳定版候选（staged pending OTP）；账号所有者批准前请从 checkout 运行
+# 或安装预发布 `next` 渠道。
+# 从 npm 安装（批准后；稳定渠道 = 默认 `latest`）：
+#   npm i -g --registry=https://registry.npmjs.org advisers@latest advisers-office@latest
+# 转正前的 preview/RC 构建：
+#   npm i -g --registry=https://registry.npmjs.org advisers@next advisers-office@next
 advisers soul init
 advisers brief "做一份 Q4 预算 Excel，周五前给老板"
 advisers chat "周五前把报价发给王工"
@@ -31,7 +35,7 @@ CLI 是**本地秘书运行时**：一个 REPL、用户账/承诺账/流程账�
 
 ## 状态
 
-`0.2.0-preview.71` 已发布到 npm（`next`）：
+`0.2.0` 是稳定版候选（staged pending OTP；尚未发布）：
 
 - SQLite 账本 `~/.advisers/state.db`（JSON fallback）；
 - soul 位于 `~/.advisers/soul.md`，人类独占；
@@ -40,7 +44,7 @@ CLI 是**本地秘书运行时**：一个 REPL、用户账/承诺账/流程账�
 - `/memory`、`/week`、`/digest`、`/diff`、`/undo`、`/learn review`；
 - routine draft/approve/patch/curator + active routine index + `routine_view`；
 - `advisers-office` 提供 DOCX/XLSX/PPTX/Mermaid/draw.io/XMind builder 与 5 个模板；
-- `advisers pet-brief`：只读脱敏 Pet Brief 投影（契约 v0.1；`--json`/`--out`/`--check`；`secrecy >= 2` 全排除；5 分钟 TTL；未接桌宠 UI）；
+- `advisers pet-brief`：只读脱敏 Pet Brief 投影（契约 v0.2：`schemaVersion: 2` + `displayPolicy`，默认 `private`；`--json`/`--out`/`--check [--strict]`/`--print-schema`/`--display-policy`；`secrecy >= 2` 全排除；5 分钟 TTL；v0.1 brief 按 legacy 可读；未接桌宠 UI）；
 - 真实 IM/Office 打开验证仍未完成。
 
 核心与架构：
@@ -59,5 +63,5 @@ https://github.com/PerryLink/advisers
 本包 README 随软件分发，适用 PolyForm NC。第三方组件保留各自许可，见
 [THIRD-PARTY-NOTICES.md](THIRD-PARTY-NOTICES.md)。
 
-0.2.0 之前发布的版本保留原许可（MIT；`advisers@0.2.0-preview.71` 为
+0.2.0 之前发布的版本保留原许可（MIT；至 2026-11-17 的 preview 版本为
 Apache-2.0），不追溯。详见仓库 LICENSING.md、LICENSE-DOCS 与 NOTICE。

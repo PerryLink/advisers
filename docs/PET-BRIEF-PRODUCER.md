@@ -13,10 +13,14 @@ v0.1 canonical 仍以私有 `PerryLink/famling` `docs/` 为准，本机快照 sh
 ## 1. 命令
 
 ```sh
-advisers pet-brief --json              # stdout JSON（调试/集成/测试）
+advisers pet-brief --json              # stdout JSON（调试/集成/测试；schemaVersion 2）
 advisers pet-brief --out [path]        # 原子写 0600；缺省 ~/.advisers/pet-brief.json
-advisers pet-brief --check             # 生成后校验 schema/TTL/禁止字段；失败退出码 1
-advisers pet-brief --check --in FILE   # 校验已有 brief 文件（CI/跨仓验收）
+advisers pet-brief --display-policy public|private|none
+                                       # v0.2：谁可以看（默认 private；public 必须显式选择）
+advisers pet-brief --check             # 生成后校验 schema/TTL/禁止字段；失败退出码 1；报告含 warnings
+advisers pet-brief --check --strict    # 额外 fail-closed：拒绝 v0.1 legacy、缺 displayPolicy 记为错误
+advisers pet-brief --check --in FILE   # 校验已有 brief 文件（CI/跨仓验收；可加 --strict）
+advisers pet-brief --print-schema      # 输出契约 v0.2 JSON Schema（与 docs/pet-brief/schema-v0.2.json 等价）
 advisers pet-brief                     # 人类可读摘要（不输出完整 brief）
 ```
 
@@ -28,17 +32,17 @@ advisers pet-brief                     # 人类可读摘要（不输出完整 br
   `E_MAX_ITEMS` / `E_COUNTS` / `E_DUP_ID` / `E_ENUM` / `E_CONFIDENCE` / `E_DISPLAY_POLICY`。
 - v0.2 起输出带 `displayPolicy`（默认 `private`），`schemaVersion: 2`。
 
-### 1.1 CLI 表面待接线（建议，本任务只改 lib）
+### 1.1 CLI 表面（已接线，2026-11-17）
 
-`bin/advisers.js` 的 `petBrief()` 尚未跟随 v0.2 暴露下列能力（本仓 `lib/` 已支持，接线改动留给 CLI 任务）：
+`bin/advisers.js` 的 `petBrief()` 已暴露 v0.2 的全部 CLI 能力（由 `lib/` 的 `buildPetBrief`/`validatePetBrief` 直接支撑）：
 
-| 建议改动 | 说明 |
+| 能力 | 行为 |
 |---|---|
-| `--print-schema` | 输出 `docs/pet-brief/schema-v0.2.json`（draft 2020-12）或等价的生成 JSON；因 `packages/advisers/package.json` `files` 不含 `docs/`，需把 schema 复制进 `lib/`（如 `lib/pet-brief-schema.json`）并加入 files allowlist，或由常量生成后打印 |
-| `--check` 报告加 `warnings` | `validatePetBrief()` 现在返回 `{ok,errors,warnings,brief}`；CLI 目前只打印 `errors`。建议输出 `warnings: result.warnings`（**不改变退出码**：warning 不 fail） |
-| `--check --strict` | 映射 `requireDisplayPolicy: true`（缺 displayPolicy → `E_DISPLAY_POLICY`）与 `acceptLegacy: false`（v0.1 → `E_SCHEMA_VERSION`），供 CI 收紧 |
-| `--display-policy public\|private\|none` | 透传 `buildPetBrief(..., { displayPolicy })`；默认 `private`，`public` 必须显式选择 |
-| 帮助行 / 注释 | 把 `contract v0.1` 文案改为 v0.2（`bin/advisers.js:294,681` 附近） |
+| `--display-policy public\|private\|none` | 透传 `buildPetBrief(..., { displayPolicy })`；默认 `private`，`public` 必须显式选择；非法值 → 退出码 1 + `E_USAGE` |
+| `--check` 报告 `warnings` | 输出 `warnings: result.warnings`（`W_LEGACY_SCHEMA_VERSION` / `W_MISSING_DISPLAY_POLICY`）；**不改变退出码**（warning 不 fail） |
+| `--check --strict` | 映射 `acceptLegacy: false` + `requireDisplayPolicy: true`：v0.1 → `E_SCHEMA_VERSION`，缺 `displayPolicy` → `E_DISPLAY_POLICY`，供 CI 收紧 |
+| `--print-schema` | 输出契约 v0.2 JSON Schema（draft 2020-12）；因 `packages/advisers/package.json` `files` 不含 `docs/`，由 `lib/pet-brief.js` 常量生成，测试断言其与 `docs/pet-brief/schema-v0.2.json` 深度相等 |
+| 帮助行 / 注释 | 已从 `contract v0.1` 文案改为 v0.2 |
 
 ## 2. 实现位置
 
@@ -47,8 +51,8 @@ advisers pet-brief                     # 人类可读摘要（不输出完整 br
 | `packages/advisers/lib/pet-brief.js` | `buildPetBrief()` 纯投影、`validatePetBrief()`（v0.2 校验 + legacy warning）、`writePetBriefAtomic()` |
 | `packages/advisers/lib/pet-brief-store.js` | `readLedgerSnapshotReadOnly()`：只读 SQLite/JSON 快照 |
 | `packages/advisers/lib/sqlite.js` | `SqliteStore` 构造器新增 `{ readOnly: true }` 选项（默认行为不变，最小改动） |
-| `packages/advisers/bin/advisers.js` | `pet-brief` 子命令 + help 行（最小改动；v0.2 CLI 面见 §1.1） |
-| `packages/advisers/test/pet-brief.test.js` | 25 个 producer 单元/CLI/隐私/只读/契约快照测试 |
+| `packages/advisers/bin/advisers.js` | `pet-brief` 子命令 + help 行；v0.2 CLI 面（`--display-policy`/`--strict`/`--print-schema`）已接线，见 §1.1 |
+| `packages/advisers/test/pet-brief.test.js` | 28 个 producer 单元/CLI/隐私/只读/契约快照测试（含 v0.2 CLI 选项） |
 | `docs/pet-brief/` | 公开契约快照：schema v0.2、合成 example、26 条测试向量（脱敏） |
 
 不新增依赖（手写 schema 校验，未引入 ajv）；不改存储表结构、core 类型、账本 schema、产品定位。
@@ -101,12 +105,12 @@ advisers pet-brief                     # 人类可读摘要（不输出完整 br
 
 ```sh
 cd /mnt/d/Projects/dsh/plugins/advisers/packages/advisers
-node --experimental-strip-types --test test/pet-brief.test.js   # 25/25 pass
-# 仓根全量：pnpm -r test → 260 tests / 260 pass / 0 fail（8 packages；其中 packages/advisers 175/175）
+node --experimental-strip-types --test test/pet-brief.test.js   # 28/28 pass（含 v0.2 CLI 选项）
+# 仓根全量：pnpm -r test → 456 tests / 456 pass / 0 fail（8 packages；其中 packages/advisers 334/334）
 ```
 
 - 覆盖：契约字段/上限/置信度/时区+TTL/禁止字段/重复 id/counts 一致性/空账本/确定性；姓名与证据 quote 不泄漏；secrecy≥2 全排除；`--json` 只读（DB SHA-256 不变）；`--out` 0600 原子且无临时残留；`--check` 通过/拒绝；缺库/用法错误机器可读。
-- v0.2 新增覆盖：`displayPolicy` 默认 `private` / 显式三态 / 非法枚举拒绝；v0.1 brief 接受且返回 `W_LEGACY_SCHEMA_VERSION`+`W_MISSING_DISPLAY_POLICY`（不 fail）；`acceptLegacy:false` 与 `requireDisplayPolicy:true` 严格模式 fail closed；公开 schema 快照与实现常量一致；example 被 `validatePetBrief` 接受；26 条契约向量逐条对照。
+- v0.2 新增覆盖：`displayPolicy` 默认 `private` / 显式三态 / 非法枚举拒绝；v0.1 brief 接受且返回 `W_LEGACY_SCHEMA_VERSION`+`W_MISSING_DISPLAY_POLICY`（不 fail）；`acceptLegacy:false` 与 `requireDisplayPolicy:true` 严格模式 fail closed；公开 schema 快照与实现常量一致；example 被 `validatePetBrief` 接受；26 条契约向量逐条对照；CLI 新选项（`--display-policy` 三态/非法值、`--check --strict`、`--print-schema` 与快照深度相等、`--check` warnings 不改变退出码）。
 - 消费者侧的 20 条 v0.1 契约向量在 desktop-games `tests/pet-brief-consumer.test.ts` 中执行（见该仓 `docs/contracts/pet-brief/README.md`）；v0.2 的 `displayPolicy` 向量见本仓 `docs/pet-brief/testcases-v0.2.json`（consumer 待同步，见 `PET-BRIEF-CONSUMERS.md`）。
 
 ## 6. 已知限制 / 未做

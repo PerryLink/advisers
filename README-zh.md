@@ -22,11 +22,11 @@ Advisers 不是聊天框，也不是情感陪伴。它维护三本账：
 - **承诺账**：谁欠谁、何时到期、外部完成证据；
 - **流程账**：这类事怎么做，以 draft/patch 形式可审阅。
 
-核心独立运行（不依赖 cordis）；DSH 是薄的 cordis 兼容宿主适配器，目前只提供 `advisers_brief` + `advisers_office`，不是功能完整的第二产品。
+核心独立运行（不依赖 cordis）；DSH 是薄的 cordis 兼容宿主适配器，提供五个工具（`advisers_brief`、`advisers_office`、`advisers_today`、`advisers_who`、`advisers_evidence`），不是功能完整的第二产品。
 
 ## 状态
 
-`advisers@0.2.0-preview.71`（core `advisers-core@0.2.0-preview.22`、`advisers-policy-strict@0.2.0-preview.12`、`advisers-office@0.2.0-preview.14`）已**发布**到 npm；`next` 指向 `.71`（账号所有者已于 2026-11-17 批准，stage `3329a587-eb8b-467a-a184-7e1ce00e560b`）。公开 `latest` 仍是旧占位版：
+`0.2.0` 是 2026-11-17 发布的**稳定版候选（stable release candidate，staged pending OTP）**：8 个 workspace 包统一为 `0.2.0`。其中 6 个发布包为 `advisers`、`advisers-core`、`advisers-office`、`advisers-policy-strict`、`advisers-bridge-hermes`、`dsh-advisers`；两个私有 `advisers-link-*` 包保持同版本但不发布。目前尚未发布到 `latest`：构建已准备进入 npm staging，需账号所有者本人 OTP 批准；获批后由发布负责人把本节改为“已发布”。
 
 > 需要 **Node >= 22.13**；Windows/PowerShell/BOM 说明见 [docs/QUICKSTART.md](docs/QUICKSTART.md)。
 
@@ -45,16 +45,18 @@ Advisers 不是聊天框，也不是情感陪伴。它维护三本账：
 - 证据/交付：`evidence show`、`deliveries --pack`（manifest + SHA256SUMS + DOCX 回执）、`deliver --type ...`（DOCX/XLSX）；
 - **交付回执包 v1.1**：`deliveries --receipt [--out dir] [--ids ...] [--all] [--recipient ...]` 复制交付文件并记录每个文件的 SHA-256、生成环境、校验结果与收件人；`evidence verify <dir>` 离线校验（JSON，exit 0/1，不读 `~/.advisers`）。证据条目默认上限 2000（用 `--ids`/`--all` 控制）；旧 `deliveries --pack` 证据包保持兼容。见 `docs/DELIVERY-RECEIPT.md`。
 - **提醒/日历接线（0.2.0）**：`commit add/edit --remind-offsets "-1d,-2h,+0d09:00"` 写入逐承诺 VALARM；`remind --deliver --notify` 增加可选 webhook 并把上次运行写入 `~/.advisers/scheduler/status.json`；`remind install|uninstall|status [--apply]` 默认只打印 dry-run 计划，加 `--apply` 才注册/移除 cron/schtasks；`today --calendar` 本地展开 RRULE（全天 / （循环）标注）。`today`、`capture`、`memory candidates`、`verify` 均有稳定 `--json`（`docs/CLI-JSON.md`）。
-- 隐私/MCP/JSON：`privacy --prove`、`mcp --stdio`（只读工具）、`ui`（本地只读视图）、`status/commit/who/deliveries/remind/evidence --json`。
-- Pet Brief（只读脱敏投影，契约 v0.1）：`pet-brief --json|--out|--check`；`secrecy >= 2` 全排除、confidence < 0.7 丢弃、5 分钟 TTL、每节 10 项上限；不调模型、不联网、不改账本；桌宠 UI/传输尚未接通。见 `docs/PET-BRIEF-PRODUCER.md`。
+- 隐私/MCP/JSON：`privacy --prove`、`mcp --stdio`（7 工具 + 4 个只读 resources，单行 JSON-RPC 上限 1 MiB；候选写入仅 pending，审计行写失败即 fail-closed）、`ui`（本地只读视图）、`status/commit/who/deliveries/remind/evidence --json`。
+- Pet Brief（只读脱敏投影，契约 v0.2：`schemaVersion: 2` + `displayPolicy`，默认 `private`；v0.1 brief 按 legacy 可读）：`pet-brief --json|--out|--check [--strict]|--print-schema|--display-policy public|private|none`；`secrecy >= 2` 全排除、confidence < 0.7 丢弃、5 分钟 TTL、每节 10 项上限；不调模型、不联网、不改账本；桌宠 UI/传输尚未接通。见 `docs/PET-BRIEF-PRODUCER.md`。
 
 ```sh
-# 当前 preview 已发布到 npm `next`，公开 `latest` 仍是旧占位版。
+# 0.2.0 处于 staged-pending-OTP 状态；获批前请从 checkout 运行。
 # 从 checkout 跑：
 #   corepack pnpm install && corepack pnpm -r build
 #   ADVISERS_OFFICE_LOCAL=1 node packages/advisers/bin/advisers.js status
-# 从 npm 安装：
-npm i -g --registry=https://registry.npmjs.org advisers@next advisers-office@next
+# 从 npm 安装（账号所有者批准 0.2.0 后；稳定渠道 = 默认 `latest`）：
+#   npm i -g --registry=https://registry.npmjs.org advisers@latest advisers-office@latest
+# 转正前，preview/RC 构建在 `next` 渠道：
+#   npm i -g --registry=https://registry.npmjs.org advisers@next advisers-office@next
 advisers soul init
 advisers commit add "周五前发报价给王工" --quote "周五前发报价给王工" --due 2026-11-13T18:00:00+08:00
 advisers tick
@@ -64,7 +66,7 @@ advisers office docx spec.json out.docx
 advisers verify out.docx
 ```
 
-在预览版转正前，`latest` 仍是占位版 `0.0.4`。
+npm 标签：**`latest`** 是稳定渠道（账号所有者批准 0.2.0 前仍是旧占位版 `0.0.4`）；**`next`** 是预发布渠道，preview/RC 构建先发到这里。需要可复现安装时请固定版本（`advisers@0.2.0`），并直接查询官方 registry（`npm view advisers dist-tags --registry=https://registry.npmjs.org/`）——镜像可能滞后。
 
 ## 许可
 
@@ -78,6 +80,6 @@ Advisers 是**源码可见、非开源（source-available）**项目。自 `0.2.
   [CC BY-NC-SA 4.0](https://creativecommons.org/licenses/by-nc-sa/4.0/)（SPDX：`CC-BY-NC-SA-4.0`），
   须署名、非商业使用、相同方式共享。
 
-历史版本保留原许可：MIT 版本仍为 MIT，`advisers@0.2.0-preview.71`（Apache-2.0）仍为 Apache-2.0。
+历史版本保留原许可：MIT 版本仍为 MIT，0.2.0 之前以 Apache-2.0 发布的版本（至 2026-11-17 的 preview）仍为 Apache-2.0。
 完整策略、Required Notice 与商业授权渠道见 [LICENSE](LICENSE)、[LICENSE-DOCS](LICENSE-DOCS)、
 [NOTICE](NOTICE) 与 [LICENSING.md](LICENSING.md)。

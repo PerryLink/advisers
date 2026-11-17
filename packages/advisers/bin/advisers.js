@@ -27,7 +27,19 @@ import { egressDeniedReason } from '../lib/egress.js'
 import { research as runResearch } from '../lib/research.js'
 import { reviewDocument } from '../lib/doc-review.js'
 import { buildHistory, buildOpening, buildPins, continuityProbes, ensurePins, fitHistory, shouldSummarize, summarizeTurns } from '../lib/context-window.js'
-import { buildPetBrief, validatePetBrief, writePetBriefAtomic } from '../lib/pet-brief.js'
+import {
+  PET_BRIEF_DEFAULT_DISPLAY_POLICY,
+  PET_BRIEF_DISPLAY_POLICIES,
+  PET_BRIEF_MAX_ITEMS,
+  PET_BRIEF_MAX_LINE_LENGTH,
+  PET_BRIEF_MAX_SUGGESTED_LINES,
+  PET_BRIEF_MOODS,
+  PET_BRIEF_SCHEMA_VERSION,
+  PET_BRIEF_SOURCE,
+  buildPetBrief,
+  validatePetBrief,
+  writePetBriefAtomic,
+} from '../lib/pet-brief.js'
 import { fetchImapMessages } from '../lib/imap.js'
 import { createReadOnlyServer } from '../lib/ui.js'
 
@@ -60,6 +72,7 @@ const loadSync = lazyModule(() => import('../lib/sync.js'))
 const loadTimestamp = lazyModule(() => import('../lib/timestamp.js'))
 const loadVault = lazyModule(() => import('../lib/vault.js'))
 const loadTos = lazyModule(() => import('../lib/tos/index.js'))
+const loadMcpServer = lazyModule(() => import('../lib/mcp-server.js'))
 
 let core
 if (process.env.ADVISERS_CORE_LOCAL === '1') {
@@ -460,7 +473,8 @@ Usage:
                               status also shows the last recorded run (scheduler/status.json)
   advisers calendar import --ics <file>  local .ics read-only import
   advisers risks              up to 3 deterministic obligation risks
-  advisers pet-brief [--json] [--out [path]] [--check]  read-only redacted Pet Brief (contract v0.1)
+  advisers pet-brief [--json] [--out [path]] [--check [--strict]] [--display-policy public|private|none]
+                              read-only redacted Pet Brief (contract v0.2); --print-schema prints the JSON Schema
   advisers tick               due commitments in the next 7 days
   advisers week               last 7 days
   advisers digest day|week    short digest
@@ -504,7 +518,7 @@ Usage:
   advisers capture --from-transcript <file>      转写稿导入→候选（不录音/不入会）
   advisers capture --from-imap                   只读 IMAP 导入（EXAMINE/FETCH；env 凭据）
   advisers ui [--port n]                        本地只读视图（127.0.0.1，GET only）
-  advisers mcp --stdio                          只读 MCP server（today/commit/who/evidence/remind）
+  advisers mcp --stdio                          MCP server（7 工具 + 4 resources；写入口仅 pending 候选/回执校验）
   advisers evidence show <id> [--json]          承诺/事实/偏好→原文来源
   advisers deliver [--commit id] [--type confirmation|weekly|statement|ledger] [--format docx|xlsx|pdf] [--out f]  交付物
   advisers deliveries --pack [--out dir]        证据包（manifest/README/SHA256SUMS + DOCX 回执）
@@ -975,29 +989,143 @@ function printLinks() {
 }
 
 /**
- * `advisers pet-brief` — read-only projection for the pet (contract v0.1).
+ * JSON Schema (draft 2020-12) for the Pet Brief contract v0.2, generated from
+ * the exported lib constants so `--print-schema` also works from the published
+ * package (docs/pet-brief/schema-v0.2.json is not in the npm `files`
+ * allowlist). The test suite asserts the generated document is deep-equal to
+ * the canonical snapshot in docs/pet-brief/schema-v0.2.json.
+ */
+function petBriefJsonSchema() {
+  const maxItems = PET_BRIEF_MAX_ITEMS
+  const id = { type: 'string', minLength: 1, maxLength: 64 }
+  const confidence = { type: 'number', minimum: 0, maximum: 1 }
+  const arrayOf = (required, properties) => ({
+    type: 'array',
+    maxItems,
+    items: { type: 'object', additionalProperties: false, required, properties },
+  })
+  return {
+    $schema: 'https://json-schema.org/draft/2020-12/schema',
+    $id: 'https://github.com/PerryLink/advisers/docs/pet-brief/schema-v0.2.json',
+    title: 'Advisers Pet Brief (contract v0.2)',
+    description: 'Read-only, redacted, expiring projection from Advisers to a desktop-pet consumer. No reasoning, secrets, documents, or emotional fields. v0.2 adds displayPolicy (public|private|none); v0.1 briefs had schemaVersion 1 and no displayPolicy.',
+    type: 'object',
+    additionalProperties: false,
+    required: ['schemaVersion', 'generatedAt', 'expiresAt', 'source', 'displayPolicy', 'counts', 'today', 'commitments', 'risks', 'facts', 'mood', 'suggestedLines', 'redactions'],
+    properties: {
+      schemaVersion: { type: 'integer', const: PET_BRIEF_SCHEMA_VERSION, description: 'Contract v0.2. v0.1 = 1 is accepted by the producer validator as legacy with warnings; consumers are not required to accept it.' },
+      generatedAt: { type: 'string', format: 'date-time' },
+      expiresAt: { type: 'string', format: 'date-time', description: 'generatedAt + 5 min by default; consumers discard the brief when now >= expiresAt.' },
+      source: { type: 'string', const: PET_BRIEF_SOURCE },
+      displayPolicy: {
+        type: 'string',
+        enum: [...PET_BRIEF_DISPLAY_POLICIES],
+        default: PET_BRIEF_DEFAULT_DISPLAY_POLICY,
+        description: 'Who may see brief-derived content. public: may be shown whenever the pet is visible (still redacted). private (default): only in a personal/no-bystander context; the consumer must auto-collapse, one-click hide and hide during screen sharing/recording. none: consumer must not render or retain any brief-derived content (treat as disabled). Missing (legacy v0.1) means private.',
+      },
+      counts: {
+        type: 'object',
+        additionalProperties: false,
+        required: ['today', 'commitments', 'risks', 'facts'],
+        properties: {
+          today: { type: 'integer', minimum: 0, maximum: maxItems },
+          commitments: { type: 'integer', minimum: 0, maximum: maxItems },
+          risks: { type: 'integer', minimum: 0, maximum: maxItems },
+          facts: { type: 'integer', minimum: 0, maximum: maxItems },
+        },
+      },
+      today: arrayOf(['id', 'title', 'status'], {
+        id,
+        title: { type: 'string', minLength: 1, maxLength: 80 },
+        status: { type: 'string', enum: ['open', 'doing', 'done'] },
+      }),
+      commitments: arrayOf(['id', 'matter', 'who', 'what', 'due', 'risk', 'confidence'], {
+        id,
+        matter: { type: 'string', minLength: 1, maxLength: 64 },
+        who: { type: 'string', minLength: 1, maxLength: 40 },
+        what: { type: 'string', minLength: 1, maxLength: 80 },
+        due: { type: 'string', minLength: 1, maxLength: 32 },
+        risk: { type: 'string', enum: ['low', 'medium', 'high'] },
+        confidence,
+      }),
+      risks: arrayOf(['id', 'level', 'summary', 'evidence', 'confidence'], {
+        id,
+        level: { type: 'string', enum: ['low', 'medium', 'high'] },
+        summary: { type: 'string', minLength: 1, maxLength: 80 },
+        evidence: { type: 'string', minLength: 1, maxLength: 64 },
+        confidence,
+      }),
+      facts: arrayOf(['id', 'subject', 'predicate', 'value', 'confidence'], {
+        id,
+        subject: { type: 'string', minLength: 1, maxLength: 40 },
+        predicate: { type: 'string', minLength: 1, maxLength: 40 },
+        value: { type: 'string', minLength: 1, maxLength: 80 },
+        confidence,
+      }),
+      mood: { type: 'string', enum: [...PET_BRIEF_MOODS], description: 'Workload-only rendering hint, never an emotional state about the user.' },
+      suggestedLines: {
+        type: 'array',
+        maxItems: PET_BRIEF_MAX_SUGGESTED_LINES,
+        items: { type: 'string', minLength: 1, maxLength: PET_BRIEF_MAX_LINE_LENGTH },
+      },
+      redactions: {
+        type: 'array',
+        maxItems,
+        items: { type: 'string', minLength: 1, maxLength: 80 },
+      },
+    },
+  }
+}
+
+/**
+ * `advisers pet-brief` — read-only projection for the pet (contract v0.2).
  * Never opens the store read-write, never calls a model, never writes the
  * ledger. The only write is the optional `--out` file (0600, atomic rename).
+ *
+ * CLI surface: `--json`, `--out [path]`, `--check [--strict] [--in file]`,
+ * `--display-policy public|private|none` and `--print-schema`. Warnings from
+ * the validator are reported but never change the exit code (strict mode turns
+ * legacy/missing-displayPolicy into errors instead).
  */
 async function petBrief(args) {
   const { flags } = parseFlags(args)
   const asJson = args.includes('--json')
   const check = args.includes('--check')
+  const strict = args.includes('--strict')
+  const printSchema = args.includes('--print-schema')
   const inFile = flags.in
   const outFlag = flags.out
+  const displayPolicyFlag = flags['display-policy']
   const fail = (code, message) => {
     console.error(JSON.stringify({ error: { code, message } }))
     process.exitCode = 1
   }
+  if (printSchema) {
+    if (inFile !== undefined || outFlag !== undefined || displayPolicyFlag !== undefined || asJson || check) {
+      return fail('E_USAGE', '--print-schema cannot be combined with other pet-brief options')
+    }
+    console.log(JSON.stringify(petBriefJsonSchema(), null, 2))
+    return
+  }
   if (inFile !== undefined && !check) return fail('E_USAGE', '--in can only be used with --check')
   if (inFile !== undefined && typeof inFile !== 'string') return fail('E_USAGE', '--in needs a file path')
   if (outFlag !== undefined && typeof outFlag !== 'string' && outFlag !== true) return fail('E_USAGE', '--out takes an optional file path')
+  if (strict && !check) return fail('E_USAGE', '--strict can only be used with --check')
+  let displayPolicy
+  if (displayPolicyFlag !== undefined) {
+    if (typeof displayPolicyFlag !== 'string' || !PET_BRIEF_DISPLAY_POLICIES.includes(displayPolicyFlag)) {
+      return fail('E_USAGE', `--display-policy must be one of ${PET_BRIEF_DISPLAY_POLICIES.join('|')}`)
+    }
+    if (inFile !== undefined) return fail('E_USAGE', '--display-policy can only be used when generating a brief')
+    displayPolicy = displayPolicyFlag
+  }
+  const validateOptions = strict ? { now: Date.now(), acceptLegacy: false, requireDisplayPolicy: true } : { now: Date.now() }
   try {
     if (inFile) {
       let text
       try { text = readFileSync(inFile, 'utf8') } catch (error) { return fail('E_READ', `cannot read ${inFile}: ${error.message}`) }
-      const result = validatePetBrief(text, { now: Date.now() })
-      console.log(JSON.stringify({ ok: result.ok, checked: inFile, expiresAt: result.brief?.expiresAt ?? null, counts: result.brief?.counts ?? null, errors: result.errors }, null, 2))
+      const result = validatePetBrief(text, validateOptions)
+      console.log(JSON.stringify({ ok: result.ok, checked: inFile, expiresAt: result.brief?.expiresAt ?? null, counts: result.brief?.counts ?? null, errors: result.errors, warnings: result.warnings }, null, 2))
       if (!result.ok) process.exitCode = 1
       return
     }
@@ -1009,10 +1137,10 @@ async function petBrief(args) {
       return fail(error?.code ?? 'E_STORE', error?.message ?? String(error))
     }
     const ledger = Ledger.fromJSON(snapshot)
-    const brief = buildPetBrief(ledger, { now: Date.now() })
+    const brief = buildPetBrief(ledger, displayPolicy ? { now: Date.now(), displayPolicy } : { now: Date.now() })
     if (check) {
-      const result = validatePetBrief(brief, { now: Date.now() })
-      console.log(JSON.stringify({ ok: result.ok, checked: 'generated', expiresAt: brief.expiresAt, counts: brief.counts, errors: result.errors }, null, 2))
+      const result = validatePetBrief(brief, validateOptions)
+      console.log(JSON.stringify({ ok: result.ok, checked: 'generated', expiresAt: brief.expiresAt, counts: brief.counts, errors: result.errors, warnings: result.warnings }, null, 2))
       if (!result.ok) process.exitCode = 1
       return
     }
@@ -1022,7 +1150,7 @@ async function petBrief(args) {
     }
     if (asJson) { console.log(JSON.stringify(brief, null, 2)); return }
     console.log(`pet-brief · ${brief.counts.today} today · ${brief.counts.commitments} commitments · ${brief.counts.risks} risks · ${brief.counts.facts} facts`)
-    console.log(`mood ${brief.mood} · expires ${brief.expiresAt}`)
+    console.log(`mood ${brief.mood} · expires ${brief.expiresAt} · displayPolicy ${brief.displayPolicy}`)
     if (outPath) console.log(`wrote ${outPath} (mode 600, atomic)`)
   } catch (error) {
     fail(error?.code ?? 'E_BRIEF', error?.message ?? String(error))
@@ -2635,70 +2763,28 @@ async function deliver(args) {
   } catch (error) { console.error(`deliver failed: ${error.message}`); process.exitCode = 1 }
 }
 
-function mcpReply(id, result) {
-  process.stdout.write(JSON.stringify({ jsonrpc: '2.0', id, result }) + '\n')
-}
-function mcpError(id, code, message) {
-  process.stdout.write(JSON.stringify({ jsonrpc: '2.0', id, error: { code, message } }) + '\n')
-}
-
-function mcpTools() {
-  return [
-    { name: 'advisers_today', description: 'Read today/week/waiting counts and open commitments.', inputSchema: { type: 'object', properties: {} } },
-    { name: 'advisers_commit_ls', description: 'List commitments (open by default).', inputSchema: { type: 'object', properties: { all: { type: 'boolean' } } } },
-    { name: 'advisers_who', description: 'Who owes whom.', inputSchema: { type: 'object', properties: {} } },
-    { name: 'advisers_evidence', description: 'Read the source turns for a commitment/fact/preference id.', inputSchema: { type: 'object', properties: { id: { type: 'string' } }, required: ['id'] } },
-    { name: 'advisers_remind', description: 'Read due reminders (no delivery).', inputSchema: { type: 'object', properties: {} } },
-  ]
-}
-
+/**
+ * `advisers mcp --stdio`: the shipped stdio entry for the MCP server.
+ *
+ * The protocol surface lives in lib/mcp-server.js (7 tools incl. the pending-only
+ * candidate write + read-only pack verification, 4 read-only resources, 1 MiB
+ * line cap, -32601/-32602/-32002/-32700). This wiring only supplies process
+ * state: the home, the store/ledger, the version and the audit sink. Every
+ * tools/call is audited through store.appendAudit; a write whose audit row
+ * cannot be appended fails closed (a created candidate is rolled back).
+ */
 async function mcpServer() {
   ensureHome()
   const store = dbStore()
   const ledger = loadLedger()
-  const handle = async (msg) => {
-    const { id, method, params } = msg
-    if (method === 'initialize') return mcpReply(id, { protocolVersion: '2024-11-05', capabilities: { tools: {} }, serverInfo: { name: 'advisers', version: VERSION } })
-    if (method === 'notifications/initialized') return
-    if (method === 'tools/list') return mcpReply(id, { tools: mcpTools() })
-    if (method === 'ping') return mcpReply(id, {})
-    if (method !== 'tools/call') return mcpError(id, -32601, `unknown method: ${method}`)
-    const name = params?.name
-    const args = params?.arguments ?? {}
-    try {
-      let data
-      if (name === 'advisers_today') {
-        const open = ledger.openCommitments()
-        data = { open: open.length, commitments: open.map((c) => ({ id: c.id, debtor: c.debtor, creditor: c.creditor, action: c.action, dueAt: c.dueAt })) }
-      } else if (name === 'advisers_commit_ls') data = ledger.listCommitments().filter((c) => args.all || c.status === 'open').map((c) => ({ id: c.id, status: c.status, action: c.action, dueAt: c.dueAt, creditor: c.creditor }))
-      else if (name === 'advisers_who') data = { mine: ledger.openCommitments().filter((c) => c.debtor === 'user' || c.debtor === 'agent'), waiting: ledger.openCommitments().filter((c) => c.debtor === 'third' || c.debtor.startsWith('third:')) }
-      else if (name === 'advisers_evidence') {
-        if (!args.id) throw new Error('id is required')
-        const { evidenceForCommitment, evidenceForFact, evidenceForPreference } = await loadEvidence()
-        const r = args.id.startsWith('cm_') ? evidenceForCommitment(store, ledger, args.id) : args.id.startsWith('fact_') ? evidenceForFact(store, ledger, args.id) : args.id.startsWith('pref_') ? evidenceForPreference(store, ledger, args.id) : null
-        if (!r) throw new Error('unknown evidence id prefix')
-        data = r
-      } else if (name === 'advisers_remind') {
-        const { buildReminders } = await loadRemind()
-        data = buildReminders(ledger, { now: new Date() })
-      }
-      else return mcpError(id, -32602, `unknown tool: ${name}`)
-      process.stdout.write(JSON.stringify({ jsonrpc: '2.0', id, result: { content: [{ type: 'text', text: JSON.stringify(data, null, 2) }], isError: false } }) + '\n')
-      store?.appendAudit({ actor: 'mcp', action: 'mcp.call', allowed: true, reason: name })
-    } catch (error) { mcpReply(id, { content: [{ type: 'text', text: error.message }], isError: true }) }
-  }
-  let buf = ''
-  process.stdin.setEncoding('utf8')
-  process.stdin.on('data', (chunk) => {
-    buf += chunk
-    let i
-    while ((i = buf.indexOf('\n')) >= 0) {
-      const line = buf.slice(0, i).trim(); buf = buf.slice(i + 1)
-      if (!line) continue
-      try { const msg = JSON.parse(line); void handle(msg) } catch { mcpError(null, -32700, 'parse error') }
-    }
+  const { createMcpServer } = await loadMcpServer()
+  const server = createMcpServer({
+    store,
+    ledger,
+    version: VERSION,
+    audit: (entry) => store?.appendAudit(entry),
   })
-  await new Promise((resolve) => process.stdin.on('end', resolve))
+  await server.serve(process.stdin, process.stdout)
 }
 
 async function ocrCommand(args) {

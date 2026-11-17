@@ -1,6 +1,111 @@
 # Changelog
 
-Unreleased: legal texts updated (TOS v2026.11.2, new PRIVACY notice, content-safety list, legal citations); **TOS consent gate** implemented — pre-dispatch first-run/version-change acceptance gate (TTY summary + explicit 同意, non-TTY exit 3 `E_TOS_REQUIRED`, `--accept-tos`/`ADVISERS_ACCEPT_TOS=1` channels), per-modification re-confirmation for `soul set/init`, routine writes and `import --replace`, `advisers tos show|status [--json]|accept|revoke`, local record `~/.advisers/tos.json` (0600, atomic) plus audited `tos.accept|tos.block|tos.reaccept|tos.revoke` events, and 11 new `tos-gate` tests. **CLI data-plane wiring**: `deliveries --receipt` builds v1.1 delivery receipt packs (copies of the delivered files + SHA-256 for every pack file + generator/verify/recipient; evidence capped at 2000 with `--ids`/`--all`) and the new `evidence verify <dir>` verifies them offline (JSON, exit 0/1, TOS-exempt, no `~/.advisers`); `commit add/edit --remind-offsets` stores per-commitment VALARM offsets, `remind --deliver --notify` adds the opt-in webhook and records the last run in `~/.advisers/scheduler/status.json`, and `remind install|uninstall|status [--apply]` plans (dry-run default) / executes / reads the user-level cron/schtasks entry; `today --calendar` expands RRULEs locally (all-day `全天`, recurring `（循环）`); capture/import now writes source schema v2 (`normalizeSource` + `validateSource`, bare capture = `conversation`) with read-side v1 compatibility; stable JSON for `today`, `capture`, `memory candidates`, `verify` and `deliveries --receipt` documented in `docs/CLI-JSON.md`; new `cli-data-wiring` test suite. The 0.2.0 entry is written by the release owner.
+## 0.2.0 (release candidate, 2026-11-17)
+
+First stable release of the 0.2.0 line: the six published packages are lockstep at `0.2.0`
+and the two private `advisers-link-*` packages share the same version. Not yet on `latest`:
+npm staging and the account owner's OTP approval happen at release time (runbook:
+`docs/RELEASING.md`; evidence draft: `eval/results/E11-release-2026-11-17.md`).
+
+### Added
+
+- **Terms / privacy / consent**: TOS v2026.11.2 (`docs/TOS.md`), new `docs/PRIVACY.md`,
+  `docs/DISCLAIMER.md`, `docs/SAFETY.md`, `docs/legal-citations.json` and offline packaged
+  copies under `packages/advisers/lib/tos/`; first-run and version-change consent gate
+  (`advisers tos show|status|accept|revoke`, local `~/.advisers/tos.json`, audited
+  `tos.accept|tos.block|tos.reaccept|tos.revoke` events, non-TTY exit 3 `E_TOS_REQUIRED`,
+  `--accept-tos` / `ADVISERS_ACCEPT_TOS=1`, re-confirmation for `soul set/init`, routine
+  writes and `import --replace`).
+- **Local content safety**: offline rule layer (`lib/safety`: 14 categories / 92 rules, zero
+  network) wired into the model/research/capture/pet-brief/attachments/MCP/DSH paths.
+- **Pet Brief contract v0.2**: `schemaVersion: 2` + `displayPolicy` (default `private`;
+  `public` must be explicit), atomic writes, v0.1 briefs readable as legacy; public schema
+  and test-case snapshots under `docs/pet-brief/`; consumer guidance updated. The CLI
+  exposes `--display-policy public|private|none`, `--check --strict` and `--print-schema`;
+  `--check` reports warnings without changing the exit code (strict mode turns legacy v0.1
+  briefs / missing `displayPolicy` into errors).
+- **Delivery receipt pack v1.1**: `advisers deliveries --receipt` copies the delivered files
+  and records every SHA-256, the generator, verify results and recipient; `advisers evidence
+  verify <dir>` verifies a pack offline (JSON, exit 0/1, no `~/.advisers`). Evidence entries
+  are capped at 2000 by default (`--ids` / `--all` override).
+- **Reminders / calendar**: per-commitment reminder offsets
+  (`commit add/edit --remind-offsets`), absolute multi-VALARM `.ics` export, opt-in
+  `--notify` webhook, `remind install|uninstall|status [--apply]` scheduler with a recorded
+  last run (`~/.advisers/scheduler/status.json`), and local RRULE expansion in
+  `today --calendar` (all-day `全天` / recurring `（循环）` markers).
+- **Calendar / source schema v2**: local RRULE expansion helper and source schema v2
+  (`normalizeSource`/`validateSource`, bare capture = `conversation`) with read-side v1
+  compatibility.
+- **MCP**: server extracted to `lib/mcp-server.js` with 7 tools (5 read:
+  today/commitments/who/evidence/remind; 2 write-path: pending-only capture candidate and
+  read-only pack verification) plus 4 read-only resources, error codes
+  (`-32601/-32602/-32002/-32700`) and a 1 MiB JSON-RPC line cap. `advisers mcp --stdio`
+  now serves this library; every `tools/call` is audited and a write whose audit row cannot
+  be appended fails closed (created candidate rolled back).
+- **DSH bundle**: expanded from 2 to 5 tools (`advisers_brief`, `advisers_office`,
+  `advisers_today`, `advisers_who`, `advisers_evidence`); the three ledger views are
+  read-only.
+- **Performance**: shared `Intl.DateTimeFormat` (no per-commitment ICU churn), batched
+  `tick` plus SQLite indexes (schema v18 adds 12 indexes), lazy loading of pdf-lib/jszip
+  modules, PDF wrap character-width cache, and an evidence-pack entry cap. The 2026-11-17
+  benchmark (before/after, ext4 copy) measured: startup `--version` 185ms/105MB →
+  70ms/71MB; `today` at 50k commitments 3.48s/1.57GB → 0.65s/331MB; `tick` 26.2s/1.13GB →
+  0.66s first run; PDF `wrap()` 1000 lines 425ms → 3ms; `deliver --format pdf` at 10k data
+  7.84s → 1.56s.
+- **Robustness / security**: keyed audit transactions, no silent JSON fallback, atomic
+  vault/sync writes, IMAP/research input limits, Office zip-bomb budgets shared across
+  read/edit/validate/attachments, deeper Office verification, and safety/egress regressions
+  covered by new tests.
+
+### Changed
+
+- **Licensing**: from `0.2.0` the source tree is **PolyForm Noncommercial License 1.0.0**
+  (software) + **CC BY-NC-SA 4.0** (docs/data/design) — source-available, **not** OSI open
+  source; commercial use needs a separate written licence. Every package carries identical
+  `LICENSE`/`NOTICE` and ships `THIRD-PARTY-NOTICES.md`; `LICENSING.md`, `NOTICE` and the
+  README licence sections document the split and the required notice.
+- **Lockstep 0.2.0**: all eight workspace packages (`advisers`, `advisers-core`,
+  `advisers-office`, `advisers-policy-strict`, `advisers-bridge-hermes`, `dsh-advisers`,
+  private `advisers-link-email`, `advisers-link-feishu`) are `0.2.0`; internal pins,
+  version constants and `pnpm-lock.yaml` follow.
+- **Docs version cleanup**: user-facing READMEs/QUICKSTART describe `0.2.0` as the stable
+  release candidate and explain the `latest` (stable) vs `next` (pre-release) channels.
+
+### Verified (release-preparation tree, 2026-11-17)
+
+- `pnpm -r build` and `pnpm -r typecheck`: exit 0.
+- `node scripts/pack-smoke.mjs`: PASS for all six packages (`advisers@0.2.0`: 53 files /
+  41 local imports).
+- `node scripts/check-docs.mjs`: PASS (`0.2.0`).
+- `node scripts/check-tos.mjs --release`: PASS (TOS v2026.11.2, effective 2026-11-17).
+- `node scripts/check-licenses.mjs`: PASS (PolyForm-NC + CC-BY-NC-SA, 203 third-party
+  packages).
+- `node scripts/check-release.mjs`: PASS (lockstep `0.2.0`).
+- `node scripts/security-suite.mjs`: 5/5 PASS; `node scripts/verify-office.mjs`: PASS.
+- Test suite: 450+ tests across 8 packages (static `test()`/`it()` declaration count 456 on
+  this tree, including Pet Brief v0.2 and MCP CLI coverage); the full run is recorded on the
+  final release commit in `eval/results/E11-release-2026-11-17.md`.
+
+### Known issues
+
+- The legal texts (TOS v2026.11.2 / PRIVACY / DISCLAIMER / SAFETY) were finalized by the
+  release lead acting as legal owner; an external-lawyer review is still recommended before
+  commercial rollout. They are not a compliance certification.
+- No independent human gold standard for extraction/review quality and no real 5–10
+  consultant dogfood yet: the published evaluation is synthetic plus author-run.
+  Real-account/WS/Office-L3 validation is still pending.
+- Promoting `latest` requires the npm account owner's OTP approval in a browser flow; no
+  agent can perform it. The release is not on `latest` until then.
+- `dsh-advisers` depends on the DSH preview line (`@deepseek-ai/dsh-tools` rc) rather than a
+  stable upstream; disclosed here as a known constraint.
+- Historic preview state that should not be read as current: the last Apache-2.0 preview
+  (`.71`) is published only on `next`, and older staged builds are not part of 0.2.0.
+
+### Prior-version licence mapping
+
+- Releases published before `0.2.0` keep the licence they shipped under (MIT for early
+  releases; Apache-2.0 for the previews published up to 2026-11-17). The change is **not
+  retroactive**; `NOTICE` records the mapping.
 
 ## 0.2.0-preview.71 (published 2026-11-17)
 
