@@ -15,7 +15,6 @@ try {
 }
 import { runAgent } from '../lib/agent.js'
 import { chatCompletion } from '../lib/model.js'
-import { extractAttachment, ofdText } from '../lib/attachments.js'
 import { applyPreferenceDecay, buildRoutineCandidate, correctionStatement } from '../lib/learning.js'
 import { checkRoutine } from '../lib/routine.js'
 import { backupBeforeWrite, diffLatest, listBackups, undoLatest } from '../lib/undo.js'
@@ -27,18 +26,34 @@ import { egressDeniedReason } from '../lib/egress.js'
 import { research as runResearch } from '../lib/research.js'
 import { reviewDocument } from '../lib/doc-review.js'
 import { buildHistory, buildOpening, buildPins, continuityProbes, ensurePins, fitHistory, shouldSummarize, summarizeTurns } from '../lib/context-window.js'
-import { buildReminders, toIcs } from '../lib/remind.js'
 import { buildPetBrief, validatePetBrief, writePetBriefAtomic } from '../lib/pet-brief.js'
-import { dedupeKey, parseEml, parseIcs, parseMbox, parseTranscript, toCaptureInput } from '../lib/importers.js'
 import { fetchImapMessages } from '../lib/imap.js'
-import { buildEvidencePack, evidenceForCommitment, evidenceForFact, evidenceForPreference, sha256Hex, toDocxRows, verifyPack } from '../lib/evidence.js'
 import { createReadOnlyServer } from '../lib/ui.js'
-import { buildSimplePdf, findCjkFont } from '../lib/pdf.js'
-import { decryptJson, encryptJson, isVaultEnvelope } from '../lib/vault.js'
-import { runLocalOcr } from '../lib/ocr.js'
-import { runLocalTimestamp } from '../lib/timestamp.js'
-import { listSnapshots, pullSnapshot, pushSnapshot, sanitizeDevice } from '../lib/sync.js'
-import { sendNotification } from '../lib/notify.js'
+
+/**
+ * P1-1: lazy-load the heavy / rarely used libraries.
+ *
+ * Before this, every invocation (including `advisers --version`) paid for the
+ * whole static import graph: pdf-lib + fontkit was ~106ms / +34MB RSS and
+ * jszip (via attachments) ~22ms / +10MB, plus importers/evidence/sync/vault/
+ * ocr/timestamp/notify/remind which only a subset of commands needs. Each
+ * loader memoizes its module promise, so a command that needs a library pays
+ * for it at most once, and it fails on first use instead of at startup.
+ */
+const lazyModule = (loader) => {
+  let promise
+  return () => (promise ??= loader())
+}
+const loadAttachments = lazyModule(() => import('../lib/attachments.js'))
+const loadEvidence = lazyModule(() => import('../lib/evidence.js'))
+const loadImporters = lazyModule(() => import('../lib/importers.js'))
+const loadNotify = lazyModule(() => import('../lib/notify.js'))
+const loadOcr = lazyModule(() => import('../lib/ocr.js'))
+const loadPdf = lazyModule(() => import('../lib/pdf.js'))
+const loadRemind = lazyModule(() => import('../lib/remind.js'))
+const loadSync = lazyModule(() => import('../lib/sync.js'))
+const loadTimestamp = lazyModule(() => import('../lib/timestamp.js'))
+const loadVault = lazyModule(() => import('../lib/vault.js'))
 
 let core
 if (process.env.ADVISERS_CORE_LOCAL === '1') {
@@ -63,6 +78,23 @@ const SOUL_META = join(HOME, 'soul.meta.json')
 const DB = join(HOME, 'state.db')
 let mode = process.env.ADVISERS_STORE === 'json' ? 'json' : 'sqlite'
 let activeStore
+
+/**
+ * P0-1: one shared ICU formatter instead of `new Intl.DateTimeFormat` per
+ * commitment. The old today()/tick() code built a fresh formatter for every
+ * date comparison (~4 per commitment), so 25k open commitments instantiated
+ * ~100k ICU objects: 3.5s and 1.6GB RSS. Intl.DateTimeFormat instances cost
+ * ~49µs/~17KB and are not tracked in the V8 heap.
+ */
+const DAY_FORMAT = new Intl.DateTimeFormat('en-CA', { timeZone: 'Asia/Shanghai' })
+/** Asia/Shanghai calendar day (YYYY-MM-DD) for a Date, timestamp or ISO string. */
+const localDayOf = (value) => DAY_FORMAT.format(new Date(value))
+
+/**
+ * P1-6: default upper bound for `advisers deliver` (open commitments).
+ * --all lifts it; the command always reports the untruncated total.
+ */
+const DELIVER_DEFAULT_LIMIT = 500
 
 const AUDIT_KEY_FILE = join(HOME, 'audit.key')
 function readAuditKey() {
@@ -666,14 +698,28 @@ function printSources(ledger) {
 
 function today(ledger, { calendar = false, sources = false, json = false } = {}) {
   const now = Date.now()
-  const localDay = new Intl.DateTimeFormat('en-CA', { timeZone: 'Asia/Shanghai' }).format(new Date(now))
-  const open = ledger.openCommitments()
-  const day = (iso) => iso ? new Intl.DateTimeFormat('en-CA', { timeZone: 'Asia/Shanghai' }).format(new Date(iso)) : ''
-  const overdue = open.filter((c) => c.dueAt && Date.parse(c.dueAt) < now && day(c.dueAt) !== localDay)
-  const todayDue = open.filter((c) => c.dueAt && day(c.dueAt) === localDay)
-  const week = open.filter((c) => c.dueAt && Date.parse(c.dueAt) > now && day(c.dueAt) !== localDay && Date.parse(c.dueAt) <= now + 7 * 86400_000)
-  const waiting = open.filter((c) => c.debtor === 'third' || c.debtor.startsWith('third:'))
-  const noDue = open.filter((c) => !c.dueAt)
+  const localDay = localDayOf(now)
+  const weekAhead = now + 7 * 86400_000
+  // P0-1: classify in one pass, formatting each due date at most once (the old
+  // four filters called day() up to four times per commitment).
+  const overdue = []
+  const todayDue = []
+  const week = []
+  const waiting = []
+  const noDue = []
+  for (const c of ledger.openCommitments()) {
+    if (c.debtor === 'third' || c.debtor.startsWith('third:')) waiting.push(c)
+    if (!c.dueAt) { noDue.push(c); continue }
+    const due = Date.parse(c.dueAt)
+    if (due < now) {
+      if (localDayOf(c.dueAt) !== localDay) overdue.push(c)
+      else todayDue.push(c)
+    } else if (localDayOf(c.dueAt) === localDay) {
+      todayDue.push(c)
+    } else if (due <= weekAhead) {
+      week.push(c)
+    }
+  }
   console.log(`今天：${todayDue.length} · 逾期：${overdue.length} · 未来 7 天：${week.length} · 等别人：${waiting.length} · 无截止：${noDue.length}`)
   for (const [label, list] of [['逾期', overdue], ['今天', todayDue], ['未来 7 天', week], ['等别人', waiting]]) {
     if (!list.length) continue
@@ -688,36 +734,70 @@ function today(ledger, { calendar = false, sources = false, json = false } = {})
 function tick(ledger, asJson = false) {
   const now = Date.now()
   const store = dbStore()
-  const localDay = new Intl.DateTimeFormat('en-CA', { timeZone: 'Asia/Shanghai' }).format(new Date(now))
+  const localDay = localDayOf(now)
+  const weekAhead = now + 7 * 86400_000
   const due = []
+  const candidates = []
+  const snoozeKeys = []
+  let statusChanged = false
+  // P0-2: one meta query for every snooze deadline instead of getMeta() per
+  // snoozed commitment.
+  const snoozeUntil = store ? store.listMetaByPrefix('snooze:') : new Map()
   for (const c of ledger.listCommitments()) {
     if (c.status === 'done' || c.status === 'dropped') continue
     if (c.status === 'snoozed') {
-      const until = store?.getMeta(`snooze:${c.id}`)
+      const until = snoozeUntil.get(`snooze:${c.id}`)
       if (until && Date.parse(until) > now) continue
       c.status = 'open'
-      store?.deleteMeta(`snooze:${c.id}`)
+      statusChanged = true
+      snoozeKeys.push(`snooze:${c.id}`)
     }
-    if (!c.dueAt || Date.parse(c.dueAt) > now + 7 * 86400_000) continue
-    const dueDay = new Intl.DateTimeFormat('en-CA', { timeZone: 'Asia/Shanghai' }).format(new Date(c.dueAt))
+    if (!c.dueAt || Date.parse(c.dueAt) > weekAhead) continue
+    candidates.push(c)
+  }
+  // P0-2: replace the per-commitment N+1 queries (listCommitmentNudges +
+  // countNudges) with three batch reads: recent outcomes per commitment,
+  // today's level counts and today's existing (commitment, level) keys.
+  const recentByCommitment = store && candidates.length ? store.recentNudgeOutcomes(3) : new Map()
+  const levelCounts = store && candidates.length ? store.countNudgesByDay(localDay) : new Map()
+  const existingKeys = store && candidates.length ? store.listNudgeLevelKeysByDay(localDay) : new Set()
+  const pendingKeys = new Set()
+  let l3Today = levelCounts.get('L3') ?? 0
+  let l2Today = levelCounts.get('L2') ?? 0
+  const nudgeRows = []
+  for (const c of candidates) {
+    const dueDay = localDayOf(c.dueAt)
     const msLeft = Date.parse(c.dueAt) - now
     let level = (msLeft < 0 || dueDay === localDay) ? 'L2' : 'L1'
     if (level === 'L2' && Date.parse(c.dueAt) < now - 86400_000 && process.env.ADVISERS_ALLOW_L3 === '1') level = 'L3'
-    const recent = store?.listCommitmentNudges(c.id, 3) ?? []
-    if (recent.length === 3 && recent.every((n) => n.outcome === 'ignored') && level !== 'L1') level = level === 'L3' ? 'L2' : 'L1'
-    if (level === 'L3' && store && store.countNudges(localDay, 'L3') >= 1) level = 'L2'
-    if (level === 'L2' && store && store.countNudges(localDay, 'L2') >= 3) level = 'L1'
-    const nudge = store?.addNudge({ localDay, level, commitmentId: c.id, body: c.action })
+    const recent = recentByCommitment.get(c.id) ?? []
+    if (recent.length === 3 && recent.every((outcome) => outcome === 'ignored') && level !== 'L1') level = level === 'L3' ? 'L2' : 'L1'
+    // Budgets keep the historical in-run semantics: a nudge already written by
+    // this tick counts toward the caps of the commitments that follow it, but a
+    // deduped (already present) key does not.
+    if (level === 'L3' && l3Today >= 1) level = 'L2'
+    if (level === 'L2' && l2Today >= 3) level = 'L1'
+    const key = `${c.id}\u0000${level}`
+    if (!existingKeys.has(key) && !pendingKeys.has(key)) {
+      if (level === 'L3') l3Today++
+      else if (level === 'L2') l2Today++
+      pendingKeys.add(key)
+    }
+    nudgeRows.push({ localDay, level, commitmentId: c.id, body: c.action })
     due.push({ ...c, level })
   }
-  saveLedger(ledger)
+  // P0-2: one transaction for all nudge inserts and one for snooze cleanup;
+  // the ledger snapshot is only rewritten when a snooze actually woke up.
+  if (store && nudgeRows.length) store.addNudges(nudgeRows)
+  if (store && snoozeKeys.length) store.deleteMetaKeys(snoozeKeys)
+  if (statusChanged) saveLedger(ledger)
   if (asJson) {
     console.log(JSON.stringify({ now: new Date(now).toISOString(), localDay, due }, null, 2))
     return
   }
   if (!due.length) { console.log('未来 7 天无到期。'); return }
   for (const c of due) {
-    const dueDay = new Intl.DateTimeFormat('en-CA', { timeZone: 'Asia/Shanghai' }).format(new Date(c.dueAt))
+    const dueDay = localDayOf(c.dueAt)
     const label = Date.parse(c.dueAt) < now ? '逾期' : dueDay === localDay ? '今天到期' : '即将到期'
     console.log(`[${c.level}] ${label}：${c.action}（${c.dueAt}）`)
   }
@@ -1065,9 +1145,10 @@ async function runTurn({ runtime, ledger, text, conversationId, debug = false, c
   const intent = context.intent
   let agentText = text
   const extracted = []
+  const attachmentLib = attachments.length ? await loadAttachments() : null
   for (const file of attachments) {
     try {
-      const attachment = await extractAttachment(file, { cwd: process.cwd() })
+      const attachment = await attachmentLib.extractAttachment(file, { cwd: process.cwd() })
       extracted.push(attachment)
       console.log(`[attach] ${attachment.name} (${attachment.text.length} chars${attachment.truncated ? ', truncated' : ''})`)
     } catch (error) {
@@ -1527,7 +1608,7 @@ function forget(id) {
   if (!ok) process.exitCode = 1
 }
 
-function exportLedger(all = false, options = {}) {
+async function exportLedger(all = false, options = {}) {
   const ledger = loadLedger().toJSON()
   const payload = all ? (() => {
     const store = dbStore()
@@ -1540,6 +1621,7 @@ function exportLedger(all = false, options = {}) {
   if (options.encrypted) {
     const passphrase = process.env.ADVISERS_EXPORT_PASSPHRASE
     if (!passphrase) { console.error('export --encrypted requires ADVISERS_EXPORT_PASSPHRASE (min 8 chars)'); process.exitCode = 1; return }
+    const { encryptJson } = await loadVault()
     text = JSON.stringify(encryptJson(payload, passphrase), null, 2)
   }
   if (options.out) {
@@ -1550,11 +1632,12 @@ function exportLedger(all = false, options = {}) {
   } else console.log(text)
 }
 
-function importLedger(file, { replace = false } = {}) {
+async function importLedger(file, { replace = false } = {}) {
   if (!file) { console.error('usage: advisers import <file> [--replace]'); process.exitCode = 1; return }
   if (!replace) { console.error('import replaces the local ledger; pass --replace to confirm'); process.exitCode = 1; return }
   let payload
   try {
+    const { isVaultEnvelope, decryptJson } = await loadVault()
     const raw = JSON.parse(readFileSync(file, 'utf8'))
     if (isVaultEnvelope(raw)) {
       const passphrase = process.env.ADVISERS_EXPORT_PASSPHRASE
@@ -1898,6 +1981,7 @@ async function capture(args) {
   let text = positional.join(' ').trim()
   if (flags.file) {
     try {
+      const { extractAttachment } = await loadAttachments()
       const extracted = await extractAttachment(flags.file, { cwd: process.cwd() })
       if (!extracted.text) throw new Error('no extractable text')
       text = extracted.text
@@ -1937,6 +2021,7 @@ async function captureFromMail(flags) {
   const denied = egressDeniedReason(ledger.getMatter(matterId), 'mail')
   if (denied) { console.error(denied); process.exitCode = 1; return }
   saveLedger(ledger)
+  const { parseMbox, parseEml, dedupeKey, toCaptureInput } = await loadImporters()
   let files = []
   try {
     const info = statSync(target)
@@ -1982,6 +2067,7 @@ async function captureFromTranscript(flags) {
   const denied = egressDeniedReason(ledger.getMatter(matterId), 'transcript')
   if (denied) { console.error(denied); process.exitCode = 1; return }
   saveLedger(ledger)
+  const { parseTranscript, dedupeKey, toCaptureInput } = await loadImporters()
   let parsed
   try { parsed = parseTranscript(readFileSync(file, 'utf8')) } catch (error) { console.error(`cannot parse transcript: ${error.message}`); process.exitCode = 1; return }
   const key = dedupeKey('transcript', parsed)
@@ -2010,6 +2096,7 @@ async function captureFromImap(flags) {
   const denied = egressDeniedReason(ledger.getMatter(matterId), 'imap')
   if (denied) { console.error(denied); process.exitCode = 1; return }
   saveLedger(ledger)
+  const { parseEml, dedupeKey, toCaptureInput } = await loadImporters()
   let messages
   try {
     messages = await fetchImapMessages({
@@ -2041,7 +2128,7 @@ async function captureFromImap(flags) {
   console.log(`imap import: ${seen} messages, ${candidates} candidates, ${skipped} skipped, ${failed} failed (EXAMINE/read-only)`)
 }
 
-function calendarImport(args) {
+async function calendarImport(args) {
   const { flags, positional } = parseFlags(args)
   const file = typeof flags.ics === 'string' ? flags.ics : positional[0]
   if (!file) { console.error('usage: advisers calendar import --ics <file>'); process.exitCode = 1; return }
@@ -2052,7 +2139,10 @@ function calendarImport(args) {
   const denied = egressDeniedReason(ledger.getMatter(matterId), 'calendar')
   if (denied) { console.error(denied); process.exitCode = 1; return }
   let events
-  try { events = parseIcs(readFileSync(file, 'utf8')) } catch (error) { console.error(`cannot parse ics: ${error.message}`); process.exitCode = 1; return }
+  try {
+    const { parseIcs } = await loadImporters()
+    events = parseIcs(readFileSync(file, 'utf8'))
+  } catch (error) { console.error(`cannot parse ics: ${error.message}`); process.exitCode = 1; return }
   let imported = 0
   for (const e of events) {
     if (!e.uid) continue
@@ -2066,7 +2156,7 @@ function calendarImport(args) {
 function printCalendarToday() {
   const store = dbStore()
   if (!store) return
-  const localDay = new Intl.DateTimeFormat('en-CA', { timeZone: 'Asia/Shanghai' }).format(new Date())
+  const localDay = localDayOf(Date.now())
   const events = store.listCalendarEvents().filter((e) => e.startsAt && e.startsAt.slice(0, 10) === localDay)
   if (!events.length) { console.log('日历：今天没有本地导入的会议。'); return }
   console.log(`日历（本地只读，${localDay}）：`)
@@ -2078,6 +2168,7 @@ async function ui(args) {
   const port = Number(flags.port) || 17860
   const ledger = loadLedger()
   const store = dbStore()
+  const { buildReminders } = await loadRemind()
   const snapshot = {
     today: () => {
       const open = ledger.openCommitments()
@@ -2127,6 +2218,7 @@ async function remind(args) {
     console.log(`reminder log: ${join(HOME, 'reminders.log')}`)
     return
   }
+  const { buildReminders, toIcs } = await loadRemind()
   const snoozed = {}
   for (const c of ledger.listCommitments()) {
     const until = store?.getMeta(`snooze:${c.id}`)
@@ -2148,6 +2240,7 @@ async function remind(args) {
     writeFileSync(join(HOME, 'reminders.log'), line, { flag: 'a', mode: 0o600 })
     let channel = 'log'
     if (flags.notify) {
+      const { sendNotification } = await loadNotify()
       const sent = await sendNotification({ title: 'Advisers · 到期提醒', body: `${reminders.length} 条承诺到期或即将到期` })
       channel = sent.sent ? sent.channel : 'log-only'
     }
@@ -2173,8 +2266,20 @@ async function deliver(args) {
     commitments = [c]
   } else commitments = ledger.openCommitments()
   if (!commitments.length) { console.error('no commitments to deliver'); process.exitCode = 1; return }
+  // P1-6: a confirmation should not dump an unbounded list of open commitments
+  // into one file (5000 open commitments used to make a 7.8s / 1.57GB PDF).
+  // The default covers the latest/default view; --all is the explicit opt-in
+  // for a full export, and the total is always printed so nothing disappears
+  // silently.
+  const totalOpen = commitments.length
+  const truncated = totalOpen > DELIVER_DEFAULT_LIMIT && flags.all !== true && !flags.commit
+  if (truncated) commitments = commitments.slice(0, DELIVER_DEFAULT_LIMIT)
+  const { sha256Hex } = await loadEvidence()
   const label = type === 'weekly' ? '周报' : type === 'statement' ? '对账单' : '确认单'
-  const sections = [{ heading: label, paragraphs: [`生成时间：${new Date().toISOString()}`, `承诺数：${commitments.length}`] }]
+  const scopeLine = truncated
+    ? `承诺数：${totalOpen}（本文件只列前 ${commitments.length} 条；用 --all 生成全部）`
+    : `承诺数：${commitments.length}`
+  const sections = [{ heading: label, paragraphs: [`生成时间：${new Date().toISOString()}`, scopeLine] }]
   for (const c of commitments) {
     sections.push({ heading: c.action, paragraphs: [`对象：${c.creditor}`, `截止：${c.dueAt ?? '未定'}`, `状态：${c.status}`, `证据：${(c.evidence ?? []).length} 条`] })
   }
@@ -2183,6 +2288,7 @@ async function deliver(args) {
     const mod = process.env.ADVISERS_OFFICE_LOCAL === '1' ? await import('../../office/dist/index.js') : await import('advisers-office')
     let buffer
     if (format === 'pdf') {
+      const { buildSimplePdf } = await loadPdf()
       const lines = commitments.map((c) => `${c.id}  ${c.creditor} · ${c.action}${c.dueAt ? ` · 截止 ${c.dueAt}` : ''} · ${c.status}`)
       buffer = await buildSimplePdf({ title: `${label} · Advisers`, paragraphs: [`承诺数：${commitments.length}`, ...lines, 'SHA256SUMS/回执说明：本 PDF 为本地账本生成，不是第三方存证。'] })
       if (!buffer.subarray(0, 5).equals(Buffer.from('%PDF-'))) throw new Error('pdf builder returned a non-PDF buffer')
@@ -2217,8 +2323,11 @@ async function deliver(args) {
       validation: format,
       audit: { actor: 'local', action: 'deliver', allowed: true, reason: `${label} ${commitments.length}` },
     })
-    if (flags.json) console.log(JSON.stringify({ ok: true, out, type, format, commitments: commitments.length }, null, 2))
-    else console.log(`wrote ${out}`)
+    if (flags.json) console.log(JSON.stringify({ ok: true, out, type, format, commitments: commitments.length, total: totalOpen, truncated }, null, 2))
+    else {
+      console.log(`wrote ${out}`)
+      if (truncated) console.log(`提示：共 ${totalOpen} 条未完成承诺，本文件只生成前 ${commitments.length} 条；用 --all 生成全部。`)
+    }
   } catch (error) { console.error(`deliver failed: ${error.message}`); process.exitCode = 1 }
 }
 
@@ -2261,10 +2370,14 @@ async function mcpServer() {
       else if (name === 'advisers_who') data = { mine: ledger.openCommitments().filter((c) => c.debtor === 'user' || c.debtor === 'agent'), waiting: ledger.openCommitments().filter((c) => c.debtor === 'third' || c.debtor.startsWith('third:')) }
       else if (name === 'advisers_evidence') {
         if (!args.id) throw new Error('id is required')
+        const { evidenceForCommitment, evidenceForFact, evidenceForPreference } = await loadEvidence()
         const r = args.id.startsWith('cm_') ? evidenceForCommitment(store, ledger, args.id) : args.id.startsWith('fact_') ? evidenceForFact(store, ledger, args.id) : args.id.startsWith('pref_') ? evidenceForPreference(store, ledger, args.id) : null
         if (!r) throw new Error('unknown evidence id prefix')
         data = r
-      } else if (name === 'advisers_remind') data = buildReminders(ledger, { now: new Date() })
+      } else if (name === 'advisers_remind') {
+        const { buildReminders } = await loadRemind()
+        data = buildReminders(ledger, { now: new Date() })
+      }
       else return mcpError(id, -32602, `unknown tool: ${name}`)
       process.stdout.write(JSON.stringify({ jsonrpc: '2.0', id, result: { content: [{ type: 'text', text: JSON.stringify(data, null, 2) }], isError: false } }) + '\n')
       store?.appendAudit({ actor: 'mcp', action: 'mcp.call', allowed: true, reason: name })
@@ -2288,6 +2401,7 @@ async function ocrCommand(args) {
   const file = args.find((a) => !a.startsWith('--'))
   if (!file) { console.error('usage: advisers ocr <image> [--out text]'); process.exitCode = 1; return }
   try {
+    const { runLocalOcr } = await loadOcr()
     const text = await runLocalOcr(file)
     const outIdx = args.indexOf('--out')
     if (outIdx >= 0 && args[outIdx + 1]) {
@@ -2307,11 +2421,12 @@ function vaultPass() {
   return pass
 }
 
-function vaultSeal(args) {
+async function vaultSeal(args) {
   const { flags } = parseFlags(args)
   ensureHome()
   if (!existsSync(DB)) { console.error(`no database at ${DB}`); process.exitCode = 1; return }
   const pass = vaultPass(); if (!pass) return
+  const { encryptJson, decryptJson } = await loadVault()
   const removePlaintext = Boolean(flags.remove) || args.includes('--remove')
   try {
     const store = new SqliteStore(DB)
@@ -2343,12 +2458,13 @@ function vaultSeal(args) {
   } catch (error) { console.error(`vault seal failed: ${error.message}`); process.exitCode = 1 }
 }
 
-function vaultUnseal(args) {
+async function vaultUnseal(args) {
   const file = args.find((a) => !a.startsWith('--')) || `${DB}.vault`
   if (!existsSync(file)) { console.error(`no sealed database at ${file}`); process.exitCode = 1; return }
   const pass = vaultPass(); if (!pass) return
   let bytes
   try {
+    const { decryptJson } = await loadVault()
     const payload = decryptJson(JSON.parse(readFileSync(file, 'utf8')), pass)
     if (payload.kind !== 'advisers-db' || typeof payload.db !== 'string') throw new Error('not an Advisers database vault')
     bytes = Buffer.from(payload.db, 'base64')
@@ -2410,6 +2526,7 @@ async function timestampCommand(args) {
   const file = args.find((a) => !a.startsWith('--'))
   if (!file) { console.error('usage: advisers timestamp <file> [--out proof]'); process.exitCode = 1; return }
   try {
+    const { runLocalTimestamp } = await loadTimestamp()
     const proof = await runLocalTimestamp(file)
     const outIdx = args.indexOf('--out')
     if (outIdx >= 0 && args[outIdx + 1]) {
@@ -2422,11 +2539,12 @@ async function timestampCommand(args) {
 
 async function tui(args) {
   const once = args.includes('--once')
+  const { buildReminders } = await loadRemind()
   const render = () => {
     const ledger = loadLedger()
     const store = dbStore()
     const open = ledger.openCommitments()
-    const localDay = new Intl.DateTimeFormat('en-CA', { timeZone: 'Asia/Shanghai' }).format(new Date())
+    const localDay = localDayOf(Date.now())
     const due = open.filter((c) => c.dueAt && c.dueAt.slice(0, 10) <= localDay)
     const reminders = buildReminders(ledger, { now: new Date() })
     const deliveries = store?.listDeliveries(3) ?? []
@@ -2466,8 +2584,9 @@ function syncPass() {
   return pass
 }
 
-function readSyncDevice() {
+async function readSyncDevice() {
   try {
+    const { sanitizeDevice } = await loadSync()
     const device = readFileSync(join(HOME, 'sync.device'), 'utf8').trim()
     return device ? sanitizeDevice(device) : undefined
   } catch {
@@ -2475,8 +2594,11 @@ function readSyncDevice() {
   }
 }
 
-function rememberSyncDevice(device) {
-  try { writeFileSync(join(HOME, 'sync.device'), sanitizeDevice(device) + '\n', { mode: 0o600 }) } catch {}
+async function rememberSyncDevice(device) {
+  try {
+    const { sanitizeDevice } = await loadSync()
+    writeFileSync(join(HOME, 'sync.device'), sanitizeDevice(device) + '\n', { mode: 0o600 })
+  } catch {}
 }
 
 /** Latest mtime of the database + its WAL (captured before any checkpoint). */
@@ -2505,12 +2627,13 @@ function checkpointLocalDatabase() {
   }
 }
 
-function syncCommand(args) {
+async function syncCommand(args) {
   const { flags, positional } = parseFlags(args)
   const sub = positional[0]
   const dir = typeof flags.dir === 'string' ? flags.dir : undefined
   if (!dir) { console.error('usage: advisers sync push|pull|status --dir <sync-dir>'); process.exitCode = 1; return }
   if (sub === 'status') {
+    const { listSnapshots } = await loadSync()
     const snaps = listSnapshots(dir)
     if (flags.json) { console.log(JSON.stringify(snaps, null, 2)); return }
     console.log(`sync dir: ${dir}`)
@@ -2534,8 +2657,9 @@ function syncCommand(args) {
       } finally {
         try { store.close() } catch {}
       }
+      const { pushSnapshot } = await loadSync()
       const result = pushSnapshot({ dir, dbPath: DB, passphrase: pass, device })
-      rememberSyncDevice(device)
+      await rememberSyncDevice(device)
       console.log(`pushed ${result.file}`)
       console.log(`sha256 ${result.sha256}`)
     } catch (error) { console.error(`sync push failed: ${error.message}`); process.exitCode = 1 }
@@ -2549,6 +2673,7 @@ function syncCommand(args) {
         if (checkpoint.busy && !force) throw new Error('local database is busy (another advisers process is writing); close it and retry sync pull, or re-run with --force (a backup is kept)')
         if (!checkpoint.busy && checkpoint.error) console.error(`note: local database could not be checkpointed (${checkpoint.error.message}); the snapshot replaces it and a backup is kept.`)
       }
+      const { pullSnapshot } = await loadSync()
       const result = pullSnapshot({
         dir,
         dbPath: DB,
@@ -2556,7 +2681,7 @@ function syncCommand(args) {
         file: typeof flags.file === 'string' ? flags.file : undefined,
         force,
         localMtimeMs,
-        localDevice: readSyncDevice(),
+        localDevice: await readSyncDevice(),
       })
       if (!result.changed) console.log('local database already matches the latest snapshot')
       else console.log(`pulled ${result.file} (${result.sha256})${result.backup ? `; backup ${result.backup}` : ''}`)
@@ -2568,7 +2693,7 @@ function syncCommand(args) {
   } else { console.error('usage: advisers sync push|pull|status --dir <sync-dir>'); process.exitCode = 1 }
 }
 
-function printEvidence(args) {
+async function printEvidence(args) {
   const { flags, positional } = parseFlags(args)
   ensureHome()
   const store = dbStore()
@@ -2577,6 +2702,7 @@ function printEvidence(args) {
   if (!id) { console.error('usage: advisers evidence show <id> [--json]'); process.exitCode = 1; return }
   let result
   try {
+    const { evidenceForCommitment, evidenceForFact, evidenceForPreference } = await loadEvidence()
     if (id.startsWith('cm_')) result = evidenceForCommitment(store, ledger, id)
     else if (id.startsWith('fact_')) result = evidenceForFact(store, ledger, id)
     else if (id.startsWith('pref_')) result = evidenceForPreference(store, ledger, id)
@@ -2605,6 +2731,7 @@ async function evidencePack(args) {
     facts: ledger.listFacts().map((f) => f.id),
     preferences: ledger.listPreferences({ includeCandidates: false }).map((p) => p.id),
   }
+  const { buildEvidencePack, toDocxRows, verifyPack } = await loadEvidence()
   const pack = buildEvidencePack({ store, ledger, ids: targetIds })
   const out = flags.out ? String(flags.out) : join(HOME, 'evidence', `evidence-${new Date().toISOString().replace(/[:.]/g, '-')}`)
   mkdirSync(out, { recursive: true, mode: 0o700 })
@@ -3033,7 +3160,7 @@ if (!command) {
 } else if (command === 'ocr') {
   await ocrCommand(args)
 } else if (command === 'evidence') {
-  printEvidence(args)
+  await printEvidence(args)
 } else if (command === 'receipt') {
   printReceipt()
 } else if (command === 'deliveries') {
@@ -3168,7 +3295,7 @@ if (!command) {
 } else if (command === 'remind') {
   await remind(args)
 } else if (command === 'calendar') {
-  calendarImport(args.slice(1))
+  await calendarImport(args.slice(1))
 } else if (command === 'who') {
   const open = loadLedger().openCommitments()
   const mine = open.filter((c) => c.debtor === 'user' || c.debtor === 'agent')
@@ -3266,18 +3393,18 @@ if (!command) {
 } else if (command === 'forget') {
   forget(args[0])
 } else if (command === 'sync') {
-  syncCommand(args)
+  await syncCommand(args)
 } else if (command === 'vault') {
   const sub = args[0]
-  if (sub === 'seal') vaultSeal(args.slice(1))
-  else if (sub === 'unseal') vaultUnseal(args.slice(1))
+  if (sub === 'seal') await vaultSeal(args.slice(1))
+  else if (sub === 'unseal') await vaultUnseal(args.slice(1))
   else if (sub === 'status' || !sub) vaultStatus()
   else { console.error('usage: advisers vault seal [--out file] [--remove] | unseal [file] | status'); process.exitCode = 1 }
 } else if (command === 'export') {
   const { flags } = parseFlags(args)
-  exportLedger(flags.all === true || args.includes('--all'), { encrypted: args.includes('--encrypted'), out: typeof flags.out === 'string' ? flags.out : undefined })
+  await exportLedger(flags.all === true || args.includes('--all'), { encrypted: args.includes('--encrypted'), out: typeof flags.out === 'string' ? flags.out : undefined })
 } else if (command === 'import') {
-  importLedger(args.find((a) => !a.startsWith('--')), { replace: args.includes('--replace') })
+  await importLedger(args.find((a) => !a.startsWith('--')), { replace: args.includes('--replace') })
 } else if (command === 'backup') {
   backup(args[0])
 } else if (command === 'brief') {
@@ -3319,7 +3446,10 @@ if (!command) {
   if (!file) { console.error('usage: advisers office-read <file>'); process.exitCode = 1 }
   else {
     if (file.toLowerCase().endsWith('.ofd')) {
-      try { console.log(await ofdText(readFileSync(file))) } catch (error) { console.error(`ofd read failed: ${error.message}`); process.exitCode = 1 }
+      try {
+        const { ofdText } = await loadAttachments()
+        console.log(await ofdText(readFileSync(file)))
+      } catch (error) { console.error(`ofd read failed: ${error.message}`); process.exitCode = 1 }
     } else {
       let mod
       if (process.env.ADVISERS_OFFICE_LOCAL === '1') mod = await import('../../office/dist/index.js')

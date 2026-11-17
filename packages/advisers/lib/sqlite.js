@@ -186,6 +186,30 @@ CREATE TABLE IF NOT EXISTS calendar_events (
 CREATE TABLE IF NOT EXISTS meta (key TEXT PRIMARY KEY, value TEXT NOT NULL);
 `
 
+/**
+ * P2-1: secondary indexes for the hot read/write paths (tick, today, history,
+ * deliveries). Indexes are layout only, not a schema change, so they are
+ * created with IF NOT EXISTS after migrate() on every open: new databases get
+ * them at creation time and existing databases get them the first time they
+ * are opened by this version. Each one was a full table SCAN + TEMP B-TREE in
+ * the 2026-11-17 performance audit (nudges/facts/deliveries/calendar_events/
+ * task_runs/sessions/model_calls/preferences/commitments).
+ */
+const INDEXES = `
+CREATE INDEX IF NOT EXISTS idx_nudges_commitment_at ON nudges(commitment_id, at);
+CREATE INDEX IF NOT EXISTS idx_nudges_local_day_level ON nudges(local_day, level);
+CREATE INDEX IF NOT EXISTS idx_nudges_at ON nudges(at);
+CREATE INDEX IF NOT EXISTS idx_commitments_status_due ON commitments(status, due_at);
+CREATE INDEX IF NOT EXISTS idx_facts_matter ON facts(matter_id);
+CREATE INDEX IF NOT EXISTS idx_facts_status_deleted ON facts(status, deleted_at);
+CREATE INDEX IF NOT EXISTS idx_preferences_status_expires ON preferences(status, expires_at);
+CREATE INDEX IF NOT EXISTS idx_calendar_events_starts ON calendar_events(starts_at);
+CREATE INDEX IF NOT EXISTS idx_deliveries_created ON deliveries(created_at);
+CREATE INDEX IF NOT EXISTS idx_task_runs_created ON task_runs(created_at);
+CREATE INDEX IF NOT EXISTS idx_sessions_updated ON sessions(updated_at);
+CREATE INDEX IF NOT EXISTS idx_model_calls_created ON model_calls(created_at);
+`
+
 const json = (v) => JSON.stringify(v ?? [])
 const parse = (v, fallback = []) => {
   if (v == null) return fallback
@@ -246,6 +270,9 @@ export class SqliteStore {
     this._transaction('IMMEDIATE', () => {
       this.db.exec(SCHEMA)
       this.migrate()
+      // Indexes come after migrate(): some index the columns migrate() adds
+      // (e.g. facts.deleted_at), so an old database must be upgraded first.
+      this.db.exec(INDEXES)
     })
   }
 
@@ -494,6 +521,76 @@ CREATE TABLE IF NOT EXISTS task_runs (
 
   countNudges(localDay, level) {
     return this.db.prepare('SELECT COUNT(*) AS n FROM nudges WHERE local_day = ? AND level = ?').get(localDay, level).n
+  }
+
+  /**
+   * P0-2 (tick N+1 removal): insert every nudge for one tick in a single
+   * transaction with one prepared statement. INSERT OR IGNORE keeps the
+   * per-(local_day, level, commitment_id) dedupe key semantics of addNudge()
+   * without aborting the batch on an expected duplicate. Returns the number of
+   * rows actually inserted (existing rows are left untouched).
+   */
+  addNudges(rows) {
+    if (!rows?.length) return 0
+    return this._transaction('IMMEDIATE', () => {
+      const statement = this.db.prepare('INSERT OR IGNORE INTO nudges(id,at,local_day,level,commitment_id,dedupe_key,body) VALUES(?,?,?,?,?,?,?)')
+      const now = new Date().toISOString()
+      let inserted = 0
+      for (const row of rows) {
+        const key = `${row.localDay}:${row.level}:${row.commitmentId}`
+        const id = `nudge_${randomUUID().replace(/-/g, '').slice(0, 16)}`
+        inserted += Number(statement.run(id, row.at ?? now, row.localDay, row.level, row.commitmentId, key, row.body).changes)
+      }
+      return inserted
+    })
+  }
+
+  /**
+   * P0-2 (tick N+1 removal): the newest `limit` outcomes per commitment in one
+   * query (window function over idx_nudges_commitment_at). Replaces one
+   * listCommitmentNudges() round-trip per commitment.
+   */
+  recentNudgeOutcomes(limit = 3) {
+    const rows = this.db.prepare(`SELECT commitment_id, outcome, at FROM (
+        SELECT commitment_id, outcome, at, ROW_NUMBER() OVER (PARTITION BY commitment_id ORDER BY at DESC) AS rn
+        FROM nudges
+      ) WHERE rn <= ?`).all(limit)
+    const byCommitment = new Map()
+    for (const row of rows) {
+      const list = byCommitment.get(row.commitment_id)
+      if (list) list.push(row.outcome)
+      else byCommitment.set(row.commitment_id, [row.outcome])
+    }
+    return byCommitment
+  }
+
+  /** P0-2 (tick N+1 removal): today's nudge count per level in one query. */
+  countNudgesByDay(localDay) {
+    const rows = this.db.prepare('SELECT level, COUNT(*) AS n FROM nudges WHERE local_day = ? GROUP BY level').all(localDay)
+    return new Map(rows.map((row) => [row.level, Number(row.n)]))
+  }
+
+  /** P0-2 (tick N+1 removal): existing (commitment, level) nudge keys for a day. */
+  listNudgeLevelKeysByDay(localDay) {
+    const rows = this.db.prepare('SELECT commitment_id, level FROM nudges WHERE local_day = ?').all(localDay)
+    return new Set(rows.map((row) => `${row.commitment_id}\u0000${row.level}`))
+  }
+
+  /** P0-2 (tick N+1 removal): all meta rows with a prefix in one query (snooze:*). */
+  listMetaByPrefix(prefix) {
+    const rows = this.db.prepare('SELECT key, value FROM meta WHERE key LIKE ?').all(`${prefix}%`)
+    return new Map(rows.map((row) => [row.key, row.value]))
+  }
+
+  /** P0-2: delete a batch of meta keys in one transaction. */
+  deleteMetaKeys(keys) {
+    if (!keys?.length) return 0
+    return this._transaction('IMMEDIATE', () => {
+      const statement = this.db.prepare('DELETE FROM meta WHERE key = ?')
+      let deleted = 0
+      for (const key of keys) deleted += Number(statement.run(key).changes)
+      return deleted
+    })
   }
 
   listNudges(limit = 20) {
