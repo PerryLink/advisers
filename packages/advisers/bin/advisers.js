@@ -1,5 +1,5 @@
 #!/usr/bin/env node
-import { chmodSync, copyFileSync, existsSync, mkdirSync, readdirSync, readFileSync, rmSync, statSync, writeFileSync } from 'node:fs'
+import { chmodSync, closeSync, copyFileSync, existsSync, fsyncSync, mkdirSync, openSync, readdirSync, readFileSync, renameSync, rmSync, statSync, writeFileSync, writeSync } from 'node:fs'
 import { homedir, hostname } from 'node:os'
 import { createHash, randomBytes, randomUUID } from 'node:crypto'
 import { basename, dirname, extname, join } from 'node:path'
@@ -37,7 +37,7 @@ import { buildSimplePdf, findCjkFont } from '../lib/pdf.js'
 import { decryptJson, encryptJson, isVaultEnvelope } from '../lib/vault.js'
 import { runLocalOcr } from '../lib/ocr.js'
 import { runLocalTimestamp } from '../lib/timestamp.js'
-import { listSnapshots, pullSnapshot, pushSnapshot } from '../lib/sync.js'
+import { listSnapshots, pullSnapshot, pushSnapshot, sanitizeDevice } from '../lib/sync.js'
 import { sendNotification } from '../lib/notify.js'
 
 let core
@@ -65,17 +65,35 @@ let mode = process.env.ADVISERS_STORE === 'json' ? 'json' : 'sqlite'
 let activeStore
 
 const AUDIT_KEY_FILE = join(HOME, 'audit.key')
+function readAuditKey() {
+  const key = readFileSync(AUDIT_KEY_FILE, 'utf8').trim()
+  if (key.length < 16) throw new Error(`audit key file is too short (${key.length} chars, expected >= 16): ${AUDIT_KEY_FILE}`)
+  return key
+}
 function ensureAuditKey() {
   if (process.env.ADVISERS_AUDIT_KEY) return
   try {
     if (existsSync(AUDIT_KEY_FILE)) {
-      const key = readFileSync(AUDIT_KEY_FILE, 'utf8').trim()
-      if (key.length >= 16) { process.env.ADVISERS_AUDIT_KEY = key; return }
+      process.env.ADVISERS_AUDIT_KEY = readAuditKey()
+      return
     }
     const key = randomBytes(32).toString('hex')
-    writeFileSync(AUDIT_KEY_FILE, key, { mode: 0o600 })
-    process.env.ADVISERS_AUDIT_KEY = key
-  } catch {}
+    try {
+      // P0-4: O_EXCL so two first-run processes agree on exactly one key. The
+      // loser must read the winner's key, not overwrite it (that would leave
+      // rows signed with a key that no longer exists on disk).
+      writeFileSync(AUDIT_KEY_FILE, key, { mode: 0o600, flag: 'wx' })
+      process.env.ADVISERS_AUDIT_KEY = key
+    } catch (error) {
+      if (error?.code !== 'EEXIST') throw error
+      process.env.ADVISERS_AUDIT_KEY = readAuditKey()
+    }
+  } catch (error) {
+    console.error(`advisers: audit key unavailable (${error.message})`)
+    console.error(`  expected a readable ${AUDIT_KEY_FILE} with at least 16 characters.`)
+    console.error('  refusing to write an unkeyed audit chain. Restore the key file; if it is lost, move it aside and rerun (the existing chain will then verify as BROKEN).')
+    process.exit(1)
+  }
 }
 function ensureHome() {
   mkdirSync(HOME, { recursive: true, mode: 0o700 })
@@ -83,9 +101,22 @@ function ensureHome() {
   ensureAuditKey()
 }
 
+/**
+ * P1-1: core ids are `${prefix}_${Date.now().toString(36)}_${seq}` with a
+ * per-process counter, so two CLIs started in the same millisecond can mint the
+ * same commitment id and one row would overwrite the other on save. Add a
+ * process-unique segment so ids from concurrent commands never collide.
+ */
+const PROCESS_ID = process.pid.toString(36) + randomBytes(2).toString('hex')
+let localIdSeq = 0
+const LOCAL_PORTS = {
+  clock: { now: () => new Date().toISOString() },
+  ids: { next: (prefix) => `${prefix}_${Date.now().toString(36)}_${PROCESS_ID}_${++localIdSeq}` },
+}
+
 function loadJson() {
-  if (!existsSync(STATE)) return new Ledger()
-  return Ledger.fromJSON(JSON.parse(readFileSync(STATE, 'utf8')))
+  if (!existsSync(STATE)) return new Ledger(LOCAL_PORTS)
+  return Ledger.fromJSON(JSON.parse(readFileSync(STATE, 'utf8')), LOCAL_PORTS)
 }
 
 function saveJson(ledger) {
@@ -93,11 +124,13 @@ function saveJson(ledger) {
   writeFileSync(STATE, JSON.stringify(ledger.toJSON(), null, 2) + '\n')
 }
 
-function openStore() {
+function openStore({ checkIntegrity = false } = {}) {
   if (!activeStore) {
     ensureHome()
-    activeStore = new SqliteStore(DB)
+    activeStore = new SqliteStore(DB, { checkIntegrity })
     try { chmodSync(DB, 0o600) } catch {}
+  } else if (checkIntegrity) {
+    activeStore.assertIntegrity()
   }
   return activeStore
 }
@@ -111,7 +144,7 @@ function loadLedger() {
       openStore().save(ledger.toJSON())
       return ledger
     }
-    return Ledger.fromJSON(openStore().load())
+    return Ledger.fromJSON(openStore().load(), LOCAL_PORTS)
   } catch (error) {
     console.error(`sqlite unavailable: ${error.message}`)
     console.error('Run `advisers doctor`; refusing to silently switch to JSON (would split the ledger).')
@@ -119,16 +152,63 @@ function loadLedger() {
   }
 }
 
+function exitStoreWriteFailure(error) {
+  // P0-2: never fall back to state.json. The SQLite database is the only ledger
+  // once it exists, so a JSON fallback would silently split the book (and the
+  // command would still exit 0). Fail loudly instead.
+  console.error(`advisers: could not write the ledger to ${DB}: ${error.message}`)
+  console.error('Nothing was written to state.json; the SQLite database is the only ledger, so this command did not apply.')
+  console.error('Retry the command; if it keeps failing run `advisers doctor` (or `advisers audit --check-db`).')
+  process.exit(1)
+}
+
 function saveLedger(ledger) {
   ensureHome()
   if (mode === 'json') return saveJson(ledger)
   try {
-    openStore().save(ledger.toJSON())
+    return openStore().save(ledger.toJSON())
   } catch (error) {
-    console.error(`sqlite save failed (${error.message}); falling back to JSON`)
-    mode = 'json'
-    saveJson(ledger)
+    exitStoreWriteFailure(error)
   }
+}
+
+function saveLedgerWithAudit(ledger, audit, inside) {
+  ensureHome()
+  if (mode === 'json') return saveJson(ledger)
+  try {
+    return openStore().saveWithAudit(ledger.toJSON(), audit, inside)
+  } catch (error) {
+    exitStoreWriteFailure(error)
+  }
+}
+
+function updateStoreWithAudit(fn, audit) {
+  ensureHome()
+  const store = dbStore()
+  if (!store) return
+  try {
+    return store.transaction(() => {
+      fn(store)
+      return store.appendAudit(audit)
+    })
+  } catch (error) {
+    exitStoreWriteFailure(error)
+  }
+}
+
+function recordDeliveryWithAudit({ files, tool, title, validation, audit }) {
+  const store = dbStore()
+  if (!store) return
+  let matterId = 'matter'
+  try { matterId = activeMatterId(loadLedger()) } catch {}
+  updateStoreWithAudit((s) => s.addDelivery({
+    matterId,
+    conversationId: latestConversationId(),
+    files,
+    tool,
+    title,
+    validation: typeof validation === 'string' ? validation : JSON.stringify(validation),
+  }), audit)
 }
 
 function loadSoul() {
@@ -150,11 +230,47 @@ function saveSoul(doc) {
   writeFileSync(SOUL_META, JSON.stringify({ version: doc.version, updatedAt: doc.updatedAt }, null, 2) + '\n', { mode: 0o600 })
 }
 
+/** Write bytes to an already-created same-directory temp file and fsync it. */
+function writeDurableTemp(target, bytes, { mode = 0o600 } = {}) {
+  const fd = openSync(target, 'wx', mode)
+  try {
+    writeSync(fd, bytes)
+    fsyncSync(fd)
+  } finally {
+    closeSync(fd)
+  }
+  return target
+}
+
+/** fsync a directory entry so a rename survives a crash. */
+function fsyncDir(path) {
+  try {
+    const fd = openSync(path, 'r')
+    try { fsyncSync(fd) } finally { closeSync(fd) }
+  } catch {}
+}
+
+/** Atomic write: same-directory temp + fsync + rename + directory fsync. */
+function atomicWriteFileSync(path, bytes, { mode = 0o600 } = {}) {
+  mkdirSync(dirname(path), { recursive: true })
+  const tmp = join(dirname(path), `.${basename(path)}.tmp-${process.pid}-${randomBytes(4).toString('hex')}`)
+  try {
+    writeDurableTemp(tmp, bytes, { mode })
+    renameSync(tmp, path)
+  } catch (error) {
+    try { if (existsSync(tmp)) rmSync(tmp) } catch {}
+    throw error
+  }
+  try { chmodSync(path, mode) } catch {}
+  fsyncDir(dirname(path))
+  return path
+}
+
 const soulStore = { load: loadSoul, save: saveSoul }
 
 function runtimeFor(ledger) {
   const ports = { ...systemPorts(), soul: soulStore }
-  return createAdvisers({ ledger, ports, seen: mode === 'sqlite' ? openStore().seenStore() : undefined, ownerIds: process.env.ADVISERS_OWNER?.split(',').map((x) => x.trim()).filter(Boolean), defaultMatterId: activeMatterId(ledger), policyResolver: StrictPolicyPack ? new StrictPolicyPack() : { resolve: () => ({ allowed: false, action: 'deny', code: 'FAIL_CLOSED', reason: 'policy pack missing' }) } })
+  return createAdvisers({ ledger, ports: { ...ports, clock: LOCAL_PORTS.clock, ids: LOCAL_PORTS.ids }, seen: mode === 'sqlite' ? openStore().seenStore() : undefined, ownerIds: process.env.ADVISERS_OWNER?.split(',').map((x) => x.trim()).filter(Boolean), defaultMatterId: activeMatterId(ledger), policyResolver: StrictPolicyPack ? new StrictPolicyPack() : { resolve: () => ({ allowed: false, action: 'deny', code: 'FAIL_CLOSED', reason: 'policy pack missing' }) } })
 }
 
 async function backupCliFile(path) {
@@ -434,8 +550,7 @@ function purgeMatter(id, confirmed) {
   }
   const counts = ledger.purgeMatter(id)
   const sqlite = dbStore()?.purgeMatterData(id)
-  dbStore()?.appendAudit({ actor: 'local', action: 'matter.purge', allowed: true, reason: `${id} ${JSON.stringify(counts)}` })
-  saveLedger(ledger)
+  saveLedgerWithAudit(ledger, { actor: 'local', action: 'matter.purge', allowed: true, reason: `${id} ${JSON.stringify(counts)}` })
   console.log(`purged: ${JSON.stringify(counts)} sqlite=${JSON.stringify(sqlite ?? {})}`)
 }
 
@@ -608,10 +723,20 @@ function tick(ledger, asJson = false) {
   }
 }
 
-function printAudit() {
+function printAudit(args = []) {
   ensureHome()
   const store = dbStore()
   if (!store) { console.log('audit requires SQLite store'); return }
+  if (args.includes('--check-db')) {
+    try {
+      store.assertIntegrity()
+      console.log('integrity: ok')
+    } catch (error) {
+      console.error(`integrity: FAIL (${error.message})`)
+      process.exitCode = 1
+      return
+    }
+  }
   const verify = store.verifyAudit()
   console.log(`audit: ${verify.ok ? 'verified' : `BROKEN at seq ${verify.seq}`} (${verify.count ?? 0} entries)`)
   if (!verify.ok) process.exitCode = 1
@@ -760,7 +885,7 @@ async function doctor() {
   try { ensureHome(); check('home', existsSync(HOME), HOME) } catch (error) { check('home', false, error.message) }
   try {
     const store = openStore()
-    const integrity = store.db.prepare('PRAGMA quick_check').get()?.quick_check
+    const integrity = store.assertIntegrity()
     check('sqlite', integrity === 'ok', `${DB} (${integrity})`)
     const audit = store.verifyAudit()
     check('audit', audit.ok, audit.ok ? `${audit.count} entries` : `BROKEN at seq ${audit.seq}`)
@@ -1340,8 +1465,7 @@ async function repl() {
     const feedback = correctionStatement(text)
     if (feedback) {
       const result = learnPreference(ledger, feedback, text, { explicit: /^(以后|记住|每次)/.test(text) })
-      dbStore()?.appendAudit({ actor: 'local', action: 'correct', allowed: true, reason: result.preference.id })
-      saveLedger(ledger)
+      saveLedgerWithAudit(ledger, { actor: 'local', action: 'correct', allowed: true, reason: result.preference.id })
       printLearnReceipt(result)
       continue
     }
@@ -1446,9 +1570,8 @@ function importLedger(file, { replace = false } = {}) {
     if (store) copyFileSync(DB, join(HOME, `import-backup-${Date.now()}.db`))
   } catch {}
   try {
-    const ledger = Ledger.fromJSON(data)
-    saveLedger(ledger)
-    dbStore()?.appendAudit({ actor: 'local', action: 'import.ledger', allowed: true, reason: basename(file) })
+    const ledger = Ledger.fromJSON(data, LOCAL_PORTS)
+    saveLedgerWithAudit(ledger, { actor: 'local', action: 'import.ledger', allowed: true, reason: basename(file) })
     console.log(`imported ${data.matters.length} matters, ${data.commitments?.length ?? 0} commitments`)
     if (payload?.data) console.error('note: SQLite-only tables in the import were not merged; ledger was replaced.')
   } catch (error) { console.error(`import failed: ${error.message}`); process.exitCode = 1 }
@@ -1457,7 +1580,8 @@ function importLedger(file, { replace = false } = {}) {
 function backup(file) {
   if (!file) { console.error('usage: advisers backup <path.db>'); process.exitCode = 1; return }
   const store = openStore()
-  store.db.exec('PRAGMA wal_checkpoint(TRUNCATE)')
+  const checkpoint = store.checkpoint()
+  if (checkpoint.busy) { console.error('backup failed: database is busy (another advisers process is writing); close it and retry'); process.exitCode = 1; return }
   mkdirSync(dirname(file), { recursive: true })
   copyFileSync(DB, file)
   chmodSync(file, 0o600)
@@ -2064,7 +2188,6 @@ async function deliver(args) {
       if (!buffer.subarray(0, 5).equals(Buffer.from('%PDF-'))) throw new Error('pdf builder returned a non-PDF buffer')
       await backupCliFile(out)
       writeFileSync(out, buffer)
-      recordManualDelivery([out], `deliver:${type}`, label, 'pdf')
     } else if (format === 'xlsx') {
       const rows = commitments.map((c) => ({
         id: c.id, creditor: c.creditor, action: c.action, due: c.dueAt ?? '',
@@ -2080,15 +2203,20 @@ async function deliver(args) {
       await mod.validateOffice(buffer, 'xlsx')
       await backupCliFile(out)
       writeFileSync(out, buffer)
-      recordManualDelivery([out], `deliver:${type}`, label, 'xlsx')
     } else {
       buffer = await mod.buildDocx({ title: `${label} · Advisers`, sections })
       await mod.validateOffice(buffer, 'docx')
       await backupCliFile(out)
       writeFileSync(out, buffer)
-      recordManualDelivery([out], `deliver:${type}`, label, 'docx')
     }
-    store?.appendAudit({ actor: 'local', action: 'deliver', allowed: true, reason: `${label} ${commitments.length}` })
+    // Delivery row + audit row commit together (robustness audit P0-3).
+    recordDeliveryWithAudit({
+      files: [out],
+      tool: `deliver:${type}`,
+      title: label,
+      validation: format,
+      audit: { actor: 'local', action: 'deliver', allowed: true, reason: `${label} ${commitments.length}` },
+    })
     if (flags.json) console.log(JSON.stringify({ ok: true, out, type, format, commitments: commitments.length }, null, 2))
     else console.log(`wrote ${out}`)
   } catch (error) { console.error(`deliver failed: ${error.message}`); process.exitCode = 1 }
@@ -2184,24 +2312,34 @@ function vaultSeal(args) {
   ensureHome()
   if (!existsSync(DB)) { console.error(`no database at ${DB}`); process.exitCode = 1; return }
   const pass = vaultPass(); if (!pass) return
+  const removePlaintext = Boolean(flags.remove) || args.includes('--remove')
   try {
     const store = new SqliteStore(DB)
-    store.appendAudit({ actor: 'local', action: 'vault.seal', allowed: true, reason: 'database encrypted at rest' })
-    store.db.exec('PRAGMA wal_checkpoint(TRUNCATE)')
-    store.db.close()
+    try {
+      // The copied bytes must contain every committed write, so fold the WAL
+      // first and never ignore a busy checkpoint.
+      const before = store.checkpoint()
+      if (before.busy) throw new Error('database is busy (another advisers process is writing); close it and retry vault seal')
+      store.appendAudit({ actor: 'local', action: 'vault.seal', allowed: true, reason: 'database encrypted at rest' })
+      const after = store.checkpoint()
+      if (after.busy) throw new Error('database is busy (another advisers process is writing); close it and retry vault seal')
+    } finally {
+      try { store.close() } catch {}
+    }
   } catch (error) { console.error(`vault seal failed: ${error.message}`); process.exitCode = 1; return }
   try {
     const bytes = readFileSync(DB)
     const sha = createHash('sha256').update(bytes).digest('hex')
     const envelope = encryptJson({ kind: 'advisers-db', version: VERSION, sha256: sha, db: bytes.toString('base64') }, pass)
     const out = typeof flags.out === 'string' ? flags.out : `${DB}.vault`
-    writeFileSync(out, JSON.stringify(envelope) + '\n', { mode: 0o600 })
+    atomicWriteFileSync(out, JSON.stringify(envelope) + '\n', { mode: 0o600 })
     const check = decryptJson(JSON.parse(readFileSync(out, 'utf8')), pass)
     if (check.sha256 !== sha) throw new Error('sealed file verification failed')
-    if (flags.remove || args.includes('--remove')) {
+    if (removePlaintext) {
       for (const f of [DB, `${DB}-wal`, `${DB}-shm`]) { try { if (existsSync(f)) rmSync(f) } catch {} }
+      fsyncDir(HOME)
     }
-    console.log(`sealed ${DB} -> ${out}${flags.remove ? ' (plaintext removed)' : ' (plaintext kept; pass --remove)'}`)
+    console.log(`sealed ${DB} -> ${out}${removePlaintext ? ' (plaintext removed)' : ' (plaintext kept; pass --remove)'}`)
   } catch (error) { console.error(`vault seal failed: ${error.message}`); process.exitCode = 1 }
 }
 
@@ -2209,18 +2347,55 @@ function vaultUnseal(args) {
   const file = args.find((a) => !a.startsWith('--')) || `${DB}.vault`
   if (!existsSync(file)) { console.error(`no sealed database at ${file}`); process.exitCode = 1; return }
   const pass = vaultPass(); if (!pass) return
+  let bytes
   try {
     const payload = decryptJson(JSON.parse(readFileSync(file, 'utf8')), pass)
     if (payload.kind !== 'advisers-db' || typeof payload.db !== 'string') throw new Error('not an Advisers database vault')
-    const bytes = Buffer.from(payload.db, 'base64')
+    bytes = Buffer.from(payload.db, 'base64')
     const sha = createHash('sha256').update(bytes).digest('hex')
     if (sha !== payload.sha256) throw new Error('vault checksum mismatch')
-    ensureHome()
-    if (existsSync(DB)) copyFileSync(DB, `${DB}.before-unseal-${Date.now()}`)
-    writeFileSync(DB, bytes, { mode: 0o600 })
+  } catch (error) {
+    console.error(`vault unseal failed: ${error.message}`)
+    console.error(`The sealed file ${file} was not touched; retry with the correct passphrase.`)
+    process.exitCode = 1
+    return
+  }
+  ensureHome()
+  // P1-3: never write the payload straight over the live database. Write a
+  // same-directory temp file, fsync it, verify the SQLite image, keep the old
+  // database (and its WAL) as a backup, then rename atomically.
+  const tmp = join(HOME, `.state.db.unseal-${process.pid}-${randomBytes(4).toString('hex')}`)
+  try {
+    writeDurableTemp(tmp, bytes)
+    let check
+    try {
+      check = new SqliteStore(tmp, { readOnly: true, checkIntegrity: true })
+    } catch (error) {
+      throw new Error(`the unsealed database failed its integrity check (${error.message})`)
+    } finally {
+      try { check?.close() } catch {}
+    }
+    let backup
+    if (existsSync(DB)) {
+      backup = `${DB}.before-unseal-${Date.now()}`
+      copyFileSync(DB, backup)
+      for (const suffix of ['-wal', '-shm']) {
+        try { if (existsSync(DB + suffix)) copyFileSync(DB + suffix, backup + suffix) } catch {}
+      }
+    }
+    // A WAL from the old database must never be replayed onto the new file.
+    for (const suffix of ['-wal', '-shm']) { try { if (existsSync(DB + suffix)) rmSync(DB + suffix) } catch {} }
+    renameSync(tmp, DB)
     try { chmodSync(DB, 0o600) } catch {}
-    console.log(`unsealed ${file} -> ${DB} (${bytes.length} bytes)`)
-  } catch (error) { console.error(`vault unseal failed: ${error.message}`); process.exitCode = 1 }
+    fsyncDir(HOME)
+    console.log(`unsealed ${file} -> ${DB} (${bytes.length} bytes, integrity ok${backup ? `; previous database kept at ${backup}` : ''})`)
+  } catch (error) {
+    try { if (existsSync(tmp)) rmSync(tmp) } catch {}
+    console.error(`vault unseal failed: ${error.message}`)
+    console.error(`The sealed file ${file} is intact (${bytes.length} bytes of plaintext); the existing database was not replaced.`)
+    console.error('Fix the disk/permissions problem and retry `advisers vault unseal`.')
+    process.exitCode = 1
+  }
 }
 
 function vaultStatus() {
@@ -2291,6 +2466,45 @@ function syncPass() {
   return pass
 }
 
+function readSyncDevice() {
+  try {
+    const device = readFileSync(join(HOME, 'sync.device'), 'utf8').trim()
+    return device ? sanitizeDevice(device) : undefined
+  } catch {
+    return undefined
+  }
+}
+
+function rememberSyncDevice(device) {
+  try { writeFileSync(join(HOME, 'sync.device'), sanitizeDevice(device) + '\n', { mode: 0o600 }) } catch {}
+}
+
+/** Latest mtime of the database + its WAL (captured before any checkpoint). */
+function latestLocalDbMtime() {
+  let latest = 0
+  for (const file of [DB, `${DB}-wal`]) {
+    try { latest = Math.max(latest, statSync(file).mtimeMs) } catch {}
+  }
+  return latest
+}
+
+/** Fold the WAL into the main file before a copy/replace; never ignore busy. */
+function checkpointLocalDatabase() {
+  if (!existsSync(DB)) return { ok: true, skipped: true }
+  let store
+  try {
+    store = new SqliteStore(DB)
+    const result = store.checkpoint()
+    return { ok: !result.busy, ...result }
+  } catch (error) {
+    // A locked database can make even the open/migrate fail; treat that as
+    // busy so pull refuses instead of replacing a live database (see below).
+    return { ok: false, busy: /SQLITE_BUSY|SQLITE_LOCKED|database is locked/i.test(String(error?.message ?? error)), error }
+  } finally {
+    try { store?.close() } catch {}
+  }
+}
+
 function syncCommand(args) {
   const { flags, positional } = parseFlags(args)
   const sub = positional[0]
@@ -2308,21 +2522,48 @@ function syncCommand(args) {
   ensureHome()
   if (sub === 'push') {
     if (!existsSync(DB)) { console.error(`no database at ${DB}`); process.exitCode = 1; return }
+    const device = typeof flags.device === 'string' ? flags.device : hostname()
     try {
       const store = new SqliteStore(DB)
-      store.appendAudit({ actor: 'local', action: 'sync.push', allowed: true, reason: basename(dir) })
-      store.db.exec('PRAGMA wal_checkpoint(TRUNCATE)')
-      store.db.close()
-      const result = pushSnapshot({ dir, dbPath: DB, passphrase: pass, device: typeof flags.device === 'string' ? flags.device : hostname() })
+      try {
+        const checkpoint = store.checkpoint()
+        if (checkpoint.busy) throw new Error('database is busy (another advisers process is writing); close it and retry sync push')
+        store.appendAudit({ actor: 'local', action: 'sync.push', allowed: true, reason: basename(dir) })
+        const afterAudit = store.checkpoint()
+        if (afterAudit.busy) throw new Error('database is busy (another advisers process is writing); close it and retry sync push')
+      } finally {
+        try { store.close() } catch {}
+      }
+      const result = pushSnapshot({ dir, dbPath: DB, passphrase: pass, device })
+      rememberSyncDevice(device)
       console.log(`pushed ${result.file}`)
       console.log(`sha256 ${result.sha256}`)
     } catch (error) { console.error(`sync push failed: ${error.message}`); process.exitCode = 1 }
   } else if (sub === 'pull') {
+    const force = Boolean(flags.force)
     try {
-      const result = pullSnapshot({ dir, dbPath: DB, passphrase: pass, file: typeof flags.file === 'string' ? flags.file : undefined, force: Boolean(flags.force) })
+      // Capture the local write time before checkpointing (checkpoint touches mtime).
+      const localMtimeMs = latestLocalDbMtime()
+      if (existsSync(DB)) {
+        const checkpoint = checkpointLocalDatabase()
+        if (checkpoint.busy && !force) throw new Error('local database is busy (another advisers process is writing); close it and retry sync pull, or re-run with --force (a backup is kept)')
+        if (!checkpoint.busy && checkpoint.error) console.error(`note: local database could not be checkpointed (${checkpoint.error.message}); the snapshot replaces it and a backup is kept.`)
+      }
+      const result = pullSnapshot({
+        dir,
+        dbPath: DB,
+        passphrase: pass,
+        file: typeof flags.file === 'string' ? flags.file : undefined,
+        force,
+        localMtimeMs,
+        localDevice: readSyncDevice(),
+      })
       if (!result.changed) console.log('local database already matches the latest snapshot')
       else console.log(`pulled ${result.file} (${result.sha256})${result.backup ? `; backup ${result.backup}` : ''}`)
-      if (result.changed) { try { dbStore()?.appendAudit({ actor: 'local', action: 'sync.pull', allowed: true, reason: result.file }) } catch {} }
+      if (result.changed) {
+        try { dbStore()?.appendAudit({ actor: 'local', action: 'sync.pull', allowed: true, reason: result.file }) }
+        catch (error) { console.error(`warning: database replaced but the sync.pull audit row failed: ${error.message}`); process.exitCode = 1 }
+      }
     } catch (error) { console.error(`sync pull failed: ${error.message}`); process.exitCode = 1 }
   } else { console.error('usage: advisers sync push|pull|status --dir <sync-dir>'); process.exitCode = 1 }
 }
@@ -2378,8 +2619,14 @@ async function evidencePack(args) {
     receipt = join(out, 'receipt.docx')
   } catch (error) { console.error(`docx receipt skipped: ${error.message}`) }
   const verification = verifyPack(pack.files)
-  store?.addDelivery({ matterId: activeMatterId(ledger), conversationId: latestConversationId(), files: [join(out, 'manifest.json'), join(out, 'README.txt'), join(out, 'SHA256SUMS'), ...(receipt ? [receipt] : [])], tool: 'evidence-pack', title: 'evidence pack', validation: JSON.stringify(verification) })
-  store?.appendAudit({ actor: 'local', action: 'evidence.pack', allowed: true, reason: `${pack.summary?.entryCount ?? 0} entries` })
+  // Delivery row + audit row commit together (robustness audit P0-3).
+  recordDeliveryWithAudit({
+    files: [join(out, 'manifest.json'), join(out, 'README.txt'), join(out, 'SHA256SUMS'), ...(receipt ? [receipt] : [])],
+    tool: 'evidence-pack',
+    title: 'evidence pack',
+    validation: verification,
+    audit: { actor: 'local', action: 'evidence.pack', allowed: true, reason: `${pack.summary?.entryCount ?? 0} entries` },
+  })
   console.log(JSON.stringify({ out, files: Object.keys(pack.files), receipt, verification }, null, 2))
   if (!verification.ok) process.exitCode = 1
 }
@@ -2483,8 +2730,7 @@ function link(sub, from, to, type) {
     const factId = proposal.rollback.slice(5)
     const ok = ledger.forget('fact', factId)
     proposal.rollback = `rolledback:${factId}`
-    dbStore()?.appendAudit({ actor: 'local', action: 'link.rollback', allowed: true, reason: factId })
-    saveLedger(ledger)
+    saveLedgerWithAudit(ledger, { actor: 'local', action: 'link.rollback', allowed: true, reason: factId })
     console.log(ok ? `rolled back: ${factId}` : `fact not found: ${factId}`)
     if (!ok) process.exitCode = 1
     return
@@ -2535,8 +2781,7 @@ function link(sub, from, to, type) {
     }
     if (sub === 'reject') {
       ledger.resolveUpdate(from, 'rejected')
-      dbStore()?.appendAudit({ actor: 'local', action: 'link.reject', allowed: true, reason: from })
-      saveLedger(ledger)
+      saveLedgerWithAudit(ledger, { actor: 'local', action: 'link.reject', allowed: true, reason: from })
       console.log(`rejected: ${from}`)
       return
     }
@@ -2549,8 +2794,7 @@ function link(sub, from, to, type) {
       source: { type: 'import', ref: proposal.id },
     })
     ledger.resolveUpdate(from, 'applied', `fact:${fact.id}`)
-    dbStore()?.appendAudit({ actor: 'local', action: 'link.apply', allowed: true, reason: `${from} -> ${fact.id}` })
-    saveLedger(ledger)
+    saveLedgerWithAudit(ledger, { actor: 'local', action: 'link.apply', allowed: true, reason: `${from} -> ${fact.id}` })
     console.log(`applied: ${from} -> target fact ${fact.id}`)
     return
   }
@@ -2841,8 +3085,7 @@ if (!command) {
         capability: flags.capability ?? 'todo',
         evidence: [{ sessionId: latestConversationId(), turnId: 'cli', quote: String(flags.quote) }],
       })
-      saveLedger(ledger)
-      dbStore()?.appendAudit({ actor: 'local', action: 'commit.add', allowed: true, reason: c.id })
+      saveLedgerWithAudit(ledger, { actor: 'local', action: 'commit.add', allowed: true, reason: c.id })
       console.log(`${c.id} open ${c.action}${c.dueAt ? ` due ${c.dueAt}` : ''}`)
     }
   } else if (sub === 'ls') printCommitments(ledger, flags.json)
@@ -2853,9 +3096,7 @@ if (!command) {
     if (!c || !Number.isFinite(hours) || hours <= 0) { console.error('usage: advisers commit snooze <id> <hours>'); process.exitCode = 1 }
     else {
       c.status = 'snoozed'
-      dbStore()?.setMeta(`snooze:${id}`, new Date(Date.now() + hours * 3600_000).toISOString())
-      saveLedger(ledger)
-      dbStore()?.appendAudit({ actor: 'local', action: 'commit.snooze', allowed: true, reason: id })
+      saveLedgerWithAudit(ledger, { actor: 'local', action: 'commit.snooze', allowed: true, reason: id }, (store) => store.setMeta(`snooze:${id}`, new Date(Date.now() + hours * 3600_000).toISOString()))
       console.log(`snoozed: ${id} for ${hours}h`)
     }
   }
@@ -2868,8 +3109,7 @@ if (!command) {
         console.error(`evidence file not found: ${String(evidence).slice(5)}`); process.exitCode = 1
       } else {
         ledger.completeCommitment(id, [{ sessionId: latestConversationId(), turnId: 'cli', quote: String(evidence) }])
-        saveLedger(ledger)
-        dbStore()?.appendAudit({ actor: 'local', action: 'commit.done', allowed: true, reason: id })
+        saveLedgerWithAudit(ledger, { actor: 'local', action: 'commit.done', allowed: true, reason: id })
         console.log(`done: ${id}`)
       }
     }
@@ -2962,9 +3202,7 @@ if (!command) {
         if (candidate.kind === 'fact') ledger.remember({ ...candidate.payload, authority: 'user', evidence: candidate.evidence.map(sourceRef) })
         else if (candidate.kind === 'preference') ledger.addPreference({ ...candidate.payload, evidence: candidate.evidence.map(sourceRef) })
         else if (candidate.kind === 'commitment') ledger.addCommitment({ ...candidate.payload, matterId: candidate.payload.matterId ?? ledger.listMatters()[0]?.id, evidence: candidate.evidence.map(commitmentEvidence) })
-        store.reviewCandidate(candidate.id, 'accepted')
-        saveLedger(ledger)
-        store.appendAudit({ actor: 'local', action: 'memory.accept', allowed: true, reason: candidate.id })
+        saveLedgerWithAudit(ledger, { actor: 'local', action: 'memory.accept', allowed: true, reason: candidate.id }, (s) => s.reviewCandidate(candidate.id, 'accepted'))
         console.log(`accepted ${candidate.id}`)
       } catch (error) { console.error(error.message); process.exitCode = 1 }
     }
@@ -2973,8 +3211,7 @@ if (!command) {
     const candidate = store?.getCandidate(args[1])
     if (!candidate) { console.error('candidate not found'); process.exitCode = 1 }
     else {
-      store.reviewCandidate(candidate.id, 'rejected', args.slice(2).join(' ') || undefined)
-      store.appendAudit({ actor: 'local', action: 'memory.reject', allowed: true, reason: candidate.id })
+      updateStoreWithAudit((s) => s.reviewCandidate(candidate.id, 'rejected', args.slice(2).join(' ') || undefined), { actor: 'local', action: 'memory.reject', allowed: true, reason: candidate.id })
       console.log(`rejected ${candidate.id}`)
     }
   } else if (args[0] === 'search') {
@@ -3005,7 +3242,7 @@ if (!command) {
 } else if (command === 'privacy') {
   printPrivacy(args)
 } else if (command === 'audit') {
-  printAudit()
+  printAudit(args)
 } else if (command === 'purge') {
   purgeMatter(args[0], args.includes('--yes'))
 } else if (command === 'decay') {
@@ -3019,8 +3256,7 @@ if (!command) {
   else {
     const ledger = loadLedger()
     const result = learnPreference(ledger, statement, statement, { explicit: true })
-    dbStore()?.appendAudit({ actor: 'local', action: 'correct', allowed: true, reason: result.preference.id })
-    saveLedger(ledger)
+    saveLedgerWithAudit(ledger, { actor: 'local', action: 'correct', allowed: true, reason: result.preference.id })
     printLearnReceipt(result)
   }
 } else if (command === 'ls') {
