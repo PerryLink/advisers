@@ -215,7 +215,65 @@ entries:
 - regression: `test/receipt-pack.test.js` builds an 80k-entry synthetic pack and
   asserts it stays linear and under 2 seconds.
 
-## Implementation / CLI wiring (maintainers)
+## CLI (0.2.0)
+
+The CLI now builds and verifies receipt packs; the library is not called by hand.
+
+```sh
+# Build a receipt pack for recent deliveries (default: latest 100 delivery rows,
+# evidence entries capped at DEFAULT_MAX_EVIDENCE_ENTRIES = 2000)
+advisers deliveries --receipt [--out <dir>] [--recipient "王工 <wang@example.com>"]
+advisers deliveries --receipt --ids cm_...,fact_...,pref_...   # narrow the evidence
+advisers deliveries --receipt --all                            # lift the 2000 cap
+advisers deliveries --receipt --force                          # replace a non-empty --out
+
+# Verify offline: reads only <dir>, prints JSON, exits 0 (ok) / 1 (not ok).
+# It needs no ~/.advisers database, no TOS acceptance record and no network.
+advisers evidence verify <dir>
+
+# The v1 evidence-only pack is unchanged (manifest/README/SHA256SUMS/DOCX receipt).
+advisers deliveries --pack [--out <dir>]
+```
+
+Behaviour of `deliveries --receipt`:
+
+- Default output directory: `~/.advisers/receipts/receipt-<timestamp>`; `--out`
+  chooses another path. A non-empty target is refused unless `--force`, which
+  moves the old directory aside (never deletes it) — see `replaced` in the
+  output.
+- Delivery files that no longer exist are skipped and reported on stderr; the
+  receipt only covers files that are still readable. If no readable delivery
+  file remains the command fails with exit 1 instead of writing a receipt that
+  claims files it cannot hash.
+- Evidence: every commitment/fact/preference is included through
+  `buildEvidencePack`, which is capped at 2000 entries. Over the cap the command
+  prints the `EvidencePackLimitError` message plus its hint (`--ids` to narrow,
+  `--all` to opt in) and exits 1 without writing a pack.
+- `verifyResults`: delivered DOCX/XLSX/PPTX artifacts are run through
+  `verifyOffice` when `advisers-office` is available (the CLI imports the office
+  `verify` submodule directly so a receipt does not pay for the xlsx/pptx
+  barrel); without that optional peer the pack records
+  `verifyStatus: "not-recorded"`.
+- `receipt.docx` uses the office DOCX builder when present (again via the `docx`
+  submodule) and the deterministic built-in writer otherwise.
+- `recipient`: `--recipient "Name <mail>"`, a bare e-mail address or a bare name;
+  it is an operator-entered record, not a delivery/acceptance proof.
+- `anchors` are `[]` from the CLI, so README.txt states
+  `anchors: NONE - this pack is not externally anchored (local self-attestation only)`.
+- The command re-runs `verifyReceiptPackDir` on the finished directory and puts
+  the result in the JSON output; a verification failure sets exit code 1.
+- A successful pack also records a local delivery row (`tool: receipt-pack`) and
+  an audit event `receipt.pack` (JSON store has no audit chain). Rows whose tool
+  is `receipt-pack` are excluded when assembling a new receipt, so receipts do
+  not recursively copy older receipt packs.
+
+Output is machine-readable JSON (one object, see
+[`CLI-JSON.md`](CLI-JSON.md)) with `ok`, `format`, `version`, `out`,
+`replaced`, `deliveryCount`, `fileCount`, `verifyStatus`, `anchored`,
+`recipient`, `manifestDigest`, `receiptSha256`, `evidence`, `files`,
+`skippedFiles` and `verification{ok,errors,warnings,checksumCount}`.
+
+## Library entry points
 
 `packages/advisers/lib/evidence.js`
 
@@ -226,26 +284,10 @@ entries:
 - old exports kept: `buildEvidencePack`, `verifyPack`, `manifestFor`,
   `toDocxRows`, `sha256Hex`, `stableStringify`, `MAX_QUOTE_CHARS`.
 
-`packages/advisers/lib/receipt-verify.js` (new)
+`packages/advisers/lib/receipt-verify.js`
 
 - `verifyReceiptPackDir(dir)` — sync, offline directory verifier.
 - `parseReceiptSums(text)` — strict SHA256SUMS parser.
-
-CLI wiring points (bin/advisers.js is owned elsewhere; do not fork this logic):
-
-1. `advisers evidence verify <dir>` → `verifyReceiptPackDir(dir)`, print
-   `JSON.stringify(result)`, `process.exitCode = result.ok ? 0 : 1`.
-2. `advisers evidence pack` / `deliveries --pack` receipt path →
-   `await buildReceiptPack({ deliveries: store.listDeliveries(n), evidence:
-   buildEvidencePack(...), verifyResults, env: { advisersVersion: VERSION,
-   nodeVersion: process.version }, recipient, outDir })`; `await` it (async) and
-   do not write `receipt.docx`/SHA256SUMS by hand (the 0600 mode + disk re-hash
-   verification live in the builder).
-3. `--ids` / `--all`: `buildEvidencePack({ ids: flags.ids ? ... : undefined,
-   all: flags.all === true })`; catch `EvidencePackLimitError`, print
-   `error.message` (already mentions `--ids`/`--all`) and exit 1.
-4. Keep `deliveries --pack` output backward-compatible until the CLI is wired to
-   the receipt format; the old evidence pack tests must stay green.
 
 ## Legal wording: what this pack is and is not
 

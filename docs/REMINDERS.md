@@ -12,10 +12,13 @@ advisers remind                      # human view
 advisers remind --json               # scripts
 advisers remind --ics out.ics        # VEVENT + VALARM (custom offsets or -P1D, -PT1H)
 advisers remind --deliver            # append to ~/.advisers/reminders.log + audit
-advisers remind --deliver --notify   # + local notification adapter
-advisers remind install              # write opt-in scheduler scripts
-advisers remind uninstall
-advisers remind status
+                                     # + scheduler/status.json (lastRun)
+advisers remind --deliver --notify   # + local notification adapter + optional webhook
+advisers remind install              # write opt-in scheduler scripts + PRINT the OS plan
+                                     # (dry-run by default; --apply executes it)
+advisers remind install --apply [--schedule "0 9 * * *"]
+advisers remind uninstall [--apply]  # remove scripts; --apply also removes the cron/schtasks entry
+advisers remind status               # scripts/log + last recorded run + OS registration state
 ```
 
 ## Per-commitment reminder offsets (0.2.0)
@@ -83,10 +86,22 @@ The core in-memory ledger stores the field through `addCommitment`,
   degrades to absent instead of breaking the ledger. Schema **v18** adds the
   column; opening a v17 database migrates it in place after writing a
   same-directory `state.db.before-migrate-v17-*` backup, and a newer schema is
-  still refused. Because the CLI loads the ledger through
-  `Ledger.fromJSON(store.load())`, `advisers remind --ics` picks the stored
-  offsets up automatically once a caller writes them via
-  `addCommitment`/`updateCommitment`.
+  still refused. The CLI writes them through
+  `addCommitment`/`updateCommitment`:
+
+```sh
+# one-off (strictly normalised with normalizeReminderOffsets; invalid input is rejected)
+advisers commit add "发报价" --quote "周五前发" --due 2026-11-20T18:00:00+08:00 \
+  --remind-offsets "-1d,-2h,+0d09:00"
+
+# edit an existing commitment (updateCommitment; --no-remind deletes the optional field)
+advisers commit edit <id> --remind-offsets "+2h"
+advisers commit edit <id> --no-remind
+```
+
+  `--remind <offset>` is a single-offset alias of `--remind-offsets`. Because the
+  CLI loads the ledger through `Ledger.fromJSON(store.load())`, `advisers
+  remind --json` / `--ics` pick the stored offsets up automatically afterwards.
 
 ## Outbound webhook (opt-in, off by default)
 
@@ -125,6 +140,13 @@ Payload (`Content-Type: application/json`):
   caller keeps the local reminder log and reports the channel honestly.
 - The webhook is a user-configured endpoint, not a cloud push: Advisers itself
   never contacts a service on the user's behalf without this variable.
+- CLI wiring: `advisers remind --deliver --notify` calls the local adapter and
+  then `sendWebhookNotification(reminders)`. The reported channel is the local
+  one (`log-only` when no local adapter is available), `webhook` when only the
+  webhook sent, or `<local>+webhook` when both sent. When the webhook is **not**
+  configured the command stays `log-only`/local exactly as before (no error,
+  no network). A configured webhook that fails is reported on stderr while the
+  local log/status stays authoritative.
 
 ## User-level scheduler (opt-in, dry-run first)
 
@@ -149,6 +171,38 @@ change as data:
   state either way.
 - Inputs are validated: five cron fields, single-line command, safe marker,
   `HH:MM` task time, no newline injection into a crontab.
+
+### CLI: dry-run first, `--apply` to register
+
+`advisers remind install|uninstall|status` is the only layer that can execute a
+system command, and it never does so by default:
+
+```sh
+advisers remind install                 # writes ~/.advisers/scheduler/remind.sh|ps1 + README
+                                        # and PRINTS the OS plan (crontab -/schtasks argv)
+advisers remind install --apply         # same, then executes the plan
+advisers remind install --apply --schedule "0 9 * * *"   # custom five-field cron schedule
+advisers remind uninstall               # removes the local scripts
+advisers remind uninstall --apply       # removes the local scripts AND the cron/schtasks entry
+advisers remind status                  # scripts/log + last recorded run + OS registration state
+```
+
+- `install` builds the plan with `planScheduler({ platform: process.platform,
+  action: 'install', command: buildCronCommand({ nodeBin, cliPath }), schedule,
+  time, dryRun: !apply })`; on cron platforms it reads the current `crontab -l`
+  text before planning so every unrelated line is preserved.
+- `uninstall` plans with `planScheduler({ action: 'uninstall' })` (read-only
+  crontab read, marker-delimited block removal) and removes the local scripts.
+- `status` prints the scheduler directory/log, the `readSchedulerStatus()`
+  record (`lastRun`/`lastResult`/`lastCount`/`lastChannel`), and the OS plan
+  (`planCronStatus` with the live crontab text, or the `schtasks /Query` argv on
+  Windows — exit code 0 there means registered).
+- A real `advisers remind --deliver` run (including one with zero due
+  reminders) writes `recordSchedulerRun({ homeDir, result: 'ok', count, channel,
+  dryRun: false })`, so `remind status` can prove the schedule actually fires.
+  A missing/corrupt status file never blocks delivery.
+- Once a cron/schtasks entry exists it calls `remind --deliver --notify`; the
+  `--notify` channel and the optional webhook are described above.
 
 ### Status file
 
@@ -176,8 +230,9 @@ explicit `homeDir`.
 
 - **No background daemon by default.** `remind install` writes user-level
   scripts (`~/.advisers/scheduler/remind.sh`, `remind.ps1`) and a README; it does
-  not register OS tasks. The scheduler library above provides the explicit,
-  reviewable registration step; nothing persists without the user's action.
+  not register OS tasks unless the user passes `--apply`. The scheduler library
+  above provides the explicit, reviewable registration step; nothing persists
+  without the user's action, and `remind uninstall --apply` removes it again.
 - **No implicit cloud push.** `.ics` is imported into the user's existing
   calendar; the calendar app owns the notification. `--deliver` writes a local
   log and an audit event. `--notify` is best-effort local

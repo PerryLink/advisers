@@ -14,9 +14,22 @@ compatibility mapping, so no stored evidence has to be rewritten.
 - `packages/advisers/lib/source.js` implements `normalizeSource()`,
   `validateSource()`, `isSourceV2()` and `toLegacySource()`. The module is
   pure: it never touches the database, filesystem or network.
-- The CLI capture/import paths still write v1 `source` objects; wiring them to
-  v2 is a separate follow-up change. Until then, readers should run stored
-  objects through `normalizeSource()`.
+- **Write side (0.2.0 CLI)**: every capture path (`capture`, `capture
+  --from-mail`, `--from-transcript`, `--from-imap`) builds one source per
+  candidate, runs `normalizeSource()` and then `validateSource()`; an invalid
+  source is rejected (the message is counted as `failed` for bulk imports, the
+  command exits 1 for a single capture) instead of being written.
+  - bare `capture` uses `type: "conversation"` plus the local turn reference
+    (`ref: "<sessionId>#<turnId>"`) and the verbatim quote;
+  - mail uses `type: "mail"` with `messageId`/`subject` (the IMAP
+    `channel`/`uid`/`from` are preserved as extension fields);
+  - transcript uses `type: "transcript"`, the `file` basename and the first
+    speaker (`speakers[]` is mapped to `speaker`);
+  - all writers add `capturedAt`; stored rows are v2.
+- **Read side**: `today --sources` / `today --json --sources` and
+  `evidence show <id> [--json]` normalise each stored source before display, so
+  v1 rows (e.g. `type: "email"`) render as v2 (`type: "mail"`) without being
+  rewritten in the database. There is no migration and no schema change.
 
 ## Shape
 
@@ -90,7 +103,8 @@ turns a calendar `ref` back into `uid`, and a transcript `speaker` back into
 ## Where it is stored
 
 - `memory_candidates.evidence[]`: `{ quote, sessionId, turnId, source }` while pending
-  (`source` is a v1 object today; v2 rows use the shape above).
+  (`source` is the v2 shape above for 0.2.0 writers; legacy rows keep the v1
+  object and are normalised on read).
 - `Commitment.evidence[]`: `{ sessionId, turnId, quote, source? }` after `memory accept`.
 - `Fact.evidence[]` / `UserPreference.evidence[]`: `{ quote, ref: "session#turn", source? }`.
 - `calendar_events`: `uid, summary, starts_at, ends_at, all_day, tzid, location, rrule, source`

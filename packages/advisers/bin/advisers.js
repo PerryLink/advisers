@@ -1,4 +1,5 @@
 #!/usr/bin/env node
+import { spawnSync } from 'node:child_process'
 import { chmodSync, closeSync, copyFileSync, existsSync, fsyncSync, mkdirSync, openSync, readdirSync, readFileSync, renameSync, rmSync, statSync, writeFileSync, writeSync } from 'node:fs'
 import { homedir, hostname } from 'node:os'
 import { createHash, randomBytes, randomUUID } from 'node:crypto'
@@ -46,8 +47,12 @@ const lazyModule = (loader) => {
 }
 const loadAttachments = lazyModule(() => import('../lib/attachments.js'))
 const loadEvidence = lazyModule(() => import('../lib/evidence.js'))
+const loadIcal = lazyModule(() => import('../lib/ical.js'))
 const loadImporters = lazyModule(() => import('../lib/importers.js'))
 const loadNotify = lazyModule(() => import('../lib/notify.js'))
+const loadReceiptVerify = lazyModule(() => import('../lib/receipt-verify.js'))
+const loadScheduler = lazyModule(() => import('../lib/scheduler.js'))
+const loadSource = lazyModule(() => import('../lib/source.js'))
 const loadOcr = lazyModule(() => import('../lib/ocr.js'))
 const loadPdf = lazyModule(() => import('../lib/pdf.js'))
 const loadRemind = lazyModule(() => import('../lib/remind.js'))
@@ -447,9 +452,12 @@ Usage:
   advisers history            recent conversations
   advisers search <text>       full-text search old turns
   advisers compact ls|rollback summary versions
-  advisers today [--calendar] one-screen today/week/waiting view (+ local events)
-  advisers remind [--json] [--ics [path]] [--deliver] [--notify]  due reminders + ICS/VALARM export
-  advisers remind install|uninstall|status  local scheduler scripts (opt-in)
+  advisers today [--calendar] [--sources] [--json]
+                              one-screen today/week/waiting view (+ local events)
+  advisers remind [--json] [--ics [path]] [--deliver [--notify]]  due reminders + ICS/VALARM export
+  advisers remind install|uninstall|status [--apply] [--schedule "0 9 * * *"]
+                              scheduler scripts + OS plan (dry-run by default; --apply executes)
+                              status also shows the last recorded run (scheduler/status.json)
   advisers calendar import --ics <file>  local .ics read-only import
   advisers risks              up to 3 deterministic obligation risks
   advisers pet-brief [--json] [--out [path]] [--check]  read-only redacted Pet Brief (contract v0.1)
@@ -462,14 +470,17 @@ Usage:
   advisers learn review <id>  LLM routine review (needs API key)
   advisers memory             what I remember
   advisers memory search <q>  search facts/preferences
-  advisers memory candidates  pending memory candidates
+  advisers memory candidates [--json] [--all]  pending memory candidates
   advisers memory accept|reject <id>
   advisers prefs [--all] | correct <text>
   advisers nudge list|done|ignore <id>  nudge outcomes
   advisers decay              apply 30-day preference decay
   advisers audit              verify the local audit hash chain
   advisers purge <matter> [--yes]  privacy delete a matter
-  advisers commit add|ls|done|snooze commitments
+  advisers commit add|edit|ls|done|snooze commitments
+  advisers commit add "..." --quote "..." [--remind-offsets "-1d,-2h"]
+  advisers commit edit <id> [--remind-offsets "<list>" | --no-remind]
+                              per-commitment reminder offsets (Asia/Shanghai wall clock)
   advisers deliveries         recent generated files
   advisers receipt            one-screen delivery receipt
   advisers ls                 list matters
@@ -487,7 +498,7 @@ Usage:
   advisers review <file> --request "..."  model content review (no edits)
   advisers research --web|--url <url> [--deep] <query>
                               server-side web search/read URL with citations (explicit egress)
-  advisers capture [--file f] [--source s] [--date ISO] [--matter id] <text>
+  advisers capture [--file f] [--source s] [--date ISO] [--matter id] [--json] <text>
                               从中文工作内容抽取候选承诺（不自动入账）
   advisers capture --from-mail <file|dir> [--limit n]  .eml/.mbox 只读导入→候选
   advisers capture --from-transcript <file>      转写稿导入→候选（不录音/不入会）
@@ -497,13 +508,16 @@ Usage:
   advisers evidence show <id> [--json]          承诺/事实/偏好→原文来源
   advisers deliver [--commit id] [--type confirmation|weekly|statement|ledger] [--format docx|xlsx|pdf] [--out f]  交付物
   advisers deliveries --pack [--out dir]        证据包（manifest/README/SHA256SUMS + DOCX 回执）
+  advisers deliveries --receipt [--out dir] [--ids ...] [--all] [--recipient "Name <mail>"]
+                              交付回执包 v1.1（交付文件副本 + 全文件 SHA-256 + 证据；默认上限 2000）
+  advisers evidence verify <dir>                离线校验回执包（JSON，exit 0/1；不读账本、不联网）
   advisers policy check <text> policy/crisis check
   advisers office-read <file>  read DOCX/XLSX/PPTX/OFD text
   advisers ocr <image> [--out text]  local OCR adapter (ADVISERS_OCR_CMD; no cloud)
   advisers timestamp <file> [--out proof]  local timestamp/signing adapter
   advisers tui [--once]          read-only terminal dashboard
   advisers office-edit <file> <ops.json> [out]  surgical Office edit
-  advisers verify <file> [--content]  structural + deterministic content checks
+  advisers verify <file> [--json] [--content]  structural + deterministic content checks
   advisers office <kind> <spec.json> <out>
                               build docx/xlsx/pptx/xmind/mermaid/drawio
   advisers routine ls         list routines
@@ -549,6 +563,15 @@ Environment:
   ADVISERS_YES=1  skip the plan confirmation
   ADVISERS_FORCE=1 overwrite existing files without asking
   ADVISERS_PROGRESS=0 hide [tool] progress lines
+  ADVISERS_ACCEPT_TOS=1  record TOS consent without a TTY (same as --accept-tos)
+  ADVISERS_NOTIFY_WEBHOOK  optional outbound webhook for remind --deliver --notify
+
+Exit codes:
+  0  success
+  1  user/config/runtime error (bad args, missing key, unknown id, failed verification)
+  3  TOS consent required: non-interactive command blocked by the consent gate.
+     Run \`advisers tos accept\` in a TTY, or pass --accept-tos / ADVISERS_ACCEPT_TOS=1.
+     \`advisers evidence verify <dir>\` is offline/read-only and exempt from the gate.
 `)
 }
 
@@ -603,7 +626,7 @@ function purgeMatter(id, confirmed) {
 function parseFlags(args) {
   const flags = {}
   const positional = []
-  const booleanFlags = new Set(['web', 'deep', 'all', 'yes', 'json', 'list', 'force', 'apply', 'quiet', 'help', 'content', 'ics', 'deliver', 'install', 'uninstall', 'status', 'calendar', 'pack', 'from-imap', 'remove', 'force', 'notify'])
+  const booleanFlags = new Set(['web', 'deep', 'all', 'yes', 'json', 'list', 'force', 'apply', 'quiet', 'help', 'content', 'ics', 'deliver', 'install', 'uninstall', 'status', 'calendar', 'sources', 'pack', 'receipt', 'from-imap', 'remove', 'force', 'notify', 'no-remind'])
   for (let i = 0; i < args.length; i++) {
     if (args[i].startsWith('--')) {
       const key = args[i].slice(2)
@@ -612,6 +635,20 @@ function parseFlags(args) {
     } else positional.push(args[i])
   }
   return { flags, positional }
+}
+
+/**
+ * Read --remind / --remind-offsets from parsed flags and strictly normalise.
+ * `--remind -1d` is a one-offset alias of `--remind-offsets "-1d,-2h"`.
+ * Returns undefined when neither flag was given; invalid input throws.
+ */
+async function parseReminderOffsetsFlag(flags) {
+  const raw = flags['remind-offsets'] !== undefined ? flags['remind-offsets'] : flags.remind
+  if (raw === undefined) return undefined
+  if (raw === true) throw new Error('--remind-offsets requires a value, e.g. --remind-offsets "-1d,-2h" or --remind -1d')
+  const list = String(raw).split(',').map((item) => item.trim()).filter(Boolean)
+  const { normalizeReminderOffsets } = await loadRemind()
+  return normalizeReminderOffsets(list)
 }
 
 function recordManualDelivery(files, tool, title, validation) {
@@ -696,24 +733,44 @@ function risks(ledger) {
   for (const line of out.slice(0, 3)) console.log(`- ${line}`)
 }
 
-function printSources(ledger) {
-  const open = ledger.listCommitments()
+/**
+ * Read-side provenance compatibility (source v2): stored v1 source rows are
+ * normalised before display so mail/transcript/IMAP provenance renders the same
+ * way regardless of when the row was written. Read-only: normalizeSource() is
+ * pure and never touches the database.
+ */
+async function collectSourceRows(ledger) {
+  const { normalizeSource } = await loadSource()
   const rows = []
-  for (const c of open) {
+  for (const c of ledger.listCommitments()) {
     for (const e of c.evidence ?? []) {
-      const src = e.source?.type ? `${e.source.type}${e.source.subject ? `:${e.source.subject}` : e.source.messageId ? `:${e.source.messageId}` : e.source.file ? `:${e.source.file}` : ''}` : 'conversation'
-      rows.push({ id: c.id, action: c.action, source: src, ref: e.sessionId ? `${e.sessionId}#${e.turnId}` : e.turnId, quote: (e.quote ?? '').slice(0, 80) })
+      const source = normalizeSource(e.source)
+      const type = source?.type ?? 'conversation'
+      rows.push({
+        commitmentId: c.id,
+        action: c.action,
+        type,
+        ref: source?.ref ?? (e.sessionId ? `${e.sessionId}#${e.turnId}` : (e.turnId ?? null)),
+        label: `${type}${source?.subject ? `:${source.subject}` : source?.messageId ? `:${source.messageId}` : source?.file ? `:${source.file}` : ''}`,
+        quote: e.quote ?? '',
+        source: source ?? null,
+      })
     }
   }
-  if (!rows.length) { console.log('来源：还没有可回溯的承诺来源；先 capture/导入并 accept。'); return }
-  console.log('来源（承诺 → 本地入口）：')
-  for (const r of rows.slice(0, 20)) console.log(`  ${r.id}  ${r.action}  ← ${r.source} (${r.ref ?? '-'})  「${r.quote}」`)
+  return rows
 }
 
-function today(ledger, { calendar = false, sources = false, json = false } = {}) {
-  const now = Date.now()
-  const localDay = localDayOf(now)
-  const weekAhead = now + 7 * 86400_000
+async function printSources(ledger) {
+  const rows = await collectSourceRows(ledger)
+  if (!rows.length) { console.log('来源：还没有可回溯的承诺来源；先 capture/导入并 accept。'); return }
+  console.log('来源（承诺 → 本地入口）：')
+  for (const r of rows.slice(0, 20)) console.log(`  ${r.commitmentId}  ${r.action}  ← ${r.label} (${r.ref ?? '-'})  「${r.quote.slice(0, 80)}」`)
+}
+
+async function today(ledger, { calendar = false, sources = false, json = false } = {}) {
+  const nowMs = Date.now()
+  const localDay = localDayOf(nowMs)
+  const weekAhead = nowMs + 7 * 86400_000
   // P0-1: classify in one pass, formatting each due date at most once (the old
   // four filters called day() up to four times per commitment).
   const overdue = []
@@ -725,7 +782,7 @@ function today(ledger, { calendar = false, sources = false, json = false } = {})
     if (c.debtor === 'third' || c.debtor.startsWith('third:')) waiting.push(c)
     if (!c.dueAt) { noDue.push(c); continue }
     const due = Date.parse(c.dueAt)
-    if (due < now) {
+    if (due < nowMs) {
       if (localDayOf(c.dueAt) !== localDay) overdue.push(c)
       else todayDue.push(c)
     } else if (localDayOf(c.dueAt) === localDay) {
@@ -734,15 +791,36 @@ function today(ledger, { calendar = false, sources = false, json = false } = {})
       week.push(c)
     }
   }
+  const next = [...overdue, ...todayDue, ...week].sort((a, b) => Date.parse(a.dueAt) - Date.parse(b.dueAt))[0]
+  if (json) {
+    // JSON contract v1 (docs/CLI-JSON.md): same classification as the human view.
+    const payload = {
+      now: new Date(nowMs).toISOString(),
+      localDay,
+      counts: { today: todayDue.length, overdue: overdue.length, week: week.length, waiting: waiting.length, noDue: noDue.length },
+      overdue,
+      today: todayDue,
+      week,
+      waiting,
+      noDue,
+      next: next ? { id: next.id, action: next.action, dueAt: next.dueAt } : null,
+    }
+    if (calendar) payload.calendar = (await calendarOccurrencesToday()).occurrences
+    if (sources) {
+      payload.sources = (await collectSourceRows(ledger)).map(({ commitmentId, action, type, ref, quote }) => ({ commitmentId, action, type, ref, quote }))
+    }
+    console.log(JSON.stringify(payload, null, 2))
+    return
+  }
   console.log(`今天：${todayDue.length} · 逾期：${overdue.length} · 未来 7 天：${week.length} · 等别人：${waiting.length} · 无截止：${noDue.length}`)
   for (const [label, list] of [['逾期', overdue], ['今天', todayDue], ['未来 7 天', week], ['等别人', waiting]]) {
     if (!list.length) continue
     console.log(`${label}：`)
     for (const c of list.slice(0, 5)) console.log(`  ${c.id}  ${c.creditor} · ${c.action}${c.dueAt ? ` · ${c.dueAt.slice(0, 10)}` : ''}`)
   }
-  console.log('下一件：' + ([...overdue, ...todayDue, ...week].sort((a, b) => Date.parse(a.dueAt) - Date.parse(b.dueAt))[0]?.action ?? '先定一个承诺或交付。'))
-  if (calendar) printCalendarToday()
-  if (sources) printSources(ledger)
+  console.log('下一件：' + (next?.action ?? '先定一个承诺或交付。'))
+  if (calendar) await printCalendarToday()
+  if (sources) await printSources(ledger)
 }
 
 function tick(ledger, asJson = false) {
@@ -1978,21 +2056,50 @@ async function research(args) {
   }
 }
 
-async function proposeCaptureText({ text, source = 'wechat', date, matterId, meta = {}, store }) {
+/**
+ * Source v2 write path (docs/SOURCE-SCHEMA.md).
+ *
+ * normalizeSource() maps v1/ad-hoc provenance (email -> mail, sessionId/turnId ->
+ * ref, speakers -> speaker, file path -> basename) and preserves unknown fields
+ * as extensions; validateSource() rejects a source with no real pointer and no
+ * quote, so an invented provenance row is never written. A plain capture without
+ * import metadata uses type "conversation" plus the local turn reference.
+ */
+async function buildCaptureSource({ meta, quote, ref, capturedAt }) {
+  const { normalizeSource, validateSource } = await loadSource()
+  const raw = { ...(meta && typeof meta === 'object' ? meta : {}) }
+  raw.type = raw.type ?? 'conversation'
+  if (quote) raw.quote = quote
+  if (ref) raw.ref = ref
+  if (!raw.capturedAt) raw.capturedAt = capturedAt
+  const checked = validateSource(raw)
+  if (!checked.ok) throw new Error(`invalid source: ${checked.errors.join('; ')}`)
+  return normalizeSource(raw)
+}
+
+/**
+ * Run the capture model and persist pending candidates (never auto-accept).
+ * @returns {Promise<{count: number, candidates: object[]}>}
+ */
+async function proposeCaptureText({ text, source = 'wechat', date, matterId, meta = {}, store, json = false }) {
   const result = await captureCandidates({ text, apiKey: process.env.ADVISERS_API_KEY, baseUrl: process.env.ADVISERS_BASE_URL, model: process.env.ADVISERS_MODEL, date, source })
-  if (!result.candidates.length) return 0
+  if (!result.candidates.length) return { count: 0, candidates: [] }
   const conversationId = latestConversationId()
   const turn = store.addTurn({ conversationId, role: 'user', content: text })
+  const capturedAt = new Date().toISOString()
+  const created = []
   for (const c of result.candidates) {
+    const evidenceSource = await buildCaptureSource({ meta, quote: c.quote, ref: `${conversationId}#${turn.id}`, capturedAt })
     const candidate = store.proposeCandidate({
       kind: 'commitment',
       payload: { matterId, debtor: c.debtor === 'third' ? 'third' : 'user', creditor: c.creditor || 'someone', action: c.action, dueAt: c.dueAt, capability: 'none' },
-      evidence: [{ quote: c.quote, turnId: turn.id, sessionId: conversationId, source: meta }],
+      evidence: [{ quote: c.quote, turnId: turn.id, sessionId: conversationId, source: evidenceSource }],
     })
-    console.log(`${candidate.id}\t${c.modal}\t${c.action}${c.dueAt ? ` · ${c.dueAt.slice(0, 10)}` : ''}\t「${c.quote.slice(0, 60)}」`)
+    created.push(candidate)
+    if (!json) console.log(`${candidate.id}\t${c.modal}\t${c.action}${c.dueAt ? ` · ${c.dueAt.slice(0, 10)}` : ''}\t「${c.quote.slice(0, 60)}」`)
   }
-  store.appendAudit({ actor: 'local', action: 'capture.propose', allowed: true, reason: `${result.candidates.length} candidates` })
-  return result.candidates.length
+  store.appendAudit({ actor: 'local', action: 'capture.propose', allowed: true, reason: `${created.length} candidates` })
+  return { count: created.length, candidates: created }
 }
 
 async function capture(args) {
@@ -2020,8 +2127,12 @@ async function capture(args) {
   const denied = egressDeniedReason(ledger.getMatter(matterId), 'capture')
   if (denied) { console.error(denied); process.exitCode = 1; return }
   saveLedger(ledger)
-  const count = await proposeCaptureText({ text, source: flags.source, date: flags.date, matterId, store })
-  if (!count) console.log('没有找到可确认的承诺候选。')
+  const result = await proposeCaptureText({ text, source: flags.source, date: flags.date, matterId, store, json: flags.json === true })
+  if (flags.json) {
+    console.log(JSON.stringify({ ok: true, command: 'capture', source: typeof flags.source === 'string' ? flags.source : 'wechat', count: result.count, candidates: result.candidates }, null, 2))
+    return
+  }
+  if (!result.count) console.log('没有找到可确认的承诺候选。')
   else console.log('确认：advisers memory accept <id>；拒绝：advisers memory reject <id>')
 }
 
@@ -2050,7 +2161,8 @@ async function captureFromMail(flags) {
     files = info.isDirectory() ? readdirSync(target).filter((f) => /\.(eml|mbox)$/i.test(f)).map((f) => join(target, f)) : [target]
   } catch (error) { console.error(`cannot read mail path: ${error.message}`); process.exitCode = 1; return }
   const limit = Math.max(1, Math.min(200, Number(flags.limit) || 20))
-  let seen = 0, skipped = 0, failed = 0, candidates = 0
+  let seen = 0, skipped = 0, failed = 0
+  const created = []
   for (const file of files.slice(0, limit)) {
     let messages = []
     try {
@@ -2064,17 +2176,21 @@ async function captureFromMail(flags) {
       const input = toCaptureInput(msg, { source: 'email' })
       if (!input.text.trim()) { skipped++; continue }
       try {
-        const n = await proposeCaptureText({
-          text: input.text, source: 'email', date: parseEmailDate(msg.date), matterId, store,
+        const result = await proposeCaptureText({
+          text: input.text, source: 'email', date: parseEmailDate(msg.date), matterId, store, json: flags.json === true,
           meta: { type: 'mail', messageId: msg.messageId, subject: msg.subject, from: msg.from },
         })
-        candidates += n
+        created.push(...result.candidates)
         store.markSeen('import', 'mail', key)
       } catch (error) { failed++; console.error(`${msg.messageId || file}: ${error.message}`) }
     }
   }
-  store.appendAudit({ actor: 'local', action: 'import.mail', allowed: true, reason: `${seen} seen, ${candidates} candidates, ${failed} failed` })
-  console.log(`mail import: ${seen} messages, ${candidates} candidates, ${skipped} skipped, ${failed} failed`)
+  store.appendAudit({ actor: 'local', action: 'import.mail', allowed: true, reason: `${seen} seen, ${created.length} candidates, ${failed} failed` })
+  if (flags.json) {
+    console.log(JSON.stringify({ ok: true, command: 'capture --from-mail', seen, skipped, failed, count: created.length, candidates: created }, null, 2))
+    return
+  }
+  console.log(`mail import: ${seen} messages, ${created.length} candidates, ${skipped} skipped, ${failed} failed`)
 }
 
 async function captureFromTranscript(flags) {
@@ -2093,16 +2209,24 @@ async function captureFromTranscript(flags) {
   let parsed
   try { parsed = parseTranscript(readFileSync(file, 'utf8')) } catch (error) { console.error(`cannot parse transcript: ${error.message}`); process.exitCode = 1; return }
   const key = dedupeKey('transcript', parsed)
-  if (store.hasSeen('import', 'transcript', key, 30)) { console.log('transcript already imported'); return }
+  if (store.hasSeen('import', 'transcript', key, 30)) {
+    if (flags.json) { console.log(JSON.stringify({ ok: true, command: 'capture --from-transcript', alreadyImported: true, count: 0, candidates: [] }, null, 2)); return }
+    console.log('transcript already imported')
+    return
+  }
   const input = toCaptureInput(parsed, { source: 'meeting' })
   if (!input.text.trim()) { console.error('transcript has no text'); process.exitCode = 1; return }
-  const candidates = await proposeCaptureText({
-    text: input.text, source: 'meeting', matterId, store,
+  const result = await proposeCaptureText({
+    text: input.text, source: 'meeting', matterId, store, json: flags.json === true,
     meta: { type: 'transcript', file: basename(file), speakers: input.meta?.speakers ?? [] },
   })
   store.markSeen('import', 'transcript', key)
-  store.appendAudit({ actor: 'local', action: 'import.transcript', allowed: true, reason: `${candidates} candidates` })
-  console.log(`transcript import: ${candidates} candidates`)
+  store.appendAudit({ actor: 'local', action: 'import.transcript', allowed: true, reason: `${result.count} candidates` })
+  if (flags.json) {
+    console.log(JSON.stringify({ ok: true, command: 'capture --from-transcript', count: result.count, candidates: result.candidates }, null, 2))
+    return
+  }
+  console.log(`transcript import: ${result.count} candidates`)
 }
 
 async function captureFromImap(flags) {
@@ -2131,7 +2255,8 @@ async function captureFromImap(flags) {
       limit: Math.max(1, Math.min(100, Number(flags.limit) || 20)),
     })
   } catch (error) { console.error(`imap failed: ${error.message}`); process.exitCode = 1; return }
-  let seen = 0, skipped = 0, failed = 0, candidates = 0
+  let seen = 0, skipped = 0, failed = 0
+  const created = []
   for (const msg of messages) {
     seen++
     let parsed
@@ -2141,13 +2266,17 @@ async function captureFromImap(flags) {
     const input = toCaptureInput(parsed, { source: 'email' })
     if (!input.text.trim()) { skipped++; continue }
     try {
-      const n = await proposeCaptureText({ text: input.text, source: 'email', date: parseEmailDate(parsed.date), matterId, store, meta: { type: 'mail', channel: 'imap', uid: msg.uid, messageId: parsed.messageId, subject: parsed.subject, from: parsed.from } })
-      candidates += n
+      const result = await proposeCaptureText({ text: input.text, source: 'email', date: parseEmailDate(parsed.date), matterId, store, json: flags.json === true, meta: { type: 'mail', channel: 'imap', uid: msg.uid, messageId: parsed.messageId, subject: parsed.subject, from: parsed.from } })
+      created.push(...result.candidates)
       store.markSeen('import', 'imap', key)
     } catch (error) { failed++; console.error(`imap message ${msg.uid}: ${error.message}`) }
   }
-  store.appendAudit({ actor: 'local', action: 'import.imap', allowed: true, reason: `${seen} seen, ${candidates} candidates, ${failed} failed` })
-  console.log(`imap import: ${seen} messages, ${candidates} candidates, ${skipped} skipped, ${failed} failed (EXAMINE/read-only)`)
+  store.appendAudit({ actor: 'local', action: 'import.imap', allowed: true, reason: `${seen} seen, ${created.length} candidates, ${failed} failed` })
+  if (flags.json) {
+    console.log(JSON.stringify({ ok: true, command: 'capture --from-imap', seen, skipped, failed, count: created.length, candidates: created }, null, 2))
+    return
+  }
+  console.log(`imap import: ${seen} messages, ${created.length} candidates, ${skipped} skipped, ${failed} failed (EXAMINE/read-only)`)
 }
 
 async function calendarImport(args) {
@@ -2175,14 +2304,46 @@ async function calendarImport(args) {
   console.log(`calendar import: ${imported} events (read-only)`)
 }
 
-function printCalendarToday() {
+/**
+ * Read-only expansion of the stored calendar rows into the occurrences that
+ * start today (Asia/Shanghai). expandRrule() is pure and bounded; an
+ * unsupported/malformed RRULE falls back to the stored DTSTART occurrence, so a
+ * bad rule never hides a real meeting.
+ */
+async function calendarOccurrencesToday() {
   const store = dbStore()
-  if (!store) return
   const localDay = localDayOf(Date.now())
-  const events = store.listCalendarEvents().filter((e) => e.startsAt && e.startsAt.slice(0, 10) === localDay)
-  if (!events.length) { console.log('日历：今天没有本地导入的会议。'); return }
+  if (!store) return { localDay, occurrences: [] }
+  const { expandRrule } = await loadIcal()
+  const occurrences = []
+  for (const row of store.listCalendarEvents()) {
+    let instances
+    try { instances = expandRrule(row, { from: localDay, to: localDay }) } catch { instances = [] }
+    for (const instance of instances) {
+      occurrences.push({
+        uid: instance.uid,
+        summary: instance.summary ?? '',
+        startsAt: instance.startsAt,
+        endsAt: instance.endsAt ?? null,
+        allDay: Boolean(instance.allDay),
+        recurring: Boolean(instance.recurring),
+        location: instance.location ?? null,
+        rrule: instance.rrule ?? null,
+      })
+    }
+  }
+  occurrences.sort((a, b) => (a.startsAt < b.startsAt ? -1 : a.startsAt > b.startsAt ? 1 : String(a.summary).localeCompare(String(b.summary))))
+  return { localDay, occurrences }
+}
+
+async function printCalendarToday() {
+  const { localDay, occurrences } = await calendarOccurrencesToday()
+  if (!occurrences.length) { console.log('日历：今天没有本地导入的会议。'); return }
   console.log(`日历（本地只读，${localDay}）：`)
-  for (const e of events) console.log(`  ${e.startsAt.slice(11, 16)}  ${e.summary}${e.location ? ` · ${e.location}` : ''}`)
+  for (const e of occurrences) {
+    const time = e.allDay ? '全天' : e.startsAt.slice(11, 16)
+    console.log(`  ${time}  ${e.summary}${e.recurring ? '（循环）' : ''}${e.location ? ` · ${e.location}` : ''}`)
+  }
 }
 
 async function ui(args) {
@@ -2213,22 +2374,48 @@ async function remind(args) {
   ensureHome()
   const store = dbStore()
   const ledger = loadLedger()
+  const scheduler = await loadScheduler()
   const sub = positional[0]
+  const apply = flags.apply === true
   if (sub === 'install' || flags.install) {
     const dir = join(HOME, 'scheduler')
     mkdirSync(dir, { recursive: true, mode: 0o700 })
     const nodeBin = process.execPath
     const cli = process.argv[1]
-    writeFileSync(join(dir, 'remind.sh'), `#!/bin/sh\n"${nodeBin}" "${cli}" remind --deliver --notify >> "${join(HOME, 'reminders.log')}" 2>&1\n`, { mode: 0o700 })
-    writeFileSync(join(dir, 'remind.ps1'), `& "${nodeBin}" "${cli}" remind --deliver --notify *>> "${join(HOME, 'reminders.log')}"\n`, { mode: 0o700 })
+    writeFileSync(join(dir, 'remind.sh'), '#!/bin/sh\n"' + nodeBin + '" "' + cli + '" remind --deliver --notify >> "' + join(HOME, 'reminders.log') + '" 2>&1\n', { mode: 0o700 })
+    writeFileSync(join(dir, 'remind.ps1'), '& "' + nodeBin + '" "' + cli + '" remind --deliver --notify *>> "' + join(HOME, 'reminders.log') + '"\n', { mode: 0o700 })
     writeFileSync(join(dir, 'README.txt'), 'Install one of these user-level schedules (opt-in):\nLinux:  systemd --user timer or cron: 0 9 * * * sh ' + join(dir, 'remind.sh') + '\nWindows: Task Scheduler -> run remind.ps1 daily\nOr import ~/.advisers/reminders.ics into your calendar.\n')
     store?.appendAudit({ actor: 'local', action: 'notify.install', allowed: true, reason: dir })
-    console.log(`scheduler scripts written: ${dir}`)
+    console.log('scheduler scripts written: ' + dir)
     console.log('opt-in: import ~/.advisers/reminders.ics, or register remind.sh/.ps1 with your OS scheduler.')
+    const command = scheduler.buildCronCommand({ nodeBin, cliPath: cli })
+    const schedule = typeof flags.schedule === 'string' ? flags.schedule : scheduler.DEFAULT_CRON_SCHEDULE
+    const time = typeof flags.time === 'string' ? flags.time : scheduler.DEFAULT_TASK_TIME
+    const existing = apply ? await readCrontabText() : { ok: false }
+    const plan = scheduler.planScheduler({
+      platform: process.platform,
+      action: 'install',
+      dryRun: !apply,
+      command,
+      schedule,
+      time,
+      ...(existing.ok ? { existingText: existing.text } : {}),
+    })
+    console.log('schedule: ' + (plan.platform === 'win32' ? plan.taskName + ' daily ' + plan.time : plan.schedule))
+    console.log('command: ' + command)
+    await applySchedulerPlan(plan, { apply })
     return
   }
   if (sub === 'uninstall' || flags.uninstall) {
     const dir = join(HOME, 'scheduler')
+    const existing = await readCrontabText()
+    const plan = scheduler.planScheduler({
+      platform: process.platform,
+      action: 'uninstall',
+      dryRun: !apply,
+      ...(existing.ok ? { existingText: existing.text } : {}),
+    })
+    await applySchedulerPlan(plan, { apply })
     if (existsSync(dir)) rmSync(dir, { recursive: true, force: true })
     store?.appendAudit({ actor: 'local', action: 'notify.uninstall', allowed: true, reason: dir })
     console.log('scheduler scripts removed (calendar events remain in your calendar app).')
@@ -2236,14 +2423,31 @@ async function remind(args) {
   }
   if (sub === 'status' || flags.status) {
     const dir = join(HOME, 'scheduler')
-    console.log(`scheduler scripts: ${existsSync(dir) ? dir : 'not installed (optional)'}`)
-    console.log(`reminder log: ${join(HOME, 'reminders.log')}`)
+    console.log('scheduler scripts: ' + (existsSync(dir) ? dir : 'not installed (optional)'))
+    console.log('reminder log: ' + join(HOME, 'reminders.log'))
+    const status = scheduler.readSchedulerStatus({ homeDir: HOME })
+    if (!status.lastRun) console.log('last run: none recorded' + (status.corrupt ? ' (status.json corrupt)' : ''))
+    else console.log('last run: ' + status.lastRun + ' · result=' + (status.lastResult ?? '-') + ' · count=' + (status.lastCount ?? '-') + ' · channel=' + (status.lastChannel ?? '-'))
+    if (process.platform === 'win32') {
+      const plan = scheduler.planWindowsStatus({})
+      console.log('os plan: ' + plan.commands.map((entry) => entry.command + ' ' + entry.args.join(' ')).join('; ') + '（运行该命令；exit 0 表示已注册）')
+    } else if (scheduler.CRON_PLATFORMS.includes(process.platform)) {
+      const existing = await readCrontabText()
+      if (existing.ok) {
+        const plan = scheduler.planCronStatus({ existingText: existing.text })
+        console.log(plan.installed ? 'os plan: installed (' + plan.schedule + ')' : 'os plan: not installed')
+      } else {
+        console.log('os plan: unknown (' + (existing.error ?? 'crontab unavailable') + ')')
+      }
+    } else {
+      console.log('os plan: unsupported platform ' + process.platform)
+    }
     return
   }
   const { buildReminders, toIcs } = await loadRemind()
   const snoozed = {}
   for (const c of ledger.listCommitments()) {
-    const until = store?.getMeta(`snooze:${c.id}`)
+    const until = store?.getMeta('snooze:' + c.id)
     if (until) snoozed[c.id] = until
   }
   const reminders = buildReminders(ledger, { now: new Date(), snoozedUntil: snoozed })
@@ -2251,24 +2455,102 @@ async function remind(args) {
     const path = typeof flags.ics === 'string' ? flags.ics : (positional[0] || join(HOME, 'reminders.ics'))
     writeFileSync(path, toIcs(reminders, { now: new Date() }), { mode: 0o600 })
     store?.appendAudit({ actor: 'local', action: 'notify.ics', allowed: true, reason: basename(path) })
-    console.log(`ics written: ${path} (${reminders.length} events)`)
+    console.log('ics written: ' + path + ' (' + reminders.length + ' events)')
     return
   }
   if (flags.json) { console.log(JSON.stringify({ now: new Date().toISOString(), reminders }, null, 2)); return }
-  if (!reminders.length) { console.log('现在没有到期的提醒。'); return }
-  for (const r of reminders) console.log(`[${r.level}/${r.bucket}] ${r.action}${r.dueAt ? ` · ${r.dueAt.slice(0, 16)}` : ''}`)
+  if (!reminders.length) {
+    console.log('现在没有到期的提醒。')
+    if (flags.deliver) recordReminderRun(scheduler, { count: 0, channel: 'log' })
+    return
+  }
+  for (const r of reminders) console.log('[' + r.level + '/' + r.bucket + '] ' + r.action + (r.dueAt ? ' · ' + r.dueAt.slice(0, 16) : ''))
   if (flags.deliver) {
-    const line = `${new Date().toISOString()}\t${reminders.length}\t${reminders.map((r) => r.action).join('；')}\n`
+    const line = new Date().toISOString() + '\t' + reminders.length + '\t' + reminders.map((r) => r.action).join('；') + '\n'
     writeFileSync(join(HOME, 'reminders.log'), line, { flag: 'a', mode: 0o600 })
     let channel = 'log'
     if (flags.notify) {
-      const { sendNotification } = await loadNotify()
-      const sent = await sendNotification({ title: 'Advisers · 到期提醒', body: `${reminders.length} 条承诺到期或即将到期` })
-      channel = sent.sent ? sent.channel : 'log-only'
+      const notify = await loadNotify()
+      const local = await notify.sendNotification({ title: 'Advisers · 到期提醒', body: reminders.length + ' 条承诺到期或即将到期' })
+      channel = local.sent ? local.channel : 'log-only'
+      const webhook = await notify.sendWebhookNotification(reminders)
+      if (webhook.sent) channel = channel === 'log-only' ? 'webhook' : channel + '+webhook'
+      else if (webhook.configured) console.error('webhook 未发送：' + (webhook.error ?? 'unknown') + (webhook.detail ? '（' + webhook.detail + '）' : ''))
     }
-    store?.appendAudit({ actor: 'local', action: 'notify.delivered', allowed: true, reason: `${reminders.length} reminders channel=${channel}` })
-    if (flags.notify) console.log(`通知通道：${channel}`)
+    store?.appendAudit({ actor: 'local', action: 'notify.delivered', allowed: true, reason: reminders.length + ' reminders channel=' + channel })
+    recordReminderRun(scheduler, { count: reminders.length, channel })
+    if (flags.notify) console.log('通知通道：' + channel)
   }
+  return
+}
+
+/** Execute one system scheduler command; missing binaries become structured failures. */
+function runSchedulerCommand(commandPlan, { timeout = 20000 } = {}) {
+  if (!commandPlan || typeof commandPlan.command !== 'string') return { ok: false, error: 'no-command' }
+  const result = spawnSync(commandPlan.command, commandPlan.args ?? [], { input: commandPlan.stdin, encoding: 'utf8', timeout, windowsHide: true })
+  return {
+    ok: !result.error && result.status === 0,
+    status: result.status,
+    stdout: result.stdout ?? '',
+    stderr: result.stderr ?? '',
+    error: result.error ? (result.error.code ?? result.error.message) : undefined,
+  }
+}
+
+/** Read the current crontab text; read-only and best-effort (never fails a command). */
+async function readCrontabText() {
+  const scheduler = await loadScheduler()
+  if (!scheduler.CRON_PLATFORMS.includes(process.platform)) return { ok: false, unsupported: true }
+  const result = runSchedulerCommand(scheduler.crontabReadCommand())
+  if (result.error) return { ok: false, error: result.error }
+  return { ok: true, text: result.ok ? result.stdout : '' }
+}
+
+/** Record a successful delivery run in ~/.advisers/scheduler/status.json. */
+function recordReminderRun(scheduler, { count, channel }) {
+  try {
+    scheduler.recordSchedulerRun({ homeDir: HOME, at: new Date(), result: 'ok', count, channel, dryRun: false })
+  } catch (error) {
+    console.error('scheduler status not recorded: ' + error.message)
+  }
+}
+
+/**
+ * Apply (or print) a scheduler plan. The library never runs a system command, so
+ * the CLI is the only place that can: dry-run prints the exact argv/stdin and
+ * only `--apply` executes it.
+ */
+async function applySchedulerPlan(plan, { apply = false } = {}) {
+  const commands = Array.isArray(plan.commands) ? plan.commands : []
+  if (!commands.length) {
+    console.log(plan.action === 'uninstall' ? '未发现需要移除的系统调度项。' : '系统调度未变更。')
+    return { applied: false, results: [] }
+  }
+  if (!apply) {
+    console.log('dry-run（默认不执行；加 --apply 才注册/移除系统任务）：')
+    for (const command of commands) {
+      if (command.stdin !== undefined) {
+        console.log('  ' + command.command + ' ' + command.args.join(' ') + ' <<EOF')
+        for (const line of String(command.stdin).split('\n')) console.log('  ' + line)
+        console.log('  EOF')
+      } else {
+        console.log('  ' + command.command + ' ' + command.args.join(' '))
+      }
+    }
+    return { applied: false, results: [] }
+  }
+  const results = []
+  for (const command of commands) {
+    const result = runSchedulerCommand(command)
+    results.push({ command: command.command, args: command.args, ...result })
+    if (!result.ok) {
+      console.error('系统调度命令失败：' + command.command + ' ' + command.args.join(' ') + (result.stderr ? '\n' + result.stderr.trim() : '') + (result.error ? ' (' + result.error + ')' : ''))
+      process.exitCode = 1
+      return { applied: false, results }
+    }
+  }
+  console.log('已执行 ' + commands.length + ' 个系统调度命令。')
+  return { applied: true, results }
 }
 
 async function deliver(args) {
@@ -2715,8 +2997,31 @@ async function syncCommand(args) {
   } else { console.error('usage: advisers sync push|pull|status --dir <sync-dir>'); process.exitCode = 1 }
 }
 
+/** Read-side source v2 compatibility for the JSON evidence view. */
+async function normalizeEvidenceSources(result) {
+  const { normalizeSource } = await loadSource()
+  const record = result?.commitment ?? result?.fact ?? result?.preference
+  if (!record || typeof record !== 'object') return result
+  if (Array.isArray(record.evidence)) {
+    record.evidence = record.evidence.map((item) => (item && typeof item === 'object' && item.source ? { ...item, source: normalizeSource(item.source) ?? item.source } : item))
+  }
+  if (record.source && typeof record.source === 'object') record.source = normalizeSource(record.source) ?? record.source
+  return result
+}
+
 async function printEvidence(args) {
   const { flags, positional } = parseFlags(args)
+  // Offline receipt-pack verification: reads only the given directory. It runs
+  // before ensureHome() so a clean machine needs no ~/.advisers state.
+  if (positional[0] === 'verify') {
+    const dir = positional[1] ?? (typeof flags.dir === 'string' ? flags.dir : undefined)
+    if (!dir) { console.error('usage: advisers evidence verify <dir>'); process.exitCode = 1; return }
+    const { verifyReceiptPackDir } = await loadReceiptVerify()
+    const result = verifyReceiptPackDir(dir)
+    console.log(JSON.stringify(result, null, 2))
+    process.exitCode = result.ok ? 0 : 1
+    return
+  }
   ensureHome()
   const store = dbStore()
   const ledger = loadLedger()
@@ -2731,6 +3036,7 @@ async function printEvidence(args) {
     else { console.error('unknown evidence id prefix (want cm_/fact_/pref_)'); process.exitCode = 1; return }
   } catch (error) { console.error(error.message); process.exitCode = 1; return }
   if (!result || (!result.commitment && !result.fact && !result.preference)) { console.error(`not found: ${id}`); process.exitCode = 1; return }
+  await normalizeEvidenceSources(result)
   if (flags.json) { console.log(JSON.stringify(result, null, 2)); return }
   const label = result.commitment ? `${result.commitment.action}` : result.fact ? `${result.fact.subject} ${result.fact.predicate}` : result.preference?.statement
   console.log(`${id}  ${label ?? ''}`)
@@ -2777,6 +3083,214 @@ async function evidencePack(args) {
     audit: { actor: 'local', action: 'evidence.pack', allowed: true, reason: `${pack.summary?.entryCount ?? 0} entries` },
   })
   console.log(JSON.stringify({ out, files: Object.keys(pack.files), receipt, verification }, null, 2))
+  if (!verification.ok) process.exitCode = 1
+}
+
+/** "Name <mail>" / "mail" / "Name" -> buildReceiptPack recipient input. */
+function parseReceiptRecipient(value) {
+  if (value === undefined || value === null || value === true) return undefined
+  const text = String(value).trim()
+  if (!text) return undefined
+  const bracketed = /^(.*?)\s*<([^<>\s]+@[^<>\s]+)>\s*$/.exec(text)
+  if (bracketed) return { name: bracketed[1].trim() || null, email: bracketed[2] }
+  if (/^[^@\s]+@[^@\s]+$/.test(text)) return { email: text }
+  return { name: text }
+}
+
+/**
+ * Resolve ONE dist submodule of the optional advisers-office peer without
+ * importing its barrel file. Importing the barrel pulls exceljs/pptxgenjs and
+ * cost ~17s on the test host; verify.js/docx.js only need jszip/docx (~100ms).
+ * Tries the workspace build first (repo/dev/tests), then the installed peer via
+ * its resolved entry URL, then the bare package (portable fallback).
+ */
+async function importOfficeSubmodule(name) {
+  try { return await import('../../office/dist/' + name + '.js') } catch {}
+  try {
+    const entry = import.meta.resolve('advisers-office')
+    if (entry.startsWith('file:')) return await import(new URL('./' + name + '.js', entry).href)
+  } catch {}
+  return null
+}
+
+/** Load one operation from a specific office submodule, falling back to the barrel. */
+async function loadOfficeOperation(moduleName, exportName) {
+  const submodule = await importOfficeSubmodule(moduleName)
+  if (typeof submodule?.[exportName] === 'function') return submodule[exportName]
+  const mod = await import('advisers-office')
+  return mod[exportName]
+}
+
+/**
+ * Best-effort structural verification of delivered Office artifacts for the
+ * receipt manifest. The optional advisers-office peer may be absent (portable
+ * install): an empty result means "not recorded", which the pack discloses.
+ */
+async function verifyDeliveryArtifacts(files) {
+  const supported = []
+  for (const file of files) {
+    const ext = extname(file).slice(1).toLowerCase()
+    if (ext === 'docx' || ext === 'xlsx' || ext === 'pptx') supported.push({ file, ext })
+  }
+  if (!supported.length) return []
+  const verifyModule = await importOfficeSubmodule('verify')
+  const verifyOffice = verifyModule?.verifyOffice
+  if (typeof verifyOffice !== 'function') return []
+  const results = []
+  for (const { file, ext } of supported) {
+    const source = 'advisers verify ' + basename(file)
+    try {
+      const result = await verifyOffice(readFileSync(file), ext)
+      results.push({ source, ...result })
+    } catch (error) {
+      results.push({ source, ok: false, errors: [String(error?.message ?? error)] })
+    }
+  }
+  return results
+}
+
+/**
+ * `advisers deliveries --receipt`: build a v1.1 delivery receipt pack.
+ *
+ * The pack copies the delivered artifacts, records their SHA-256 plus the
+ * generator environment / verify results / recipient, and includes the
+ * evidence-pack entries (capped at DEFAULT_MAX_EVIDENCE_ENTRIES unless --all or
+ * --ids narrows/extends it). The old evidence-only path stays on
+ * `deliveries --pack`.
+ */
+async function receiptPack(args) {
+  const { flags } = parseFlags(args)
+  ensureHome()
+  const store = dbStore()
+  if (!store) { console.error('deliveries --receipt requires SQLite store'); process.exitCode = 1; return }
+  const ledger = loadLedger()
+  const denied = egressDeniedReason(ledger.getMatter(activeMatterId(ledger)), 'evidence')
+  if (denied) { console.error(denied); process.exitCode = 1; return }
+  const ids = typeof flags.ids === 'string' ? flags.ids.split(',').map((item) => item.trim()).filter(Boolean) : undefined
+  if (ids && !ids.length) { console.error('--ids is empty'); process.exitCode = 1; return }
+  const deliveryLimit = Math.max(1, Math.min(2000, Number(flags.limit) || 100))
+  // A receipt pack records itself as a delivery for discoverability, but a new
+  // receipt must not recursively copy older receipt packs (unbounded growth).
+  const rows = store.listDeliveries(deliveryLimit).filter((row) => row.tool !== 'receipt-pack')
+  if (!rows.length) {
+    console.error('没有交付记录可生成回执包；先运行 `advisers deliver` / `advisers office` / `advisers template`。')
+    process.exitCode = 1
+    return
+  }
+  const skippedFiles = []
+  const deliveries = []
+  for (const row of rows) {
+    const files = []
+    for (const file of Array.isArray(row.files) ? row.files : []) {
+      try {
+        if (typeof file === 'string' && existsSync(file) && statSync(file).isFile()) files.push(file)
+        else skippedFiles.push(row.id + ': ' + String(file))
+      } catch { skippedFiles.push(row.id + ': ' + String(file)) }
+    }
+    if (!files.length) continue
+    deliveries.push({
+      id: row.id,
+      title: row.title ?? null,
+      tool: row.tool ?? null,
+      createdAt: row.createdAt ?? null,
+      validation: row.validation ?? null,
+      files,
+    })
+  }
+  if (!deliveries.length) {
+    console.error('没有仍存在的交付文件，无法生成回执包（文件可能已被移动或删除）。')
+    if (skippedFiles.length) console.error('缺失：' + skippedFiles.slice(0, 5).join('; '))
+    process.exitCode = 1
+    return
+  }
+  if (skippedFiles.length) console.error('注意：' + skippedFiles.length + ' 个交付文件缺失，已跳过（回执只覆盖仍存在的文件）。')
+
+  const verifyResults = await verifyDeliveryArtifacts(deliveries.flatMap((delivery) => delivery.files))
+  const { buildEvidencePack, buildReceiptPack, EvidencePackLimitError } = await loadEvidence()
+  let evidence
+  try {
+    const targetIds = ids ?? {
+      commitments: ledger.listCommitments().map((row) => row.id),
+      facts: ledger.listFacts().map((row) => row.id),
+      preferences: ledger.listPreferences({ includeCandidates: false }).map((row) => row.id),
+    }
+    evidence = buildEvidencePack({ store, ledger, ids: targetIds, all: flags.all === true })
+  } catch (error) {
+    if (error instanceof EvidencePackLimitError || error?.code === 'EVIDENCE_PACK_TOO_LARGE') {
+      console.error('error: ' + error.message)
+      if (error.hint) console.error('hint: ' + error.hint)
+      process.exitCode = 1
+      return
+    }
+    throw error
+  }
+  const out = typeof flags.out === 'string'
+    ? flags.out
+    : join(HOME, 'receipts', 'receipt-' + new Date().toISOString().replace(/[:.]/g, '-'))
+  // Generate receipt.docx with the office DOCX submodule when available (fast,
+  // nicer table) or the built-in deterministic writer otherwise.
+  const docxModule = await importOfficeSubmodule('docx')
+  const docxBuilder = typeof docxModule?.buildDocx === 'function'
+    ? async (spec) => docxModule.buildDocx(spec)
+    : false
+  let pack
+  try {
+    pack = await buildReceiptPack({
+      deliveries,
+      evidence,
+      verifyResults,
+      docxBuilder,
+      env: {
+        advisersVersion: VERSION,
+        nodeVersion: process.version,
+        platform: process.platform,
+        command: 'advisers deliveries --receipt',
+      },
+      recipient: parseReceiptRecipient(flags.recipient),
+      anchors: [],
+      outDir: out,
+      overwrite: flags.force === true,
+    })
+  } catch (error) {
+    console.error('receipt pack failed: ' + String(error?.message ?? error))
+    process.exitCode = 1
+    return
+  }
+  const summary = pack.summary
+  try {
+    recordDeliveryWithAudit({
+      files: [join(summary.outDir, 'manifest.json'), join(summary.outDir, 'README.txt'), join(summary.outDir, 'SHA256SUMS'), join(summary.outDir, 'receipt.docx')],
+      tool: 'receipt-pack',
+      title: 'delivery receipt pack',
+      validation: 'receipt-pack-v1.1: ' + summary.verifyStatus,
+      audit: { actor: 'local', action: 'receipt.pack', allowed: true, reason: deliveries.length + ' deliveries/' + summary.fileCount + ' files' },
+    })
+  } catch {}
+  const { verifyReceiptPackDir } = await loadReceiptVerify()
+  const verification = verifyReceiptPackDir(summary.outDir)
+  console.log(JSON.stringify({
+    ok: verification.ok,
+    format: summary.format,
+    version: summary.version,
+    out: summary.outDir,
+    replaced: summary.replaced ?? null,
+    deliveryCount: summary.deliveryCount,
+    fileCount: summary.fileCount,
+    verifyStatus: summary.verifyStatus,
+    anchored: summary.anchored,
+    recipient: summary.recipient,
+    manifestDigest: summary.manifestDigest,
+    receiptSha256: summary.receiptSha256,
+    evidence: summary.evidence,
+    files: summary.files,
+    skippedFiles,
+    verification: {
+      ok: verification.ok,
+      errors: verification.errors,
+      warnings: verification.warnings,
+      checksumCount: verification.checksumCount,
+    },
+  }, null, 2))
   if (!verification.ok) process.exitCode = 1
 }
 
@@ -3231,6 +3745,9 @@ async function maybeSourceModifiedNotice(tos) {
 async function tosGate() {
   const isTTY = Boolean(process.stdin.isTTY)
   if (!command) { if (!isTTY) return }
+  // Offline receipt verification must work on a clean machine without a
+  // ~/.advisers consent record (docs/DELIVERY-RECEIPT.md); it reads only <dir>.
+  else if (command === 'evidence' && args[0] === 'verify') return
   else if (TOS_EXEMPT_COMMANDS.has(command) || !KNOWN_COMMANDS.has(command)) return
   const tos = await loadTos()
   const info = tos.currentTos()
@@ -3478,7 +3995,8 @@ if (!command) {
 } else if (command === 'receipt') {
   printReceipt()
 } else if (command === 'deliveries') {
-  if (args.includes('--pack')) await evidencePack(args)
+  if (args.includes('--receipt')) await receiptPack(args)
+  else if (args.includes('--pack')) await evidencePack(args)
   else if (args.includes('--json')) console.log(JSON.stringify(dbStore()?.listDeliveries(100) ?? [], null, 2))
   else printDeliveries()
 } else if (command === 'learn') {
@@ -3514,20 +4032,58 @@ if (!command) {
   const { flags, positional } = parseFlags(args.slice(1))
   if (sub === 'add') {
     const action = positional.join(' ').trim()
-    if (!action || !flags.quote) { console.error('usage: advisers commit add "<action>" --quote "<原话>" [--due ISO] [--debtor user|agent] [--creditor name] [--matter id]'); process.exitCode = 1 }
+    if (!action || !flags.quote) { console.error('usage: advisers commit add "<action>" --quote "<原话>" [--due ISO] [--debtor user|agent] [--creditor name] [--matter id] [--remind-offsets "-1d,-2h"]'); process.exitCode = 1 }
     else {
-      const c = ledger.addCommitment({
-        matterId: activeMatterId(ledger, flags.matter),
-        debtor: flags.debtor ?? 'user',
-        creditor: flags.creditor ?? /(?:发给|给|向|对)([\u4e00-\u9fa5A-Za-z0-9_]{1,12})/.exec(action)?.[1] ?? 'someone',
-        action,
-        dueAt: flags.due,
-        timezone: flags.tz ?? 'Asia/Shanghai',
-        capability: flags.capability ?? 'todo',
-        evidence: [{ sessionId: latestConversationId(), turnId: 'cli', quote: String(flags.quote) }],
-      })
-      saveLedgerWithAudit(ledger, { actor: 'local', action: 'commit.add', allowed: true, reason: c.id })
-      console.log(`${c.id} open ${c.action}${c.dueAt ? ` due ${c.dueAt}` : ''}`)
+      let reminderOffsets
+      let offsetsError
+      try { reminderOffsets = await parseReminderOffsetsFlag(flags) } catch (error) { offsetsError = error }
+      if (offsetsError) { console.error(offsetsError.message); process.exitCode = 1 }
+      else {
+        const c = ledger.addCommitment({
+          matterId: activeMatterId(ledger, flags.matter),
+          debtor: flags.debtor ?? 'user',
+          creditor: flags.creditor ?? /(?:发给|给|向|对)([\u4e00-\u9fa5A-Za-z0-9_]{1,12})/.exec(action)?.[1] ?? 'someone',
+          action,
+          dueAt: flags.due,
+          timezone: flags.tz ?? 'Asia/Shanghai',
+          capability: flags.capability ?? 'todo',
+          evidence: [{ sessionId: latestConversationId(), turnId: 'cli', quote: String(flags.quote) }],
+          ...(reminderOffsets !== undefined ? { reminderOffsets } : {}),
+        })
+        saveLedgerWithAudit(ledger, { actor: 'local', action: 'commit.add', allowed: true, reason: c.id })
+        console.log(`${c.id} open ${c.action}${c.dueAt ? ` due ${c.dueAt}` : ''}`)
+        if (reminderOffsets !== undefined) console.log('reminder-offsets: ' + JSON.stringify(reminderOffsets))
+      }
+    }
+  } else if (sub === 'edit' || sub === 'update') {
+    const id = positional[0]
+    const usage = 'usage: advisers commit edit <id> [--action text] [--due ISO] [--remind-offsets "<list>" | --no-remind]'
+    if (!id) { console.error(usage); process.exitCode = 1 }
+    else {
+      const patch = {}
+      if (typeof flags.action === 'string') patch.action = flags.action
+      if (typeof flags.due === 'string') patch.dueAt = flags.due
+      if (typeof flags.tz === 'string') patch.timezone = flags.tz
+      if (typeof flags.capability === 'string') patch.capability = flags.capability
+      let offsetsError
+      try {
+        if (flags['no-remind'] === true) patch.reminderOffsets = null
+        else {
+          const offsets = await parseReminderOffsetsFlag(flags)
+          if (offsets !== undefined) patch.reminderOffsets = offsets
+        }
+      } catch (error) { offsetsError = error }
+      if (offsetsError) { console.error(offsetsError.message); process.exitCode = 1 }
+      else if (!Object.keys(patch).length) { console.error(usage); process.exitCode = 1 }
+      else {
+        try {
+          const c = ledger.updateCommitment(id, patch)
+          saveLedgerWithAudit(ledger, { actor: 'local', action: 'commit.update', allowed: true, reason: id })
+          console.log(`updated: ${c.id}`)
+          if ('reminderOffsets' in patch) console.log('reminder-offsets: ' + JSON.stringify(c.reminderOffsets ?? []))
+          if (patch.dueAt !== undefined) console.log('due: ' + (c.dueAt ?? '未定'))
+        } catch (error) { console.error(error.message); process.exitCode = 1 }
+      }
     }
   } else if (sub === 'ls') printCommitments(ledger, flags.json)
   else if (sub === 'snooze') {
@@ -3554,7 +4110,7 @@ if (!command) {
         console.log(`done: ${id}`)
       }
     }
-  } else { console.error('usage: advisers commit add|ls|done'); process.exitCode = 1 }
+  } else { console.error('usage: advisers commit add|edit|ls|done|snooze'); process.exitCode = 1 }
 } else if (command === 'diff') {
   const result = await diffLatest({ cwd: process.cwd(), backupDir: join(HOME, 'undo') })
   console.log(result.ok ? result.diff : `diff failed: ${result.error}`)
@@ -3601,7 +4157,7 @@ if (!command) {
 } else if (command === 'pet-brief') {
   await petBrief(args)
 } else if (command === 'today') {
-  today(loadLedger(), { calendar: args.includes('--calendar'), sources: args.includes('--sources') })
+  await today(loadLedger(), { calendar: args.includes('--calendar'), sources: args.includes('--sources'), json: args.includes('--json') })
 } else if (command === 'tick') {
   tick(loadLedger(), args.includes('--json'))
 } else if (command === 'ui') {
@@ -3624,9 +4180,12 @@ if (!command) {
 } else if (command === 'memory') {
   const ledger = loadLedger()
   if (args[0] === 'candidates') {
-    const rows = dbStore()?.listCandidates(args[1] === '--all' ? 'all' : 'pending') ?? []
-    if (!rows.length) console.log('（没有待确认记忆）')
-    for (const c of rows) console.log(`${c.id}\t${c.kind}\t${JSON.stringify(c.payload)}\t${c.status}`)
+    const rows = dbStore()?.listCandidates(args.includes('--all') ? 'all' : 'pending') ?? []
+    if (args.includes('--json')) console.log(JSON.stringify(rows, null, 2))
+    else {
+      if (!rows.length) console.log('（没有待确认记忆）')
+      for (const c of rows) console.log(`${c.id}\t${c.kind}\t${JSON.stringify(c.payload)}\t${c.status}`)
+    }
   } else if (args[0] === 'accept') {
     const store = dbStore()
     const candidate = store?.getCandidate(args[1])
@@ -3773,23 +4332,27 @@ if (!command) {
     }
   }
 } else if (command === 'verify') {
-  const file = args[0]
-  if (!file) { console.error('usage: advisers verify <file>'); process.exitCode = 1 }
+  const { flags, positional } = parseFlags(args)
+  const file = positional[0]
+  if (!file) { console.error('usage: advisers verify <file> [--json] [--content]'); process.exitCode = 1 }
   else {
     const ext = file.split('.').pop()?.toLowerCase()
     if (!['docx', 'xlsx', 'pptx'].includes(ext)) { console.error('verify supports docx/xlsx/pptx'); process.exitCode = 1 }
     else {
-
-      let mod
-      if (process.env.ADVISERS_OFFICE_LOCAL === '1') mod = await import('../../office/dist/index.js')
-      else { try { mod = await import('advisers-office') } catch { mod = await import('../../office/dist/index.js') } }
-      const result = await mod.verifyOffice(readFileSync(file), ext)
-      if (args.includes('--content')) {
-        const content = await mod.checkOffice(readFileSync(file), ext)
-        console.log(JSON.stringify({ structure: result, content }, null, 2))
-        if (!content.ok) process.exitCode = 1
-      } else console.log(JSON.stringify(result, null, 2))
-      if (!result.ok) process.exitCode = 1
+      try {
+        const verifyOffice = await loadOfficeOperation('verify', 'verifyOffice')
+        const result = await verifyOffice(readFileSync(file), ext)
+        if (flags.content === true) {
+          const checkOffice = await loadOfficeOperation('check', 'checkOffice')
+          const content = await checkOffice(readFileSync(file), ext)
+          console.log(JSON.stringify({ structure: result, content }, null, 2))
+          if (!content.ok) process.exitCode = 1
+        } else console.log(JSON.stringify(result, null, 2))
+        if (!result.ok) process.exitCode = 1
+      } catch (error) {
+        console.error(`verify failed: ${error.message}`)
+        process.exitCode = 1
+      }
     }
   }
 } else if (command === 'office') {

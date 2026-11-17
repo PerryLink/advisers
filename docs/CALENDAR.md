@@ -10,13 +10,17 @@ event, as in every other read-only import.
 ```sh
 advisers calendar import --ics cal.ics   # read-only import; prints "N events"
 advisers today --calendar                # local events for today (Asia/Shanghai)
+advisers today --json --calendar         # same, machine-readable (see CLI-JSON.md)
 ```
 
 - `calendar import` parses the file with `importers.parseIcs()` and upserts each
   event by `UID`; re-importing the same file updates the stored row instead of
   duplicating it.
-- `today --calendar` is a local read of `calendar_events`; it never contacts a
-  calendar server.
+- `today --calendar` expands each stored row with `expandRrule(row, { from:
+  today, to: today })` (read-only, bounded) and shows the occurrences that start
+  today: timed events as `HH:MM`, all-day events as `全天`, and instances that
+  came from an expanded RRULE with a `（循环）` marker. It never contacts a
+  calendar server and never writes a row.
 - Times are displayed in **Asia/Shanghai (UTC+08:00, no DST)**. The parser keeps
   the `.ics` wall time literally and exposes `TZID` as a marker; this package
   does not ship a time-zone database, so a non-Shanghai `TZID` is not converted.
@@ -84,12 +88,24 @@ real data.
 and the internal day/week scan is capped, so a hostile rule such as
 `FREQ=DAILY;COUNT=100000` over a ten-year window costs a bounded amount of work.
 
-### Status / integration
+### CLI integration
 
-`lib/ical.js` ships the expander with its test suite
-(`test/ical.test.js`). Passing the expanded instances to `today --calendar`
-(and appending a "重复" marker) is the CLI display follow-up; as of 2026-11-17
-the command still matches only the DTSTART day.
+`lib/ical.js` ships the expander with its test suite (`test/ical.test.js`);
+`today --calendar` (and `today --json --calendar`) is now wired to it:
+
+- Every stored `calendar_events` row is expanded for the **current local day**
+  window. Non-recurring rows are returned only when they start today; weekly /
+  daily rows return the occurrence that starts today, so a weekly meeting no
+  longer appears only on its DTSTART day.
+- `allDay` rows print `全天`; an expanded occurrence prints `（循环）` after the
+  summary. Unsupported/malformed rules fall back to the single stored DTSTART
+  occurrence instead of guessing dates.
+- Display order is chronological (all-day date strings sort before timed
+  `+08:00` stamps); the header day, `今天：…` counts and the plain
+  `advisers today` output are unchanged.
+- The JSON view (`today --json --calendar`) exposes
+  `calendar: [{uid,summary,startsAt,endsAt,allDay,recurring,location,rrule}]`
+  with the same expansion.
 
 ## Storage and provenance
 
