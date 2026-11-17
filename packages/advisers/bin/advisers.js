@@ -283,18 +283,76 @@ function openStore({ checkIntegrity = false } = {}) {
   return activeStore
 }
 
-function loadLedger() {
+/**
+ * P1-2 (0.2.2): per-table partial snapshot loaders.
+ *
+ * Every ledger command used to pay for the full 9-table store.load() -- 488ms
+ * at a 50k-row ledger and 1.2s at 100k in the 2026-11-17 performance audit
+ * round 2 -- even when it read one table or no rows at all. A read command now
+ * passes only the tables it uses (e.g. today/who load open commitments only)
+ * and the store records which rows were read so a later save() (tick waking a
+ * snoozed commitment) never deletes rows of tables that were not loaded.
+ */
+const LEDGER_PART_LOADERS = {
+  matters: (store, options) => store.loadMatters(options),
+  facts: (store, options) => store.loadFacts(options),
+  commitments: (store, options) => store.loadCommitments(options),
+  preferences: (store, options) => store.loadPreferences(options),
+  links: (store, options) => store.loadLinks(options),
+  updates: (store, options) => store.loadUpdates(options),
+  routines: (store, options) => store.loadRoutines(options),
+  routinePatches: (store, options) => store.loadRoutinePatches(options),
+  routes: (store) => store.loadRoutes(),
+}
+
+/**
+ * Open the SQLite store for a ledger read, after honouring the legacy
+ * state.json -> SQLite migration and the sealed-vault/corrupt-DB fail-fast
+ * paths. Exits the process (with the documented hints) instead of ever
+ * silently falling back to the JSON store.
+ */
+function openLedgerStore() {
   ensureHome()
-  if (mode === 'json') return loadJson()
   const sealed = vaultSealedPath()
   if (sealed) throw vaultSealedError(sealed)
   try {
     if (!existsSync(DB) && existsSync(STATE)) {
       const ledger = loadJson()
       openStore().save(ledger.toJSON())
-      return ledger
     }
-    return Ledger.fromJSON(openStore().load(), LOCAL_PORTS)
+    return openStore()
+  } catch (error) {
+    const hint = storeFailureHint(error)
+    if (hint) {
+      console.error(hint)
+      process.exit(1)
+    }
+    console.error(`sqlite unavailable: ${error.message}`)
+    console.error('Run `advisers doctor`; refusing to silently switch to JSON (would split the ledger).')
+    process.exit(1)
+  }
+}
+
+/**
+ * Load the ledger. No arguments: the full snapshot (write commands and
+ * anything that may save keep using this). With a table map such as
+ * `{ commitments: { status: 'open' } }` only those tables are read, mapped by
+ * the same row mappers, and the returned Ledger treats every omitted table as
+ * empty (Ledger.fromParts).
+ */
+function loadLedger(parts = null) {
+  ensureHome()
+  if (mode === 'json') return loadJson()
+  const store = openLedgerStore()
+  try {
+    if (!parts) return Ledger.fromJSON(store.load(), LOCAL_PORTS)
+    const snapshot = { version: 1 }
+    for (const [table, options] of Object.entries(parts)) {
+      const loader = LEDGER_PART_LOADERS[table]
+      if (!loader) throw new Error(`unknown ledger table for partial load: ${table}`)
+      snapshot[table] = loader(store, options ?? {})
+    }
+    return Ledger.fromParts(snapshot, LOCAL_PORTS)
   } catch (error) {
     const hint = storeFailureHint(error)
     if (hint) {
@@ -471,7 +529,8 @@ function printReceipt() {
   if (!store) { console.log('receipt requires SQLite store'); return }
   const delivery = store.listDeliveries(1)[0]
   if (!delivery) { console.log('还没有交付记录；先运行 `advisers office` / `advisers template`。'); return }
-  const ledger = loadLedger()
+  // P1-2 (0.2.2): only this delivery's matter and its open commitments are read.
+  const ledger = loadLedger({ commitments: { status: 'open', matterId: delivery.matterId } })
   const open = ledger.openCommitments(delivery.matterId)
   console.log(`回执 ${delivery.id}`)
   console.log(`时间：${delivery.createdAt}`)
@@ -498,8 +557,9 @@ function printDeliveries() {
     console.log('no deliveries yet')
     return
   }
+  // P1-2 (0.2.2): only matter titles are needed for the fallback label.
   let matters = []
-  try { matters = loadLedger().listMatters() } catch {}
+  try { matters = loadLedger({ matters: {} }).listMatters() } catch {}
   const title = new Map(matters.map((m) => [m.id, m.title]))
   for (const row of rows) {
     console.log(`${row.createdAt.slice(0, 19)}  ${row.title ?? title.get(row.matterId) ?? row.matterId}  [${row.tool ?? 'tool'}] ${row.validation ?? ''}`)
@@ -1434,7 +1494,6 @@ function init() {
 }
 
 function printStatus(asJson = false) {
-  const ledger = loadLedger()
   const data = {
     version: VERSION,
     node: process.version,
@@ -1442,19 +1501,32 @@ function printStatus(asJson = false) {
     home: HOME,
     store: mode === 'sqlite' ? { type: 'sqlite', path: DB } : { type: mode, path: STATE },
     model: modelLabel(),
-    matters: ledger.listMatters().length,
-    prefs: ledger.listPreferences().length,
-    routines: ledger.listRoutines().length,
-    links: ledger.listLinks().length,
     soul: existsSync(SOUL) ? 'present' : 'not initialized',
   }
-  try {
-    const store = dbStore()
-    data.sessions = store?.listSessions(100).length ?? 0
-    data.deliveries = store?.countDeliveries() ?? 0
-    const usage = store?.sumModelUsage?.()
-    if (usage?.calls) data.modelUsage = usage
-  } catch {}
+  if (mode === 'json') {
+    // Legacy JSON store: the snapshot is small, keep the historical behaviour.
+    const ledger = loadLedger()
+    data.matters = ledger.listMatters().length
+    data.prefs = ledger.listPreferences().length
+    data.routines = ledger.listRoutines().length
+    data.links = ledger.listLinks().length
+    data.sessions = 0
+    data.deliveries = 0
+  } else {
+    // P1-2 (0.2.2): COUNT-only status. The old path loaded all 9 tables just to
+    // count four of them (664ms / 352MB RSS at 50k rows in the round-2 audit).
+    // listMatters()/listPreferences()/listRoutines()/listLinks() filter status,
+    // so the counts replicate those filters exactly.
+    const store = openLedgerStore()
+    data.matters = store.countMatters({ status: 'active' })
+    data.prefs = store.countPreferences({ status: 'confirmed' })
+    data.routines = store.countRoutines()
+    data.links = store.countLinks({ excludeRejected: true })
+    data.sessions = store.countSessions()
+    data.deliveries = store.countDeliveries()
+    const usage = store.sumModelUsage()
+    if (usage.calls) data.modelUsage = usage
+  }
   if (asJson) { console.log(JSON.stringify(data, null, 2)); return }
   console.log(`version   ${data.version}`)
   console.log(`node      ${data.node}`)
@@ -4807,13 +4879,16 @@ if (!command) {
     else console.log(`${sub}: ${id}`)
   } else { console.error('usage: advisers nudge list|done|ignore'); process.exitCode = 1 }
 } else if (command === 'risks') {
-  risks(loadLedger())
+  risks(loadLedger({ commitments: { status: 'open' } }))
 } else if (command === 'pet-brief') {
   await petBrief(args)
 } else if (command === 'today') {
-  await today(loadLedger(), { calendar: args.includes('--calendar'), sources: args.includes('--sources'), json: args.includes('--json') })
+  // P1-2 (0.2.2): today only reads open commitments; --sources reports source
+  // rows for every commitment, so that flag keeps the wider load.
+  const sources = args.includes('--sources')
+  await today(loadLedger({ commitments: sources ? {} : { status: 'open' } }), { calendar: args.includes('--calendar'), sources, json: args.includes('--json') })
 } else if (command === 'tick') {
-  tick(loadLedger(), args.includes('--json'))
+  tick(loadLedger({ commitments: {} }), args.includes('--json'))
 } else if (command === 'ui') {
   await ui(args)
 } else if (command === 'remind') {
@@ -4821,7 +4896,7 @@ if (!command) {
 } else if (command === 'calendar') {
   await calendarImport(args.slice(1))
 } else if (command === 'who') {
-  const open = loadLedger().openCommitments()
+  const open = loadLedger({ commitments: { status: 'open' } }).openCommitments()
   const mine = open.filter((c) => c.debtor === 'user' || c.debtor === 'agent')
   const waiting = open.filter((c) => c.debtor === 'third' || c.debtor.startsWith('third:'))
   if (args.includes('--json')) { console.log(JSON.stringify({ mine, waiting }, null, 2)); }
@@ -4891,7 +4966,7 @@ if (!command) {
     deliveries: store?.listDeliveries(100) ?? [],
   }))
 } else if (command === 'week') {
-  printWeek(loadLedger())
+  printWeek(loadLedger({ commitments: {} }))
 } else if (command === 'prefs') {
   printPreferences()
 } else if (command === 'privacy') {

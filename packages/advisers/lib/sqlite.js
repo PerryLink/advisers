@@ -521,12 +521,103 @@ const parse = (v, fallback = []) => {
   try { return JSON.parse(v) } catch { return fallback }
 }
 
+// ---------------------------------------------------------------------------
+// Ledger row mappers + table registry (P1-2, 0.2.2).
+//
+// Before this, every ledger command paid for store.load() -- the whole 9-table
+// snapshot -- even when it needed one table or a count: 488ms at a 50k-row
+// ledger (1.2s at 100k) in the 2026-11-17 performance audit round 2. The
+// mappers are shared by load() and the per-table load*/count* helpers so a
+// partial snapshot returns byte-identical row objects to a full snapshot; a
+// partial snapshot is safe to hand to Ledger.fromJSON/fromParts because the
+// core Ledger treats missing tables as empty.
+// ---------------------------------------------------------------------------
+const mapMatterRow = (r) => ({
+  id: r.id, title: r.title, status: r.status, domain: r.domain, secrecy: r.secrecy,
+  summary: r.summary ?? undefined, participants: parse(r.participants), deadlines: parse(r.deadlines),
+  openQuestions: parse(r.open_questions), createdAt: r.created_at, updatedAt: r.updated_at,
+})
+
+const mapFactRow = (r) => ({
+  id: r.id, matterId: r.matter_id ?? undefined, subject: r.subject, predicate: r.predicate,
+  object: r.object, recordedAt: r.recorded_at, expiredAt: r.expired_at ?? undefined,
+  authority: r.authority, confidence: r.confidence,
+  source: r.source ? parse(r.source, undefined) : undefined,
+  evidence: r.evidence ? parse(r.evidence, undefined) : undefined,
+  status: r.status, validFrom: r.valid_from ?? undefined, validTo: r.valid_to ?? undefined,
+  supersedes: r.supersedes ?? undefined, supersededBy: r.superseded_by ?? undefined,
+  shadowedBy: r.shadowed_by ?? undefined, lastSeenAt: r.last_seen_at ?? undefined,
+  deletedAt: r.deleted_at ?? undefined, deletedReason: r.deleted_reason ?? undefined,
+})
+
+const mapCommitmentRow = (r) => {
+  // NULL means "never customised": keep the field absent so old snapshots
+  // and the pre-0.2.0 commitment shape stay identical. Corrupt or
+  // non-array JSON degrades to absent rather than breaking the ledger.
+  const parsedOffsets = r.reminder_offsets == null ? null : parse(r.reminder_offsets, null)
+  const reminderOffsets = Array.isArray(parsedOffsets) ? parsedOffsets : undefined
+  return {
+    id: r.id, matterId: r.matter_id, debtor: r.debtor, creditor: r.creditor, action: r.action,
+    dueAt: r.due_at ?? undefined, timezone: r.timezone, status: r.status,
+    evidence: parse(r.evidence), capability: r.capability, doneAt: r.done_at ?? undefined,
+    ...(reminderOffsets === undefined ? {} : { reminderOffsets }),
+  }
+}
+
+const mapPreferenceRow = (r) => ({
+  id: r.id, kind: r.kind, statement: r.statement, scope: parse(r.scope, {}),
+  source: parse(r.source, {}), evidence: parse(r.evidence), confidence: r.confidence,
+  status: r.status, validFrom: r.valid_from, lastConfirmed: r.last_confirmed ?? undefined,
+  expiresAt: r.expires_at ?? undefined, priority: r.priority,
+})
+
+const mapLinkRow = (r) => ({
+  id: r.id, fromMatter: r.from_matter, toMatter: r.to_matter, type: r.type,
+  confidence: r.confidence, evidence: parse(r.evidence), status: r.status,
+  createdBy: r.created_by, createdAt: r.created_at,
+})
+
+const mapUpdateRow = (r) => ({
+  id: r.id, sourceMatter: r.source_matter, targetMatter: r.target_matter, change: r.change,
+  status: r.status, createdAt: r.created_at, rollback: r.rollback ?? undefined,
+})
+
+const mapRoutineRow = (r) => ({
+  id: r.id, name: r.name, description: r.description, trigger: parse(r.trigger),
+  steps: parse(r.steps), preferences: parse(r.preferences), pitfalls: parse(r.pitfalls),
+  verification: parse(r.verification), scope: r.scope ?? undefined, version: r.version,
+  status: r.status, createdBy: r.created_by, createdAt: r.created_at, updatedAt: r.updated_at,
+})
+
+const mapRoutinePatchRow = (r) => ({
+  id: r.id, routineId: r.routine_id, baseVersion: r.base_version,
+  changes: parse(r.changes, {}), before: parse(r.before, {}), diff: r.diff, status: r.status, createdAt: r.created_at,
+})
+
+const mapTurnRow = (r) => ({
+  id: r.id, conversationId: r.conversation_id, seq: r.seq, role: r.role, content: r.content, createdAt: r.created_at,
+})
+
+/** Every table Ledger.fromJSON understands: raw SQL table + row mapper. */
+const LEDGER_TABLE_LOADERS = {
+  matters: { table: 'matters', map: mapMatterRow },
+  facts: { table: 'facts', map: mapFactRow },
+  commitments: { table: 'commitments', map: mapCommitmentRow },
+  preferences: { table: 'preferences', map: mapPreferenceRow },
+  links: { table: 'links', map: mapLinkRow },
+  updates: { table: 'updates', map: mapUpdateRow },
+  routines: { table: 'routines', map: mapRoutineRow },
+  routinePatches: { table: 'routine_patches', map: mapRoutinePatchRow },
+  routes: { table: 'routes', routes: true },
+}
+
 export class SqliteStore {
   constructor(path, { readOnly = false, checkIntegrity = false, busyTimeoutMs = Number(process.env.ADVISERS_SQLITE_BUSY_TIMEOUT_MS) || DEFAULT_BUSY_TIMEOUT_MS } = {}) {
     this.path = path
     this.busyTimeoutMs = busyTimeoutMs
     this._transactionDepth = 0
     this._baselineIds = null
+    this._fullLoad = false
     // P2-2 (0.2.1): an existing 0-byte file is treated as corrupt instead of a
     // brand-new database. Before this, SQLite turned it into an empty schema and
     // every command reported "no data" while silently rebuilding the ledger.
@@ -1021,15 +1112,35 @@ CREATE TABLE IF NOT EXISTS task_runs (
     return id
   }
 
+  /**
+   * Token totals for 'advisers status' / 'advisers receipt'.
+   * P1-2: aggregate in SQLite instead of materialising every model_calls row
+   * (the old reduce loaded the whole table just to sum five columns).
+   */
   sumModelUsage({ since } = {}) {
-    const rows = since
-      ? this.db.prepare('SELECT * FROM model_calls WHERE created_at >= ?').all(since)
-      : this.db.prepare('SELECT * FROM model_calls').all()
-    return rows.reduce((acc, r) => {
-      acc.calls += 1
-      for (const key of ['prompt_tokens', 'completion_tokens', 'reasoning_tokens', 'cached_tokens', 'total_tokens']) acc[key] += Number(r[key] || 0)
-      return acc
-    }, { calls: 0, prompt_tokens: 0, completion_tokens: 0, reasoning_tokens: 0, cached_tokens: 0, total_tokens: 0 })
+    const row = since
+      ? this.db.prepare(`SELECT COUNT(*) AS calls,
+          COALESCE(SUM(prompt_tokens), 0) AS prompt_tokens,
+          COALESCE(SUM(completion_tokens), 0) AS completion_tokens,
+          COALESCE(SUM(reasoning_tokens), 0) AS reasoning_tokens,
+          COALESCE(SUM(cached_tokens), 0) AS cached_tokens,
+          COALESCE(SUM(total_tokens), 0) AS total_tokens
+        FROM model_calls WHERE created_at >= ?`).get(since)
+      : this.db.prepare(`SELECT COUNT(*) AS calls,
+          COALESCE(SUM(prompt_tokens), 0) AS prompt_tokens,
+          COALESCE(SUM(completion_tokens), 0) AS completion_tokens,
+          COALESCE(SUM(reasoning_tokens), 0) AS reasoning_tokens,
+          COALESCE(SUM(cached_tokens), 0) AS cached_tokens,
+          COALESCE(SUM(total_tokens), 0) AS total_tokens
+        FROM model_calls`).get()
+    return {
+      calls: Number(row?.calls ?? 0),
+      prompt_tokens: Number(row?.prompt_tokens ?? 0),
+      completion_tokens: Number(row?.completion_tokens ?? 0),
+      reasoning_tokens: Number(row?.reasoning_tokens ?? 0),
+      cached_tokens: Number(row?.cached_tokens ?? 0),
+      total_tokens: Number(row?.total_tokens ?? 0),
+    }
   }
 
   proposeCandidate({ kind, payload, evidence }) {
@@ -1204,70 +1315,219 @@ CREATE TABLE IF NOT EXISTS task_runs (
     }
   }
 
-  load() {
-    const all = (sql) => this.db.prepare(sql).all()
-    const snapshot = {
-      version: 1,
-      matters: all('SELECT * FROM matters').map((r) => ({
-        id: r.id, title: r.title, status: r.status, domain: r.domain, secrecy: r.secrecy,
-        summary: r.summary ?? undefined, participants: parse(r.participants), deadlines: parse(r.deadlines),
-        openQuestions: parse(r.open_questions), createdAt: r.created_at, updatedAt: r.updated_at,
-      })),
-      facts: all('SELECT * FROM facts').map((r) => ({
-        id: r.id, matterId: r.matter_id ?? undefined, subject: r.subject, predicate: r.predicate,
-        object: r.object, recordedAt: r.recorded_at, expiredAt: r.expired_at ?? undefined,
-        authority: r.authority, confidence: r.confidence,
-        source: r.source ? parse(r.source, undefined) : undefined,
-        evidence: r.evidence ? parse(r.evidence, undefined) : undefined,
-        status: r.status, validFrom: r.valid_from ?? undefined, validTo: r.valid_to ?? undefined,
-        supersedes: r.supersedes ?? undefined, supersededBy: r.superseded_by ?? undefined,
-        shadowedBy: r.shadowed_by ?? undefined, lastSeenAt: r.last_seen_at ?? undefined,
-        deletedAt: r.deleted_at ?? undefined, deletedReason: r.deleted_reason ?? undefined,
-      })),
-      commitments: all('SELECT * FROM commitments').map((r) => {
-        // NULL means "never customised": keep the field absent so old snapshots
-        // and the pre-0.2.0 commitment shape stay identical. Corrupt or
-        // non-array JSON degrades to absent rather than breaking the ledger.
-        const parsedOffsets = r.reminder_offsets == null ? null : parse(r.reminder_offsets, null)
-        const reminderOffsets = Array.isArray(parsedOffsets) ? parsedOffsets : undefined
-        return {
-          id: r.id, matterId: r.matter_id, debtor: r.debtor, creditor: r.creditor, action: r.action,
-          dueAt: r.due_at ?? undefined, timezone: r.timezone, status: r.status,
-          evidence: parse(r.evidence), capability: r.capability, doneAt: r.done_at ?? undefined,
-          ...(reminderOffsets === undefined ? {} : { reminderOffsets }),
-        }
-      }),
-      preferences: all('SELECT * FROM preferences').map((r) => ({
-        id: r.id, kind: r.kind, statement: r.statement, scope: parse(r.scope, {}),
-        source: parse(r.source, {}), evidence: parse(r.evidence), confidence: r.confidence,
-        status: r.status, validFrom: r.valid_from, lastConfirmed: r.last_confirmed ?? undefined,
-        expiresAt: r.expires_at ?? undefined, priority: r.priority,
-      })),
-      links: all('SELECT * FROM links').map((r) => ({
-        id: r.id, fromMatter: r.from_matter, toMatter: r.to_matter, type: r.type,
-        confidence: r.confidence, evidence: parse(r.evidence), status: r.status,
-        createdBy: r.created_by, createdAt: r.created_at,
-      })),
-      updates: all('SELECT * FROM updates').map((r) => ({
-        id: r.id, sourceMatter: r.source_matter, targetMatter: r.target_matter, change: r.change,
-        status: r.status, createdAt: r.created_at, rollback: r.rollback ?? undefined,
-      })),
-      routines: all('SELECT * FROM routines').map((r) => ({
-        id: r.id, name: r.name, description: r.description, trigger: parse(r.trigger),
-        steps: parse(r.steps), preferences: parse(r.preferences), pitfalls: parse(r.pitfalls),
-        verification: parse(r.verification), scope: r.scope ?? undefined, version: r.version,
-        status: r.status, createdBy: r.created_by, createdAt: r.created_at, updatedAt: r.updated_at,
-      })),
-      routinePatches: all('SELECT * FROM routine_patches').map((r) => ({
-        id: r.id, routineId: r.routine_id, baseVersion: r.base_version,
-        changes: parse(r.changes, {}), before: parse(r.before, {}), diff: r.diff, status: r.status, createdAt: r.created_at,
-      })),
-      routes: Object.fromEntries(all('SELECT * FROM routes').map((r) => [r.key, r.matter_id])),
+  // -------------------------------------------------------------------------
+  // Partial loading (P1-2, 0.2.2)
+  //
+  // Read commands no longer pay for the whole 9-table snapshot: they call the
+  // per-table loaders below for the tables they actually use (today/who -> open
+  // commitments, week/tick -> commitments, status -> count* only) and build a
+  // partial snapshot for Ledger.fromParts. Every loader also records the row
+  // ids it saw on this connection, so a later save() keeps the P1-1 merge
+  // semantics: rows a loader never read are never deleted, and a partially
+  // loaded ledger can be saved without truncating the tables it did not touch
+  // (this is what lets 'tick' persist a snooze wake-up without touching facts).
+  // -------------------------------------------------------------------------
+
+  _selectRows(table, where = [], params = [], suffix = '') {
+    const sql = 'SELECT * FROM ' + table + (where.length ? ' WHERE ' + where.join(' AND ') : '') + suffix
+    return this.db.prepare(sql).all(...params)
+  }
+
+  _countRows(table, where = [], params = []) {
+    const sql = 'SELECT COUNT(*) AS n FROM ' + table + (where.length ? ' WHERE ' + where.join(' AND ') : '')
+    return Number(this.db.prepare(sql).get(...params)?.n ?? 0)
+  }
+
+  /** Record the row ids this connection loaded so save() only deletes those. */
+  _markLoadedRows(table, rows) {
+    // A partial load after a full load() starts a fresh partial baseline: a
+    // snapshot built from the partial ledger does not contain the tables the
+    // full load read, and keeping the full baseline would let save() delete
+    // rows that the partial snapshot simply never had. Conservative rule: a
+    // save may only delete rows a loader on this connection actually read.
+    if (this._fullLoad) {
+      this._baselineIds = idsFor({})
+      this._fullLoad = false
     }
+    if (!this._baselineIds) this._baselineIds = idsFor({})
+    this._baselineIds[table] = table === 'routes'
+      ? new Set(Object.keys(rows ?? {}))
+      : new Set((rows ?? []).map((row) => row?.id).filter((id) => id != null))
+  }
+
+  /** Load one whole ledger table by its Ledger.fromJSON table name. */
+  _loadTable(table) {
+    const definition = LEDGER_TABLE_LOADERS[table]
+    if (!definition) throw new Error('unknown ledger table: ' + table)
+    if (definition.routes) return this.loadRoutes()
+    const rows = this._selectRows(definition.table).map(definition.map)
+    this._markLoadedRows(table, rows)
+    return rows
+  }
+
+  /** Snapshot of a subset of ledger tables (default: all of them). */
+  loadSnapshot(tables = null) {
+    const snapshot = { version: 1 }
+    for (const table of tables ?? Object.keys(LEDGER_TABLE_LOADERS)) snapshot[table] = this._loadTable(table)
+    return snapshot
+  }
+
+  loadMatters({ status } = {}) {
+    const rows = status === undefined
+      ? this._selectRows('matters', [], [], ' ORDER BY rowid')
+      : this._selectRows('matters', ['status = ?'], [status], ' ORDER BY rowid')
+    const matters = rows.map(mapMatterRow)
+    this._markLoadedRows('matters', matters)
+    return matters
+  }
+
+  loadFacts({ status, matterId, includeDeleted } = {}) {
+    const where = []
+    const params = []
+    if (status !== undefined) { where.push('status = ?'); params.push(status) }
+    if (matterId !== undefined) { where.push('matter_id = ?'); params.push(matterId) }
+    if (includeDeleted === false) where.push('deleted_at IS NULL')
+    const facts = this._selectRows('facts', where, params, ' ORDER BY rowid').map(mapFactRow)
+    this._markLoadedRows('facts', facts)
+    return facts
+  }
+
+  loadCommitments({ status, matterId } = {}) {
+    const where = []
+    const params = []
+    if (status !== undefined) { where.push('status = ?'); params.push(status) }
+    if (matterId !== undefined) { where.push('matter_id = ?'); params.push(matterId) }
+    const commitments = this._selectRows('commitments', where, params, ' ORDER BY rowid').map(mapCommitmentRow)
+    this._markLoadedRows('commitments', commitments)
+    return commitments
+  }
+
+  loadPreferences({ status, kind } = {}) {
+    const where = []
+    const params = []
+    if (status !== undefined) { where.push('status = ?'); params.push(status) }
+    if (kind !== undefined) { where.push('kind = ?'); params.push(kind) }
+    const preferences = this._selectRows('preferences', where, params, ' ORDER BY rowid').map(mapPreferenceRow)
+    this._markLoadedRows('preferences', preferences)
+    return preferences
+  }
+
+  loadLinks({ status, excludeRejected } = {}) {
+    const where = []
+    const params = []
+    if (status !== undefined) { where.push('status = ?'); params.push(status) }
+    if (excludeRejected === true) where.push("status != 'rejected'")
+    const links = this._selectRows('links', where, params, ' ORDER BY rowid').map(mapLinkRow)
+    this._markLoadedRows('links', links)
+    return links
+  }
+
+  loadUpdates({ status } = {}) {
+    const rows = status === undefined
+      ? this._selectRows('updates', [], [], ' ORDER BY rowid')
+      : this._selectRows('updates', ['status = ?'], [status], ' ORDER BY rowid')
+    const updates = rows.map(mapUpdateRow)
+    this._markLoadedRows('updates', updates)
+    return updates
+  }
+
+  loadRoutines({ status } = {}) {
+    const rows = status === undefined
+      ? this._selectRows('routines', [], [], ' ORDER BY rowid')
+      : this._selectRows('routines', ['status = ?'], [status], ' ORDER BY rowid')
+    const routines = rows.map(mapRoutineRow)
+    this._markLoadedRows('routines', routines)
+    return routines
+  }
+
+  loadRoutinePatches({ status } = {}) {
+    const rows = status === undefined
+      ? this._selectRows('routine_patches', [], [], ' ORDER BY rowid')
+      : this._selectRows('routine_patches', ['status = ?'], [status], ' ORDER BY rowid')
+    const routinePatches = rows.map(mapRoutinePatchRow)
+    this._markLoadedRows('routinePatches', routinePatches)
+    return routinePatches
+  }
+
+  loadRoutes() {
+    const routes = Object.fromEntries(this._selectRows('routes', [], [], ' ORDER BY rowid').map((r) => [r.key, r.matter_id]))
+    this._markLoadedRows('routes', routes)
+    return routes
+  }
+
+  /**
+   * Latest turns for one conversation (same window and order as listTurns),
+   * or every turn in seq order when no conversation/limit is given.
+   */
+  loadTurns({ conversationId, limit } = {}) {
+    const where = []
+    const params = []
+    if (conversationId !== undefined) { where.push('conversation_id = ?'); params.push(conversationId) }
+    if (limit === undefined) return this._selectRows('turns', where, params, ' ORDER BY seq ASC').map(mapTurnRow)
+    const rows = this._selectRows('turns', where, params.concat([limit]), ' ORDER BY seq DESC LIMIT ?')
+    return rows.reverse().map(mapTurnRow)
+  }
+
+  /** Row counts for 'advisers status' and friends (no row mapping, no snapshot). */
+  countMatters({ status } = {}) {
+    return status === undefined ? this._countRows('matters') : this._countRows('matters', ['status = ?'], [status])
+  }
+
+  countFacts({ status, matterId, includeDeleted } = {}) {
+    const where = []
+    const params = []
+    if (status !== undefined) { where.push('status = ?'); params.push(status) }
+    if (matterId !== undefined) { where.push('matter_id = ?'); params.push(matterId) }
+    if (includeDeleted === false) where.push('deleted_at IS NULL')
+    return this._countRows('facts', where, params)
+  }
+
+  countCommitments({ status, matterId } = {}) {
+    const where = []
+    const params = []
+    if (status !== undefined) { where.push('status = ?'); params.push(status) }
+    if (matterId !== undefined) { where.push('matter_id = ?'); params.push(matterId) }
+    return this._countRows('commitments', where, params)
+  }
+
+  countPreferences({ status, kind } = {}) {
+    const where = []
+    const params = []
+    if (status !== undefined) { where.push('status = ?'); params.push(status) }
+    if (kind !== undefined) { where.push('kind = ?'); params.push(kind) }
+    return this._countRows('preferences', where, params)
+  }
+
+  countRoutines({ status } = {}) {
+    return status === undefined ? this._countRows('routines') : this._countRows('routines', ['status = ?'], [status])
+  }
+
+  countLinks({ status, excludeRejected } = {}) {
+    const where = []
+    const params = []
+    if (status !== undefined) { where.push('status = ?'); params.push(status) }
+    if (excludeRejected === true) where.push("status != 'rejected'")
+    return this._countRows('links', where, params)
+  }
+
+  countSessions() {
+    return this._countRows('sessions')
+  }
+
+  countTurns({ conversationId } = {}) {
+    return conversationId === undefined
+      ? this._countRows('turns')
+      : this._countRows('turns', ['conversation_id = ?'], [conversationId])
+  }
+
+  load() {
+    const snapshot = this.loadSnapshot()
     // Remember which rows this connection has seen (P1-1): save() only deletes
     // rows this loader owned, so another process's concurrent additions are
-    // merged instead of being silently overwritten by a stale snapshot.
+    // merged instead of being silently overwritten by a stale snapshot. The
+    // partial loaders above record the same baseline for their own tables.
     this._baselineIds = idsFor(snapshot)
+    this._fullLoad = true
     return snapshot
   }
 

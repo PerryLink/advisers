@@ -597,20 +597,48 @@ export class Ledger {
     }
   }
 
-  static fromJSON(snapshot: LedgerSnapshot, ports: HostPorts = systemPorts()): Ledger {
+  /**
+   * Build a ledger from any subset of the serialized tables.
+   *
+   * P1-2 (0.2.2): the CLI reads only the tables a command needs (for example
+   * today/who load open commitments only) instead of paying for the whole
+   * 50k-row snapshot. Missing tables are treated as empty, exactly like the
+   * historical fromJSON() behaviour (`snapshot.x ?? []`), so a partial snapshot
+   * and a full snapshot are interchangeable for the tables that are present.
+   * toJSON() still emits every table, so a partially loaded ledger serializes
+   * to a well-formed (but incomplete) LedgerSnapshot; callers that persist a
+   * partial ledger must use a store that preserves unloaded rows (SqliteStore
+   * save() merges with its `_baselineIds` for exactly this reason).
+   */
+  static fromParts(parts: LedgerParts, ports: HostPorts = systemPorts()): Ledger {
     const ledger = new Ledger(ports)
-    for (const m of snapshot.matters ?? []) ledger.matters.set(m.id, m)
-    for (const f of snapshot.facts ?? []) ledger.facts.set(f.id, f)
-    for (const c of snapshot.commitments ?? []) ledger.commitments.set(c.id, c)
-    for (const p of snapshot.preferences ?? []) ledger.preferences.set(p.id, p)
-    for (const l of snapshot.links ?? []) ledger.links.set(l.id, l)
-    for (const u of snapshot.updates ?? []) ledger.updates.set(u.id, u)
-    for (const [k, v] of Object.entries(snapshot.routes ?? {})) ledger.routes.set(k, v)
-    for (const r of snapshot.routines ?? []) ledger.routines.set(r.id, r)
-    for (const p of snapshot.routinePatches ?? []) ledger.routinePatches.set(p.id, p)
+    for (const m of parts.matters ?? []) ledger.matters.set(m.id, m)
+    for (const f of parts.facts ?? []) ledger.facts.set(f.id, f)
+    for (const c of parts.commitments ?? []) ledger.commitments.set(c.id, c)
+    for (const p of parts.preferences ?? []) ledger.preferences.set(p.id, p)
+    for (const l of parts.links ?? []) ledger.links.set(l.id, l)
+    for (const u of parts.updates ?? []) ledger.updates.set(u.id, u)
+    for (const [k, v] of Object.entries(parts.routes ?? {})) ledger.routes.set(k, v)
+    for (const r of parts.routines ?? []) ledger.routines.set(r.id, r)
+    for (const p of parts.routinePatches ?? []) ledger.routinePatches.set(p.id, p)
     return ledger
   }
+
+  /**
+   * Deserialize a snapshot produced by toJSON() (or by SqliteStore.load()).
+   * Accepts partial snapshots too; fromParts() is the explicit name for that.
+   * Existing full-snapshot behaviour is unchanged.
+   */
+  static fromJSON(snapshot: LedgerSnapshot | LedgerParts, ports: HostPorts = systemPorts()): Ledger {
+    return Ledger.fromParts(snapshot, ports)
+  }
 }
+
+/**
+ * A subset of a {@link LedgerSnapshot}: the CLI's partial loaders return only
+ * the tables a command reads, and every omitted table is treated as empty.
+ */
+export type LedgerParts = Partial<Omit<LedgerSnapshot, 'version'>> & { version?: 1 }
 
 export interface LedgerSnapshot {
   version: 1
