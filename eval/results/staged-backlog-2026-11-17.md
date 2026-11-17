@@ -26,6 +26,8 @@
 `npm stage reject <stage-id>` 是破坏性操作，官方 registry 要求账号所有者 2FA
 （实测 token 直接调用返回 `EOTP`），因此 agent 无法代为执行。本仓提供交互式工具：
 
+Windows PowerShell 用户用 `scripts/windows-clean-staged.ps1`（同样先列后清，支持 -Limit 试跑）。
+
 ~~~bash
 # 1) 只列出（默认只看 Advisers 六包）
 node scripts/staged-backlog.mjs

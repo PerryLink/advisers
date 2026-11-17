@@ -258,7 +258,8 @@ export ADVISERS_HOME=/tmp/adv-home-0.2.0
 
 > 旧 staged 积压（本仓六包历史版本）与 stable 无关，且逐条 reject 需 owner 2FA。清理工具：
 > `node scripts/staged-backlog.mjs`（默认只看六包，`--apply` 交互式逐条 reject，`--all` 含
-> 其他项目）。快照与说明见 `eval/results/staged-backlog-2026-11-17.md`；清理前先确认没有
+> 其他项目）。Windows 用 `scripts/windows-clean-staged.ps1`（-Apply/-Limit/-All -Force）。
+> 快照与说明见 `eval/results/staged-backlog-2026-11-17.md`；清理前先确认没有
 > 仍需保留的 staged 候选。
 
 ## 附：验收清单（复制到发布日志）
