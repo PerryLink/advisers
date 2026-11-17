@@ -3,6 +3,16 @@ on:
   push:
     branches: [main]
   pull_request:
+
+# Least privilege: CI only reads the repository (cache actions use their own
+# runtime tokens). No step needs a write-scoped GITHUB_TOKEN.
+permissions:
+  contents: read
+
+# Supply-chain hardening: every action is pinned to a full commit SHA. The
+# comment records the upstream release tag; bump the SHA and the comment
+# together (Dependabot/Renovate may open the bump, review it before merging).
+# Prefer pinning to a SHA over a mutable major tag.
 jobs:
   test:
     runs-on: ubuntu-latest
@@ -12,11 +22,11 @@ jobs:
         # 22.16 is the exact minimum: Node 22.13-22.15 ship node:sqlite without FTS5.
         node: ['22.16', 24]
     steps:
-      - uses: actions/checkout@v4
-      - uses: pnpm/action-setup@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+      - uses: pnpm/action-setup@fc06bc1257f339d1d5d8b3a19a8cae5388b55320 # v4.4.0
         with:
           version: 12.16.1
-      - uses: actions/setup-node@v4
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
         with:
           node-version: ${{ matrix.node }}
           cache: pnpm
@@ -31,3 +41,10 @@ jobs:
       - run: node scripts/check-release.mjs
       - run: node scripts/verify-office.mjs
       - run: node scripts/security-suite.mjs
+      # Supply-chain audit gate against the official npm registry. WARN-only for
+      # now: the script prints PASS/WARN and exits 0 unless --strict is passed,
+      # and continue-on-error keeps a registry/audit-endpoint outage from
+      # blocking CI. Promote to blocking later by removing continue-on-error and
+      # passing --strict once the tracked advisories are fixed or re-waived.
+      - run: node scripts/check-deps.mjs
+        continue-on-error: true

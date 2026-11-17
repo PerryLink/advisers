@@ -1,7 +1,15 @@
 name: release-gate
 
-# Manual pre-release gate. This workflow NEVER publishes: staged publishing needs
-# the npm account owner's OTP in their own terminal after the stage ids exist.
+# Manual pre-release gate. The gate job NEVER publishes: staged publishing needs
+# the npm account owner's approval (OTP in their own terminal for the local
+# path, or approval of a CI-staged build). The trusted-publish-draft job below
+# grants id-token: write but is opt-in (confirm=yes) and still does not publish
+# or stage anything: real CI publishing needs the owner to configure an npm
+# Trusted Publisher for every package and to make that decision explicitly.
+#
+# Supply-chain hardening: every action is pinned to a full commit SHA; the
+# comment records the upstream release tag. Bump the SHA and the comment
+# together.
 on:
   workflow_dispatch:
     inputs:
@@ -11,6 +19,12 @@ on:
         default: latest
         type: choice
         options: [latest, next]
+      confirm:
+        description: "run the trusted-publishing draft job (it does not publish)"
+        required: true
+        default: "no"
+        type: choice
+        options: ["no", "yes"]
 
 permissions:
   contents: read
@@ -19,13 +33,13 @@ jobs:
   gate:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
         with:
           fetch-depth: 0
-      - uses: pnpm/action-setup@v4
+      - uses: pnpm/action-setup@fc06bc1257f339d1d5d8b3a19a8cae5388b55320 # v4.4.0
         with:
           version: 12.16.1
-      - uses: actions/setup-node@v4
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
         with:
           node-version: 24
           cache: pnpm
@@ -40,9 +54,87 @@ jobs:
       - run: node scripts/check-tos.mjs --release
       - run: node scripts/security-suite.mjs
       - run: node scripts/verify-office.mjs
+      # WARN-only dependency audit gate; policy is documented in ci.yml.
+      - run: node scripts/check-deps.mjs
+        continue-on-error: true
       - name: Manual publish instructions
         run: |
           echo "Gate passed for tag ${{ inputs.release_tag }}."
-          echo "This workflow does not publish. On a clean tagged checkout run:"
+          echo "This workflow does not publish. The current path is a local staged release:"
           echo "  RELEASE_TAG=${{ inputs.release_tag }} NPM_TOKEN=... node scripts/release.mjs"
           echo "Then approve each stage id in your own terminal (OTP is human-only)."
+          echo "Trusted publishing is drafted below; dispatch with confirm=yes and read the"
+          echo "trusted-publish-draft job output for the npmjs setup steps."
+
+  trusted-publish-draft:
+    # Draft only, opt-in via confirm=yes: it grants OIDC so the provenance path
+    # can be exercised, but it never publishes and never stages. Real publishing
+    # remains an explicit owner decision. The intended future step is commented
+    # out at the end of this job until every package has an npm Trusted Publisher.
+    needs: gate
+    if: ${{ inputs.confirm == 'yes' }}
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      id-token: write
+    # If the npmjs Trusted Publisher entry names a GitHub environment, use the
+    # same name here (and require reviewers on that environment for a human gate):
+    # environment: npm-release
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+        with:
+          fetch-depth: 0
+      - uses: pnpm/action-setup@fc06bc1257f339d1d5d8b3a19a8cae5388b55320 # v4.4.0
+        with:
+          version: 12.16.1
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
+        with:
+          node-version: 24
+          cache: pnpm
+      - run: pnpm install --frozen-lockfile
+      - name: OIDC token endpoint reachable (token is not printed)
+        run: |
+          if [ -z "$ACTIONS_ID_TOKEN_REQUEST_URL" ] || [ -z "$ACTIONS_ID_TOKEN_REQUEST_TOKEN" ]; then
+            echo "::error::OIDC request environment is missing; this job needs permissions: id-token: write"
+            exit 1
+          fi
+          sep="?"
+          case "$ACTIONS_ID_TOKEN_REQUEST_URL" in
+            *"?"*) sep="&" ;;
+          esac
+          status="$(curl -s -o /dev/null -w '%{http_code}' -H "Authorization: bearer ${ACTIONS_ID_TOKEN_REQUEST_TOKEN}" "${ACTIONS_ID_TOKEN_REQUEST_URL}${sep}audience=npm:registry.npmjs.org")"
+          echo "OIDC token endpoint: HTTP ${status} (token not printed)"
+          test "${status}" = "200"
+      - name: Provenance dry-run (diagnostic only; nothing is staged)
+        continue-on-error: true
+        env:
+          RELEASE_TAG: ${{ inputs.release_tag }}
+        run: |
+          echo "Running: node scripts/release.mjs --dry-run --provenance"
+          echo "This exercises the npm --provenance / OIDC path. It is expected to fail or"
+          echo "warn until a Trusted Publisher is configured for every package."
+          node scripts/release.mjs --dry-run --provenance
+      - name: Trusted Publisher setup and owner decision
+        run: |
+          echo "This draft job does NOT publish or stage anything."
+          echo ""
+          echo "To enable trusted publishing (owner decision), for EACH of the six packages on npmjs.com:"
+          echo "  Settings -> Trusted Publisher -> GitHub Actions"
+          echo "    repository:    the GitHub owner/repo that hosts this workflow"
+          echo "    workflow file: publish.yml"
+          echo "    environment:   empty unless a protected GitHub environment is used (must match)"
+          echo "    permission:    allow stage publish (recommended); direct publish only if the owner accepts it"
+          echo "  npm CLI on the runner must be >= 11.15.0 for staged publishing with OIDC."
+          echo "  Current npm CLI: $(npm --version)"
+          echo ""
+          echo "Then the real command (from a job with id-token: write, after the owner configures npmjs) is:"
+          echo "  RELEASE_TAG=${{ inputs.release_tag }} node scripts/release.mjs --provenance"
+          echo "Every staged build still needs the owner's explicit approval before it is published."
+      # ---------------------------------------------------------------------
+      # Real trusted-publishing step: intentionally commented out until the
+      # owner configures the Trusted Publisher and decides CI may stage builds.
+      # - name: Stage via trusted publishing (owner-approved change)
+      #   env:
+      #     RELEASE_TAG: ${{ inputs.release_tag }}
+      #   run: node scripts/release.mjs --provenance
+      # ---------------------------------------------------------------------

@@ -5,9 +5,21 @@
  *   node scripts/release.mjs                  # stage with RELEASE_TAG (default next)
  *   RELEASE_TAG=latest node scripts/release.mjs
  *   node scripts/release.mjs --dry-run        # npm stage publish --dry-run only
+ *   node scripts/release.mjs --provenance     # require npm provenance (OIDC CI only)
+ *
+ * Provenance / Trusted Publishing:
+ *   --provenance (or ADVISERS_PROVENANCE=1) asks npm to attach build provenance
+ *   attestations. That only works from an OIDC-capable CI runner (GitHub Actions
+ *   with `permissions: id-token: write` and a Trusted Publisher configured for
+ *   every package on npmjs.com). A local terminal has no OIDC identity, so the
+ *   default remains the existing local staged flow; requesting provenance there
+ *   fails early with instructions instead of silently publishing unsigned. When
+ *   the OIDC request environment is present, provenance is attempted by default.
+ *   ADVISERS_PROVENANCE=0 or --no-provenance force it off.
  *
  * This script NEVER approves a stage. Approval needs the account owner's OTP
- * and must be done by that person in their own terminal:
+ * (or the owner's approval of a CI-staged build) and must be done by that
+ * person in their own terminal:
  *   npm stage approve <stage-id> --registry https://registry.npmjs.org/
  *
  * Preconditions: clean tree, HEAD tagged v<version>, official registry, and
@@ -44,6 +56,89 @@ if (!['next', 'latest'].includes(tag)) {
 if (process.env.NPM_OTP) {
   console.error('NPM_OTP is not accepted here: approval must be done by the account owner in their own terminal.')
   process.exit(2)
+}
+
+// Provenance / Trusted Publishing. npm can only attach build provenance when the
+// publisher authenticates through a supported CI provider (GitHub Actions with
+// `permissions: id-token: write` + a Trusted Publisher on npmjs.com; npm CLI >=
+// 11.15.0 for staged publishing with OIDC). The default therefore stays the
+// existing local staged flow: provenance is used only when an OIDC request
+// environment is actually present, or when it is explicitly requested.
+const flagProvenance = process.argv.includes('--provenance')
+const flagNoProvenance = process.argv.includes('--no-provenance')
+if (flagProvenance && flagNoProvenance) {
+  console.error('--provenance and --no-provenance are mutually exclusive')
+  process.exit(2)
+}
+const provenanceEnv = (process.env.ADVISERS_PROVENANCE || '').toLowerCase()
+if (provenanceEnv && !['0', '1', 'true', 'false'].includes(provenanceEnv)) {
+  console.error('ADVISERS_PROVENANCE must be 0/1/true/false (got ' + process.env.ADVISERS_PROVENANCE + ')')
+  process.exit(2)
+}
+const oidcRequestable = Boolean(
+  process.env.ACTIONS_ID_TOKEN_REQUEST_URL && process.env.ACTIONS_ID_TOKEN_REQUEST_TOKEN,
+)
+let provenance = oidcRequestable
+if (flagNoProvenance || provenanceEnv === '0' || provenanceEnv === 'false') provenance = false
+if (flagProvenance || provenanceEnv === '1' || provenanceEnv === 'true') provenance = true
+
+const npmAtLeast = (found, minimum) => {
+  const parse = (value) => String(value).replace(/^v/, '').split('-')[0].split('.').map((part) => Number(part) || 0)
+  const left = parse(found)
+  const right = parse(minimum)
+  for (let index = 0; index < Math.max(left.length, right.length); index += 1) {
+    const a = left[index] || 0
+    const b = right[index] || 0
+    if (a !== b) return a > b
+  }
+  return true
+}
+const npmCliVersion = () => {
+  try {
+    return execFileSync('npm', ['--version'], { encoding: 'utf8' }).trim()
+  } catch {
+    return ''
+  }
+}
+
+if (provenance && !oidcRequestable) {
+  console.error(
+    [
+      'provenance was requested, but this environment cannot provide an npm OIDC identity.',
+      '',
+      'npm attaches provenance attestations only when the publisher authenticates through a',
+      'supported CI provider. For GitHub Actions that means:',
+      '  - the publishing job has permissions: { contents: read, id-token: write }',
+      '  - every package has a Trusted Publisher configured on npmjs.com (owner decision;',
+      '    see the trusted-publishing draft job in .github/workflows/publish.yml)',
+      '  - npm CLI >= 11.15.0 (staged publishing with OIDC)',
+      '',
+      'The local staged flow cannot produce provenance. Nothing was staged.',
+      'Drop --provenance / unset ADVISERS_PROVENANCE to stage locally as before.',
+    ].join('\n'),
+  )
+  process.exit(2)
+}
+if (provenance) {
+  const cliVersion = npmCliVersion()
+  if (!npmAtLeast(cliVersion, '11.15.0')) {
+    console.error(
+      'provenance requires npm CLI >= 11.15.0 for trusted/staged publishing; found ' +
+        (cliVersion || 'unknown') +
+        '. Upgrade npm in the runner, then retry.',
+    )
+    process.exit(2)
+  }
+  if (process.env.NPM_TOKEN) {
+    console.warn(
+      'warning: NPM_TOKEN is set; trusted publishing should authenticate through OIDC instead of a long-lived token.',
+    )
+  }
+  console.log('provenance: on (npm --provenance via OIDC / Trusted Publishing; npm ' + cliVersion + ')')
+} else {
+  console.log(
+    'provenance: off (local staged publish path unchanged; use --provenance only in an OIDC-capable CI job with a configured npm Trusted Publisher)',
+  )
 }
 
 const readJson = (file) => JSON.parse(readFileSync(join(root, file), 'utf8'))
@@ -115,6 +210,7 @@ try {
     const ver = readJson(dir + '/package.json').version
     console.log('\n== ' + name + '@' + ver + ' (' + tag + ')' + (dryRun ? ' [dry-run]' : ''))
     const args = ['stage', 'publish', '--tag', tag, '--registry', registry]
+    if (provenance) args.push('--provenance')
     if (dryRun) args.push('--dry-run')
     let out
     try {
@@ -160,4 +256,11 @@ for (const item of staged) {
 }
 console.log('\nApprove in your own terminal, then verify with:')
 console.log('  npm view advisers dist-tags --registry ' + registry)
+if (provenance) {
+  console.log('\nProvenance was requested. After the owner approves each stage, confirm attestations:')
+  for (const item of staged) {
+    console.log('  npm view ' + item.name + '@' + item.ver + ' dist.attestations --json --registry ' + registry)
+  }
+  console.log('Empty dist.attestations after approval means the publish did not use OIDC/Trusted Publishing: do not describe the release as provenance-signed.')
+}
 process.exit(process.exitCode || 0)
