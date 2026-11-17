@@ -202,6 +202,16 @@ npm stage approve <stage-id> --registry https://registry.npmjs.org/
 
 ## R10. 发布后验证与收尾
 
+0. **自动化验证（推荐先跑，失败即停止对外宣布）**：
+~~~sh
+node scripts/verify-release.mjs --version 0.2.0 --tag latest
+~~~
+   脚本逐包检查 dist-tags.latest、dist.shasum 与 sha512 integrity、tarball 内
+   LICENSE/NOTICE/THIRD-PARTY-NOTICES.md、package.json license=PolyForm-NC、advisers 包内
+   lib/tos 四份文本、LICENSE 与仓库 LICENSE 字节一致；并对 advisers 做临时 prefix 安装 +
+   --version / tos status --json / help smoke。--skip-install 跳过安装；--json 输出供证据引用。
+   全部 PASS 后再做下面的手工交叉核对。
+
 1. **dist-tags**：六包 latest 均为 0.2.0；
 ~~~sh
 for p in advisers advisers-core advisers-office advisers-policy-strict advisers-bridge-hermes dsh-advisers; do
@@ -259,5 +269,5 @@ export ADVISERS_HOME=/tmp/adv-home-0.2.0
 - [ ] R7 RELEASE_TAG=latest node scripts/release.mjs 六包 staged，6 个 stage id 记录
 - [ ] R8 六包 stage：version=0.2.0 / tag=latest / status=staged
 - [ ] R9 owner 本人 OTP approve（依赖顺序；agent 未接触 OTP）
-- [ ] R10 六包 latest=0.2.0；tarball 200；LICENSE=PolyForm；temp-prefix install smoke --version=0.2.0；pet-brief OK
+- [ ] R10 node scripts/verify-release.mjs --version 0.2.0 --tag latest 全 PASS；六包 latest=0.2.0；tarball 200；LICENSE=PolyForm；temp-prefix install smoke --version=0.2.0；pet-brief OK
 - [ ] E11 证据 commit + push 三端；README/CHANGELOG 改为 published

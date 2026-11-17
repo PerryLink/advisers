@@ -17,6 +17,7 @@
     "check:release": "node scripts/check-release.mjs",
     "check:licenses": "node scripts/check-licenses.mjs",
     "check:tos": "node scripts/check-tos.mjs",
+    "verify:release": "node scripts/verify-release.mjs",
     "test:security": "node scripts/security-suite.mjs"
   },
   "devDependencies": {
