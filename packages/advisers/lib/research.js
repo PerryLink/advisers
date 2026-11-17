@@ -7,9 +7,46 @@
  * AbortController timeout, a hard wall-clock deadline that does not depend on
  * the fetch implementation honoring the signal, and bounded retries for
  * 429/5xx (same policy as lib/model.js).
+ *
+ * Content safety (0.2.0): the query/URL text is classified locally BEFORE any
+ * network request (surface research.query); a block throws ContentSafetyError
+ * and no fetch happens. A model answer that is flagged is returned as-is with
+ * an additive safetyWarnings field (the provider call already happened; the
+ * design keeps research output at warn, never a silent rewrite). The protected
+ * matter egress gate lives in the CLI (lib/egress.js) and is unchanged.
  */
+import { classify, safetyErrorFrom, buildAuditReason } from './safety/index.js'
+
 const MAX_TOKENS = 4096
 const RETRY_STATUS = new Set([429, 500, 502, 503, 504])
+
+const RESEARCH_INPUT_SURFACE = 'research.query'
+const RESEARCH_OUTPUT_SURFACE = 'research.output'
+
+function safetyWarningOf(result, direction) {
+  if (!result || result.action === 'allow') return null
+  const surface = result.surface || RESEARCH_INPUT_SURFACE
+  const ruleIds = Array.isArray(result.ruleIds) ? [...result.ruleIds] : []
+  return {
+    direction,
+    action: result.action,
+    code: result.code,
+    categories: Array.isArray(result.categories) ? [...result.categories] : [],
+    ruleIds,
+    surface,
+    rulesetVersion: result.rulesetVersion,
+    evidenceHash: result.evidenceHash || null,
+    crisis: Boolean(result.crisis),
+    auditReason: buildAuditReason({
+      rulesetVersion: result.rulesetVersion,
+      surface,
+      action: result.action,
+      code: result.code,
+      ruleIds,
+      evidenceHash: result.evidenceHash,
+    }),
+  }
+}
 
 function root(baseUrl) {
   const base = String(baseUrl || 'https://api.deepseek.com').replace(/\/+$/, '')
@@ -61,10 +98,17 @@ export async function research({
   timeoutMs = Number(process.env.ADVISERS_RESEARCH_TIMEOUT_MS) || 60_000,
   retries = 2,
   signal,
+  safetyKey,
 }) {
   if (!apiKey) throw new ResearchError('research requires ADVISERS_API_KEY', { code: 'MISSING_API_KEY' })
   const text = [String(query || '').trim(), ...urls].filter(Boolean).join('\n')
   if (!text) throw new ResearchError('research requires a query or URL', { code: 'INVALID_REQUEST' })
+  // Local pre-flight check: a blocked query/URL never opens a network request.
+  const requestSafety = classify(text, { surface: RESEARCH_INPUT_SURFACE, hmacKey: safetyKey })
+  if (requestSafety.action === 'block') throw safetyErrorFrom(requestSafety, { surface: RESEARCH_INPUT_SURFACE, provider: 'deepseek' })
+  const safetyWarnings = []
+  const requestWarning = safetyWarningOf(requestSafety, 'input')
+  if (requestWarning) safetyWarnings.push(requestWarning)
   const tools = urls.length
     ? [{ type: 'deepseek_read_url', name: 'deepseek_read_url' }]
     : [{ type: 'deepseek_web_search', name: 'deepseek_web_search' }]
@@ -117,7 +161,19 @@ export async function research({
         const sources = normalizeSources(blocks)
         const citations = normalizeCitations(blocks)
         if (data.stop_reason === 'refusal') throw new ResearchError('research refused by provider safety review', { code: 'REFUSAL' })
-        return { answer, sources, citations, usage: data.usage, stopReason: data.stop_reason, blocks }
+        // Output stays at warn: the response already exists, so it is not
+        // rewritten; callers get an additive safetyWarnings field instead.
+        const answerWarning = safetyWarningOf(classify(answer, { surface: RESEARCH_OUTPUT_SURFACE, hmacKey: safetyKey }), 'output')
+        if (answerWarning) safetyWarnings.push(answerWarning)
+        return {
+          answer,
+          sources,
+          citations,
+          usage: data.usage,
+          stopReason: data.stop_reason,
+          blocks,
+          ...(safetyWarnings.length ? { safetyWarnings } : {}),
+        }
       }
     } catch (error) {
       if (signal?.aborted) throw new ResearchError('research cancelled by user', { code: 'CANCELLED_BY_USER' })

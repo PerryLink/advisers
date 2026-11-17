@@ -3,6 +3,10 @@ import { AdvisersRuntime } from 'advisers-core'
 import { buildDocx, buildPptx, buildXlsx, buildXmind, buildMermaid, buildDrawio, validateOffice, validateXmind } from 'advisers-office'
 import { lstatSync, mkdirSync, realpathSync, writeFileSync } from 'node:fs'
 import { dirname, isAbsolute, relative, resolve } from 'node:path'
+// Content safety (docs/CONTENT-SAFETY.md section 8). dsh-advisers consumes the
+// same local rule layer as the CLI; packaging keeps the two workspace packages
+// together (see section 8's packaging note).
+import { classify } from '../advisers/lib/safety/index.js'
 
 export const name = 'advisers'
 export const inject = ['tools']
@@ -32,7 +36,48 @@ const ERROR_CODES = Object.freeze({
   UNKNOWN_ID_PREFIX: 'UNKNOWN_ID_PREFIX',
   EVIDENCE_NOT_FOUND: 'EVIDENCE_NOT_FOUND',
   INTERNAL_ERROR: 'INTERNAL_ERROR',
+  CONTENT_BLOCKED: 'CONTENT_BLOCKED',
 })
+
+// Stable structured error for a local content-safety block. Shape is deliberately
+// additive to the existing { ok, path, bytes } / IntentBrief results; no host
+// crash and no original text.
+const contentSafetyErrorSchema = {
+  type: 'object',
+  additionalProperties: false,
+  properties: {
+    code: { type: 'string', required: true, description: 'CONTENT_BLOCKED when the local content-safety layer blocked the call.' },
+    message: { type: 'string', required: true, description: 'One-line human-readable detail (no original text).' },
+    surface: { type: 'string' },
+    ruleIds: { type: 'array', items: { type: 'string' } },
+    rulesetVersion: { type: 'string' },
+  },
+}
+
+/** JSON text for classification only; never throws on odd input. */
+function safeJson(value) {
+  try {
+    return JSON.stringify(value ?? {})
+  } catch {
+    return ''
+  }
+}
+
+/** Classify tool input with the dsh.tool surface; return a structured block. */
+function contentSafetyBlock(text, surface = 'dsh.tool') {
+  const result = classify(text, { surface })
+  if (result.action !== 'block') return null
+  return {
+    ok: false,
+    error: {
+      code: ERROR_CODES.CONTENT_BLOCKED,
+      message: '内容安全审核未通过，已阻止本次工具调用（CONTENT_BLOCKED）。',
+      surface: result.surface,
+      ruleIds: result.ruleIds,
+      rulesetVersion: result.rulesetVersion,
+    },
+  }
+}
 
 /** Domain error that executeRead renders as a structured { ok: false, error }. */
 class ReadToolError extends Error {
@@ -605,17 +650,36 @@ export function apply(ctx, config = {}) {
     },
     output: {
       schema: {
-        type: 'object',
-        additionalProperties: false,
-        properties: {
-          ok: { type: 'boolean', required: true },
-          path: { type: 'string', required: true },
-          bytes: { type: 'number', required: true },
-        },
+        oneOf: [
+          {
+            type: 'object',
+            additionalProperties: false,
+            properties: {
+              ok: { type: 'boolean', required: true },
+              path: { type: 'string', required: true },
+              bytes: { type: 'number', required: true },
+            },
+          },
+          {
+            type: 'object',
+            additionalProperties: false,
+            properties: {
+              ok: { type: 'boolean', const: false, required: true },
+              error: { ...contentSafetyErrorSchema, required: true },
+            },
+          },
+        ],
       },
-      render: (_args, value) => [{ type: 'text', text: `${value.ok ? 'written' : 'failed'}: ${value.path} (${value.bytes} bytes)` }],
+      render: (_args, value) => [{
+        type: 'text',
+        text: value.ok === false && value.error
+          ? `${asString(value.error.code) || ERROR_CODES.CONTENT_BLOCKED}: ${asString(value.error.message)}`
+          : `${value.ok ? 'written' : 'failed'}: ${value.path} (${value.bytes} bytes)`,
+      }],
     },
     async execute(args) {
+      const blocked = contentSafetyBlock(safeJson({ kind: args.kind, out: args.out, spec: args.spec }))
+      if (blocked) return blocked
       const root = resolve(config.workspace || process.cwd())
       const target = resolve(root, args.out)
       const rel = relative(root, target)
@@ -653,20 +717,39 @@ export function apply(ctx, config = {}) {
     },
     output: {
       schema: {
-        type: 'object',
-        additionalProperties: false,
-        properties: {
-          goal: { type: 'string', required: true },
-          deliverable: { type: 'string', required: true },
-          action: { type: 'string', required: true },
-          risk: { type: 'string', required: true },
-          questions: { type: 'array', items: { type: 'string' }, required: true },
-          readback: { type: 'string', required: true },
-        },
+        oneOf: [
+          {
+            type: 'object',
+            additionalProperties: false,
+            properties: {
+              goal: { type: 'string', required: true },
+              deliverable: { type: 'string', required: true },
+              action: { type: 'string', required: true },
+              risk: { type: 'string', required: true },
+              questions: { type: 'array', items: { type: 'string' }, required: true },
+              readback: { type: 'string', required: true },
+            },
+          },
+          {
+            type: 'object',
+            additionalProperties: false,
+            properties: {
+              ok: { type: 'boolean', const: false, required: true },
+              error: { ...contentSafetyErrorSchema, required: true },
+            },
+          },
+        ],
       },
-      render: (_args, value) => [{ type: 'text', text: value.readback }],
+      render: (_args, value) => [{
+        type: 'text',
+        text: value.ok === false && value.error
+          ? `${asString(value.error.code) || ERROR_CODES.CONTENT_BLOCKED}: ${asString(value.error.message)}`
+          : value.readback,
+      }],
     },
     async execute(args) {
+      const blocked = contentSafetyBlock(args.text)
+      if (blocked) return blocked
       const brief = runtime.brief(args.text)
       return {
         goal: brief.goal,

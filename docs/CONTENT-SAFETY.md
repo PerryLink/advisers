@@ -1,8 +1,9 @@
 # 内容安全：本地规则层
 
-> 状态：0.2.0 稳定版实施（2026-11-17）。模块位置 `packages/advisers/lib/safety/`，纯 ESM、零第三方依赖、无网络；本轮只落地本地规则层，**尚未接入 `bin/` 与 `lib/model.js`**（接入由后续任务完成，接入点见 §8）。
+> 状态：0.2.0 稳定版实施（2026-11-17）。模块位置 `packages/advisers/lib/safety/`，纯 ESM、零第三方依赖、无网络。
+> 规则层已完成 **lib 级 7 条路径的接入**：model / research / capture / pet-brief / attachments / MCP server / DSH 工具（见 §8）；`bin/` 级 CLI 的审计写入、首启 TOS 与 `advisers safety` 子命令仍由后续任务接线（本轮不改 `bin/`，边界见 §8.2）。
 >
-> 规则集版本：`advisers-content-1`。测试：`packages/advisers/test/safety.test.js`（21 个测试，5 类语料 + 本地微基准）。
+> 规则集版本：`advisers-content-1`。测试：`packages/advisers/test/safety.test.js`（21 个规则/语料测试）+ `packages/advisers/test/safety-integration.test.js`（13 个接入路径测试）+ `packages/dsh-advisers/test/safety.test.js`（5 个 DSH 结构化错误测试）。
 
 ## 1. 定位与诚实口径
 
@@ -164,22 +165,56 @@ const classifySite = createClassifier({ ruleset, hmacKey: auditKey })
 
 另有**引用/新闻/法律/学术语境降级**：命中非硬拦 block 规则时，若上下文含「新闻/报道/判决/刑法/普法/案例/论文/教材/……」，且不含第一人称求取（「教我/告诉我/帮我/我要/我想/……」，则 block→confirm（`downgraded=true`）。这是误报闸，也是清楚的绕过面：把「教我制作炸药」包装成新闻可以降级为 confirm，因此高危词表与硬拦不公开、CSAM 永不降级。
 
-## 8. 接入点清单（本轮未接线，后续任务按此清单接入）
+## 8. 接入点清单与已接入路径（0.2.0 本轮）
 
-| 接入点 | 位置（HEAD ccdf2ac） | 检查对象 | 默认动作 | 本轮状态 |
+下表是完整接入面；「本轮状态」只描述 0.2.0 稳定版实际落地的内容，**未接线项不假装已实现**。
+
+| 接入点 | 位置 | 检查对象 | 默认动作 | 本轮状态（0.2.0） |
 |---|---|---|---|---|
-| chat/agent 输入输出 | `lib/model.js` 的 `chatCompletion()`、`lib/agent.js` 的 `runAgent()` | messages 全文、模型输出、tool_calls 参数 | block/warn/redact | 未接线 |
-| capture（邮件/转写/文件） | `lib/capture.js` `captureCandidates()`、`lib/importers.js` | 输入文本、候选 quote/action | warn + 不落候选；block 仅高危 | 未接线 |
-| research | `lib/research.js` `research()` | query/URL、回答与引用 | block query；回答 warn | 未接线 |
-| attachments | `lib/attachments.js` `extractAttachment()` | 抽取文本（docx/pdf/ofd/ocr） | 自有文件 warn；CSAM 例外 block | 未接线 |
-| Office/交付物 | `bin/advisers.js` office/deliver 命令、`packages/office/src/*` | spec 文本、最终文件正文 | warn；对外交付加标识 | 未接线 |
-| Pet Brief | `lib/pet-brief.js` `buildPetBrief()` / `validatePetBrief()` | suggestedLines/risks/facts | block 则丢弃该行（fail-closed） | 未接线 |
-| MCP | `bin/advisers.js` `mcpServer()` 的 `tools/call` | 调用参数、返回 text | warn/redact + 审计 | 未接线 |
-| DSH 工具 | `packages/dsh-advisers/index.js` 的 `advisers_brief` / `advisers_office` | text/spec/渲染结果 | block → 结构化错误码 | 未接线 |
+| chat/agent 输入输出 | `lib/model.js` 的 `chatCompletion()`（`lib/agent.js` 等所有模型调用都经过它） | messages 全文（含 `tool_calls.arguments`）、模型返回文本 | block/warn | **已接入**：发请求前 `inspectMessages`（surface `model.output`）；block 抛 `ContentSafetyError` 且**不建网络请求**；warn/confirm 继续并在返回中新增可选 `safetyWarnings`；模型输出同样后置分类；DeepSeek 通道默认附 `safety_check:{level:'high'}`，`ADVISERS_SAFETY_CLOUD=0` 关闭 |
+| capture（邮件/转写/文件） | `lib/capture.js` `captureCandidates()`；`lib/mcp-server.js` 的写候选路径复用同一门 | 输入文本 surface `capture.input`、候选 payload | warn + 不落候选；block 仅高危 | **已接入**：输入 block 抛错且**不调用模型**；候选 payload 的 `action/creditor/uncertainty` 做 PII 脱敏（`quote` 保持逐字原文用于校验）；不自动 accept |
+| research | `lib/research.js` `research()` | query/URL surface `research.query`、回答 surface `research.output` | block query；回答 warn | **已接入**：query/URL block 抛错且**不发起 fetch**；受保护 matter 的 egress 门仍在 CLI（`lib/egress.js`，本轮未改）；回答命中以可选 `safetyWarnings` 返回（不重写回答） |
+| attachments | `lib/attachments.js` `extractAttachment()` | 抽取文本 surface `attachment`（归一为 `attachments.text`） | 自有文件 warn；CSAM 例外 block | **已接入**：返回新增可选 `safety` 元数据；CSAM 硬拦抛错；非 CSAM 的 block 按 surface 策略降为 confirm |
+| Office/交付物 | `bin/advisers.js` office/deliver 命令、`packages/office/src/*` | spec 文本、最终文件正文 | warn；对外交付加标识 | **未接线**（`bin/` 与 office 包不在本轮改动范围；DSH 的 `advisers_office` 已接入 spec 检查） |
+| Pet Brief | `lib/pet-brief.js` `buildPetBrief()` / `validatePetBrief()` | suggestedLines、risks.summary | block 则丢弃该行（fail-closed） | **已接入**：block 级建议行/摘要丢弃，`counts` 由数组派生自动一致，redactions 只写通用说明、不写原文；契约 v0.2 schema 不变 |
+| MCP | `lib/mcp-server.js` 的 `tools/call`（`bin/` 的 `mcpServer()` 复用该库） | 调用参数 JSON、返回数据 JSON（surface `mcp.tool`） | warn/redact + 审计 | **已接入**：block 返回 `isError:true` 的结构化 `CONTENT_BLOCKED`（不崩 server）、写候选复用 capture 门；若注入 `audit` 回调则记录 `allowed:false` 事件；stdio server 不变量不变 |
+| DSH 工具 | `packages/dsh-advisers/index.js` 的 `advisers_brief` / `advisers_office` | `text`、`{kind,out,spec}`（surface `dsh.tool`） | block → 结构化错误码 | **已接入**：block 返回 `{ok:false,error:{code:'CONTENT_BLOCKED',surface,ruleIds,rulesetVersion}}`；两个工具输出 schema 扩为 success/block 的 `oneOf`，成功分支保持原结构 |
 | TTS（未来） | 新增 `lib/tts.js`（当前不存在） | 待合成文本 | block + 音频显式标识 | 规划 |
 | DLC/插件（未来） | 新增 `lib/plugin/loader.js`（当前不存在） | manifest 声明文本、工具输入输出 | 加载即审；默认禁用 | 规划 |
 
-接入约定：入口先 `classify(...)`；`block` 用 `ContentSafetyError`/统一拒答文案中断且写审计；`confirm` 弹确认；`redact` 对日志/审计/Pet Brief 强制、正文提示；`warn` 仅提示不打断；自伤 `crisis=true` 走已有危机响应（不得 block）。
+接入约定（与实现一致）：入口先 `classify(...)`/`inspectMessages(...)`；`block` 用 `ContentSafetyError`（MCP/DSH 用结构化错误码）中断，错误对象与返回值**不含原文**；`confirm` 由调用方确认（lib 层只透出判定）；`redact` 只作用于日志/审计/Pet Brief/候选 payload 等派生副本，不篡改用户原文；`warn` 仅提示不打断；自伤 `crisis=true` 走已有危机响应（永不 block）。
+
+### 8.1 已接入路径与事件（可审计字段）
+
+| 路径 | 入口函数 | surface | block 行为 | warn/confirm 行为 |
+|---|---|---|---|---|
+| model | `chatCompletion()` | `model.output` | 抛 `ContentSafetyError`（无网络请求） | 返回新增可选 `safetyWarnings` |
+| research | `research()` | `research.query` / `research.output` | query/URL 抛错、不 fetch | 回答以 `safetyWarnings` 返回 |
+| capture | `captureCandidates()` | `capture.input` | 抛错、不调模型、不产候选 | 候选 payload PII 脱敏 |
+| pet-brief | `buildPetBrief()` | `pet-brief` | 丢弃该建议行/摘要 | 不打断 |
+| attachments | `extractAttachment()` | `attachment`（`attachments.text`） | 抛错 | 返回新增可选 `safety` 元数据 |
+| MCP | `tools/call` | `mcp.tool` | `isError:true` + `CONTENT_BLOCKED` | 透传结果；写候选走 capture 门 |
+| DSH | `advisers_brief` / `advisers_office` | `dsh.tool` | `{ok:false,error:{code:'CONTENT_BLOCKED',...}}` | 成功分支保持原结构 |
+
+每次 block 判定可携带的结构化字段（由 `ContentSafetyError.toJSON()` / `safetyWarnings[*]` 提供）：`code`、`action`、`ruleIds`、`categories`、`rulesetVersion`、`evidenceHash`（有审计 key 时）、`auditReason`（`rulesetVersion|surface|action|code|ruleIds|evidenceHash`，≤300 字符）。**不含原文**；接入测试逐条断言序列化结果不含触发文本。
+
+### 8.2 审计边界（本轮到哪、后续做什么）
+
+- **lib 层只产出判定字段，不直接写审计链**：`buildAuditReason()` / `ContentSafetyError.auditReason` 已可直接交给 `store.appendAudit()`（`actor='safety'`、`action='safety.<surface>'`、block 时 `allowed=0`）。
+- **MCP 已通过注入的 `audit` 回调记录安全事件**：block 的调用会发 `{actor:'mcp', action, allowed:false, reason:auditReason}`；未注入回调时不写（与既有 MCP 审计约定一致）。
+- **DSH 只返回结构化错误**：宿主审计与 `runtime.audit` 的安全事件扩展由后续接线完成。
+- **`bin/advisers.js` 的审计写入仍由后续接线完成**：`chat`/`repl`、`mcpServer()`、`capture` 等 CLI 入口尚未把 `auditReason` 送进 `appendAudit()`；`evidenceHash` 需要调用方传入 `ensureAuditKey()` 的 key（本轮 lib 提供可选 `hmacKey`/`safetyKey` 参数，CLI 接线后才有值，故当前为 `null`/`-`）。**不改审计表结构、不改 hash-chain material 顺序**。
+- 原文边界：`classify()` 结果、错误对象、MCP/DSH 结构化错误、新增 `safetyWarnings`/`safety` 字段都不含原文；`redact()` 只返回替换后的文本与不含值的命中。接入测试对 7 条路径逐条断言「不泄漏原文」。
+
+### 8.3 接入后的误报处理（用户可见路径）
+
+- 默认只对 block 打断；`warn`/`confirm` 不阻塞（model/research 以 `safetyWarnings` 透出、capture 只脱敏候选字段、attachments 返回 `safety` 元数据、pet-brief 只在 block 时丢弃行）。
+- 语境降级与 surface 降级仍然生效：用户自有文件（capture/attachments/office.spec/doc-review）非 CSAM 的 block 会降为 confirm；引用/新闻/法律/学术语境可把非硬拦 block 降为 confirm（这是误报闸，也是已知绕过面）。
+- DSH 的 block 是结构化返回值而非抛异常，宿主/模型可据此提示用户改写需求；MCP 同理（`isError` 文本是 JSON，不含原文）。
+- `ADVISERS_SAFETY_CLOUD=0` 只关闭 DeepSeek 的 `safety_check` 网络侧参数，**不关闭本地规则**；CSAM 硬拦不可通过配置关闭。
+- 误报规则可通过 `resolveRuleset()` 的 JSON 覆盖禁用（CSAM/block 白名单不可放宽）；`advisers safety report`（误报反馈 CLI）仍为 0.2.1 计划。
+- **上游 `safety_check` 兼容性 TODO**：参数按 DeepSeek 官方文档（2026-11-17）添加，仅用于 DeepSeek 通道；尚未做活体灰度验证（研究报告 §10-R1）。若上游发现不兼容，用 `ADVISERS_SAFETY_CLOUD=0` 关闭即可，本地规则不受影响；不要删除或改写请求其余字段。
+- **dsh-advisers 打包 TODO**：`packages/dsh-advisers/index.js` 以 monorepo 相对路径引用 `packages/advisers/lib/safety/`（本轮不改 `package.json`，未新增 npm 依赖）。独立发布 `dsh-advisers` 时需把 safety 模块随包提供或在 `package.json` 声明依赖；在此之前 DSH 插件按本仓 workspace 使用。
 
 ## 9. 审计与可解释
 
@@ -208,7 +243,8 @@ advisers-content-1|chat.output|block|CSAM|R-SEX-CSAM-01|9f2c1ab7e3d4c5b6
 2. `confirm` 替代 block（block 白名单外的高危 → 用户显式确认）；
 3. surface 区分（用户自有文件 → 更宽）；
 4. JSON 覆盖可禁用误报规则（但 CSAM/block 白名单不可放宽）；
-5. 误报反馈走 `advisers safety report`（后续 CLI）。
+5. 误报反馈走 `advisers safety report`（后续 CLI）；
+6. 接入层默认只对 block 打断：`warn`/`confirm` 以可选 `safetyWarnings`/`safety` 元数据透出（§8.1、§8.3），用户自有文件 surface 的 block 会降级为 confirm。
 
 已知限制（不得对外承诺拦截率）：
 
@@ -216,7 +252,7 @@ advisers-content-1|chat.output|block|CSAM|R-SEX-CSAM-01|9f2c1ab7e3d4c5b6
 - 启发式组合规则可被精心构造的文本绕过（这是概率问题，不是保证）；
 - 不做年龄核验，未成年人保护只能「声明即收紧」；
 - 没有模型二次判定（`ADVISERS_SAFETY_MODEL` 未实现）；
-- 上游服务商 `safety_check` 与本层独立：本层不替代上游审核，上游拒答映射见 §5.2；
+- 上游服务商 `safety_check` 与本层独立：本层不替代上游审核，上游拒答映射见 §5.2；DeepSeek 通道默认附 `safety_check:{level:'high'}`（`ADVISERS_SAFETY_CLOUD=0` 关闭，§8.3 TODO）；
 - 规则词表属于软件（PolyForm Noncommercial 1.0.0）；测试语料属于文档/数据（CC BY-NC-SA 4.0），见 `LICENSING.md` 的边界规则。
 
 ## 11. 测试与性能
@@ -225,14 +261,17 @@ advisers-content-1|chat.output|block|CSAM|R-SEX-CSAM-01|9f2c1ab7e3d4c5b6
 
 ```bash
 cd packages/advisers
-node --experimental-strip-types --test test/safety.test.js
-pnpm -r test
+node --experimental-strip-types --test test/safety.test.js test/safety-integration.test.js
+cd ../dsh-advisers && node --test test/safety.test.js
+cd ../.. && pnpm -r test
 ```
 
 当前结果（2026-11-17）：
 
-- 21 个测试全部通过；5 类语料：违规 16 条（覆盖 14 类，其中窄白名单 10 条必须 block）、边界 14 条、误报/正常 22 条、注入 12 条、上游拒答形状 12 条；
+- 规则/语料层 21 个测试全部通过（`test/safety.test.js`）；5 类语料：违规 16 条（覆盖 14 类，其中窄白名单 10 条必须 block）、边界 14 条、误报/正常 22 条、注入 12 条、上游拒答形状 12 条；
 - 违规语料 block 精确率 100%（无「不该拦却拦」）；边界语料 block 误伤 0；正常办公语料 100% `allow`、误报 0；注入命中率 ≥90%（实际 12/12）；拒答形状 12/12 映射；
+- 接入层 13 个测试全部通过（`test/safety-integration.test.js`）：model block 不发网络 / warn 透出 `safetyWarnings` / 输出与上游 400 映射、research block 不 fetch、capture block 不调模型 + PII 脱敏且 quote 逐字保留、pet-brief 丢弃行且 counts/schema 一致、attachments CSAM 抛错、MCP 结构化 `CONTENT_BLOCKED` 且 server 存活、全路径「序列化结果不含原文」断言；
+- DSH 层 5 个测试全部通过（`packages/dsh-advisers/test/safety.test.js`）：brief/office block 返回结构化 `CONTENT_BLOCKED`、输出 schema 两个分支均通过宿主校验、office block 不落盘、benign 仍成功；
 - 本地微基准：1085 个中文字符，`hmacKey` 开启，`p95≈0.24ms`（预算 20ms/千字；测试通过 `t.diagnostic` 写入测试输出）；
 - 微基准是开发机数据，不代表真实分布下的吞吐；生产接入后需在宿主机器复测。
 
@@ -253,5 +292,5 @@ pnpm -r test
 
 - 规则集：`advisers-content-1`；改动规则须同步升级 `RULESET_VERSION` 并补正例/反例；
 - API：`SAFETY_API_VERSION='advisers-safety-api-1'`；
-- 本轮交付：`lib/safety/{rules,classifier,redact,explain,index}.js`、`test/safety.test.js`、本文档；
-- 后续（0.2.1 计划）：接入 §8 的 10 个点、`advisers safety {check,explain,report,status}` CLI、`bin/advisers.js` 首启 TOS/同意门联动、扩大语料到研究报告设计的 45/50/50/15/12 并做离线评测、模型二次判定（可选）、规则的持续复核与文案更新。
+- 本轮交付：`lib/safety/{rules,classifier,redact,explain,index}.js`、`test/safety.test.js`、`test/safety-integration.test.js`、`packages/dsh-advisers/test/safety.test.js`、本文档；lib 级 7 条路径（model/research/capture/pet-brief/attachments/MCP/DSH）已接入。
+- 后续（0.2.1 计划）：`bin/advisers.js` 的审计写入与 `chat`/`repl`/`mcpServer()` 接线、Office/deliver 路径、TTS/DLC 未来接入、`advisers safety {check,explain,report,status}` CLI、`bin/advisers.js` 首启 TOS/同意门联动、扩大语料到研究报告设计的 45/50/50/15/12 并做离线评测、模型二次判定（可选）、规则的持续复核与文案更新。

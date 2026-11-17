@@ -29,6 +29,8 @@ import { join, resolve } from 'node:path'
 import { StringDecoder } from 'node:string_decoder'
 import { evidenceForCommitment, evidenceForFact, evidenceForPreference, verifyPack } from './evidence.js'
 import { buildReminders } from './remind.js'
+import { inspectCaptureText } from './capture.js'
+import { classify, redact, safetyErrorFrom } from './safety/index.js'
 
 export const PROTOCOL_VERSION = '2024-11-05'
 export const SERVER_NAME = 'advisers'
@@ -37,6 +39,13 @@ export const MAX_LINE_BYTES = 1024 * 1024
 /** Receipt directories are small; refuse to slurp anything huge. */
 export const MAX_PACK_FILE_BYTES = 512 * 1024
 export const MAX_PACK_SUMS_BYTES = 64 * 1024
+
+// Content-safety wiring (docs/CONTENT-SAFETY.md section 8): tools/call argument
+// text and returned text are classified with the mcp.tool surface. A block-level
+// call returns a structured CONTENT_BLOCKED tool error (isError true) instead of
+// crashing the JSON-RPC server; blocked writes never reach the store because the
+// capture gate runs inside advisers_capture_candidate before proposeCandidate.
+const MCP_SURFACE = 'mcp.tool'
 
 export const TOOL_NAMES = Object.freeze([
   'advisers_today',
@@ -156,6 +165,32 @@ class ToolError extends Error {
 
 function invalidParams(message) {
   return new RpcError(-32602, message)
+}
+
+/** JSON text for classification only; never echoes raw input in errors. */
+function safeJson(value) {
+  try {
+    return JSON.stringify(value ?? {})
+  } catch {
+    return ''
+  }
+}
+
+/** Structured CONTENT_BLOCKED tool result: isError=true, no original text. */
+function toolBlocked(id, error) {
+  const payload = {
+    ok: false,
+    error: {
+      code: 'CONTENT_BLOCKED',
+      message: error.message,
+      action: error.action,
+      surface: error.surface,
+      ruleIds: Array.isArray(error.ruleIds) ? error.ruleIds : [],
+      rulesetVersion: error.rulesetVersion,
+      auditReason: error.auditReason,
+    },
+  }
+  return { jsonrpc: '2.0', id, result: { content: [{ type: 'text', text: JSON.stringify(payload, null, 2) }], isError: true } }
 }
 
 /* -------------------------------------------------------------------------- */
@@ -424,6 +459,10 @@ export function createMcpServer({ store, ledger, version = '0.0.0', audit, readP
     assertAllowedKeys(args, ['action', 'quote', 'debtor', 'creditor', 'dueAt', 'matterId'])
     const action = requireString(args, 'action', { min: 1, max: 500 })
     const quote = requireString(args, 'quote', { min: 1, max: 2000 })
+    // Reuse the capture gate (same surface/policy as lib/capture.js): a blocked
+    // write never creates a candidate; PII is redacted from the payload only.
+    // The quote stays verbatim (it is the stored evidence text).
+    inspectCaptureText([action, quote].join('\n'), { surface: 'capture.input' })
     const debtor = optionalEnum(args, 'debtor', ['user', 'agent', 'third'], 'user')
     const creditor = optionalString(args, 'creditor', { max: 200 }) ?? 'someone'
     const dueAt = optionalIsoDate(args, 'dueAt')
@@ -434,7 +473,7 @@ export function createMcpServer({ store, ledger, version = '0.0.0', audit, readP
       matterId = typeof ledger?.listMatters === 'function' ? ledger.listMatters()[0]?.id : undefined
     }
 
-    const payload = { debtor, creditor, action, capability: 'none' }
+    const payload = { debtor, creditor: redact(creditor).text, action: redact(action).text, capability: 'none' }
     if (matterId !== undefined) payload.matterId = matterId
     if (dueAt !== undefined) payload.dueAt = dueAt
 
@@ -545,6 +584,14 @@ export function createMcpServer({ store, ledger, version = '0.0.0', audit, readP
   /* ------------------------------- auditing ------------------------------- */
 
   function auditEntry(tool, outcome) {
+    if (!outcome.ok && outcome.error && outcome.error.name === 'ContentSafetyError') {
+      const action = tool.name === 'advisers_capture_candidate'
+        ? 'mcp.capture.candidate'
+        : tool.name === 'advisers_pack_verify'
+          ? 'mcp.pack.verify'
+          : 'mcp.call'
+      return { actor: 'mcp', action, allowed: false, reason: outcome.error.auditReason || 'CONTENT_BLOCKED' }
+    }
     if (tool.name === 'advisers_capture_candidate') {
       return {
         actor: 'mcp',
@@ -613,17 +660,41 @@ export function createMcpServer({ store, ledger, version = '0.0.0', audit, readP
     const tool = toolsByName.get(name)
     if (!tool) throw invalidParams('unknown tool ' + sanitizeToken(name))
 
+    // Gate 1: classify argument text before any tool logic runs.
+    const argumentSafety = classify(safeJson(args), { surface: MCP_SURFACE })
+    if (argumentSafety.action === 'block') {
+      const error = safetyErrorFrom(argumentSafety, { surface: MCP_SURFACE })
+      await recordAudit(auditEntry(tool, { ok: false, error }))
+      return toolBlocked(id, error)
+    }
+
     let outcome
     try {
       outcome = { ok: true, data: await tool.run(args) }
     } catch (error) {
       outcome = { ok: false, error }
     }
+
+    // Gate 2: a tool must not relay block-level text (ledger data, receipt
+    // metadata, ...). The returned payload is classified before it is sent.
+    let blockedData
+    if (outcome.ok) {
+      const outputSafety = classify(safeJson(outcome.data), { surface: MCP_SURFACE })
+      if (outputSafety.action === 'block') {
+        blockedData = outcome.data
+        outcome = { ok: false, error: safetyErrorFrom(outputSafety, { surface: MCP_SURFACE }) }
+      }
+    }
     const audited = await recordAudit(auditEntry(tool, outcome))
 
     if (!outcome.ok) {
       if (outcome.error instanceof RpcError) {
         throw outcome.error
+      }
+      if (outcome.error?.name === 'ContentSafetyError') {
+        // A write whose returned text was blocked is compensated (no orphan).
+        if (tool.name === 'advisers_capture_candidate' && blockedData?.candidate?.id) rollbackCandidate(blockedData.candidate.id)
+        return toolBlocked(id, outcome.error)
       }
       if (tool.write && !audited) return toolFailure(id, 'audit chain unavailable; call rejected')
       return toolFailure(id, outcome.error instanceof ToolError ? outcome.error.message : 'tool execution failed')

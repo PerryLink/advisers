@@ -1,8 +1,63 @@
 import { chatCompletion } from './model.js'
 import { describeMessageTime, normalizeDue } from './relative-date.js'
+import { classify, redact, safetyErrorFrom, buildAuditReason } from './safety/index.js'
 
 const MAX_CANDIDATES = 5
 const MAX_CHARS = 20_000
+const CAPTURE_SURFACE = 'capture.input'
+
+/**
+ * Shared capture safety gate (also reused by lib/mcp-server.js).
+ *
+ * Classifies text with the capture surface (local-file policy: non-CSAM blocks
+ * are downgraded to confirm; CSAM stays a hard block) and throws a typed,
+ * text-free ContentSafetyError on block. Callers must run this before any model
+ * call or candidate write so a blocked input never produces a candidate.
+ */
+export function inspectCaptureText(text, { surface = CAPTURE_SURFACE, hmacKey } = {}) {
+  const result = classify(text, { surface, hmacKey })
+  if (result.action === 'block') throw safetyErrorFrom(result, { surface })
+  return result
+}
+
+function safetyWarningOf(result, direction) {
+  if (!result || result.action === 'allow') return null
+  const surface = result.surface || CAPTURE_SURFACE
+  const ruleIds = Array.isArray(result.ruleIds) ? [...result.ruleIds] : []
+  return {
+    direction,
+    action: result.action,
+    code: result.code,
+    categories: Array.isArray(result.categories) ? [...result.categories] : [],
+    ruleIds,
+    surface,
+    rulesetVersion: result.rulesetVersion,
+    evidenceHash: result.evidenceHash || null,
+    crisis: Boolean(result.crisis),
+    auditReason: buildAuditReason({
+      rulesetVersion: result.rulesetVersion,
+      surface,
+      action: result.action,
+      code: result.code,
+      ruleIds,
+      evidenceHash: result.evidenceHash,
+    }),
+  }
+}
+
+/**
+ * Redact PII/secrets from the candidate payload only. The quote stays verbatim:
+ * it is checked against the source text, so redacting it would break the
+ * verbatim contract. Redaction is one-way and never returns the original value.
+ */
+function redactCandidatePayload(candidate) {
+  return {
+    ...candidate,
+    action: redact(candidate.action).text,
+    uncertainty: redact(candidate.uncertainty).text,
+    ...(candidate.creditor === undefined ? {} : { creditor: redact(candidate.creditor).text }),
+  }
+}
 
 function normalize(text) {
   return String(text || '').replace(/\r\n/g, '\n').replace(/[ \t]+/g, ' ').trim()
@@ -70,12 +125,17 @@ export function validateCaptureCandidates(candidates, text, { now = new Date(), 
   return out
 }
 
-export async function captureCandidates({ text, apiKey, baseUrl, model, fetchImpl = fetch, date, source, now = new Date() }) {
+export async function captureCandidates({ text, apiKey, baseUrl, model, fetchImpl = fetch, date, source, now = new Date(), safetyKey }) {
   const input = normalize(text)
   if (!input) return { candidates: [], usage: undefined }
   if (input.length > MAX_CHARS) throw new Error(`capture input is too long (max ${MAX_CHARS} chars)`)
   const messageDate = date ? new Date(date) : now
   if (!Number.isFinite(messageDate.getTime())) throw new Error('capture message date is invalid')
+  // Fail closed before the model call: a blocked input produces no candidate.
+  const inputSafety = inspectCaptureText(input, { hmacKey: safetyKey })
+  const safetyWarnings = []
+  const inputWarning = safetyWarningOf(inputSafety, 'input')
+  if (inputWarning) safetyWarnings.push(inputWarning)
   const result = await chatCompletion({
     messages: [
       { role: 'system', content: '你是严谨的中文工作秘书。只输出 JSON，不输出解释。' },
@@ -83,6 +143,26 @@ export async function captureCandidates({ text, apiKey, baseUrl, model, fetchImp
     ],
     apiKey, baseUrl, model, fetchImpl,
     task: 'capture', thinking: true, effort: 'high', maxTokens: 4096,
+    safetyKey,
   })
-  return { candidates: validateCaptureCandidates(parseCaptureResponse(result.content), input, { now, messageDate }), usage: result.usage, raw: result }
+  const validated = validateCaptureCandidates(parseCaptureResponse(result.content), input, { now, messageDate })
+  const candidates = []
+  for (const candidate of validated) {
+    // A model-invented candidate that is itself block-level must not become a
+    // pending row; it is dropped (the batch continues) and only a structural
+    // warning is reported - never the original text.
+    const candidateSafety = classify(`${candidate.action}\n${candidate.quote}`, { surface: CAPTURE_SURFACE, hmacKey: safetyKey })
+    if (candidateSafety.action === 'block') {
+      const dropped = safetyWarningOf(candidateSafety, 'output')
+      if (dropped) safetyWarnings.push({ ...dropped, dropped: true })
+      continue
+    }
+    candidates.push(redactCandidatePayload(candidate))
+  }
+  return {
+    candidates,
+    usage: result.usage,
+    raw: result,
+    ...(safetyWarnings.length ? { safetyWarnings } : {}),
+  }
 }

@@ -3,6 +3,7 @@ import { existsSync, lstatSync, realpathSync } from 'node:fs'
 import { extname, isAbsolute, relative, resolve } from 'node:path'
 import JSZip from 'jszip'
 import { runLocalOcr, ocrConfigured } from './ocr.js'
+import { classify, safetyErrorFrom } from './safety/index.js'
 
 const MAX_FILE_BYTES = 10 * 1024 * 1024
 const MAX_CHARS = 20_000
@@ -16,6 +17,33 @@ const MAX_TEXT_CHARS = 8 * 1024 * 1024
 const TEXT_EXT = new Set(['.txt', '.md', '.markdown', '.json', '.csv', '.log', '.yaml', '.yml', '.xml', '.html'])
 const OFFICE_EXT = new Set(['.docx', '.xlsx', '.pptx'])
 const IMAGE_EXT = new Set(['.png', '.jpg', '.jpeg', '.webp', '.bmp', '.tif', '.tiff'])
+
+// Content-safety wiring (docs/CONTENT-SAFETY.md section 8). Attachments are the
+// user's own files, so the classifier policy downgrades ordinary non-CSAM blocks
+// to confirm; CSAM is a hard block and throws a typed, text-free error. The
+// returned safety object is additive metadata (never the extracted text).
+const ATTACHMENT_SURFACE = 'attachment' // alias of attachments.text
+
+function attachmentSafety(result) {
+  return {
+    action: result.action,
+    code: result.code,
+    categories: Array.isArray(result.categories) ? [...result.categories] : [],
+    ruleIds: Array.isArray(result.ruleIds) ? [...result.ruleIds] : [],
+    severity: result.severity,
+    crisis: Boolean(result.crisis),
+    downgraded: Boolean(result.downgraded),
+    rulesetVersion: result.rulesetVersion,
+    evidenceHash: result.evidenceHash || null,
+  }
+}
+
+/** Classify extracted text; throw on a hard block, otherwise attach metadata. */
+function withSafety(extracted, options = {}) {
+  const safety = classify(extracted.text, { surface: ATTACHMENT_SURFACE, hmacKey: options.hmacKey })
+  if (safety.action === 'block') throw safetyErrorFrom(safety, { surface: ATTACHMENT_SURFACE })
+  return { ...extracted, safety: attachmentSafety(safety) }
+}
 
 function safePath(cwd, input) {
   const root = realpathSync(cwd)
@@ -210,7 +238,7 @@ async function xlsxText(reader) {
   return out.filter(Boolean).join('\n').trim()
 }
 
-export async function extractAttachment(input, { cwd = process.cwd() } = {}) {
+export async function extractAttachment(input, { cwd = process.cwd(), hmacKey } = {}) {
   const path = safePath(cwd, input)
   const info = await stat(path)
   if (!info.isFile()) throw new Error(`not a file: ${input}`)
@@ -220,7 +248,7 @@ export async function extractAttachment(input, { cwd = process.cwd() } = {}) {
   if (TEXT_EXT.has(ext)) {
     const raw = await readFile(path, 'utf8')
     const { text, truncated } = truncate(raw)
-    return { name, path, kind: ext.slice(1), text, truncated, bytes: info.size }
+    return withSafety({ name, path, kind: ext.slice(1), text, truncated, bytes: info.size }, { hmacKey })
   }
   if (OFFICE_EXT.has(ext)) {
     const reader = await loadZip(await readFile(path))
@@ -231,25 +259,25 @@ export async function extractAttachment(input, { cwd = process.cwd() } = {}) {
         : await xlsxText(reader)
     const { text, truncated } = truncate(raw)
     if (!text) throw new Error(`no extractable text in ${name}`)
-    return { name, path, kind: ext.slice(1), text, truncated, bytes: info.size }
+    return withSafety({ name, path, kind: ext.slice(1), text, truncated, bytes: info.size }, { hmacKey })
   }
   if (ext === '.ofd') {
     const raw = await ofdText(await readFile(path))
     const { text, truncated } = truncate(raw)
     if (!text) throw new Error(`no extractable text in ${name} (OFD image-only?)`)
-    return { name, path, kind: 'ofd', text, truncated, bytes: info.size }
+    return withSafety({ name, path, kind: 'ofd', text, truncated, bytes: info.size }, { hmacKey })
   }
   if (IMAGE_EXT.has(ext)) {
     if (!ocrConfigured()) throw new Error(`image OCR is not configured; set ADVISERS_OCR_CMD to a local OCR executable (${name})`)
     const raw = await runLocalOcr(path, { cwd })
     const { text, truncated } = truncate(raw)
-    return { name, path, kind: 'ocr', text, truncated, bytes: info.size }
+    return withSafety({ name, path, kind: 'ocr', text, truncated, bytes: info.size }, { hmacKey })
   }
   if (ext === '.pdf') {
     const raw = await pdfText(path)
     const { text, truncated } = truncate(raw)
     if (!text) throw new Error(`no extractable text in ${name} (scanned PDF?)`)
-    return { name, path, kind: 'pdf', text, truncated, bytes: info.size }
+    return withSafety({ name, path, kind: 'pdf', text, truncated, bytes: info.size }, { hmacKey })
   }
   throw new Error(`unsupported attachment type: ${ext || '(none)'}`)
 }

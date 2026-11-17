@@ -17,6 +17,7 @@
 import { chmodSync, closeSync, fsyncSync, mkdirSync, openSync, renameSync, unlinkSync, writeSync } from 'node:fs'
 import { basename, dirname, join } from 'node:path'
 import { localDay } from './remind.js'
+import { classify } from './safety/index.js'
 
 export const PET_BRIEF_SCHEMA_VERSION = 2
 /** v0.1 briefs (contract before `displayPolicy`) are still accepted with warnings. */
@@ -34,6 +35,16 @@ export const PET_BRIEF_MIN_CONFIDENCE = 0.7
 export const PET_BRIEF_MAX_SUGGESTED_LINES = 3
 export const PET_BRIEF_MAX_LINE_LENGTH = 40
 export const PET_BRIEF_MOODS = ['calm', 'focused', 'concerned', 'pleased']
+
+// Content-safety wiring (docs/CONTENT-SAFETY.md section 8): suggested lines and
+// risk summaries are classified with the pet-brief surface. A block-level line
+// is dropped entirely (fail-closed, no schema change: counts are derived from
+// the arrays) and only a generic note is added to redactions - never the text.
+const PET_BRIEF_SURFACE = 'pet-brief'
+
+function isBlockedLine(text, hmacKey) {
+  return classify(text, { surface: PET_BRIEF_SURFACE, hmacKey }).action === 'block'
+}
 
 /** Contract §2.2. Matched case-insensitively with `_`/`-`/spaces removed. */
 export const PET_BRIEF_FORBIDDEN_KEYS = [
@@ -165,6 +176,8 @@ export function buildPetBrief(ledger, options = {}) {
   const maxItems = Number.isFinite(options.maxItems) ? options.maxItems : PET_BRIEF_MAX_ITEMS
   const minConfidence = Number.isFinite(options.minConfidence) ? options.minConfidence : PET_BRIEF_MIN_CONFIDENCE
   const displayPolicy = options.displayPolicy ?? PET_BRIEF_DEFAULT_DISPLAY_POLICY
+  const hmacKey = options.hmacKey
+  const dropped = { risks: 0, lines: 0 }
   if (!PET_BRIEF_DISPLAY_POLICIES.includes(displayPolicy)) {
     throw new TypeError(`displayPolicy must be one of ${PET_BRIEF_DISPLAY_POLICIES.join('|')}`)
   }
@@ -286,6 +299,11 @@ export function buildPetBrief(ledger, options = {}) {
   }
   const riskItems = risks
     .filter((risk) => risk.confidence >= minConfidence)
+    .filter((risk) => {
+      if (!isBlockedLine(risk.summary, hmacKey)) return true
+      dropped.risks += 1
+      return false
+    })
     .sort((a, b) => RISK_RANK[b.level] - RISK_RANK[a.level] || b.confidence - a.confidence || cmp(a.id, b.id))
     .slice(0, limit)
 
@@ -315,7 +333,12 @@ export function buildPetBrief(ledger, options = {}) {
   const lines = []
   const pushLine = (line) => {
     const text = clip(oneLine(line), PET_BRIEF_MAX_LINE_LENGTH)
-    if (text && !lines.includes(text) && lines.length < PET_BRIEF_MAX_SUGGESTED_LINES) lines.push(text)
+    if (!text || lines.includes(text) || lines.length >= PET_BRIEF_MAX_SUGGESTED_LINES) return
+    if (isBlockedLine(text, hmacKey)) {
+      dropped.lines += 1
+      return
+    }
+    lines.push(text)
   }
   const topRisk = riskItems[0]
   if (topRisk) pushLine(`${topRisk.summary}。`)
@@ -334,6 +357,8 @@ export function buildPetBrief(ledger, options = {}) {
   redactions.push('不含模型推理、系统提示或原始提示词')
   const excludedSecrecy = allMatters.filter((matter) => matterSecrecy(matter) >= 2).length
   if (excludedSecrecy > 0) redactions.push(clip(`已排除保密等级≥2 的事项（${excludedSecrecy} 个）`, 80))
+  const droppedTotal = dropped.risks + dropped.lines
+  if (droppedTotal > 0) redactions.push(clip(`已丢弃 ${droppedTotal} 条不安全内容（不展示原文）`, 80))
   if (!redactions.some((note) => note.startsWith('联系人')) && !redactions.some((note) => note.includes('客户名'))) {
     redactions.push('联系人/客户名默认不进入 brief')
   }
