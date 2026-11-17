@@ -296,6 +296,14 @@ test('wrapToWidth reproduces the prefix-measuring line breaks for the host CJK f
   const b = await buildSimplePdf({ title: '性能回归 · Advisers', paragraphs, createdAt: fixed })
   assert.equal(a.subarray(0, 5).toString(), '%PDF-')
   assert.ok(a.equals(b), 'PDF output is deterministic for identical input (byte-for-byte)')
+  // pdf-lib's create() stamps the wall clock into /CreationDate and /ModDate,
+  // so two identical builds used to differ whenever they crossed a second
+  // boundary (the flake this test guards). buildSimplePdf pins both to
+  // createdAt; load with updateMetadata:false so reading the dates does not
+  // re-stamp /ModDate.
+  const loaded = await PDFDocument.load(a, { updateMetadata: false })
+  assert.equal(loaded.getCreationDate().getTime(), fixed.getTime(), '/CreationDate is the input generation time')
+  assert.equal(loaded.getModificationDate().getTime(), fixed.getTime(), '/ModDate is the input generation time')
 })
 
 test('opening a database adds the secondary indexes without bumping schema v18', () => {
@@ -372,6 +380,12 @@ test('batch nudge helpers keep the per-row addNudge/query semantics', () => {
       assert.deepEqual(recent.get('cm_recent'), ['ignored', 'accepted', 'accepted'])
       assert.deepEqual(recent.get('cm_recent'), store.listCommitmentNudges('cm_recent', 3).map((n) => n.outcome))
       assert.deepEqual(recent.get('cm_b'), ['pending'])
+      // The bounded (candidate-ids) form returns exactly the same rows.
+      const bounded = store.recentNudgeOutcomes(3, ['cm_recent', 'cm_b', 'cm_missing'])
+      assert.deepEqual(bounded.get('cm_recent'), recent.get('cm_recent'))
+      assert.deepEqual(bounded.get('cm_b'), ['pending'])
+      assert.equal(bounded.has('cm_missing'), false)
+      assert.deepEqual(store.recentNudgeOutcomes(2, ['cm_recent']).get('cm_recent'), ['ignored', 'accepted'])
 
       assert.equal(store.listMetaByPrefix('snooze:').size, 0)
       store.setMeta('snooze:cm_a', '2026-11-18T00:00:00Z')
@@ -381,6 +395,57 @@ test('batch nudge helpers keep the per-row addNudge/query semantics', () => {
       assert.equal(store.deleteMetaKeys(['snooze:cm_a', 'snooze:missing']), 1)
       assert.deepEqual([...store.listMetaByPrefix('snooze:').keys()], ['snooze:cm_b'])
       assert.ok(store.getMeta('other:key'))
+    } finally {
+      store.close()
+    }
+  } finally {
+    rmSync(root, { recursive: true, force: true })
+  }
+})
+
+test('recentNudgeOutcomes stays index-bounded on a 200k-row nudge history', () => {
+  // The first tick batching change (0.2.0) windowed over the whole nudges table,
+  // so the per-tick read grew with the user's nudge history (271ms at 200k rows
+  // and climbing). Tick now asks only for its candidate ids; this pins the
+  // bounded cost and the equivalence with listCommitmentNudges().
+  const { root, home } = setup('nudge-window')
+  try {
+    const store = new SqliteStore(join(home, 'state.db'))
+    try {
+      const now = Date.now()
+      const dayMs = 86_400_000
+      const insert = store.db.prepare('INSERT INTO nudges(id,at,local_day,level,commitment_id,dedupe_key,body) VALUES(?,?,?,?,?,?,?)')
+      store.db.exec('BEGIN')
+      for (let i = 0; i < 200_000; i++) {
+        const at = new Date(now - (i % 180) * dayMs).toISOString()
+        insert.run(`nd_${i}`, at, at.slice(0, 10), ['L1', 'L2', 'L3'][i % 3], `cm_${i % 20_000}`, `key_${i}`, 'x')
+      }
+      store.db.exec('COMMIT')
+      assert.equal(store.db.prepare('SELECT COUNT(*) AS n FROM nudges').get().n, 200_000)
+
+      const ids = Array.from({ length: 500 }, (_, i) => `cm_${i}`)
+      const bounded = store.recentNudgeOutcomes(3, ids)
+      assert.equal(bounded.size, ids.length)
+      for (const id of ids.slice(0, 20)) {
+        assert.deepEqual(bounded.get(id), store.listCommitmentNudges(id, 3).map((n) => n.outcome), id)
+      }
+      assert.equal(store.recentNudgeOutcomes(3, ['cm_missing']).size, 0)
+
+      // One index seek per candidate; no whole-table scan / window sort.
+      const plan = store.db.prepare('EXPLAIN QUERY PLAN SELECT outcome FROM nudges WHERE commitment_id = ? ORDER BY at DESC LIMIT ?')
+        .all('cm_1', 3).map((row) => row.detail).join(' ')
+      assert.match(plan, /INDEX idx_nudges_commitment_at/)
+      assert.doesNotMatch(plan, /SCAN nudges\b/)
+
+      const timings = []
+      for (let i = 0; i < 7; i++) {
+        const startedAt = process.hrtime.bigint()
+        store.recentNudgeOutcomes(3, ids)
+        timings.push(Number(process.hrtime.bigint() - startedAt) / 1e6)
+      }
+      timings.sort((a, b) => a - b)
+      const median = timings[Math.floor(timings.length / 2)]
+      assert.ok(median < 50, `bounded nudge read should stay under 50ms with a 200k-row history (median ${median.toFixed(1)}ms)`)
     } finally {
       store.close()
     }

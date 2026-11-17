@@ -81,6 +81,14 @@ export async function buildSimplePdf({ title = 'Advisers', paragraphs = [], font
   if (!fontPath) throw new Error('no CJK font found; set ADVISERS_PDF_FONT to a .ttf/.otf font (e.g. simhei.ttf)')
   const bytes = readFileSync(fontPath)
   const doc = await PDFDocument.create()
+  // PDFDocument.create() calls updateInfoDict(), which stamps /ModDate and
+  // /CreationDate with the wall clock. Two runs over identical input therefore
+  // produced different bytes whenever they crossed a wall-clock second (the PDF
+  // date format has second precision), which made the perf regression test and
+  // any byte-level receipt comparison flake. Pin both dates to the caller-
+  // supplied generation time so one input always serializes to the same bytes.
+  doc.setCreationDate(createdAt)
+  doc.setModificationDate(createdAt)
   doc.registerFontkit(fontkit)
   const font = await doc.embedFont(bytes, { subset: true })
   const size = 10.5

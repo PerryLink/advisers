@@ -12,11 +12,18 @@
  *   node scripts/bench.mjs --json > bench.json
  *   node scripts/bench.mjs --bin /tmp/base/packages/advisers/bin/advisers.js
  *
- * Measures: --version/--help/status startup, today, tick, deliveries --pack,
- * and the in-process PDF wrap()/buildSimplePdf() path. Each CLI rep runs in a
- * fresh child process; mutating commands copy the data directory first. Peak
- * RSS comes from the child's process.resourceUsage().maxRSS. Run from a local
- * ext4/tmp checkout: a network/9p mount inflates every file read.
+ * Measures: --version/--help/status startup, today, tick, deliver --format pdf,
+ * deliveries --pack, and the in-process PDF wrap()/buildSimplePdf() path. Each
+ * CLI rep runs in a fresh child process; mutating commands copy the data
+ * directory first. Peak RSS comes from the child's
+ * process.resourceUsage().maxRSS. Run from a local ext4/tmp checkout: a
+ * network/9p mount inflates every file read.
+ *
+ * Consent fixture: the CLI gates non-exempt commands on a recorded TOS
+ * acceptance (non-TTY runs exit 3 without one). The benchmark seeds the
+ * acceptance record into the prepared data home once (equivalent to a user
+ * accepting on first run) and also passes ADVISERS_ACCEPT_TOS=1, so today /
+ * tick / deliveries --pack measure the real paths instead of the gate.
  */
 import { spawnSync } from 'node:child_process'
 import { cpSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
@@ -120,7 +127,28 @@ function baseEnv(home) {
     ADVISERS_OFFICE_LOCAL: existsSync(OFFICE) ? '1' : '0',
     ADVISERS_NO_MODEL: '1',
     ADVISERS_STORE: 'sqlite',
+    // Fallback for homes the benchmark did not seed itself (e.g. a --home that
+    // cannot be copied): an explicit environment acceptance is recorded by the
+    // CLI exactly like typing it on first run, it is not a silent bypass.
+    ADVISERS_ACCEPT_TOS: '1',
   }
+}
+
+/**
+ * Record a TOS acceptance in a throwaway benchmark home so the gated scenarios
+ * measure their own work. Uses the CLI's documented non-interactive path
+ * (tos accept --accept-tos), so the record is the same one a real user would
+ * have. Best-effort: on failure the ADVISERS_ACCEPT_TOS env fallback still lets
+ * the benchmark run.
+ */
+function seedTosAcceptance(bin, home) {
+  const result = spawnSync(process.execPath, [bin, 'tos', 'accept', '--accept-tos'], {
+    cwd: ROOT,
+    env: baseEnv(home),
+    encoding: 'utf8',
+    timeout: 60000,
+  })
+  return result.status === 0
 }
 
 /** Run the CLI once in a child process and measure wall time + peak RSS. */
@@ -268,18 +296,37 @@ async function main() {
     throw new Error('--home ' + dataHome + ' has no state.db; run advisers init there first')
   }
   const workRoot = mkdtempSync(join(tmpdir(), 'advisers-bench-work-'))
+  // One prepared snapshot for all reps: the data directory plus a recorded TOS
+  // acceptance, so every measured command runs its real path (without the gate
+  // exit-3) and the consent write is not billed to each rep.
+  const preparedHome = join(workRoot, 'data-home')
+  copyHome(dataHome, preparedHome)
+  if (!seedTosAcceptance(options.bin, preparedHome)) {
+    console.error('warning: could not pre-record the TOS acceptance in the benchmark home; relying on ADVISERS_ACCEPT_TOS=1')
+  }
   const loaderPath = join(workRoot, 'bench-child.mjs')
   writeFileSync(loaderPath, childLoader())
   const emptyHome = join(workRoot, 'empty-home')
   mkdirSync(emptyHome, { recursive: true })
+  // The default evidence-pack cap is 2000 entries; on any ledger above that the
+  // scenario would measure the documented cap error (~exit 1) instead of the
+  // pack path, so exercise the documented --all escape hatch. For small ledgers
+  // the code path is identical (the flag only lifts the cap).
+  const packArgs = ['deliveries', '--pack', '--all', '--out', '{OUT}']
   const scenarios = [
     { name: '--version', args: ['--version'], home: 'empty', mutate: false },
     { name: '--help', args: ['--help'], home: 'empty', mutate: false },
     { name: 'status', args: ['status'], home: 'data', mutate: false },
     { name: 'today', args: ['today'], home: 'data', mutate: false },
     { name: 'tick', args: ['tick'], home: 'data', mutate: true },
-    { name: 'deliveries --pack', args: ['deliveries', '--pack', '--out', '{OUT}'], home: 'data', mutate: true },
+    { name: 'deliveries --pack', args: packArgs, home: 'data', mutate: true },
   ]
+  try {
+    const pdfLib = await import(pathToFileURL(PDF).href)
+    if (pdfLib.findCjkFont()) scenarios.push({ name: 'deliver --format pdf', args: ['deliver', '--format', 'pdf', '--out', '{OUT}/deliver.pdf'], home: 'data', mutate: true })
+    else console.error('skipping deliver --format pdf: no CJK font on this host (set ADVISERS_PDF_FONT)')
+  } catch {}
+
   const results = []
   for (const scenario of scenarios) {
     const samples = []
@@ -288,7 +335,7 @@ async function main() {
       let home = emptyHome
       if (scenario.home === 'data') {
         home = join(repRoot, 'home')
-        copyHome(dataHome, home)
+        copyHome(preparedHome, home)
         mkdirSync(join(repRoot, 'cwd'), { recursive: true })
       }
       const cwd = scenario.mutate ? join(repRoot, 'cwd') : workRoot
@@ -335,7 +382,7 @@ async function main() {
       console.log(row.name.padEnd(width) + String(row.medianMs + 'ms').padStart(9) + String(row.minMs + 'ms').padStart(8) + String(row.maxMs + 'ms').padStart(8) + String(row.maxRssMb + 'MB').padStart(9) + '  ' + (row.note ?? ''))
     }
     console.log('')
-    console.log('note: medians of fresh child processes; run from a local ext4/tmp checkout for comparable numbers (a 9p/network mount inflates file reads). CLI rows include a tiny child-loader wrapper (~10ms) used to report peak RSS.')
+    console.log('note: medians of fresh child processes; run from a local ext4/tmp checkout for comparable numbers (a 9p/network mount inflates file reads). CLI rows include a small child-loader wrapper used to report peak RSS, so compare columns within one machine/run style rather than across hosts.')
   }
   if (generated && !options.keep) removeTree(dataHome)
   removeTree(workRoot)

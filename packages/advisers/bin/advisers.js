@@ -16,34 +16,7 @@ try {
   }
   throw error
 }
-import { runAgent } from '../lib/agent.js'
-import { chatCompletion } from '../lib/model.js'
-import { applyPreferenceDecay, buildRoutineCandidate, correctionStatement } from '../lib/learning.js'
-import { checkRoutine } from '../lib/routine.js'
-import { backupBeforeWrite, diffLatest, listBackups, undoLatest } from '../lib/undo.js'
-import { lintReview, materializeReview, reviewRun } from '../lib/review.js'
-import { classifyNudgeOutcome } from '../lib/nudge.js'
-import { buildDigest } from '../lib/digest.js'
-import { captureCandidates } from '../lib/capture.js'
 import { egressDeniedReason } from '../lib/egress.js'
-import { research as runResearch } from '../lib/research.js'
-import { reviewDocument } from '../lib/doc-review.js'
-import { buildHistory, buildOpening, buildPins, continuityProbes, ensurePins, fitHistory, shouldSummarize, summarizeTurns } from '../lib/context-window.js'
-import {
-  PET_BRIEF_DEFAULT_DISPLAY_POLICY,
-  PET_BRIEF_DISPLAY_POLICIES,
-  PET_BRIEF_MAX_ITEMS,
-  PET_BRIEF_MAX_LINE_LENGTH,
-  PET_BRIEF_MAX_SUGGESTED_LINES,
-  PET_BRIEF_MOODS,
-  PET_BRIEF_SCHEMA_VERSION,
-  PET_BRIEF_SOURCE,
-  buildPetBrief,
-  validatePetBrief,
-  writePetBriefAtomic,
-} from '../lib/pet-brief.js'
-import { fetchImapMessages } from '../lib/imap.js'
-import { createReadOnlyServer } from '../lib/ui.js'
 
 /**
  * P1-1: lazy-load the heavy / rarely used libraries.
@@ -76,6 +49,25 @@ const loadVault = lazyModule(() => import('../lib/vault.js'))
 const loadTos = lazyModule(() => import('../lib/tos/index.js'))
 const loadMcpServer = lazyModule(() => import('../lib/mcp-server.js'))
 const loadSafety = lazyModule(() => import('../lib/safety/index.js'))
+// P2-4 (0.2.1): every command used to pay for the full static import graph,
+// including the model/agent stack, safety classifier, Pet Brief, UI server,
+// IMAP client and review helpers (~63-75ms of compiled JS). They are only
+// needed by a subset of commands, so each one is a memoized dynamic import.
+const loadAgent = lazyModule(() => import('../lib/agent.js'))
+const loadModel = lazyModule(() => import('../lib/model.js'))
+const loadLearning = lazyModule(() => import('../lib/learning.js'))
+const loadRoutine = lazyModule(() => import('../lib/routine.js'))
+const loadUndo = lazyModule(() => import('../lib/undo.js'))
+const loadReview = lazyModule(() => import('../lib/review.js'))
+const loadNudge = lazyModule(() => import('../lib/nudge.js'))
+const loadDigest = lazyModule(() => import('../lib/digest.js'))
+const loadCapture = lazyModule(() => import('../lib/capture.js'))
+const loadResearch = lazyModule(() => import('../lib/research.js'))
+const loadDocReview = lazyModule(() => import('../lib/doc-review.js'))
+const loadContextWindow = lazyModule(() => import('../lib/context-window.js'))
+const loadPetBrief = lazyModule(() => import('../lib/pet-brief.js'))
+const loadImap = lazyModule(() => import('../lib/imap.js'))
+const loadUi = lazyModule(() => import('../lib/ui.js'))
 
 let core
 if (process.env.ADVISERS_CORE_LOCAL === '1') {
@@ -442,7 +434,7 @@ function runtimeFor(ledger) {
 }
 
 async function backupCliFile(path) {
-  try { await backupBeforeWrite(path, { cwd: process.cwd(), backupDir: join(HOME, 'undo') }) } catch {}
+  try { const { backupBeforeWrite } = await loadUndo(); await backupBeforeWrite(path, { cwd: process.cwd(), backupDir: join(HOME, 'undo') }) } catch {}
 }
 
 function now() {
@@ -1004,10 +996,24 @@ function tick(ledger, asJson = false) {
     if (!c.dueAt || Date.parse(c.dueAt) > weekAhead) continue
     candidates.push(c)
   }
+  // P2-2 (0.2.1): the recent-outcome read is bounded by the candidate set.
+  // Only candidates whose pre-outcome level is L2/L3 can be downgraded by an
+  // ignored run (the `level !== 'L1'` guard below), so those are the only ids
+  // the query needs; the history table is never scanned as a whole.
+  const baseLevelById = new Map()
+  const outcomeIds = []
+  for (const c of candidates) {
+    const dueDay = localDayOf(c.dueAt)
+    const msLeft = Date.parse(c.dueAt) - now
+    let baseLevel = (msLeft < 0 || dueDay === localDay) ? 'L2' : 'L1'
+    if (baseLevel === 'L2' && Date.parse(c.dueAt) < now - 86400_000 && process.env.ADVISERS_ALLOW_L3 === '1') baseLevel = 'L3'
+    baseLevelById.set(c.id, baseLevel)
+    if (baseLevel !== 'L1') outcomeIds.push(c.id)
+  }
   // P0-2: replace the per-commitment N+1 queries (listCommitmentNudges +
   // countNudges) with three batch reads: recent outcomes per commitment,
   // today's level counts and today's existing (commitment, level) keys.
-  const recentByCommitment = store && candidates.length ? store.recentNudgeOutcomes(3) : new Map()
+  const recentByCommitment = store && outcomeIds.length ? store.recentNudgeOutcomes(3, outcomeIds) : new Map()
   const levelCounts = store && candidates.length ? store.countNudgesByDay(localDay) : new Map()
   const existingKeys = store && candidates.length ? store.listNudgeLevelKeysByDay(localDay) : new Set()
   const pendingKeys = new Set()
@@ -1015,10 +1021,7 @@ function tick(ledger, asJson = false) {
   let l2Today = levelCounts.get('L2') ?? 0
   const nudgeRows = []
   for (const c of candidates) {
-    const dueDay = localDayOf(c.dueAt)
-    const msLeft = Date.parse(c.dueAt) - now
-    let level = (msLeft < 0 || dueDay === localDay) ? 'L2' : 'L1'
-    if (level === 'L2' && Date.parse(c.dueAt) < now - 86400_000 && process.env.ADVISERS_ALLOW_L3 === '1') level = 'L3'
+    let level = baseLevelById.get(c.id)
     const recent = recentByCommitment.get(c.id) ?? []
     if (recent.length === 3 && recent.every((outcome) => outcome === 'ignored') && level !== 'L1') level = level === 'L3' ? 'L2' : 'L1'
     // Budgets keep the historical in-run semantics: a nudge already written by
@@ -1155,7 +1158,12 @@ function printLinks() {
  * allowlist). The test suite asserts the generated document is deep-equal to
  * the canonical snapshot in docs/pet-brief/schema-v0.2.json.
  */
-function petBriefJsonSchema() {
+async function petBriefJsonSchema() {
+  const {
+    PET_BRIEF_DEFAULT_DISPLAY_POLICY, PET_BRIEF_DISPLAY_POLICIES, PET_BRIEF_MAX_ITEMS,
+    PET_BRIEF_MAX_LINE_LENGTH, PET_BRIEF_MAX_SUGGESTED_LINES, PET_BRIEF_MOODS,
+    PET_BRIEF_SCHEMA_VERSION, PET_BRIEF_SOURCE,
+  } = await loadPetBrief()
   const maxItems = PET_BRIEF_MAX_ITEMS
   const id = { type: 'string', minLength: 1, maxLength: 64 }
   const confidence = { type: 'number', minimum: 0, maximum: 1 }
@@ -1248,6 +1256,11 @@ function petBriefJsonSchema() {
  * legacy/missing-displayPolicy into errors instead).
  */
 async function petBrief(args) {
+  const {
+    PET_BRIEF_DEFAULT_DISPLAY_POLICY, PET_BRIEF_DISPLAY_POLICIES, PET_BRIEF_MAX_ITEMS,
+    PET_BRIEF_MAX_LINE_LENGTH, PET_BRIEF_MAX_SUGGESTED_LINES, PET_BRIEF_MOODS,
+    PET_BRIEF_SCHEMA_VERSION, PET_BRIEF_SOURCE, buildPetBrief, validatePetBrief, writePetBriefAtomic,
+  } = await loadPetBrief()
   const { flags } = parseFlags(args)
   const asJson = args.includes('--json')
   const check = args.includes('--check')
@@ -1264,7 +1277,7 @@ async function petBrief(args) {
     if (inFile !== undefined || outFlag !== undefined || displayPolicyFlag !== undefined || asJson || check) {
       return fail('E_USAGE', '--print-schema cannot be combined with other pet-brief options')
     }
-    console.log(JSON.stringify(petBriefJsonSchema(), null, 2))
+    console.log(JSON.stringify(await petBriefJsonSchema(), null, 2))
     return
   }
   if (inFile !== undefined && !check) return fail('E_USAGE', '--in can only be used with --check')
@@ -1395,8 +1408,11 @@ async function doctor() {
       }
     }
   }
+  // P2-3 (0.2.1): probe resolvability instead of importing the office barrel
+  // (222-573ms, and only needed to answer "is the peer installed?").
   let officeOk = false
-  try { await import('advisers-office'); officeOk = true } catch { try { await import('../../office/dist/index.js'); officeOk = true } catch {} }
+  try { officeOk = Boolean(import.meta.resolve('advisers-office')) } catch {}
+  if (!officeOk) officeOk = existsSync(new URL('../../office/dist/index.js', import.meta.url))
   check('office', officeOk, officeOk ? 'advisers-office resolvable' : 'npm i -g advisers-office@next, or ADVISERS_OFFICE_LOCAL=1 in checkout')
   check('policy', Boolean(StrictPolicyPack), StrictPolicyPack ? 'strict pack loaded' : 'policy pack missing')
   check('model', true, process.env.ADVISERS_API_KEY ? 'API key present (not tested)' : 'optional; ADVISERS_API_KEY not set')
@@ -1456,10 +1472,11 @@ function printStatus(asJson = false) {
   console.log(`soul      ${data.soul}`)
 }
 
-function loadHistory(conversationId) {
+async function loadHistory(conversationId) {
   try {
     const store = dbStore()
     if (!store) return { turns: [], summary: '' }
+    const { buildHistory } = await loadContextWindow()
     const turns = store.listTurns(conversationId, 100)
     const summary = store.getSessionSummary(conversationId)
     return buildHistory({ turns, summary: summary?.summary, throughSeq: summary?.throughSeq ?? 0 })
@@ -1477,6 +1494,7 @@ async function maybeSummarize(conversationId, { apiKey, baseUrl, model, ledger }
   try {
     const store = dbStore()
     if (!store) return
+    const { shouldSummarize, buildPins, summarizeTurns, ensurePins, continuityProbes } = await loadContextWindow()
     const turns = store.listTurns(conversationId, 500)
     const old = store.getSessionSummary(conversationId)
     if (!shouldSummarize(turns, old?.throughSeq ?? 0, 10, 20)) return
@@ -1489,6 +1507,7 @@ async function maybeSummarize(conversationId, { apiKey, baseUrl, model, ledger }
     if (apiKey && process.env.ADVISERS_LLM_SUMMARY !== '0') {
       try {
         const transcript = fresh.map((t) => `${t.role === 'user' ? '用户' : '助手'}：${t.content}`).join('\n')
+        const { chatCompletion } = await loadModel()
         const response = await chatCompletion({
           apiKey,
           baseUrl: baseUrl || 'https://api.deepseek.com',
@@ -1509,10 +1528,11 @@ async function maybeSummarize(conversationId, { apiKey, baseUrl, model, ledger }
   } catch {}
 }
 
-function printOpening(conversationId) {
+async function printOpening(conversationId) {
   try {
     const store = dbStore()
     if (!store) return
+    const { buildOpening } = await loadContextWindow()
     const turns = store.listTurns(conversationId, 20)
     const summary = store.getSessionSummary(conversationId)
     const commitments = loadLedger().openCommitments()
@@ -1520,7 +1540,8 @@ function printOpening(conversationId) {
   } catch {}
 }
 
-function applyNudgeFeedback(text) {
+async function applyNudgeFeedback(text) {
+  const { classifyNudgeOutcome } = await loadNudge()
   const outcome = classifyNudgeOutcome(text)
   if (!outcome) return
   try {
@@ -1615,7 +1636,7 @@ async function runTurnInner({ runtime, ledger, text, conversationId, debug = fal
     console.log(`[ignored: ${result.reason}]`)
     return
   }
-  applyNudgeFeedback(text)
+  await applyNudgeFeedback(text)
   const context = runtime.lastContext
   if (!context) throw new Error('runtime did not produce a context')
   const egressDenied = egressDeniedReason(context.matter, 'chat')
@@ -1673,7 +1694,8 @@ async function runTurnInner({ runtime, ledger, text, conversationId, debug = fal
     if (!intent?.questions?.length) console.log('[local] 未配置模型；已记录到当前会话，但没有创建承诺或文件。设置 ADVISERS_API_KEY 后可用自然语言执行；也可用 `advisers office` / `advisers template` 直接生成文件。')
     return intent?.questions?.[0]
   }
-  const history = loadHistory(conversationId)
+  const { buildPins, fitHistory } = await loadContextWindow()
+  const history = await loadHistory(conversationId)
   const pins = buildPins({
     preferences: ledger.listPreferences({ matterId: context.matter.id }),
     commitments: ledger.openCommitments(context.matter.id),
@@ -1681,6 +1703,7 @@ async function runTurnInner({ runtime, ledger, text, conversationId, debug = fal
   const prompt = pins ? `${context.prompt}\n<session-pins>\n${pins}\n</session-pins>` : context.prompt
   const fitted = fitHistory({ system: prompt, summary: history.summary, history: history.turns, current: agentText, maxTokens: Number(process.env.ADVISERS_CONTEXT_TOKENS || 12000) })
   if (fitted.trimmed) console.log(`[compact] 裁剪 ${fitted.trimmed} 轮旧历史`)
+  const { runAgent } = await loadAgent()
   const { reply, artifacts, toolLog } = await runAgent({
     runtime,
     text: agentText,
@@ -1747,6 +1770,7 @@ async function runTurnInner({ runtime, ledger, text, conversationId, debug = fal
   if (runId && process.env.ADVISERS_LEARNING === 'auto' && apiKey) {
     try {
       const run = dbStore()?.listTaskRuns(50).find((r) => r.id === runId)
+      const { reviewRun, lintReview, materializeReview } = await loadReview()
       const review = await reviewRun({ run, routines: ledger.listRoutines(), apiKey, baseUrl: process.env.ADVISERS_BASE_URL, model: process.env.ADVISERS_MODEL })
       const checked = lintReview(review, { run, routines: ledger.listRoutines() })
       if (checked.ok && checked.review.verdict !== 'NONE') {
@@ -1756,6 +1780,7 @@ async function runTurnInner({ runtime, ledger, text, conversationId, debug = fal
       }
     } catch {}
   }
+  const { buildRoutineCandidate } = await loadLearning()
   const candidate = buildRoutineCandidate({ text, toolLog, artifacts })
   if (candidate && !ledger.listRoutines().some((r) => r.name === candidate.name)) {
     try {
@@ -1813,7 +1838,7 @@ async function repl() {
   }
   try {
     const latest = dbStore()?.listSessions(1)[0]
-    printOpening(latest?.conversationId ?? conversationId)
+    await printOpening(latest?.conversationId ?? conversationId)
   } catch {}
   console.log('/help for commands, /quit to leave')
 
@@ -1918,6 +1943,7 @@ async function repl() {
       continue
     }
     if (text === '/decay') {
+      const { applyPreferenceDecay } = await loadLearning()
       const changed = applyPreferenceDecay(ledger.listPreferences({ includeCandidates: true }))
       saveLedger(ledger)
       console.log(`[decay] ${changed.length} preference(s) updated`)
@@ -1937,6 +1963,7 @@ async function repl() {
     if (text === '/week') { printWeek(ledger); continue }
     if (text === '/digest' || text === '/digest day' || text === '/digest week') {
       const store = dbStore()
+      const { buildDigest } = await loadDigest()
       console.log(buildDigest({
         period: text.endsWith('week') ? 'week' : 'day',
         turns: store?.listTurns(conversationId, 200) ?? [],
@@ -1946,11 +1973,13 @@ async function repl() {
       continue
     }
     if (text === '/diff') {
+      const { diffLatest } = await loadUndo()
       const result = await diffLatest({ cwd: process.cwd(), backupDir: join(HOME, 'undo') })
       console.log(result.ok ? result.diff : `diff failed: ${result.error}`)
       continue
     }
     if (text === '/undo') {
+      const { undoLatest } = await loadUndo()
       const result = await undoLatest({ cwd: process.cwd(), backupDir: join(HOME, 'undo'), force: args.includes('--force') })
       console.log(result.ok ? `已回滚：${result.path}` : `撤销失败：${result.error}`)
       continue
@@ -2026,7 +2055,7 @@ async function repl() {
         pendingFiles = []
         console.log(`resumed: ${pick.title} [${pick.conversationId}]`)
       } catch { console.log('history is not available') }
-      printOpening(conversationId)
+      await printOpening(conversationId)
       continue
     }
     if (text.startsWith('/brief ')) {
@@ -2036,6 +2065,7 @@ async function repl() {
       continue
     }
     if (text.startsWith('/')) { console.log(`unknown command: ${text}; /help`); continue }
+    const { correctionStatement } = await loadLearning()
     const feedback = correctionStatement(text)
     if (feedback) {
       const result = learnPreference(ledger, feedback, text, { explicit: /^(以后|记住|每次)/.test(text) })
@@ -2190,6 +2220,7 @@ async function brief(text, deep = false) {
     const briefDenied = egressDeniedReason(briefLedger.getMatter(activeMatterId(briefLedger)), 'brief --deep')
     if (briefDenied) { console.error(briefDenied); process.exitCode = 1; return }
     try {
+      const { chatCompletion } = await loadModel()
       const response = await chatCompletion({
         apiKey: process.env.ADVISERS_API_KEY,
         baseUrl: process.env.ADVISERS_BASE_URL,
@@ -2273,6 +2304,7 @@ async function routine(sub, arg, arg2) {
     if (!arg) { console.error('usage: advisers routine check <id>'); process.exitCode = 1; return }
     const routine = ledger.listRoutines().find((r) => r.id === arg)
     if (!routine) { console.error(`unknown routine: ${arg}`); process.exitCode = 1; return }
+    const { checkRoutine } = await loadRoutine()
     const result = checkRoutine(routine)
     for (const item of result.results) console.log(`${item.ok ? 'ok' : 'FAIL'}\t${item.kind}\t${item.entry}`)
     if (!result.ok) process.exitCode = 1
@@ -2337,6 +2369,7 @@ async function routine(sub, arg, arg2) {
       const routine = ledger.listRoutines().find((r) => r.id === pending.routineId)
       if (!routine) { console.error(`unknown routine: ${pending.routineId}`); process.exitCode = 1; return }
       const candidate = { ...routine, ...pending.changes }
+      const { checkRoutine } = await loadRoutine()
       const check = checkRoutine(candidate)
       if (!check.ok) {
         console.error('routine checks failed; patch not applied')
@@ -2435,6 +2468,7 @@ async function documentReview(args) {
   if (process.env.ADVISERS_OFFICE_LOCAL === '1') mod = await import('../../office/dist/index.js')
   else { try { mod = await import('advisers-office') } catch { mod = await import('../../office/dist/index.js') } }
   const doc = await mod.readOffice(readFileSync(file))
+  const { reviewDocument } = await loadDocReview()
   const result = await reviewDocument({ text: mod.officeToText(doc, 20_000), request: flags.request, apiKey, baseUrl: process.env.ADVISERS_BASE_URL, model: process.env.ADVISERS_MODEL })
   dbStore()?.appendAudit({ actor: 'local', action: 'doc.review', allowed: !result.findings.some((f) => f.severity === 'blocker'), reason: file })
   console.log(result.summary || '(no summary)')
@@ -2459,6 +2493,7 @@ async function research(args) {
   // must not print stacks/upstream text either. Print only stable status + code.
   let result
   try {
+    const { research: runResearch } = await loadResearch()
     result = await runResearch({ query, urls, apiKey, baseUrl: process.env.ADVISERS_BASE_URL, deep: Boolean(flags.deep) })
   } catch (error) {
     const status = Number.isFinite(Number(error?.status)) ? `HTTP ${Number(error.status)} ` : ''
@@ -2505,6 +2540,7 @@ async function buildCaptureSource({ meta, quote, ref, capturedAt }) {
  * @returns {Promise<{count: number, candidates: object[]}>}
  */
 async function proposeCaptureText({ text, source = 'wechat', date, matterId, meta = {}, store, json = false }) {
+  const { captureCandidates } = await loadCapture()
   const result = await captureCandidates({ text, apiKey: process.env.ADVISERS_API_KEY, baseUrl: process.env.ADVISERS_BASE_URL, model: process.env.ADVISERS_MODEL, date, source })
   if (!result.candidates.length) return { count: 0, candidates: [] }
   const conversationId = latestConversationId()
@@ -2668,6 +2704,7 @@ async function captureFromImap(flags) {
   const { parseEml, dedupeKey, toCaptureInput } = await loadImporters()
   let messages
   try {
+    const { fetchImapMessages } = await loadImap()
     messages = await fetchImapMessages({
       host,
       port: Number(process.env.ADVISERS_IMAP_PORT) || (String(process.env.ADVISERS_IMAP_SECURE) === '0' ? 143 : 993),
@@ -2795,6 +2832,7 @@ async function ui(args) {
     who: () => ({ mine: ledger.openCommitments().filter((c) => c.debtor === 'user' || c.debtor === 'agent'), waiting: ledger.openCommitments().filter((c) => c.debtor === 'third' || c.debtor.startsWith('third:')) }),
     reminders: () => buildReminders(ledger, { now: new Date() }),
   }
+  const { createReadOnlyServer } = await loadUi()
   const app = createReadOnlyServer({ snapshot, port })
   // SEC2-07: DNS rebinding can point an attacker origin at 127.0.0.1; the
   // library only checks method=GET, so validate Host before its handler runs.
@@ -3035,7 +3073,6 @@ async function deliver(args) {
   }
   sections.push({ heading: '校验', paragraphs: [`内容哈希：${sha256Hex(JSON.stringify(commitments.map((c) => ({ id: c.id, action: c.action, dueAt: c.dueAt, evidence: c.evidence }))))}`, '本文件由本地账本生成；哈希用于事后比对，不是第三方存证。'] })
   try {
-    const mod = process.env.ADVISERS_OFFICE_LOCAL === '1' ? await import('../../office/dist/index.js') : await import('advisers-office')
     let buffer
     if (format === 'pdf') {
       const { buildSimplePdf } = await loadPdf()
@@ -3045,6 +3082,9 @@ async function deliver(args) {
       await backupCliFile(out)
       writeFileSync(out, buffer)
     } else if (format === 'xlsx') {
+      // P2-3: the office barrel (exceljs + pptxgenjs + read/check) is only paid
+      // on the formats that actually need it; PDF used to import it too.
+      const mod = process.env.ADVISERS_OFFICE_LOCAL === '1' ? await import('../../office/dist/index.js') : await import('advisers-office')
       const rows = commitments.map((c) => ({
         id: c.id, creditor: c.creditor, action: c.action, due: c.dueAt ?? '',
         status: c.status, evidence: (c.evidence ?? []).length,
@@ -3060,6 +3100,7 @@ async function deliver(args) {
       await backupCliFile(out)
       writeFileSync(out, buffer)
     } else {
+      const mod = process.env.ADVISERS_OFFICE_LOCAL === '1' ? await import('../../office/dist/index.js') : await import('advisers-office')
       buffer = await mod.buildDocx({ title: `${label} · Advisers`, sections })
       await mod.validateOffice(buffer, 'docx')
       await backupCliFile(out)
@@ -3569,10 +3610,13 @@ async function evidencePack(args) {
   for (const [name, content] of Object.entries(pack.files)) writeFileSync(join(out, name), content, { mode: 0o600 })
   let receipt
   try {
-    const mod = process.env.ADVISERS_OFFICE_LOCAL === '1' ? await import('../../office/dist/index.js') : await import('advisers-office')
+    // P2-3: import the docx/validate submodules, not the office barrel.
+    const docxModule = await importOfficeSubmodule('docx')
+    if (typeof docxModule?.buildDocx !== 'function') throw new Error('advisers-office docx builder is not available')
+    const validateOffice = await loadOfficeOperation('validate', 'validateOffice')
     const rows = toDocxRows(pack, { maxRows: 80 })
-    const buffer = await mod.buildDocx({ title: '证据包回执', sections: [{ heading: '证据清单', paragraphs: rows.length ? rows : ['（没有可导出条目）'] }, { heading: '校验', paragraphs: [`manifest.json / README.txt 的 SHA256 见 SHA256SUMS`, `生成时间：${new Date().toISOString()}`, 'SHA256SUMS 只证明包生成后未被修改；不是签名或第三方存证。'] }] })
-    await mod.validateOffice(buffer, 'docx')
+    const buffer = await docxModule.buildDocx({ title: '证据包回执', sections: [{ heading: '证据清单', paragraphs: rows.length ? rows : ['（没有可导出条目）'] }, { heading: '校验', paragraphs: [`manifest.json / README.txt 的 SHA256 见 SHA256SUMS`, `生成时间：${new Date().toISOString()}`, 'SHA256SUMS 只证明包生成后未被修改；不是签名或第三方存证。'] }] })
+    await validateOffice(buffer, 'docx')
     writeFileSync(join(out, 'receipt.docx'), buffer)
     receipt = join(out, 'receipt.docx')
   } catch (error) { console.error(`docx receipt skipped: ${error.message}`) }
@@ -4623,6 +4667,7 @@ if (!command) {
     if (!run || !apiKey) { console.error('usage: ADVISERS_API_KEY=... advisers learn review <run-id>'); process.exitCode = 1 }
     else {
       const ledger = loadLedger()
+      const { reviewRun, lintReview, materializeReview } = await loadReview()
       const review = await reviewRun({ run, routines: ledger.listRoutines(), apiKey, baseUrl: process.env.ADVISERS_BASE_URL, model: process.env.ADVISERS_MODEL })
       const checked = lintReview(review, { run, routines: ledger.listRoutines() })
       if (!checked.ok) { console.error(`review rejected: ${checked.error}`); process.exitCode = 1 }
@@ -4719,10 +4764,12 @@ if (!command) {
     }
   } else { console.error('usage: advisers commit add|edit|ls|done|snooze'); process.exitCode = 1 }
 } else if (command === 'diff') {
+  const { diffLatest } = await loadUndo()
   const result = await diffLatest({ cwd: process.cwd(), backupDir: join(HOME, 'undo') })
   console.log(result.ok ? result.diff : `diff failed: ${result.error}`)
   if (!result.ok) process.exitCode = 1
 } else if (command === 'undo') {
+  const { listBackups, undoLatest } = await loadUndo()
   if (args.includes('--list')) {
     for (const row of await listBackups(join(HOME, 'undo'), { workspace: process.cwd() })) console.log(`${row.id}\t${row.path}\t${row.existed ? 'overwrite' : 'create'}`)
   } else {
@@ -4836,6 +4883,7 @@ if (!command) {
 } else if (command === 'digest') {
   const period = args[0] === 'week' ? 'week' : 'day'
   const store = dbStore()
+  const { buildDigest } = await loadDigest()
   console.log(buildDigest({
     period,
     turns: store?.listTurns(latestConversationId(), 200) ?? [],
@@ -4854,6 +4902,7 @@ if (!command) {
   purgeMatter(args[0], args.includes('--yes'))
 } else if (command === 'decay') {
   const ledger = loadLedger()
+  const { applyPreferenceDecay } = await loadLearning()
   const changed = applyPreferenceDecay(ledger.listPreferences({ includeCandidates: true }))
   saveLedger(ledger)
   console.log(`[decay] ${changed.length} preference(s) updated`)

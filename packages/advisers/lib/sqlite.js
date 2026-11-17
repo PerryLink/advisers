@@ -864,16 +864,34 @@ CREATE TABLE IF NOT EXISTS task_runs (
   }
 
   /**
-   * P0-2 (tick N+1 removal): the newest `limit` outcomes per commitment in one
-   * query (window function over idx_nudges_commitment_at). Replaces one
-   * listCommitmentNudges() round-trip per commitment.
+   * P0-2 (tick N+1 removal): the newest `limit` outcomes per commitment.
+   *
+   * P2-2 (0.2.1): the original form windowed over the WHOLE nudges table
+   * (scan + temp b-tree sort), so every tick paid for the entire nudge history:
+   * 271ms at 200k rows and growing linearly. Tick only needs outcomes for the
+   * commitments it is about to nudge, so callers that know that set pass
+   * `commitmentIds`; the read then becomes `limit` index seeks per commitment on
+   * idx_nudges_commitment_at, bounded by the candidate set instead of the
+   * history size. Passing no ids keeps the historical whole-table map for
+   * callers/tests that need it.
    */
-  recentNudgeOutcomes(limit = 3) {
+  recentNudgeOutcomes(limit = 3, commitmentIds = null) {
+    const newest = Math.max(1, Math.floor(Number(limit) || 3))
+    const byCommitment = new Map()
+    if (commitmentIds) {
+      const ids = [...new Set(commitmentIds)]
+      if (!ids.length) return byCommitment
+      const statement = this.db.prepare('SELECT outcome FROM nudges WHERE commitment_id = ? ORDER BY at DESC LIMIT ?')
+      for (const id of ids) {
+        const rows = statement.all(id, newest)
+        if (rows.length) byCommitment.set(id, rows.map((row) => row.outcome))
+      }
+      return byCommitment
+    }
     const rows = this.db.prepare(`SELECT commitment_id, outcome, at FROM (
         SELECT commitment_id, outcome, at, ROW_NUMBER() OVER (PARTITION BY commitment_id ORDER BY at DESC) AS rn
         FROM nudges
-      ) WHERE rn <= ?`).all(limit)
-    const byCommitment = new Map()
+      ) WHERE rn <= ?`).all(newest)
     for (const row of rows) {
       const list = byCommitment.get(row.commitment_id)
       if (list) list.push(row.outcome)
