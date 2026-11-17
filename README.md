@@ -43,14 +43,14 @@ on any link package; adapters load one only when configured.
 
 ## Status
 
-`0.2.0` is the **stable release candidate** for the 2026-11-17 release, **staged pending OTP approval**:
-the eight workspace packages are lockstep at `0.2.0`. The six published packages are
-`advisers`, `advisers-core`, `advisers-office`, `advisers-policy-strict`,
-`advisers-bridge-hermes` and `dsh-advisers`; the two private `advisers-link-*` packages are
-held at the same version but are not published. Nothing from this release is on `latest`
-yet (it still points at the old placeholder): the build is prepared for npm staging and the
-account owner approves it with OTP. The release owner updates this section to "published"
-only after that manual step.
+`0.2.0` is the **current stable release** for the 2026-11-17 release: the eight workspace
+packages are lockstep at `0.2.0`. The six published packages are `advisers`,
+`advisers-core`, `advisers-office`, `advisers-policy-strict`, `advisers-bridge-hermes` and
+`dsh-advisers`; the two private `advisers-link-*` packages are held at the same version but
+are not published. All six published packages are live on npm **`latest` = `0.2.0`**
+(the account owner completed the npm OTP approval on 2026-11-17). Registry tarballs,
+license files and a fresh-prefix install were verified with
+`scripts/verify-release.mjs` (80/80 checks, including an install smoke test).
 
 > Requires **Node >= 22.13**. See [docs/QUICKSTART.md](docs/QUICKSTART.md) for Windows/PowerShell and BOM notes.
 
@@ -72,17 +72,17 @@ only after that manual step.
 - each turn sends a `latest_reminder` date/weekday/location/language marker so relative dates are grounded;
 - thinking mode: `ADVISERS_THINKING=off|on|auto`, `ADVISERS_THINKING_EFFORT=low|high|max`; `reasoning_content` is kept in memory only for the current tool loop and is not written to turns/summaries/audit/export/backup. This does not control provider-side logs or OS crash dumps;
 - DSH bundle (`dsh-advisers`) with five tools (`advisers_brief`, `advisers_office`, `advisers_today`, `advisers_who`, `advisers_evidence`); email/Feishu link packages are **libraries not wired into the CLI**; optional strict policy pack (see `packages/policy-strict/README.md`);
-- Hermes bridge (`advisers-bridge-hermes`); staged with the other five packages for `0.2.0`;
+- Hermes bridge (`advisers-bridge-hermes`); published with the other five packages for `0.2.0`;
 - real-account/WS/Office-L3 validation still pending.
 
 ```sh
-# 0.2.0 is staged-pending-OTP; run from checkout until the owner approves:
+# 0.2.0 is published on npm @latest; or run from checkout:
 git clone https://github.com/PerryLink/advisers.git
 cd advisers && corepack pnpm install && corepack pnpm -r build
 ADVISERS_OFFICE_LOCAL=1 node packages/advisers/bin/advisers.js status
-# From npm, after the owner approves 0.2.0 (stable channel = default `latest`):
+# From npm (stable channel = default `latest`, now 0.2.0):
 #   npm i -g --registry=https://registry.npmjs.org advisers@latest advisers-office@latest
-# Pre-release/RC builds live on the `next` channel until then:
+# Pre-release/RC builds live on the `next` channel:
 #   npm i -g --registry=https://registry.npmjs.org advisers@next advisers-office@next
 advisers
 # or one-shot:

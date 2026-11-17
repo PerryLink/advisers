@@ -1,9 +1,9 @@
 # Quickstart (Windows + PowerShell)
 
-> Current status: `0.2.0` is the **stable release candidate** (staged pending OTP). All six
-> published packages are lockstep at `0.2.0`; the account owner's OTP approval is the only
-> remaining internal step. Until approval, run from the checkout as shown below: the public
-> `@latest` tag is still an old placeholder and `@next` may lag behind the staged build.
+> Current status: `0.2.0` is the **current stable release**, published on npm `@latest`.
+> All six published packages are lockstep at `0.2.0`; install with
+> `npm i -g --registry=https://registry.npmjs.org advisers@latest advisers-office@latest`.
+> The checkout instructions below remain valid for development builds.
 
 > **Before you start** — read the [Terms of Service](TOS.md) (v2026.11.2),
 > [Disclaimer](DISCLAIMER.md), [Safety & content review](SAFETY.md), and

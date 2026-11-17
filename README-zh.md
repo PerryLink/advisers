@@ -26,7 +26,7 @@ Advisers 不是聊天框，也不是情感陪伴。它维护三本账：
 
 ## 状态
 
-`0.2.0` 是 2026-11-17 发布的**稳定版候选（stable release candidate，staged pending OTP）**：8 个 workspace 包统一为 `0.2.0`。其中 6 个发布包为 `advisers`、`advisers-core`、`advisers-office`、`advisers-policy-strict`、`advisers-bridge-hermes`、`dsh-advisers`；两个私有 `advisers-link-*` 包保持同版本但不发布。目前尚未发布到 `latest`：构建已准备进入 npm staging，需账号所有者本人 OTP 批准；获批后由发布负责人把本节改为“已发布”。
+`0.2.0` 是 2026-11-17 的**当前稳定版**：8 个 workspace 包统一为 `0.2.0`。其中 6 个发布包为 `advisers`、`advisers-core`、`advisers-office`、`advisers-policy-strict`、`advisers-bridge-hermes`、`dsh-advisers`；两个私有 `advisers-link-*` 包保持同版本但不发布。六包均已发布到 npm **`latest` = `0.2.0`**（账号所有者本人于 2026-11-17 完成 OTP 批准）；registry tarball、许可文件与全新 prefix 安装已用 `scripts/verify-release.mjs` 验证（80/80，含安装 smoke）。
 
 > 需要 **Node >= 22.13**；Windows/PowerShell/BOM 说明见 [docs/QUICKSTART.md](docs/QUICKSTART.md)。
 
@@ -49,13 +49,13 @@ Advisers 不是聊天框，也不是情感陪伴。它维护三本账：
 - Pet Brief（只读脱敏投影，契约 v0.2：`schemaVersion: 2` + `displayPolicy`，默认 `private`；v0.1 brief 按 legacy 可读）：`pet-brief --json|--out|--check [--strict]|--print-schema|--display-policy public|private|none`；`secrecy >= 2` 全排除、confidence < 0.7 丢弃、5 分钟 TTL、每节 10 项上限；不调模型、不联网、不改账本；桌宠 UI/传输尚未接通。见 `docs/PET-BRIEF-PRODUCER.md`。
 
 ```sh
-# 0.2.0 处于 staged-pending-OTP 状态；获批前请从 checkout 运行。
+# 0.2.0 已发布到 npm @latest；也可从 checkout 运行：
 # 从 checkout 跑：
 #   corepack pnpm install && corepack pnpm -r build
 #   ADVISERS_OFFICE_LOCAL=1 node packages/advisers/bin/advisers.js status
-# 从 npm 安装（账号所有者批准 0.2.0 后；稳定渠道 = 默认 `latest`）：
+# 从 npm 安装（稳定渠道 = 默认 `latest`，现为 0.2.0）：
 #   npm i -g --registry=https://registry.npmjs.org advisers@latest advisers-office@latest
-# 转正前，preview/RC 构建在 `next` 渠道：
+# preview/RC 构建在 `next` 渠道：
 #   npm i -g --registry=https://registry.npmjs.org advisers@next advisers-office@next
 advisers soul init
 advisers commit add "周五前发报价给王工" --quote "周五前发报价给王工" --due 2026-11-13T18:00:00+08:00
@@ -66,7 +66,7 @@ advisers office docx spec.json out.docx
 advisers verify out.docx
 ```
 
-npm 标签：**`latest`** 是稳定渠道（账号所有者批准 0.2.0 前仍是旧占位版 `0.0.4`）；**`next`** 是预发布渠道，preview/RC 构建先发到这里。需要可复现安装时请固定版本（`advisers@0.2.0`），并直接查询官方 registry（`npm view advisers dist-tags --registry=https://registry.npmjs.org/`）——镜像可能滞后。
+npm 标签：**`latest`** 是稳定渠道（现为 `0.2.0`）；**`next`** 是预发布/候选渠道。需要可复现安装时请固定版本（`advisers@0.2.0`），并直接查询官方 registry（`npm view advisers dist-tags --registry=https://registry.npmjs.org/`）——镜像可能滞后。需要可复现安装时请固定版本（`advisers@0.2.0`），并直接查询官方 registry（`npm view advisers dist-tags --registry=https://registry.npmjs.org/`）——镜像可能滞后。
 
 ## 许可
 

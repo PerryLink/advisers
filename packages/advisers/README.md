@@ -7,14 +7,12 @@ routines.
 ## Install
 
 ```sh
-# 0.2.0 is the stable release candidate (staged pending OTP); until the owner
-# approves it, run from checkout or install the pre-release `next` channel.
+# 0.2.0 is published on npm @latest (stable channel = default `latest`):
+#   npm i -g --registry=https://registry.npmjs.org advisers@latest advisers-office@latest
 # From checkout:
 #   corepack pnpm install && corepack pnpm -r build
 #   ADVISERS_OFFICE_LOCAL=1 node packages/advisers/bin/advisers.js status
-# From npm, after approval (stable channel = default `latest`):
-#   npm i -g --registry=https://registry.npmjs.org advisers@latest advisers-office@latest
-# Pre-release/RC builds until then:
+# Pre-release/RC builds live on the `next` channel:
 #   npm i -g --registry=https://registry.npmjs.org advisers@next advisers-office@next
 advisers soul init
 advisers brief "做一份 Q4 预算 Excel，周五前给老板"
@@ -45,7 +43,7 @@ turn natural language into commitments or artifacts.
 
 ## Status
 
-`0.2.0` is the stable release candidate (staged pending OTP; not published yet):
+`0.2.0` is the current stable release (published on npm `latest`):
 
 - SQLite ledger at `~/.advisers/state.db` (JSON fallback with `ADVISERS_STORE=json`);
 - soul at `~/.advisers/soul.md`, human-owned;

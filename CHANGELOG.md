@@ -1,11 +1,12 @@
 # Changelog
 
-## 0.2.0 (release candidate, 2026-11-17)
+## 0.2.0 (published, 2026-11-17)
 
 First stable release of the 0.2.0 line: the six published packages are lockstep at `0.2.0`
-and the two private `advisers-link-*` packages share the same version. Not yet on `latest`:
-npm staging and the account owner's OTP approval happen at release time (runbook:
-`docs/RELEASING.md`; evidence draft: `eval/results/E11-release-2026-11-17.md`).
+and the two private `advisers-link-*` packages share the same version. Published on npm
+`latest` on 2026-11-17 after the account owner's OTP approval; tarballs, license files and
+a fresh-prefix install were verified with `scripts/verify-release.mjs` (80/80 checks). See
+`docs/RELEASING.md` and `eval/results/E11-release-2026-11-17.md` for evidence.
 
 ### Added
 
@@ -68,10 +69,10 @@ npm staging and the account owner's OTP approval happen at release time (runbook
   `advisers-office`, `advisers-policy-strict`, `advisers-bridge-hermes`, `dsh-advisers`,
   private `advisers-link-email`, `advisers-link-feishu`) are `0.2.0`; internal pins,
   version constants and `pnpm-lock.yaml` follow.
-- **Docs version cleanup**: user-facing READMEs/QUICKSTART describe `0.2.0` as the stable
-  release candidate and explain the `latest` (stable) vs `next` (pre-release) channels.
+- **Docs version cleanup**: user-facing READMEs/QUICKSTART describe `0.2.0` as the current
+  stable release and explain the `latest` (stable) vs `next` (pre-release) channels.
 
-### Verified (release-preparation tree, 2026-11-17)
+### Verified (published release, 2026-11-17)
 
 - `pnpm -r build` and `pnpm -r typecheck`: exit 0.
 - `node scripts/pack-smoke.mjs`: PASS for all six packages (`advisers@0.2.0`: 53 files /
