@@ -1,6 +1,8 @@
 # Windows smoke test（发布后，首个目标平台）
 
 > 目的：在 **Windows 原生**（PowerShell 7 + Node >= 22.13）验证 npm 包安装与首启/tos/pet-brief。
+> 若要把测试交给 Windows 上的 DSH/agent 执行，直接复制
+> [WINDOWS-SMOKE-PROMPT.md](WINDOWS-SMOKE-PROMPT.md) 的提示词正文。
 > 无法实机执行时，E11 必须保留「Windows 未验证」的如实记录。
 
 ## 前置
