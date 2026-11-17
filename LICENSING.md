@@ -211,8 +211,38 @@ P2 follow-up.
 
 ## Derived projects
 
-Projects derived from Advisers may adopt the same policy; a copy-ready guide and Required
-Notice template are in [templates/DERIVED-PROJECT-LICENSING.md](templates/DERIVED-PROJECT-LICENSING.md).
+Advisers applies a **limited derivative-project policy (policy A, decision of
+2026-11-17)**: only projects that are *direct derivatives* of Advisers adopt the same
+two-license model.
+
+- **In scope — direct derivative projects.** A project is a direct derivative if it
+  depends on a published Advisers package (`advisers`, `advisers-core`,
+  `advisers-office`, `advisers-policy-strict`, `advisers-bridge-hermes`,
+  `dsh-advisers`, `advisers-link-*`), if its own source consumes or tracks an Advisers
+  interface contract beyond an independent implementation (Pet Brief contract, CLI
+  `--json` contract, MCP resources/tools, source schema, copied schemas/test
+  vectors/fixtures), or if it copies or adapts Advisers code, templates or
+  documentation. Those projects license the Advisers-derived parts under PolyForm
+  Noncommercial 1.0.0 (software) and CC BY-NC-SA 4.0 (documentation/data/design).
+- **Out of scope — independent DSH plugin compositions.** Plugin projects that run on
+  DeepSeek Harness but do not depend on an Advisers package and do not copy or track
+  Advisers code/contracts keep their own licences (commonly Apache-2.0). This policy
+  does not relicense them and does not ask them to adopt the Advisers licences.
+- **Deriving is not the same as implementing an interface.** Independently implementing
+  a published interface remains free under boundary rule 3 above; copying the interface
+  documentation itself still triggers CC BY-NC-SA 4.0.
+- **Not retroactive.** A derived project's releases published before its migration keep
+  the licence in force at publication. Upstream files keep the upstream licence; a
+  derived project may license its own original additions separately (PolyForm
+  Noncommercial is not copyleft), but that does not change the restrictions on the
+  upstream parts.
+
+Current direct derivative projects are listed in
+[docs/DERIVED-PROJECTS.md](docs/DERIVED-PROJECTS.md). The copy-ready guide, directory
+checklist, migration steps and acceptance commands are in
+[templates/DERIVED-PROJECT-LICENSING.md](templates/DERIVED-PROJECT-LICENSING.md).
+Commercial-licensing requests for Advisers:
+<https://github.com/PerryLink/advisers/issues> with the title prefix `commercial-license`.
 
 ## Contributing
 
@@ -258,4 +288,10 @@ LICENSE，必需声明见 NOTICE）；文档、评测数据与设计材料采用
 - 不追溯：0.2.0 之前发布的版本保留原许可（MIT；advisers@0.2.0-preview.71 为
   Apache-2.0），详见 NOTICE。已经授予的权利不可撤销：MIT/Apache-2.0 版本的用户可继续按
   原许可使用（含商业使用）与再分发。
+- 衍生项目（方案 A，2026-11-17 决定）：仅**直接衍生项目**（依赖 Advisers 发布包 / 在自身
+  源码中消费 Pet Brief、CLI `--json`、MCP、source schema 等契约 / 复制或改编 Advisers
+  代码与文档）迁移为同样的双许可；**独立 DSH 插件组合保持各自原许可**（常见
+  Apache-2.0），本政策不改变其许可。清单见 docs/DERIVED-PROJECTS.md，迁移清单、目录要求
+  与验收命令见 templates/DERIVED-PROJECT-LICENSING.md。迁移不追溯；上游文件保持上游
+  许可，衍生项目自己新增的部分可另行许可。
 - 贡献：见 CONTRIBUTING.md 的 "Licensing of contributions"（DCO 1.1 + 再许可授权）。
