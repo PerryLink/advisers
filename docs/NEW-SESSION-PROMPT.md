@@ -26,7 +26,7 @@
 - 重要背景（写交接时的实测）：HEAD 约 `c7e30a0`，代码 HEAD `64a7f82`；250 tests；版本仍是 `.70`；**staged `.70` 不包含另一个会话新增的 Pet Brief producer**。若你看到版本已是 `.71` 或更高，以 CHANGELOG/当前 stage 为准，不要把本文当现值。
 - 不要直接 approve `.70` 当成包含 Pet Brief 的版本；要包含它，先 bump `.71` 并重新 stage。
 - Gitee 公开 API 读回可能 404/受限；用 token 核实，不要假设三端已同步。
-- **2026-11-16 更新**：版本已是 `0.2.0-preview.71`，已 staged（id `3329a587-eb8b-467a-a184-7e1ce00e560b`，待 OTP）；三端 main 已同步到发布提交 `1dac429`。详见 `eval/results/E10-release-2026-11-16.md`。
+- **2026-11-17 更新**：`0.2.0-preview.71` 已由账号所有者 OTP 批准并发布到 npm（`next`，stage `3329a587-eb8b-467a-a184-7e1ce00e560b`）；依赖 `advisers-core@.22`/`advisers-policy-strict@.12`/`advisers-office@.14` 同步发布。详见 `eval/results/E10-release-2026-11-16.md`。
 
 ## 我同意后，建议的第一批工作
 

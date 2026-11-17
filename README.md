@@ -27,7 +27,7 @@ on any link package; adapters load one only when configured.
 
 ## Status
 
-`advisers@0.2.0-preview.71` (with `advisers-core@0.2.0-preview.22`) is **staged** on npm (stage `3329a587-eb8b-467a-a184-7e1ce00e560b`), awaiting owner OTP approval. The public `next` tag still points at the old `0.1.0-preview.2`; do not evaluate this build through it until approval:
+`advisers@0.2.0-preview.71` (with `advisers-core@0.2.0-preview.22`, `advisers-policy-strict@0.2.0-preview.12`, `advisers-office@0.2.0-preview.14`) is **published** on npm; the `next` tag points at `.71` (owner-approved 2026-11-17, stage `3329a587-eb8b-467a-a184-7e1ce00e560b`). The public `latest` tag stays on the old placeholder:
 
 > Requires **Node >= 22.13**. See [docs/QUICKSTART.md](docs/QUICKSTART.md) for Windows/PowerShell and BOM notes.
 
@@ -51,11 +51,11 @@ on any link package; adapters load one only when configured.
 - real-account/WS/Office-L3 validation still pending.
 
 ```sh
-# Current staged preview is not public yet; run from checkout:
+# Current preview is published on npm `next`; run from checkout:
 git clone https://github.com/PerryLink/advisers.git
 cd advisers && corepack pnpm install && corepack pnpm -r build
 ADVISERS_OFFICE_LOCAL=1 node packages/advisers/bin/advisers.js status
-# After npm approval:
+# From npm:
 # npm i -g --registry=https://registry.npmjs.org advisers@next advisers-office@next
 advisers
 # or one-shot:

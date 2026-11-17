@@ -1,6 +1,6 @@
 # Changelog
 
-## 0.2.0-preview.71 (staged, approval pending)
+## 0.2.0-preview.71 (published 2026-11-17)
 
 ### Added
 - **Pet Brief producer (contract v0.1)**: `advisers pet-brief --json|--out [path]|--check [--in file]`

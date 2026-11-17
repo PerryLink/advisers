@@ -1,6 +1,6 @@
 # Pet Brief producer (Advisers → Famling/Pearl)
 
-状态：**已实现 producer（只读投影 + CLI + `--check` + 测试）；已随 `0.2.0-preview.71` staged（待账号所有者 OTP 批准）；未接桌宠 UI。**
+状态：**已实现 producer（只读投影 + CLI + `--check` + 测试）；已随 `0.2.0-preview.71` 发布（npm `next`，2026-11-17）；未接桌宠 UI。**
 契约版本：**v0.1（2026-11-14，status: design contract）**。
 本机契约快照：`/mnt/d/Projects/dsh/desktop-games/docs/contracts/pet-brief/`
 （2026-11-15 自私有仓 `PerryLink/famling` `docs/` 复制；sha：PET-BRIEF.md `8698dd0c`、schema `5ec912cc`、example `12c1ecf4`、testcases `bcec4c94`/`47e86a88`。canonical 仍以 famling 为准。）

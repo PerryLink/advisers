@@ -7,11 +7,11 @@ routines.
 ## Install
 
 ```sh
-# Current preview is staged, awaiting OTP; public @next is an old 0.1 stub.
+# Current preview is published on npm `next` (owner-approved 2026-11-17).
 # From checkout:
 #   corepack pnpm install && corepack pnpm -r build
 #   ADVISERS_OFFICE_LOCAL=1 node packages/advisers/bin/advisers.js status
-# After approval:
+# From npm:
 npm i -g --registry=https://registry.npmjs.org advisers@next advisers-office@next
 advisers soul init
 advisers brief "做一份 Q4 预算 Excel，周五前给老板"
@@ -28,7 +28,7 @@ turn natural language into commitments or artifacts.
 
 ## Status
 
-`0.2.0-preview.71` is staged (owner OTP approval pending):
+`0.2.0-preview.71` is published on npm (`next`):
 
 - SQLite ledger at `~/.advisers/state.db` (JSON fallback with `ADVISERS_STORE=json`);
 - soul at `~/.advisers/soul.md`, human-owned;

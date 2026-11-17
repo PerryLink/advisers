@@ -12,7 +12,7 @@ Advisers 不是聊天框，也不是情感陪伴。它维护三本账：
 
 ## 状态
 
-`advisers@0.2.0-preview.71`（core `advisers-core@0.2.0-preview.22`）已 staged（stage `3329a587-eb8b-467a-a184-7e1ce00e560b`，待账号所有者 OTP 批准）；npm `next` 仍是旧的 0.1 preview，批准前不要用它评估：
+`advisers@0.2.0-preview.71`（core `advisers-core@0.2.0-preview.22`、`advisers-policy-strict@0.2.0-preview.12`、`advisers-office@0.2.0-preview.14`）已**发布**到 npm；`next` 指向 `.71`（账号所有者已于 2026-11-17 批准，stage `3329a587-eb8b-467a-a184-7e1ce00e560b`）。公开 `latest` 仍是旧占位版：
 
 > 需要 **Node >= 22.13**；Windows/PowerShell/BOM 说明见 [docs/QUICKSTART.md](docs/QUICKSTART.md)。
 
@@ -33,11 +33,11 @@ Advisers 不是聊天框，也不是情感陪伴。它维护三本账：
 - Pet Brief（只读脱敏投影，契约 v0.1）：`pet-brief --json|--out|--check`；`secrecy >= 2` 全排除、confidence < 0.7 丢弃、5 分钟 TTL、每节 10 项上限；不调模型、不联网、不改账本；桌宠 UI/传输尚未接通。见 `docs/PET-BRIEF-PRODUCER.md`。
 
 ```sh
-# 当前 preview 只 staged，等 OTP；公开 @next 还是旧 0.1 stub。
+# 当前 preview 已发布到 npm `next`，公开 `latest` 仍是旧占位版。
 # 从 checkout 跑：
 #   corepack pnpm install && corepack pnpm -r build
 #   ADVISERS_OFFICE_LOCAL=1 node packages/advisers/bin/advisers.js status
-# 批准后：
+# 从 npm 安装：
 npm i -g --registry=https://registry.npmjs.org advisers@next advisers-office@next
 advisers soul init
 advisers commit add "周五前发报价给王工" --quote "周五前发报价给王工" --due 2026-11-13T18:00:00+08:00
