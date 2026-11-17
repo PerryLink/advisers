@@ -21,6 +21,20 @@ advisers ls
 advisers export
 ```
 
+> **AI & legal notice** — Advisers is a local-first work assistant, not a companion or a
+> professional adviser. AI output can be wrong; verify before use. Illegal, infringing,
+> fraudulent, harassing, or unlabeled synthetic content is prohibited; distribute
+> AI-generated content only with the required labels. Minors need guardian consent.
+> Software licence: PolyForm Noncommercial 1.0.0 (source-available, not OSI open source;
+> commercial use requires a separate licence). Terms:
+> <https://github.com/PerryLink/advisers/blob/main/docs/TOS.md> (v2026.11.2) · Disclaimer:
+> <https://github.com/PerryLink/advisers/blob/main/docs/DISCLAIMER.md> · Safety:
+> <https://github.com/PerryLink/advisers/blob/main/docs/SAFETY.md> · Privacy & data-flow:
+> <https://github.com/PerryLink/advisers/blob/main/docs/PRIVACY.md>. The local database is
+> not encrypted by default; the default model provider is DeepSeek (api.deepseek.com) when
+> you set an API key. Offline copies ship in `lib/tos/` (`terms.zh-CN.md`,
+> `summary.zh-CN.md`, `privacy.zh-CN.md`, `safety.zh-CN.md`).
+
 The CLI is a **local secretary runtime**: one REPL, a user ledger, a commitment
 ledger, a routine ledger, Office artifacts, and an optional model loop. Without
 an API key it records the session and can build/search files, but it does not

@@ -15,6 +15,18 @@ advisers ls
 advisers export
 ```
 
+> **AI 与法律提示** —— Advisers 是本地优先的工作助手，不是情感陪伴，也不提供法律、医疗、
+> 金融等专业意见；AI 输出可能出错，使用前请自行核验。禁止用于违法、侵权、欺诈、骚扰、
+> 伪造或未标识合成内容等用途；未成年人须经监护人同意。
+> 软件许可：PolyForm Noncommercial 1.0.0（源码可见、非 OSI 开源；商业使用须另行取得许可）。
+> 使用前请阅读[服务条款](https://github.com/PerryLink/advisers/blob/main/docs/TOS.md)（v2026.11.2）、
+> [免责声明](https://github.com/PerryLink/advisers/blob/main/docs/DISCLAIMER.md)、
+> [安全与内容审核说明](https://github.com/PerryLink/advisers/blob/main/docs/SAFETY.md) 与
+> [隐私与数据流说明](https://github.com/PerryLink/advisers/blob/main/docs/PRIVACY.md)。
+> 本地数据库默认不加密；设置 API Key 后默认模型服务商为 DeepSeek（api.deepseek.com）。
+> 离线副本随包分发于 `lib/tos/`（`terms.zh-CN.md`、`summary.zh-CN.md`、
+> `privacy.zh-CN.md`、`safety.zh-CN.md`）。
+
 CLI 是**本地秘书运行时**：一个 REPL、用户账/承诺账/流程账、Office 产物，以及可选的模型回路。没有 API key 也能记录、检索、计划、生成文件，并运行承诺/摘要命令。
 
 ## 状态

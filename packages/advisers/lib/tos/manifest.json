@@ -1,21 +1,32 @@
 {
   "schema": "advisers.tos/1",
-  "version": "2026.11.1",
+  "version": "2026.11.2",
   "effectiveFrom": "2026-11-17",
   "language": "zh-CN",
   "canonical": "docs/TOS.md",
   "shortNotice": "docs/DISCLAIMER.md",
+  "privacy": "docs/PRIVACY.md",
   "safety": "docs/SAFETY.md",
   "files": [
     {
       "path": "terms.zh-CN.md",
       "source": "docs/TOS.md",
-      "sha256": "cf01f3f9e246befb10f01d6796c77f87043e1d9c4111d189e89d91cdc9576316"
+      "sha256": "c40f869ad806e74a2e3870e7041d4d4602f6d1a4c2619b80b3e453333b9713dd"
     },
     {
       "path": "summary.zh-CN.md",
       "source": "docs/DISCLAIMER.md",
-      "sha256": "019adf780c881679d4acb7aa1a755bbce7fc2f7a5cece26a83c12d8e9ad0a90a"
+      "sha256": "22f4c093a186d8f256744a345d7011e8bc05bcd076f67ded097bbe55dae0c1a8"
+    },
+    {
+      "path": "privacy.zh-CN.md",
+      "source": "docs/PRIVACY.md",
+      "sha256": "c20eb1525a5b8c232027bff6db88d57802696f1cf04cc06349e3440e2b90d0b9"
+    },
+    {
+      "path": "safety.zh-CN.md",
+      "source": "docs/SAFETY.md",
+      "sha256": "2358b187f0f97af8dd8aeb30026654ea55804acc9dbeb7f87fd778fe0a29f044"
     }
   ]
 }

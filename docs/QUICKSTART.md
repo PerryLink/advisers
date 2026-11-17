@@ -4,9 +4,15 @@
 > The public `@next` tag currently points at an old 0.1 preview; do not judge this build by it.
 > Until approval, run from the checkout as shown below.
 
-> **Before you start** — read the [Terms of Service](TOS.md) (v2026.11.1),
-> [Disclaimer](DISCLAIMER.md), and [Safety & content review](SAFETY.md). AI output can be
-> wrong; illegal, infringing, deceptive, or unlabeled synthetic content is prohibited.
+> **Before you start** — read the [Terms of Service](TOS.md) (v2026.11.2),
+> [Disclaimer](DISCLAIMER.md), [Safety & content review](SAFETY.md), and
+> [Privacy & data-flow notice](PRIVACY.md). AI output can be wrong; illegal, infringing,
+> deceptive, or unlabeled synthetic content is prohibited.
+>
+> The first time you use gated features, Advisers shows a short summary of the Terms and
+> asks you to confirm explicitly (type 同意 or press the confirm key); non-interactive
+> environments must use `--accept-tos` or `ADVISERS_ACCEPT_TOS=1`. Continuing to run,
+> pressing Enter, or keeping the default option is not acceptance.
 
 ## Requirements
 
@@ -102,9 +108,19 @@ If `advisers-office` is missing, install it explicitly; the CLI does not pull it
 
 ## Data & privacy
 
-- Data: `%USERPROFILE%\.advisers\` unless `ADVISERS_HOME` is set.
-- `advisers export` contains raw conversations/preferences — do not share it.
-- Model calls send context to the configured API; local-only commands (`status`, `office`, `template`, `verify`, `commit`) do not.
+- Data: `%USERPROFILE%\.advisers\` unless `ADVISERS_HOME` is set. No telemetry, no account,
+  no operator cloud service; the local database is **not encrypted by default**.
+- `advisers export` contains raw conversations/preferences — do not share it. Migration,
+  sync and import backups (`state.db.before-*`, `import-backup-*.db`) and `undo` copies are
+  not cleaned up automatically and contain the full database.
+- Egress: model commands (`chat`, `capture`, `review`, `brief --deep`, `learn review`) send
+  context to the configured API — **DeepSeek (`https://api.deepseek.com`) by default**;
+  `research --web|--url`, `capture --from-imap`, `ADVISERS_NOTIFY_WEBHOOK`, `sync`, MCP/DSH/
+  desktop-pet consumers and your own external commands can also leave the machine. Local-only
+  commands (`status`, `office`, `template`, `verify`, `commit`) do not.
+- Read [docs/PRIVACY.md](PRIVACY.md) for the full data-flow, deletion limits (`purge` is a
+  partial delete; `forget` keeps a tombstone) and your own obligations when processing
+  other people's personal information.
 
 ## E. Reminders (local, opt-in)
 

@@ -5,8 +5,16 @@
 > **AI 与合规提示** —— Advisers 是本地优先的工作助手，不是情感陪伴，也不提供法律、医疗、
 > 金融等专业意见；AI 输出可能出错，使用前请自行核验。禁止用于违法、侵权、欺诈、骚扰、
 > 伪造或未标识合成内容等用途；未成年人须经监护人同意。
-> 详见[服务条款](docs/TOS.md)（v2026.11.1）、[免责声明](docs/DISCLAIMER.md)、
-> [安全与内容审核说明](docs/SAFETY.md)；许可拆分见 [LICENSING.md](LICENSING.md)。
+> 使用前请阅读[服务条款](docs/TOS.md)（v2026.11.2）、[免责声明](docs/DISCLAIMER.md)、
+> [安全与内容审核说明](docs/SAFETY.md) 与[隐私与数据流说明](docs/PRIVACY.md)；
+> 许可拆分见 [LICENSING.md](LICENSING.md)。
+
+> **非商业 source-available** —— Advisers **不是开源项目**。软件采用 PolyForm
+> Noncommercial License 1.0.0（仅限非商业用途，且须“不预期产生商业应用”），文档/数据/设计
+> 采用 CC BY-NC-SA 4.0。商业使用（包括为付费客户做交付）须另行取得书面商业授权（在
+> <https://github.com/PerryLink/advisers/issues> 提出，标题前缀 `commercial-license`）。
+> 本地数据库**默认不加密**；完整出网清单（默认模型服务商为 DeepSeek）与删除边界见
+> [隐私与数据流说明](docs/PRIVACY.md)。
 
 Advisers 不是聊天框，也不是情感陪伴。它维护三本账：
 

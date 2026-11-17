@@ -6,8 +6,17 @@
 > lawyer, doctor, or financial adviser. AI output can be wrong; verify before use.
 > Illegal, infringing, fraudulent, harassing, or forged use is prohibited; distribute
 > AI-generated content only with the required labels. Minors need guardian consent.
-> See [Terms of Service](docs/TOS.md) (v2026.11.1), [Disclaimer](docs/DISCLAIMER.md),
-> [Safety & content review](docs/SAFETY.md); licence split: [LICENSING.md](LICENSING.md).
+> Read the [Terms of Service](docs/TOS.md) (v2026.11.2), [Disclaimer](docs/DISCLAIMER.md),
+> [Safety & content review](docs/SAFETY.md) and [Privacy & data-flow notice](docs/PRIVACY.md)
+> before use; licence split: [LICENSING.md](LICENSING.md).
+
+> **Noncommercial source-available** — Advisers is **not open source**. The software is
+> PolyForm Noncommercial License 1.0.0 (noncommercial use only; no anticipated commercial
+> application) and docs/data/design are CC BY-NC-SA 4.0. Commercial use — including paid
+> client work — requires a separate written commercial licence (open an issue at
+> <https://github.com/PerryLink/advisers/issues>, label `commercial-license`). The local
+> database is **not encrypted by default**; see the [Privacy notice](docs/PRIVACY.md) for the
+> full egress list (DeepSeek is the default model provider) and deletion limits.
 
 Advisers is not another chat window. It is a small staff of specialist advisers
 (memory, commitments, routines) that share one continuous conversation and keep

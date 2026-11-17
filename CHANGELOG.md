@@ -1,5 +1,7 @@
 # Changelog
 
+Unreleased: legal texts updated (TOS v2026.11.2, new PRIVACY notice, content-safety list, legal citations). The 0.2.0 entry is written by the release owner.
+
 ## 0.2.0-preview.71 (published 2026-11-17)
 
 ### Added
