@@ -235,8 +235,9 @@ export ADVISERS_HOME=/tmp/adv-home-0.2.0
 /tmp/adv-0.2.0/bin/advisers pet-brief --check   # exit 0
 ~~~
    可选：advisers office docx + advisers verify。
-4. **Windows smoke**（首个目标平台）：PowerShell 7 + Node ≥22.13 重复第 3 步，记录
-   chcp 65001 与 BOM 用例；PowerShell 5.1 抽查一次。无法实机时在 E11 明确写“未验证”。
+4. **Windows smoke**（首个目标平台）：按 docs/WINDOWS-SMOKE.md 在 PowerShell 7 + Node ≥22.13
+   重复第 3 步，记录 chcp 65001 与 BOM 用例；PowerShell 5.1 抽查一次。无法实机时在 E11
+   明确写“未验证”。
 5. **tags 收尾（可选，按发布决策）**：npm dist-tag add <pkg>@0.2.0 next --registry ... 六包，
    避免 @next 仍停在旧 preview；旧 preview 版本不再改动。
 6. **证据落盘**：按 eval/results/E11-release-2026-11-17.md 模板填 commit/tag、CI、六包 stage

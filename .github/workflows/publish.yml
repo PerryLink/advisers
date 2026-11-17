@@ -37,7 +37,7 @@ jobs:
       - run: node scripts/check-docs.mjs
       - run: node scripts/check-release.mjs --stable --require-tag
       - run: node scripts/check-licenses.mjs
-      - run: node scripts/check-tos.mjs
+      - run: node scripts/check-tos.mjs --release
       - run: node scripts/security-suite.mjs
       - run: node scripts/verify-office.mjs
       - name: Manual publish instructions
