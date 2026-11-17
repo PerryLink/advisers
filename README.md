@@ -47,11 +47,10 @@ on any link package; adapters load one only when configured.
 at `0.2.1`. The six published packages are `advisers`, `advisers-core`,
 `advisers-office`, `advisers-policy-strict`, `advisers-bridge-hermes` and `dsh-advisers`;
 the two private `advisers-link-*` packages are held at the same version but are not
-published. `0.2.1` is being staged to npm **`latest`** and awaits the account owner's OTP
-approval — it is **not published yet**; `0.2.0` (published on 2026-11-17) remains what
-`latest` serves until that approval. Registry tarballs, license files and a fresh-prefix
-install for `0.2.0` were verified with `scripts/verify-release.mjs` (80/80 checks,
-including an install smoke test).
+published. The six packages are published on npm **`latest` = `0.2.1`** (account owner OTP
+approved on 2026-11-17); `0.2.0` remains installable by pinning it. Registry tarballs,
+license files, a fresh-prefix install and per-package `import()` smoke are checked by
+`scripts/verify-release.mjs`.
 
 > Requires **Node >= 22.16**. See [docs/QUICKSTART.md](docs/QUICKSTART.md) for Windows/PowerShell and BOM notes.
 
@@ -77,14 +76,13 @@ including an install smoke test).
 - real-account/WS/Office-L3 validation still pending.
 
 ```sh
-# 0.2.1 is staged to npm @latest pending the owner's OTP approval (0.2.0 is what
-# @latest serves until then); or run from checkout:
+# 0.2.1 is published on npm @latest; or run from the checkout:
 git clone https://github.com/PerryLink/advisers.git
 cd advisers && corepack pnpm install && corepack pnpm -r build
 ADVISERS_OFFICE_LOCAL=1 node packages/advisers/bin/advisers.js status
-# From npm (stable channel = default `latest`, currently 0.2.0):
+# From npm (stable channel = default `latest`, currently 0.2.1):
 #   npm i -g --registry=https://registry.npmjs.org advisers@latest advisers-office@latest
-# Pre-release/RC builds land on the `next` channel (currently also 0.2.0):
+# The `next` channel currently also points at 0.2.1:
 #   npm i -g --registry=https://registry.npmjs.org advisers@next advisers-office@next
 advisers
 # or one-shot:

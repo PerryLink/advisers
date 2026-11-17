@@ -1,11 +1,10 @@
 # Changelog
 
-## 0.2.1 (release candidate, 2026-11-17)
+## 0.2.1 (published, 2026-11-17)
 
 Hardening release on the 0.2.0 stable line. `0.2.1` is the current release: the eight
 workspace packages are lockstep at `0.2.1`, internal pins/version constants/`pnpm-lock.yaml`
-follow, and it is being staged to npm `latest` pending the account owner's OTP approval
-(not published yet). The legal texts are unchanged from 0.2.0 (TOS v2026.11.2).
+follow, and it was published to npm `latest` on 2026-11-17 after the account owner's OTP approval. The legal texts are unchanged from 0.2.0 (TOS v2026.11.2).
 
 ### Fixed
 
@@ -98,7 +97,7 @@ follow, and it is being staged to npm `latest` pending the account owner's OTP a
   regenerated (`node scripts/check-licenses.mjs --write`) so their embedded package
   version says `0.2.1`; the dependency list itself is unchanged.
 
-### Verified (release candidate, 2026-11-17)
+### Verified (published release, 2026-11-17)
 
 All commands run from the release worktree; no source change is part of this version bump
 (only versions, docs and generated notices).
@@ -119,10 +118,12 @@ All commands run from the release worktree; no source change is part of this ver
 - `node scripts/security-suite.mjs`: 5/5 PASS. `node scripts/verify-office.mjs`: PASS
   (the LibreOffice-backed PDF layer is reported "skipped (LibreOffice not found)", never
   as a pass).
-- `node scripts/verify-release.mjs --skip-install`: pending — it verifies the published
-  registry tarballs for the version and `0.2.1` is not available there before the account
-  owner's OTP approval; it is re-run after promotion.
-- npm staging: pending the account owner's OTP approval; dist-tags are not promoted yet.
+- `node scripts/verify-release.mjs --version 0.2.1 --tag latest`: PASS, 86 checks — registry
+  tarballs exist, sha1/sha512 match `dist.shasum`/`dist.integrity`, LICENSE/NOTICE/TPN and
+  the packaged legal texts are intact, a fresh-prefix install runs 0.2.1, and every package
+  (including `dsh-advisers`) imports from a clean temp prefix.
+- npm: the six packages were published to `latest` and `next` = 0.2.1 on 2026-11-17 after the account owner OTP approval; registry tarballs, install smoke and per-package `import()` smoke are checked by `scripts/verify-release.mjs`.
+- `dsh-advisers@0.2.0` was deprecated with a message pointing at 0.2.1 (its 0.2.0 npm entry cannot load); no other 0.2.0 package was deprecated.
 
 ## 0.2.0 (published, 2026-11-17)
 

@@ -1,6 +1,6 @@
 # Advisers architecture
 
-> Status: 0.2.1 release candidate (staged for npm `latest`, pending the account owner OTP; 0.2.0 is what `latest` serves until approval). This document fixes the
+> Status: 0.2.1 (published on npm `latest` on 2026-11-17). This document fixes the
 > vocabulary and the invariants; the implementation is allowed to be smaller than the
 > document.
 

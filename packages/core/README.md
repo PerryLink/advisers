@@ -12,7 +12,7 @@ SQLite/FTS persistence lives in the `advisers` distribution; this package has no
 
 ## Status
 
-`0.2.1` is the current release (staged to npm `latest`, pending the account owner's OTP approval). The API is stabilizing but may change before 0.3.
+`0.2.1` is the current release (published on npm `latest`, 2026-11-17). The API is stabilizing but may change before 0.3.
 
 ## License
 

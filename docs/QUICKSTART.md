@@ -1,8 +1,8 @@
 # Quickstart (Windows + PowerShell)
 
-> Current status: `0.2.1` is the **current release**; it is staged to npm `@latest` and
-> awaits the account owner's OTP approval (`0.2.0` is still what `latest` serves until
-> then). All six published packages are lockstep at `0.2.1`; after promotion install with
+> Current status: `0.2.1` is the **current release**, published on npm `@latest` on
+> 2026-11-17 after the account owner's OTP approval. All six published packages are
+> lockstep at `0.2.1`; install with
 > `npm i -g --registry=https://registry.npmjs.org advisers@latest advisers-office@latest`.
 > The checkout instructions below remain valid for development builds.
 
