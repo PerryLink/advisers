@@ -118,7 +118,7 @@ node eval/run-capture-gold.mjs --dry-run --json /tmp/gold-check.json
   precision 97.13%（169/174）、auto-confirmed 0；exit 0。
 - 首跑 due 94.89% 未过线；7 条 due 差异中 6 条是模型算错、1 条（gold-108
   “这两天”）按模糊相对时间改为 null；gold-023 补 dueAlt。详见
-  `eval/results/gold-reviewed-2026-11-14.md`。
+  the internal evaluation records (not published here)。
 - B 评审发现 `resolveRelativeDate` 把“当天”误当消息日；已修复并加回归测试。
 
 ## 人工金标完成清单

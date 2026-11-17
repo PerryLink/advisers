@@ -14,4 +14,4 @@ Presentation here; Microsoft Office is not required).
 | `contract-v1.docx` | `advisers office docx spec.json ...` | verify ok; WPS Writer opens |
 | `contract-v2.docx` | `advisers office-edit contract-v1.docx ops.json ...` | `p6: 合同金额：120 万元 -> 150 万元`; verify ok; WPS Writer opens |
 
-Hashes and full evidence: `eval/results/delivery-2026-11-14.md`.
+Hashes and full evidence: the internal evaluation records (not published here).

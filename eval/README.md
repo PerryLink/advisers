@@ -149,7 +149,7 @@ LIMIT=4 node eval/run-office-real.mjs --dry-run         # first N cases
   `ADVISERS_HOME`, 180 s timeout, concurrency 3) and counts a case as PASS only
   when a `[blocker]` finding is returned (keyword match is reported separately).
 - `--dry-run` works without a key and always cleans its temp directory unless
-  `--keep` is passed. Results note: `eval/results/office-real-YYYY-MM-DD.md`.
+  `--keep` is passed. Results note: the internal evaluation records (not published here).
 
 ### `run-capture-gold.mjs` — capture gold-set scaffolding
 
@@ -181,7 +181,7 @@ ledger + explicit preferences, cross-session `today`/`tick`, office
 build/verify/receipt, read-only review, and capture→pending→manual accept.
 Global checks assert no cross-persona/home leakage. These are simulated
 personas, not real dogfood users. Latest result:
-`eval/results/dogfood-5-2026-11-14.md` (15/15 tasks, 74/74 global checks).
+the internal evaluation records (not published here) (15/15 tasks, 74/74 global checks).
 
 ### Other evals
 
@@ -205,9 +205,9 @@ quality gates, **not** achieved claims.
 
 Results are local artifacts, not pass/fail badges. Suggested practice:
 
-1. Keep the raw JSON for the run (in `eval/results/`, e.g.
+1. Keep the raw JSON for the run (in the internal, gitignored `eval/results/` directory, e.g.
    `continuity-YYYY-MM-DD.json`, or pasted into the note).
-2. Add a short markdown note at `eval/results/<eval>-YYYY-MM-DD.md` (existing
+2. Add a short markdown note at `eval/results/<eval>-YYYY-MM-DD.md` in the internal workspace (existing
    files follow this name) recording: date, model (`ADVISERS_MODEL`), Node
    version, git commit, parameters (`FACTS` / `TASKS` / corpus size), pass/fail
    counts, failure list, and the caveats below.

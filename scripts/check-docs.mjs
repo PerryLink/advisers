@@ -24,7 +24,7 @@ const check = (name, ok, detail = '') => {
 // License policy (0.2.0 migration, 2026-11-17): software is PolyForm Noncommercial
 // 1.0.0 and docs/data/design is CC BY-NC-SA 4.0. This is source-available, NOT an
 // OSI-approved open source project. Historical notes (CHANGELOG older sections,
-// eval/results/**, docs/HANDOFF-*, NOTICE version mapping) are intentionally not
+// the internal eval/results/** (gitignored), docs/HANDOFF-*, NOTICE version mapping) are intentionally not
 // scanned for the old license names.
 const LICENSE_ID = 'PolyForm-Noncommercial-1.0.0'
 const DOCS_LICENSE_ID = 'CC-BY-NC-SA-4.0'

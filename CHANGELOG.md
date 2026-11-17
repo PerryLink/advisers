@@ -6,7 +6,7 @@ First stable release of the 0.2.0 line: the six published packages are lockstep 
 and the two private `advisers-link-*` packages share the same version. Published on npm
 `latest` on 2026-11-17 after the account owner's OTP approval; tarballs, license files and
 a fresh-prefix install were verified with `scripts/verify-release.mjs` (80/80 checks). See
-`docs/RELEASING.md` and `eval/results/E11-release-2026-11-17.md` for evidence.
+the internal release evidence retained outside this repository.
 
 ### Added
 
@@ -85,7 +85,7 @@ a fresh-prefix install were verified with `scripts/verify-release.mjs` (80/80 ch
 - `node scripts/security-suite.mjs`: 5/5 PASS; `node scripts/verify-office.mjs`: PASS.
 - Test suite: 450+ tests across 8 packages (static `test()`/`it()` declaration count 456 on
   this tree, including Pet Brief v0.2 and MCP CLI coverage); the full run is recorded on the
-  final release commit in `eval/results/E11-release-2026-11-17.md`.
+  final release commit in the internal evaluation records (not published here).
 
 ### Known issues
 
@@ -167,7 +167,7 @@ a fresh-prefix install were verified with `scripts/verify-release.mjs` (80/80 ch
 - Docs: `docs/REMINDERS.md`, `docs/SOURCE-SCHEMA.md`, `docs/CLI-JSON.md`, `docs/POSITIONING.md`, `docs/OFD-OCR.md`, `docs/PRICING-CHANNEL.md`.
 
 ### Fixed
-- Agent no longer tries to backfill facts from earlier turns via `memory_propose` (whose quote must come from the current message); this fixes the continuity-50 8/9 regression. Re-run: 9/9. See `eval/results/continuity-50-round12-*.md`.
+- Agent no longer tries to backfill facts from earlier turns via `memory_propose` (whose quote must come from the current message); this fixes the continuity-50 8/9 regression. Re-run: 9/9. See the internal evaluation records (not published here).
 - `advisers audit` now calls `ensureHome()`/`ensureAuditKey()`, verifies fresh and
   recorded chains, and exits non-zero when the chain is broken.
 - `capture` now records a real turn and stores `sessionId` + `turnId`; accepting
@@ -203,7 +203,7 @@ a fresh-prefix install were verified with `scripts/verify-release.mjs` (80/80 ch
 - Delivery sample pack `examples/delivery-2026-11-14/` (docx/xlsx/pptx + an
   edited contract) with `verify --content` and WPS real-consumer checks; the
   acceptance bar is tool-agnostic (the user clarified Microsoft Office is not
-  required). See `eval/results/delivery-2026-11-14.md`.
+  required). See the internal evaluation records (not published here).
 
 ### Verified (2026-11-14, deepseek-flash, single runs)
 - Reviewed gold: quote 100%, firm recall 95.31% (122/128), due accuracy 97.84%
@@ -213,7 +213,7 @@ a fresh-prefix install were verified with `scripts/verify-release.mjs` (80/80 ch
   `advisers@0.2.0-preview.58` is the staged artifact.
 - Upstream DSH PR: not possible under current upstream policy (Issues/PRs
   disabled; CONTRIBUTING rejects external PRs) — see
-  `eval/results/upstream-pr-2026-11-14.md`.
+  the internal evaluation records (not published here).
 
 ## 0.2.0-preview.57 (staged, approval pending)
 
@@ -255,22 +255,22 @@ a fresh-prefix install were verified with `scripts/verify-release.mjs` (80/80 ch
 ### Verified (single runs, 2026-11-14)
 - capture synthetic 150: recall 150/150, due 150/150 natural, 141/150 under the
   legacy ambiguous labels, 120 dates resolved by the rule pass, 0 auto-confirmed.
-- continuity: `FACTS=50` 9/9, `FACTS=100` 10/10, `FACTS=200` 12/12 (see `eval/results/continuity-*.md`).
-- agent tasks: 8/8 PASS (`eval/results/agent-tasks-2026-11-14.md`).
+- continuity: `FACTS=50` 9/9, `FACTS=100` 10/10, `FACTS=200` 12/12 (see the internal evaluation records (not published here)).
+- agent tasks: 8/8 PASS (the internal evaluation records (not published here)).
 - Office realistic-synthetic review: v2 20/20 blocker; v1 (before two
   severity-ambiguous defects were strengthened) was 18/20. See
-  `eval/results/office-real-2026-11-14.md`.
+  the internal evaluation records (not published here).
 - Windows/WPS: CLI version/status/office/verify/template PASS; WPS Writer,
   Spreadsheet and Presentation opened/extracted the generated files. Microsoft
   Office is not installed on the test host, so this is WPS-only evidence. See
-  `eval/results/windows-wps-2026-11-14.md`.
+  the internal evaluation records (not published here).
 
 ### Known limitations / not done
 - The 150-case **human** gold set is not done; only a 50-case AI draft seed
   exists and it still needs human double review.
 - The Office defect set is realistic synthetic, not real desensitized customer
   documents.
-- Continuity has been run at 10/50/100/200 facts (see `eval/results/continuity-*.md`); each real-model soak is long and is recorded as a single run, not a nightly gate.
+- Continuity has been run at 10/50/100/200 facts (see the internal evaluation records (not published here)); each real-model soak is long and is recorded as a single run, not a nightly gate.
 - No Microsoft Office validation; WPS only. No 5-user dogfood.
 - npm is staged only, not published (OTP approval is a human step).
 - remote file parse is a design document only.

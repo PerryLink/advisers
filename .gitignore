@@ -5,3 +5,13 @@ dist/
 .DS_Store
 *.log
 .env
+
+# internal release/ops artifacts (kept outside the public tree)
+eval/results/
+docs/HANDOFF-*.md
+docs/NEW-SESSION-PROMPT.md
+docs/RELEASING.md
+docs/WINDOWS-SMOKE*.md
+scripts/staged-backlog.mjs
+scripts/windows-clean-staged.ps1
+scripts/soak-*.mjs
