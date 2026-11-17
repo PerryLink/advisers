@@ -7,18 +7,22 @@
 
 用户随后通过 npmjs.com 的 Staged Packages 批量功能清理了一部分：
 
-| package | 原始 | 当前剩余 |
-|---|---|---|
-| advisers | 69 | 36 |
-| dsh-advisers | 25 | 13 |
-| advisers-core | 20 | 9 |
-| advisers-office | 12 | 7 |
-| advisers-bridge-hermes | 17 | 5 |
-| advisers-policy-strict | 11 | 2 |
-| **合计** | **154** | **72** |
+| package | 原始 | 2026-11-17 18:44 | 2026-11-17 19:53 |
+|---|---|---|---|
+| advisers | 69 | 36 | 32 |
+| dsh-advisers | 25 | 13 | 9 |
+| advisers-core | 20 | 9 | 5 |
+| advisers-office | 12 | 7 | 3 |
+| advisers-bridge-hermes | 17 | 5 | 1 |
+| advisers-policy-strict | 11 | 2 | 0 |
+| **合计** | **154** | **72** | **50** |
 
-其他项目记录从 53 → 52（未处理）。剩余 72 条**不影响安装/latest/next**，可继续在
+其他项目记录从 53 → 52（未处理）。剩余 50 条**不影响安装/latest/next**，可继续在
 npmjs.com → Settings → Staged Packages 批量清，也可以保留。
+
+**第二次 token 测试（2026-11-17 19:53）**：owner 提供的新 granular token 同样可认证
+（`npm whoami`=perrylink）且可读 stage list，但 `npm stage reject` 仍返回 **EOTP**；
+因此 bypass-2FA token 路径对 staged reject 无效，网页批量是唯一批量入口。
 
 ## 六包 backlog（原始快照）
 
