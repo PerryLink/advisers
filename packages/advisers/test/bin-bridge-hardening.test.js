@@ -93,6 +93,12 @@ function outboxFiles(bridgeDir) {
   }
 }
 
+// The bridge writes atomically (tmp file + rename). A directory listing can
+// briefly contain the .tmp file; only completed replies are .json.
+function outboxReplies(bridgeDir) {
+  return outboxFiles(bridgeDir).filter((name) => name.endsWith('.json'))
+}
+
 function bridgeMode(bridgeDir, relPath) {
   const target = join(bridgeDir, relPath)
   return existsSync(target) ? statSync(target).mode & 0o777 : null
@@ -108,8 +114,8 @@ test('bridge: secrecy>0 denies the model call, permits stay guarded and the outb
   try {
     assert.ok(await waitFor(() => state.stdout.includes('listening at')), 'bridge did not start: ' + state.stderr)
     inboxMessage(bridgeDir, 'm1', '请把报价发我')
-    assert.ok(await waitFor(() => outboxFiles(bridgeDir).length === 1), 'bridge did not write an outbox reply')
-    const outbox = readFileSync(join(bridgeDir, 'outbox', 'advisers', outboxFiles(bridgeDir)[0]), 'utf8')
+    assert.ok(await waitFor(() => outboxReplies(bridgeDir).length === 1), 'bridge did not write an outbox reply')
+    const outbox = readFileSync(join(bridgeDir, 'outbox', 'advisers', outboxReplies(bridgeDir)[0]), 'utf8')
     assert.match(outbox, /protected matter/)
     assert.equal(outbox.includes('绝密客户A并购'), false)
     assert.doesNotMatch(outbox, /"localPath"/)
@@ -118,7 +124,7 @@ test('bridge: secrecy>0 denies the model call, permits stay guarded and the outb
     assert.equal(provider.requests.length, 0, 'a protected matter must not reach the model provider')
 
     await stopBridge(child)
-    assert.equal(statSync(join(bridgeDir, 'outbox', 'advisers', outboxFiles(bridgeDir)[0])).mode & 0o777, 0o600)
+    assert.equal(statSync(join(bridgeDir, 'outbox', 'advisers', outboxReplies(bridgeDir)[0])).mode & 0o777, 0o600)
     for (const rel of ['inbox/advisers', 'outbox/advisers', 'status/advisers', 'registry', 'quarantine/advisers']) {
       assert.equal(bridgeMode(bridgeDir, rel), 0o700, rel + ' must be 0700')
     }
