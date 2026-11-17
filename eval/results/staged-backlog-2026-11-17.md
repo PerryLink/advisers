@@ -40,6 +40,12 @@ Windows PowerShell 用户用 `scripts/windows-clean-staged.ps1`（同样先列�
 若 npm 仍拒绝该 token 执行 staged reject（EOTP），说明该操作不在 bypass 范围内，退回
 浏览器逐条方式或分批处理（或直接保留 backlog，不影响安装）。
 
+**2026-11-17 实测结论**：owner 提供的 granular token（`npm whoami` 可认证为 perrylink、
+`stage list` 可读）执行 `stage reject` 仍返回 **EOTP**（npm 提示 bypass-2FA token 正被限制
+用于 account changes/direct publishing）。因此**不存在免 2FA 的批量 reject 路径**；
+清理只能逐条由账号所有者 2FA 完成。建议：保留 backlog（不影响安装/latest/next），或
+按 `windows-clean-staged.ps1 -Apply -Limit N` 分批慢慢清。
+
 ~~~bash
 # 1) 只列出（默认只看 Advisers 六包）
 node scripts/staged-backlog.mjs
