@@ -5,8 +5,10 @@ import { homedir, hostname } from 'node:os'
 import { createHash, randomBytes, randomUUID } from 'node:crypto'
 import { basename, dirname, extname, isAbsolute, join } from 'node:path'
 let SqliteStore
+let acquireInstanceLock
+let instanceLockPath
 try {
-  ({ SqliteStore } = await import('../lib/sqlite.js'))
+  ({ SqliteStore, acquireInstanceLock, instanceLockPath } = await import('../lib/sqlite.js'))
 } catch (error) {
   if (String(error?.message || error).includes('node:sqlite')) {
     console.error(`Advisers needs Node >= 22.16 (node:sqlite). You have ${process.version}. Install Node 24 or use nvm-windows.`)
@@ -98,6 +100,73 @@ const SOUL_META = join(HOME, 'soul.meta.json')
 const DB = join(HOME, 'state.db')
 let mode = process.env.ADVISERS_STORE === 'json' ? 'json' : 'sqlite'
 let activeStore
+
+/**
+ * 0.2.1 robustness audit P0-1: one SQLite writer per HOME.
+ *
+ * Every process that opens state.db first takes ~/.advisers/instance.lock
+ * (O_EXCL create). A second ordinary command waits (ADVISERS_LOCK_TIMEOUT_MS,
+ * default 10s) and then exits E_DB_LOCKED instead of saving from a stale
+ * snapshot; long-lived holders (ui/mcp/bridge) keep the lock while they run.
+ * The lock is released on exit and on SIGINT/SIGTERM. Read-only commands never
+ * open the store, so --version/help create no home and no lock.
+ */
+let instanceLock = null
+let storeExitHooksInstalled = false
+const LOCK_PATH = instanceLockPath(HOME)
+
+function lockCommandLabel() {
+  return process.argv
+    .slice(2)
+    .filter((value) => !/^--accept-tos(?:=|$)/.test(value))
+    .join(' ')
+    .slice(0, 160)
+}
+
+function releaseInstanceLock() {
+  const lock = instanceLock
+  instanceLock = null
+  try { lock?.release() } catch {}
+}
+
+function installStoreExitHooks() {
+  if (storeExitHooksInstalled) return
+  storeExitHooksInstalled = true
+  process.on('exit', releaseInstanceLock)
+  for (const signal of ['SIGINT', 'SIGTERM']) {
+    process.on(signal, () => {
+      releaseInstanceLock()
+      // With no other listener the signal should still terminate the process,
+      // with the conventional exit code; otherwise the command's own handler
+      // (ui/bridge) finishes its cleanup and exits normally.
+      if (process.listenerCount(signal) <= 1) process.exit(signal === 'SIGINT' ? 130 : 143)
+    })
+  }
+}
+
+/** Take the HOME instance lock once per process (SQLite store mode only). */
+function ensureInstanceLock() {
+  if (mode !== 'sqlite') return null
+  if (instanceLock?.held) return instanceLock
+  installStoreExitHooks()
+  instanceLock = acquireInstanceLock({ home: HOME, command: lockCommandLabel() })
+  return instanceLock
+}
+
+/** Human-readable hint for E_DB_LOCKED/E_DB_CORRUPT; null for other errors. */
+function storeFailureHint(error) {
+  if (error?.code === 'E_DB_LOCKED') {
+    return `advisers: ${error.message}\n` +
+      'No changes were made and the JSON store was not used as a fallback. ' +
+      'Wait for the other process or stop the long-running server, then retry.'
+  }
+  if (error?.code === 'E_DB_CORRUPT') {
+    return `advisers: ${error.message}\n` +
+      `Back up ${DB} before touching it (do not delete it), then run \`advisers doctor\`; ` +
+      'the database was not rebuilt and no fallback store was created.'
+  }
+  return null
+}
 
 /**
  * P0-1: one shared ICU formatter instead of `new Intl.DateTimeFormat` per
@@ -210,6 +279,10 @@ function openStore({ checkIntegrity = false } = {}) {
     const sealed = vaultSealedPath()
     if (sealed) throw vaultSealedError(sealed)
     ensureHome()
+    // P0-1: take the single-writer lock before SQLite sees state.db. The sealed
+    // check above runs first so a sealed HOME creates neither a database nor a
+    // lock file. E_DB_LOCKED / E_DB_CORRUPT propagate to the caller.
+    ensureInstanceLock()
     activeStore = new SqliteStore(DB, { checkIntegrity })
     secureDbSidecars()
   } else if (checkIntegrity) {
@@ -231,6 +304,11 @@ function loadLedger() {
     }
     return Ledger.fromJSON(openStore().load(), LOCAL_PORTS)
   } catch (error) {
+    const hint = storeFailureHint(error)
+    if (hint) {
+      console.error(hint)
+      process.exit(1)
+    }
     console.error(`sqlite unavailable: ${error.message}`)
     console.error('Run `advisers doctor`; refusing to silently switch to JSON (would split the ledger).')
     process.exit(1)
@@ -241,6 +319,11 @@ function exitStoreWriteFailure(error) {
   // P0-2: never fall back to state.json. The SQLite database is the only ledger
   // once it exists, so a JSON fallback would silently split the book (and the
   // command would still exit 0). Fail loudly instead.
+  const hint = storeFailureHint(error)
+  if (hint) {
+    console.error(hint)
+    process.exit(1)
+  }
   console.error(`advisers: could not write the ledger to ${DB}: ${error.message}`)
   console.error('Nothing was written to state.json; the SQLite database is the only ledger, so this command did not apply.')
   console.error('Retry the command; if it keeps failing run `advisers doctor` (or `advisers audit --check-db`).')
@@ -470,8 +553,15 @@ function friendlyError(error) {
   if (/database is locked/.test(message)) return 'database is busy; close other advisers processes and retry'
   return message
 }
-process.on('uncaughtException', (error) => { console.error(`advisers: ${friendlyError(error)}`); process.exit(1) })
-process.on('unhandledRejection', (error) => { console.error(`advisers: ${friendlyError(error)}`); process.exit(1) })
+function reportFatalError(error) {
+  // E_DB_LOCKED / E_DB_CORRUPT get backup/doctor/concurrency guidance instead of
+  // the generic one-line message (commands that touch the store without going
+  // through loadLedger() end up here).
+  console.error(storeFailureHint(error) ?? `advisers: ${friendlyError(error)}`)
+  process.exit(1)
+}
+process.on('uncaughtException', reportFatalError)
+process.on('unhandledRejection', reportFatalError)
 /**
  * TOS gate: `--accept-tos[=<version>]` is a global pre-dispatch flag, so it is
  * stripped from argv before the command is parsed (it may appear before or after
@@ -613,10 +703,25 @@ Environment:
   ADVISERS_PROGRESS=0 hide [tool] progress lines
   ADVISERS_ACCEPT_TOS=1  record TOS consent without a TTY (same as --accept-tos)
   ADVISERS_NOTIFY_WEBHOOK  optional outbound webhook for remind --deliver --notify
+  ADVISERS_LOCK_TIMEOUT_MS  wait for another advisers process to release the
+                  instance lock (milliseconds; default 10000, 0 = fail immediately)
+
+Concurrency:
+  One advisers process per ADVISERS_HOME uses the SQLite ledger at a time. The
+  CLI takes ~/.advisers/instance.lock before opening state.db; a second process
+  waits up to ADVISERS_LOCK_TIMEOUT_MS and then exits with E_DB_LOCKED instead
+  of writing from a stale ledger snapshot. ui / mcp / bridge keep the lock while
+  they run, so stop them before running other commands (or raise the timeout).
+  A stale lock (dead pid, or not refreshed for 1h) is reclaimed; SIGINT/SIGTERM
+  and normal exit release the lock. Concurrent commands therefore either run one
+  after another or fail explicitly — they never silently overwrite each other.
 
 Exit codes:
   0  success
-  1  user/config/runtime error (bad args, missing key, unknown id, failed verification)
+  1  user/config/runtime error (bad args, missing key, unknown id, failed
+     verification, E_DB_LOCKED when another process holds the instance lock,
+     E_DB_CORRUPT when state.db is 0 bytes/corrupt: back it up and run
+     \`advisers doctor\`; damaged databases are never silently rebuilt)
   3  TOS consent required: non-interactive command blocked by the consent gate.
      Run \`advisers tos accept\` in a TTY, or pass --accept-tos / ADVISERS_ACCEPT_TOS=1.
      \`advisers evidence verify <dir>\` is offline/read-only and exempt from the gate.
@@ -1184,6 +1289,15 @@ async function petBrief(args) {
       if (!result.ok) process.exitCode = 1
       return
     }
+    // P1-1/P0-1: pet-brief reads state.db read-only, but it still shares the
+    // single-writer HOME. Report a sealed vault with the stable code instead of
+    // "store not found", and take the instance lock so the read cannot race a
+    // seal/unseal/sync-pull replacing the database.
+    if (mode === 'sqlite') {
+      const sealed = vaultSealedPath()
+      if (sealed) return fail('E_VAULT_SEALED', 'the database is sealed at ' + sealed + '; run "ADVISERS_VAULT_PASSPHRASE=... advisers vault unseal" first (no empty database was created)')
+      ensureInstanceLock()
+    }
     const { readLedgerSnapshotReadOnly } = await import('../lib/pet-brief-store.js')
     let snapshot
     try {
@@ -1244,18 +1358,42 @@ async function doctor() {
   const sealed = vaultSealedPath()
   if (sealed) {
     check('vault', true, `sealed (${sealed}); run ` + '`advisers vault unseal`')
+    check('lock', true, 'not taken (vault sealed)')
+    check('database', true, 'skipped (vault sealed)')
     check('sqlite', true, 'skipped (vault sealed)')
     check('audit', true, 'skipped (vault sealed)')
     check('schema', true, 'skipped (vault sealed)')
   } else {
     try {
       const store = openStore()
+      // P0-1: doctor holds the instance lock while it inspects the store; the
+      // row also exposes the lock path so a stuck holder can be diagnosed.
+      check('lock', true, `${instanceLock?.path ?? LOCK_PATH} (held by pid ${process.pid})`)
+      let dbBytes = 0
+      try { dbBytes = statSync(DB).size } catch {}
+      check('database', dbBytes > 0, dbBytes > 0 ? `${DB} (${dbBytes} bytes)` : `E_DB_CORRUPT: ${DB} is 0 bytes; back it up and restore`)
       const integrity = store.assertIntegrity()
       check('sqlite', integrity === 'ok', `${DB} (${integrity})`)
       const audit = store.verifyAudit()
       check('audit', audit.ok, audit.ok ? `${audit.count} entries` : `BROKEN at seq ${audit.seq}`)
       check('schema', true, String(store.db.prepare("SELECT value FROM meta WHERE key='schema_version'").get()?.value ?? '?'))
-    } catch (error) { check('sqlite', false, error.message) }
+    } catch (error) {
+      if (error?.code === 'E_DB_LOCKED') {
+        // Another live process holds the store; this is a real FAIL, not a
+        // reason to silently inspect a stale snapshot.
+        check('lock', false, error.message)
+        check('sqlite', false, 'skipped (another instance holds the instance lock)')
+      } else if (error?.code === 'E_DB_CORRUPT') {
+        check('lock', true, `${instanceLock?.path ?? LOCK_PATH} (held by pid ${process.pid})`)
+        check('database', false, error.message)
+        check('sqlite', false, 'refusing to open a 0-byte/corrupt database (no silent rebuild)')
+        check('audit', false, 'skipped (database damaged)')
+        check('schema', false, 'skipped (database damaged)')
+      } else {
+        check('lock', Boolean(instanceLock?.held), instanceLock?.held ? `${LOCK_PATH} (held by pid ${process.pid})` : 'not taken')
+        check('sqlite', false, error.message)
+      }
+    }
   }
   let officeOk = false
   try { await import('advisers-office'); officeOk = true } catch { try { await import('../../office/dist/index.js'); officeOk = true } catch {} }
@@ -2004,6 +2142,9 @@ async function importLedger(file, { replace = false } = {}) {
   if (!data || !Array.isArray(data.matters)) { console.error('import file does not contain an Advisers ledger'); process.exitCode = 1; return }
   await requireTosReaccept({ scope: 'import', subject: basename(file), action: 'import --replace' })
   ensureHome()
+  // import replaces the ledger wholesale; serialize it with every other store
+  // user (P0-1) before copying the pre-import backup and writing.
+  ensureInstanceLock()
   try {
     const store = dbStore()
     if (store) copyFileSync(DB, join(HOME, `import-backup-${Date.now()}.db`))
@@ -3055,6 +3196,10 @@ function reportPlaintextCleanup(cleanup, out) {
 async function vaultSeal(args) {
   const { flags } = parseFlags(args)
   ensureHome()
+  // P1-3: seal mutates/removes state.db, so it takes the same single-writer lock
+  // as ordinary commands; a ui/mcp/bridge server holding the store now makes seal
+  // fail with E_DB_LOCKED instead of silently discarding that process's writes.
+  ensureInstanceLock()
   const removePlaintext = Boolean(flags.remove) || args.includes('--remove')
   if (!existsSync(DB)) {
     const sealed = vaultSealedPath()
@@ -3117,6 +3262,9 @@ async function vaultUnseal(args) {
     return
   }
   ensureHome()
+  // P1-3: unseal replaces state.db; hold the single-writer lock for the whole
+  // verify + backup + rename sequence (E_DB_LOCKED while another process runs).
+  ensureInstanceLock()
   // P1-3: never write the payload straight over the live database. Write a
   // same-directory temp file, fsync it, verify the SQLite image, keep the old
   // database (and its WAL) as a backup, then rename atomically.
@@ -3285,6 +3433,10 @@ async function syncCommand(args) {
   }
   const pass = syncPass(); if (!pass) return
   ensureHome()
+  // P1-3: push checkpoints/copies the live database and pull replaces it, so both
+  // must not run while another process holds the store (or be run by two sync
+  // commands at once). The lock is held for the whole operation.
+  if (sub === 'push' || sub === 'pull') ensureInstanceLock()
   if (sub === 'push') {
     if (!existsSync(DB)) { console.error(`no database at ${DB}`); process.exitCode = 1; return }
     const device = typeof flags.device === 'string' ? flags.device : hostname()

@@ -1,6 +1,7 @@
 import { DatabaseSync } from 'node:sqlite'
-import { chmodSync, copyFileSync } from 'node:fs'
+import { chmodSync, closeSync, copyFileSync, fsyncSync, mkdirSync, openSync, readFileSync, rmSync, statSync, unlinkSync, utimesSync, writeSync } from 'node:fs'
 import { createHash, createHmac, randomUUID } from 'node:crypto'
+import { dirname, join } from 'node:path'
 
 /**
  * Open + write hardening (2026-11-17 robustness audit P0-1/P0-3/P1-2):
@@ -40,6 +41,310 @@ function sleepSync(ms) {
 
 function backoffMs(attempt) {
   return Math.min(2000, 50 * 2 ** attempt)
+}
+
+// ---------------------------------------------------------------------------
+// Cross-process single-writer instance lock (0.2.1 robustness audit P0-1).
+//
+// The ledger snapshot save() path (see _saveRows below) writes whole rows, so
+// two ordinary CLI commands that both load() and then save() can overwrite each
+// other's committed updates (and resurrect soft-deleted rows) even while the
+// SQLite page-level writer serialization keeps the file structurally intact.
+// The audit's recommended first fix is one writer per HOME: every process that
+// opens the SQLite store takes ~/.advisers/instance.lock (O_EXCL) first, waits a
+// bounded time for a live holder, reclaims a provably stale lock, and releases
+// on exit/SIGINT/SIGTERM.
+//
+// Rules that keep the takeover safe:
+// - a lock whose pid is alive is never stolen while its heartbeat is fresh;
+//   long-lived holders (ui/mcp/bridge) refresh the lock mtime periodically.
+// - a stale lock is removed only under an O_EXCL reclaim guard directory, so
+//   two waiters can never both delete and recreate the lock under each other.
+// - release() only unlinks the lock when its pid + startedAt still match ours.
+// ---------------------------------------------------------------------------
+export const INSTANCE_LOCK_FILE = 'instance.lock'
+const DEFAULT_LOCK_TIMEOUT_MS = 10_000
+const DEFAULT_LOCK_STALE_MS = 60 * 60 * 1000
+const MAX_LOCK_TIMEOUT_MS = 24 * 60 * 60 * 1000
+const MAX_LOCK_STALE_MS = 30 * 24 * 60 * 60 * 1000
+const LOCK_POLL_INTERVAL_MS = 50
+const LOCK_RECLAIM_GUARD_MS = 10_000
+
+/** The database exists but cannot be trusted (0 bytes / not a SQLite file). */
+export class DatabaseCorruptError extends Error {
+  constructor(path, detail) {
+    super(
+      `E_DB_CORRUPT: ${path}: ${detail}. Refusing to rebuild or overwrite it. ` +
+        'Back up the file first (do not delete it), then run `advisers doctor`; ' +
+        'restore a known-good copy (state.db.before-*) if you have one.',
+    )
+    this.name = 'DatabaseCorruptError'
+    this.code = 'E_DB_CORRUPT'
+    this.path = path
+  }
+}
+
+/** Another live advisers process holds the HOME's single-writer instance lock. */
+export class DatabaseLockedError extends Error {
+  constructor({ lockPath, holder, waitedMs, timeoutMs }) {
+    const who = holder
+      ? ` (pid ${holder.pid}, started ${holder.startedAt || 'unknown'}${holder.command ? `, "${holder.command}"` : ''})`
+      : ''
+    super(
+      `E_DB_LOCKED: another advisers process is using this home via ${lockPath}${who}; ` +
+        `waited ${waitedMs}ms (ADVISERS_LOCK_TIMEOUT_MS=${timeoutMs}). No data was written. ` +
+        'Stop the other process (ui/mcp/bridge servers hold the lock while running) and retry, ' +
+        'or raise ADVISERS_LOCK_TIMEOUT_MS to wait longer. If the holder is gone, remove the stale lock file.',
+    )
+    this.name = 'DatabaseLockedError'
+    this.code = 'E_DB_LOCKED'
+    this.lockPath = lockPath
+    this.holder = holder
+    this.waitedMs = waitedMs
+  }
+}
+
+function readEnvMs(name, fallback, max) {
+  const raw = process.env[name]
+  if (raw === undefined || raw === null || String(raw).trim() === '') return fallback
+  const value = Number(raw)
+  if (!Number.isFinite(value) || value < 0) return fallback
+  return Math.min(Math.floor(value), max)
+}
+
+/** Wait budget for a contended instance lock (`ADVISERS_LOCK_TIMEOUT_MS`, default 10s). */
+export function instanceLockTimeoutMs() {
+  return readEnvMs('ADVISERS_LOCK_TIMEOUT_MS', DEFAULT_LOCK_TIMEOUT_MS, MAX_LOCK_TIMEOUT_MS)
+}
+
+/** Age after which an unrefreshed lock may be reclaimed (`ADVISERS_LOCK_STALE_MS`, default 1h). */
+export function instanceLockStaleMs() {
+  return readEnvMs('ADVISERS_LOCK_STALE_MS', DEFAULT_LOCK_STALE_MS, MAX_LOCK_STALE_MS)
+}
+
+/** Absolute path of the per-HOME instance lock. */
+export function instanceLockPath(home) {
+  return join(home, INSTANCE_LOCK_FILE)
+}
+
+function isPidAlive(pid) {
+  if (!Number.isInteger(pid) || pid <= 0) return false
+  try {
+    process.kill(pid, 0)
+    return true
+  } catch (error) {
+    // EPERM: the pid exists but belongs to another user; never steal from it.
+    return error?.code === 'EPERM'
+  }
+}
+
+/** Read + stat the instance lock without creating anything; null when absent. */
+export function readInstanceLock(home) {
+  const file = instanceLockPath(home)
+  let stat
+  try {
+    stat = statSync(file)
+  } catch (error) {
+    if (error?.code === 'ENOENT') return null
+    throw error
+  }
+  let record = null
+  try {
+    const parsed = JSON.parse(readFileSync(file, 'utf8'))
+    if (parsed && typeof parsed === 'object' && Number.isFinite(Number(parsed.pid)) && Number(parsed.pid) > 0) {
+      record = {
+        pid: Math.trunc(Number(parsed.pid)),
+        startedAt: typeof parsed.startedAt === 'string' ? parsed.startedAt : '',
+        command: typeof parsed.command === 'string' ? parsed.command : '',
+      }
+    }
+  } catch {}
+  return { file, record, mtimeMs: stat.mtimeMs, size: stat.size }
+}
+
+/**
+ * A lock is stale when its owner pid is gone, or when it has not been refreshed
+ * (heartbeat / normal short command) for longer than `staleMs`. A live pid with
+ * a fresh mtime is never stolen — ui/mcp/bridge holders legitimately keep the
+ * lock for hours.
+ */
+export function instanceLockIsStale(info, { now = Date.now(), staleMs = instanceLockStaleMs() } = {}) {
+  if (!info) return false
+  if (info.record && !isPidAlive(info.record.pid)) return true
+  return now - info.mtimeMs > staleMs
+}
+
+function heartbeatIntervalMs(staleMs) {
+  return Math.max(1000, Math.min(5 * 60_000, Math.floor(staleMs / 4)))
+}
+
+/** Remove a stale lock while serialising concurrent reclaimers with a tty-less guard dir. */
+function reclaimStaleLock({ path, expected, staleMs, timeoutMs, pollMs }) {
+  const guard = path + '.reclaim'
+  const guardDeadline = Date.now() + timeoutMs
+  for (;;) {
+    try {
+      mkdirSync(guard, { mode: 0o700 })
+      break
+    } catch (error) {
+      if (error?.code !== 'EEXIST') throw error
+      let age = 0
+      try { age = Date.now() - statSync(guard).mtimeMs } catch {}
+      if (age > LOCK_RECLAIM_GUARD_MS) {
+        try { rmSync(guard, { recursive: true, force: true }) } catch {}
+        continue
+      }
+      if (Date.now() >= guardDeadline) return false
+      sleepSync(pollMs)
+    }
+  }
+  try {
+    const current = readInstanceLock(dirname(path))
+    if (!current) return true
+    if (!instanceLockIsStale(current, { staleMs })) return false
+    // Only delete the exact record we inspected; a new holder may have replaced it.
+    const same = expected
+      ? current.record && expected.record &&
+        current.record.pid === expected.record.pid &&
+        current.record.startedAt === expected.record.startedAt
+      : !current.record
+    if (!same) return false
+    try { unlinkSync(path) } catch (error) { if (error?.code !== 'ENOENT') throw error }
+    return true
+  } finally {
+    try { rmSync(guard, { recursive: true, force: true }) } catch {}
+  }
+}
+
+export class InstanceLock {
+  constructor({ home, command = '', timeoutMs = instanceLockTimeoutMs(), staleMs = instanceLockStaleMs(), pollMs = LOCK_POLL_INTERVAL_MS } = {}) {
+    this.home = home
+    this.path = instanceLockPath(home)
+    this.timeoutMs = Math.max(0, Math.floor(Number(timeoutMs) || 0))
+    this.staleMs = Math.max(1, Math.floor(Number(staleMs) || DEFAULT_LOCK_STALE_MS))
+    this.pollMs = Math.max(5, Math.floor(Number(pollMs) || LOCK_POLL_INTERVAL_MS))
+    this.record = { pid: process.pid, startedAt: new Date().toISOString(), command: String(command ?? '').slice(0, 160) }
+    this._held = false
+    this._heartbeat = null
+  }
+
+  get held() {
+    return this._held
+  }
+
+  /** Try once to create the lock file (O_EXCL); returns true on success. */
+  _create() {
+    mkdirSync(this.home, { recursive: true, mode: 0o700 })
+    let fd
+    try {
+      fd = openSync(this.path, 'wx', 0o600)
+    } catch (error) {
+      if (error?.code === 'EEXIST') return false
+      throw error
+    }
+    try {
+      writeSync(fd, JSON.stringify(this.record) + '\n')
+      fsyncSync(fd)
+    } catch (error) {
+      // Never leave a half-written lock file behind: a reader would see invalid
+      // JSON and could only recover by waiting out the (1h) stale threshold.
+      try { closeSync(fd) } catch {}
+      try { unlinkSync(this.path) } catch {}
+      throw error
+    }
+    closeSync(fd)
+    try { chmodSync(this.path, 0o600) } catch {}
+    return true
+  }
+
+  acquire() {
+    const deadline = Date.now() + this.timeoutMs
+    const started = Date.now()
+    for (;;) {
+      if (this._create()) {
+        this._held = true
+        this._startHeartbeat()
+        return this
+      }
+      const info = readInstanceLock(this.home)
+      if (info && instanceLockIsStale(info, { staleMs: this.staleMs })) {
+        if (reclaimStaleLock({ path: this.path, expected: info, staleMs: this.staleMs, timeoutMs: this.timeoutMs, pollMs: this.pollMs })) continue
+      }
+      const now = Date.now()
+      if (now >= deadline) {
+        throw new DatabaseLockedError({ lockPath: this.path, holder: info?.record ?? null, waitedMs: now - started, timeoutMs: this.timeoutMs })
+      }
+      sleepSync(Math.max(1, Math.min(this.pollMs, deadline - now)))
+    }
+  }
+
+  /** Refresh the lock mtime so long-lived holders are not age-reclaimed. */
+  refresh() {
+    if (!this._held) return false
+    const info = readInstanceLock(this.home)
+    if (!info?.record || info.record.pid !== this.record.pid || info.record.startedAt !== this.record.startedAt) {
+      this._stopHeartbeat()
+      this._held = false
+      return false
+    }
+    const now = new Date()
+    try { utimesSync(this.path, now, now) } catch { this._stopHeartbeat() }
+    return true
+  }
+
+  _startHeartbeat() {
+    if (this._heartbeat || this.staleMs < 60_000) return
+    this._heartbeat = setInterval(() => this.refresh(), heartbeatIntervalMs(this.staleMs))
+    if (typeof this._heartbeat.unref === 'function') this._heartbeat.unref()
+  }
+
+  _stopHeartbeat() {
+    if (!this._heartbeat) return
+    clearInterval(this._heartbeat)
+    this._heartbeat = null
+  }
+
+  /** Release the lock; only the exact record this process wrote is removed. */
+  release() {
+    this._stopHeartbeat()
+    if (!this._held) return false
+    this._held = false
+    let info
+    try { info = readInstanceLock(this.home) } catch { return false }
+    if (!info?.record) return false
+    if (info.record.pid !== this.record.pid || info.record.startedAt !== this.record.startedAt) return false
+    try {
+      unlinkSync(this.path)
+      return true
+    } catch (error) {
+      return error?.code === 'ENOENT'
+    }
+  }
+}
+
+/** Take the single-writer lock for a HOME; throws E_DB_LOCKED after the wait budget. */
+export function acquireInstanceLock({ home, command = '', timeoutMs, staleMs, pollMs } = {}) {
+  if (!home) throw new Error('acquireInstanceLock requires a home directory')
+  const lock = new InstanceLock({ home, command, timeoutMs, staleMs, pollMs })
+  return lock.acquire()
+}
+
+/** Throw E_DB_CORRUPT for an existing 0-byte / non-file database before SQLite touches it. */
+export function assertDatabaseFileUsable(path) {
+  if (!path || path === ':memory:') return
+  let stat
+  try {
+    stat = statSync(path)
+  } catch (error) {
+    if (error?.code === 'ENOENT') return
+    throw error
+  }
+  if (stat.isDirectory()) throw new DatabaseCorruptError(path, 'the path is a directory, not a SQLite database file')
+  if (stat.size === 0) throw new DatabaseCorruptError(path, 'the database file is 0 bytes (truncated, or an interrupted first-time initialisation)')
+}
+
+function isCorruptSqliteError(error) {
+  return /file is not a database|database disk image is malformed|malformed database|not a database/i.test(String(error?.message ?? error))
 }
 
 // Ledger tables are written as a whole snapshot by save(). The id column lets
@@ -222,19 +527,32 @@ export class SqliteStore {
     this.busyTimeoutMs = busyTimeoutMs
     this._transactionDepth = 0
     this._baselineIds = null
-    this.db = readOnly ? new DatabaseSync(path, { readOnly: true }) : new DatabaseSync(path)
-    // P0-1: sqlite only applies busy_timeout to statements that run after the
-    // pragma is set; concurrent first-opens used to fail on journal_mode=WAL
-    // because busy_timeout was set afterwards.
-    this.db.exec(`PRAGMA busy_timeout = ${Math.max(0, Math.floor(Number(busyTimeoutMs) || 0))}`)
-    if (readOnly) {
-      if (checkIntegrity) this.assertIntegrity()
-      return
+    // P2-2 (0.2.1): an existing 0-byte file is treated as corrupt instead of a
+    // brand-new database. Before this, SQLite turned it into an empty schema and
+    // every command reported "no data" while silently rebuilding the ledger.
+    assertDatabaseFileUsable(path)
+    try {
+      this.db = readOnly ? new DatabaseSync(path, { readOnly: true }) : new DatabaseSync(path)
+      // P0-1: sqlite only applies busy_timeout to statements that run after the
+      // pragma is set; concurrent first-opens used to fail on journal_mode=WAL
+      // because busy_timeout was set afterwards.
+      this.db.exec(`PRAGMA busy_timeout = ${Math.max(0, Math.floor(Number(busyTimeoutMs) || 0))}`)
+      if (readOnly) {
+        if (checkIntegrity) this.assertIntegrity()
+        return
+      }
+      this.enableWal()
+      this.db.exec('PRAGMA secure_delete = ON')
+      this.db.exec('PRAGMA synchronous = NORMAL')
+      this.initializeSchema()
+    } catch (error) {
+      try { this.db?.close() } catch {}
+      if (error?.code === 'E_DB_CORRUPT') throw error
+      if (isCorruptSqliteError(error)) {
+        throw new DatabaseCorruptError(path, `SQLite reports that the file is not a valid database (${String(error?.message ?? error).slice(0, 200)})`)
+      }
+      throw error
     }
-    this.enableWal()
-    this.db.exec('PRAGMA secure_delete = ON')
-    this.db.exec('PRAGMA synchronous = NORMAL')
-    this.initializeSchema()
   }
 
   /** Full-database integrity check; explicit because it is O(database size). */

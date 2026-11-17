@@ -52,6 +52,10 @@ const PULL_TMP_PREFIX = '.advisers-pull-verify-'
 function assertDatabaseIntegrity(file) {
   let db
   try {
+    // A 0-byte file is a valid "empty database" to SQLite (quick_check says ok),
+    // so a truncated snapshot used to replace the live library silently. Treat it
+    // as corrupt (robustness audit P2-2 / P1-4) and keep the local database.
+    if (statSync(file).size === 0) throw new Error('E_DB_CORRUPT: the snapshot database is 0 bytes (truncated)')
     db = new DatabaseSync(file, { readOnly: true })
     const row = db.prepare('PRAGMA quick_check').get()
     const verdict = String(row?.quick_check ?? 'unknown').slice(0, 120)
