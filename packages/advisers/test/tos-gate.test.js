@@ -47,8 +47,20 @@ function baseEnv(home) {
   return env
 }
 
+function sanitizeStderr(text) {
+  // Node 22 prints an ExperimentalWarning for node:sqlite before user output;
+  // the consent gate assertions are about the user-facing stderr only.
+  return String(text || '')
+    .split(/\r?\n/)
+    .filter((line) => !line.includes('ExperimentalWarning') && !line.includes('trace-warnings'))
+    .join('\n')
+    .replace(/^\n+/, '')
+}
+
 function run(home, args, extra = {}) {
-  return spawnSync(process.execPath, [bin, ...args], { env: { ...baseEnv(home), ...extra }, encoding: 'utf8' })
+  const result = spawnSync(process.execPath, [bin, ...args], { env: { ...baseEnv(home), ...extra }, encoding: 'utf8' })
+  result.stderr = sanitizeStderr(result.stderr)
+  return result
 }
 
 function runOk(home, args, extra = {}) {

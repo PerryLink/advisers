@@ -132,7 +132,9 @@ export async function research({
         controller.abort()
         reject(new ResearchError(`research timeout after ${timeoutMs}ms`, { code: 'TIMEOUT' }))
       }, timeoutMs)
-      if (typeof timer?.unref === 'function') timer.unref()
+      // The deadline timer must stay referenced: a fetch implementation that
+      // ignores the abort signal may leave the event loop empty, and an unref'd
+      // timer would never fire (Node 22 treats that as a pending promise at exit).
     })
     try {
       const request = fetchImpl(`${root(baseUrl)}/messages`, {
