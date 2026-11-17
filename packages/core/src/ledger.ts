@@ -61,6 +61,21 @@ export interface CommitmentInput {
   timezone?: string
   capability?: Commitment['capability']
   evidence: CommitmentEvidence[]
+  /** Opt-in reminder offsets for this commitment; see {@link Commitment}. */
+  reminderOffsets?: string[]
+}
+
+/** Fields a caller may change after a commitment exists. */
+export interface CommitmentUpdate {
+  action?: string
+  dueAt?: string
+  timezone?: string
+  capability?: Commitment['capability']
+  /**
+   * Replacement reminder offsets. Omit to leave unchanged; pass `null` to
+   * clear them (falling back to the reminder library defaults).
+   */
+  reminderOffsets?: string[] | null
 }
 
 /**
@@ -238,6 +253,7 @@ export class Ledger {
     if (input.evidence.length === 0) {
       throw new Error('a commitment requires at least one evidence item')
     }
+    const reminderOffsets = this.copyReminderOffsets(input.reminderOffsets)
     const commitment: Commitment = {
       id: this.ids.next('cm'),
       matterId: input.matterId,
@@ -249,9 +265,40 @@ export class Ledger {
       status: 'open',
       evidence: input.evidence,
       capability: input.capability ?? 'none',
+      // Never invent the field for old callers: a missing key keeps snapshots
+      // byte-compatible with pre-0.2.0 data.
+      ...(reminderOffsets === undefined ? {} : { reminderOffsets }),
     }
     this.commitments.set(commitment.id, commitment)
     return commitment
+  }
+
+  /**
+   * Update mutable commitment fields. Completion/drop stay on their dedicated
+   * methods so evidence rules cannot be bypassed here.
+   */
+  updateCommitment(id: Id, patch: CommitmentUpdate): Commitment {
+    const commitment = this.commitments.get(id)
+    if (!commitment) throw new Error(`unknown commitment: ${id}`)
+    if (patch.action !== undefined) commitment.action = patch.action
+    if (patch.dueAt !== undefined) commitment.dueAt = patch.dueAt
+    if (patch.timezone !== undefined) commitment.timezone = patch.timezone
+    if (patch.capability !== undefined) commitment.capability = patch.capability
+    if (patch.reminderOffsets !== undefined) {
+      const reminderOffsets = this.copyReminderOffsets(patch.reminderOffsets)
+      if (reminderOffsets === undefined) delete commitment.reminderOffsets
+      else commitment.reminderOffsets = reminderOffsets
+    }
+    return commitment
+  }
+
+  private copyReminderOffsets(value: string[] | null | undefined): string[] | undefined {
+    if (value === undefined || value === null) return undefined
+    if (!Array.isArray(value)) throw new TypeError('reminderOffsets must be an array of strings')
+    return value.map((entry) => {
+      if (typeof entry !== 'string') throw new TypeError('reminderOffsets must be an array of strings')
+      return entry
+    })
   }
 
   openCommitments(matterId?: Id): Commitment[] {

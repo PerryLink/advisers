@@ -150,6 +150,181 @@ export function escapeIcsText(value) {
     .replace(/,/g, '\\,')
 }
 
+const OFFSET_PATTERN = /^([+-])(\d+)([dhm])(?:(\d{1,2}):(\d{2}))?$/
+const MAX_OFFSET_DAYS = 3650
+const MAX_OFFSET_HOURS = MAX_OFFSET_DAYS * 24
+const MAX_OFFSET_MINUTES = MAX_OFFSET_HOURS * 60
+
+/** Upper bound on per-commitment alarms so a ledger row cannot flood a calendar. */
+export const MAX_REMINDER_OFFSETS = 24
+
+const pad2 = (value) => String(value).padStart(2, '0')
+
+/**
+ * Parse one custom reminder offset relative to the commitment due instant.
+ *
+ * Accepted grammar (Asia/Shanghai wall clock):
+ *   - `-1d` / `+2d`        — whole local days, same clock time as `dueAt`
+ *   - `-2h` / `+90m`       — hours or minutes relative to `dueAt`
+ *   - `+0d09:00`            — 09:00 on the due day (day shift + wall-clock time)
+ *   - `-1d08:30`            — 08:30 on the day before the due day
+ *
+ * The sign is mandatory. A time-of-day is only valid together with the `d`
+ * unit, and a zero-day time-of-day offset is canonicalised to `+`.
+ *
+ * @returns {{ offset: string, sign: 1|-1, days: number, hours: number,
+ *   minutes: number, timeOfDay: { hour: number, minute: number }|null, source: string }}
+ */
+export function parseReminderOffset(value) {
+  if (typeof value !== 'string') throw new TypeError('reminder offset must be a string')
+  const text = value.trim().toLowerCase()
+  if (!text) throw new TypeError('reminder offset must not be empty')
+  const match = OFFSET_PATTERN.exec(text)
+  if (!match) throw new TypeError(`invalid reminder offset: ${String(value)}`)
+  const [, rawSign, rawAmount, unit, rawHour, rawMinute] = match
+  const amount = Number(rawAmount)
+  if (!Number.isSafeInteger(amount)) throw new TypeError(`invalid reminder offset amount: ${String(value)}`)
+  let days = 0
+  let hours = 0
+  let minutes = 0
+  if (unit === 'd') {
+    days = amount
+    if (days > MAX_OFFSET_DAYS) throw new RangeError(`reminder offset too large: ${String(value)}`)
+  } else if (unit === 'h') {
+    hours = amount
+    if (hours > MAX_OFFSET_HOURS) throw new RangeError(`reminder offset too large: ${String(value)}`)
+  } else {
+    minutes = amount
+    if (minutes > MAX_OFFSET_MINUTES) throw new RangeError(`reminder offset too large: ${String(value)}`)
+  }
+  let timeOfDay = null
+  if (rawHour !== undefined) {
+    if (unit !== 'd') throw new TypeError(`time-of-day is only valid with a day offset: ${String(value)}`)
+    const hour = Number(rawHour)
+    const minute = Number(rawMinute)
+    if (hour > 23 || minute > 59) throw new RangeError(`invalid reminder offset time: ${String(value)}`)
+    timeOfDay = Object.freeze({ hour, minute })
+  }
+  const sign = rawSign === '-' ? -1 : 1
+  const canonicalSign = timeOfDay && days === 0 ? '+' : rawSign
+  const offset = timeOfDay
+    ? `${canonicalSign}${days}d${pad2(timeOfDay.hour)}:${pad2(timeOfDay.minute)}`
+    : unit === 'd'
+      ? `${canonicalSign}${days}d`
+      : unit === 'h'
+        ? `${canonicalSign}${hours}h`
+        : `${canonicalSign}${minutes}m`
+  return Object.freeze({ offset, sign, days, hours, minutes, timeOfDay, source: String(value) })
+}
+
+/**
+ * Strictly validate and canonicalise a list of offsets. Invalid input throws;
+ * use {@link reminderAlarms} for the lenient rendering path.
+ */
+export function normalizeReminderOffsets(value) {
+  if (value == null) return []
+  if (!Array.isArray(value)) throw new TypeError('reminderOffsets must be an array of offset strings')
+  if (value.length > MAX_REMINDER_OFFSETS) {
+    throw new RangeError(`too many reminder offsets (max ${MAX_REMINDER_OFFSETS})`)
+  }
+  const seen = new Set()
+  const normalized = []
+  for (const entry of value) {
+    const parsed = parseReminderOffset(entry)
+    if (seen.has(parsed.offset)) continue
+    seen.add(parsed.offset)
+    normalized.push(parsed.offset)
+  }
+  return normalized
+}
+
+/** Lenient list reader used for rendering: skips invalid entries instead of throwing. */
+function resolveReminderOffsets(value) {
+  if (value == null) return []
+  let items
+  if (Array.isArray(value)) items = value
+  else if (typeof value === 'string') items = value.split(',')
+  else return []
+  const seen = new Set()
+  const resolved = []
+  for (const item of items.slice(0, MAX_REMINDER_OFFSETS)) {
+    try {
+      const parsed = parseReminderOffset(item)
+      if (seen.has(parsed.offset)) continue
+      seen.add(parsed.offset)
+      resolved.push(parsed.offset)
+    } catch {
+      // A single malformed ledger value must not suppress every reminder.
+    }
+  }
+  return resolved
+}
+
+/** Human label used inside a VALARM DESCRIPTION. */
+export function describeReminderOffset(value) {
+  const parsed = parseReminderOffset(value)
+  if (parsed.timeOfDay) {
+    const time = `${pad2(parsed.timeOfDay.hour)}:${pad2(parsed.timeOfDay.minute)}`
+    if (parsed.days === 0) return `当天 ${time}`
+    return `${parsed.sign < 0 ? '提前' : '延后'} ${parsed.days} 天 ${time}`
+  }
+  if (parsed.days === 0 && parsed.hours === 0 && parsed.minutes === 0) return '到期时'
+  const when = parsed.sign < 0 ? '提前' : '延后'
+  if (parsed.days) return `${when} ${parsed.days} 天`
+  if (parsed.hours) return `${when} ${parsed.hours} 小时`
+  return `${when} ${parsed.minutes} 分钟`
+}
+
+/**
+ * Absolute instant of one alarm: the due instant shifted by `offset`.
+ * All wall-clock arithmetic uses Asia/Shanghai (UTC+8, no DST since 1991).
+ */
+export function reminderAlarmTime(dueAt, offset) {
+  const due = requireDate(dueAt, 'due date')
+  const parsed = parseReminderOffset(offset)
+  if (parsed.timeOfDay) {
+    const wall = new Date(due.getTime() + SHANGHAI_OFFSET_MS)
+    const shifted = new Date(
+      Date.UTC(
+        wall.getUTCFullYear(),
+        wall.getUTCMonth(),
+        wall.getUTCDate() + parsed.sign * parsed.days,
+        parsed.timeOfDay.hour,
+        parsed.timeOfDay.minute,
+        0,
+        0,
+      ),
+    )
+    const date = new Date(shifted.getTime() - SHANGHAI_OFFSET_MS)
+    if (Number.isNaN(date.getTime())) throw new RangeError(`invalid reminder offset: ${String(offset)}`)
+    return date
+  }
+  const deltaMs = parsed.sign * (parsed.days * 24 * 60 + parsed.hours * 60 + parsed.minutes) * 60_000
+  const date = new Date(due.getTime() + deltaMs)
+  if (Number.isNaN(date.getTime())) throw new RangeError(`invalid reminder offset: ${String(offset)}`)
+  return date
+}
+
+/**
+ * Build the VALARM instants for a due date. Duplicate instants collapse so the
+ * same calendar reminder is never emitted twice; output is chronological.
+ *
+ * @returns {Array<{ offset: string, at: Date, label: string }>}
+ */
+export function reminderAlarms(dueAt, offsets) {
+  const normalized = resolveReminderOffsets(offsets)
+  const seen = new Set()
+  const alarms = []
+  for (const offset of normalized) {
+    const at = reminderAlarmTime(dueAt, offset)
+    const key = String(at.getTime())
+    if (seen.has(key)) continue
+    seen.add(key)
+    alarms.push({ offset, at, label: describeReminderOffset(offset) })
+  }
+  return alarms.sort((left, right) => left.at.getTime() - right.at.getTime() || left.offset.localeCompare(right.offset))
+}
+
 function rule(id, description, test) {
   return Object.freeze({ id, description, test })
 }
@@ -266,6 +441,47 @@ function readSnoozeUntil(commitment, options, ledger) {
   return null
 }
 
+/**
+ * Resolve reminder offsets for one commitment. Priority: injected per-id state
+ * (Map/object/function, mirroring snoozes), the commitment field itself, any
+ * commitment meta hook, a duck-typed ledger `getMeta`, then the caller's global
+ * default. Invalid entries are skipped so one bad ledger row cannot hide every
+ * reminder.
+ */
+function readReminderOffsets(commitment, options, ledger) {
+  const meta = commitment.meta
+  const injected = options.reminderOffsets
+  const sources = []
+  if (injected instanceof Map) {
+    sources.push(injected.get(commitment.id))
+    sources.push(injected.get(`reminderOffsets:${commitment.id}`))
+  } else if (typeof injected === 'function') {
+    sources.push(injected(commitment))
+  } else if (injected && typeof injected === 'object') {
+    sources.push(injected[commitment.id])
+    sources.push(injected[`reminderOffsets:${commitment.id}`])
+  }
+  sources.push(commitment.reminderOffsets)
+  if (meta && typeof meta === 'object') {
+    sources.push(meta.reminderOffsets)
+    sources.push(meta[`reminderOffsets:${commitment.id}`])
+    if (typeof meta.get === 'function') sources.push(meta.get(`reminderOffsets:${commitment.id}`))
+  }
+  // Optional duck-typed store hook; never required, never SQLite-specific.
+  if (ledger && typeof ledger.getMeta === 'function') {
+    try {
+      sources.push(ledger.getMeta(`reminderOffsets:${commitment.id}`))
+    } catch {
+      // A read-only or closed store must not break planning.
+    }
+  }
+  for (const source of sources) {
+    const resolved = resolveReminderOffsets(source)
+    if (resolved.length) return resolved
+  }
+  return resolveReminderOffsets(options.defaultReminderOffsets)
+}
+
 function outputDueAt(value) {
   if (typeof value === 'string') return value
   const date = toDate(value)
@@ -284,9 +500,14 @@ function outputDueAt(value) {
  * @param {Array<object|string>} [options.rules] Rule descriptors or ids.
  * @param {Map|object|Function} [options.snoozedUntil] Per-commitment snooze
  *   deadlines, keyed by commitment id; future deadlines suppress reminders.
+ * @param {Map|object|Function} [options.reminderOffsets] Injected
+ *   per-commitment offsets (same keying as `snoozedUntil`). Injected values
+ *   are checked before the commitment's own `reminderOffsets` field.
+ * @param {string[]} [options.defaultReminderOffsets] Global offsets applied
+ *   when a commitment has neither its own nor an injected list.
  * @returns {Array<{ commitmentId: string, action: string, dueAt: string,
  *   bucket: 'overdue'|'due-today'|'due-1d'|'upcoming',
- *   level: 'L1'|'L2'|'L3', ruleId: string }>}
+ *   level: 'L1'|'L2'|'L3', ruleId: string, reminderOffsets?: string[] }>}
  */
 export function buildReminders(ledger, options = {}) {
   if (!ledger || typeof ledger.listCommitments !== 'function') {
@@ -319,6 +540,7 @@ export function buildReminders(ledger, options = {}) {
     // becomes visible again and the snooze-wake rule fires.
     if (snoozeUntil && snoozeUntil.getTime() > now.getTime()) continue
     const snoozeExpired = Boolean(snoozeUntil)
+    const reminderOffsets = readReminderOffsets(commitment, opts, ledger)
 
     const dueDay = localDay(due)
     const dayOffset = localDayIndex(dueDay) - todayIndex
@@ -353,6 +575,9 @@ export function buildReminders(ledger, options = {}) {
         bucket: result.bucket,
         level: result.level,
         ruleId: result.ruleId,
+        // Only present when customised: pre-0.2.0 reminder objects keep their
+        // exact shape and toIcs falls back to the legacy relative alarms.
+        ...(reminderOffsets.length ? { reminderOffsets } : {}),
       })
     }
   }
@@ -377,8 +602,42 @@ export function buildReminders(ledger, options = {}) {
  * @param {object} [options]
  * @param {Date|string|number} [options.now] DTSTAMP instant.
  * @param {string} [options.uidPrefix='advisers']
+ * @param {string[]} [options.reminderOffsets] Fallback custom offsets for
+ *   reminders that do not carry their own `reminderOffsets`.
  * @returns {string} CRLF-terminated iCalendar text.
  */
+const legacyAlarmLines = (title) => [
+  'BEGIN:VALARM',
+  'TRIGGER:-P1D',
+  'ACTION:DISPLAY',
+  `DESCRIPTION:${escapeIcsText(`提醒：${title}（1 天前）`)}`,
+  'END:VALARM',
+  'BEGIN:VALARM',
+  'TRIGGER:-PT1H',
+  'ACTION:DISPLAY',
+  `DESCRIPTION:${escapeIcsText(`提醒：${title}（1 小时前）`)}`,
+  'END:VALARM',
+]
+
+/**
+ * VALARM lines for one event. Custom offsets become **absolute** DATE-TIME
+ * triggers computed in Asia/Shanghai (RFC5545 requires VALUE=DATE-TIME when
+ * TRIGGER is absolute) and one VALARM is emitted per rule. With no offsets the
+ * pre-0.2.0 relative defaults (-P1D, -PT1H) are preserved byte-for-byte.
+ */
+function alarmLines(reminder, due, title, options) {
+  const configured = reminder.reminderOffsets ?? options.reminderOffsets
+  const alarms = reminderAlarms(due, configured)
+  if (!alarms.length) return legacyAlarmLines(title)
+  return alarms.flatMap((alarm) => [
+    'BEGIN:VALARM',
+    `TRIGGER;VALUE=DATE-TIME:${formatIcsDate(alarm.at)}`,
+    'ACTION:DISPLAY',
+    `DESCRIPTION:${escapeIcsText(`提醒：${title}（${alarm.label}）`)}`,
+    'END:VALARM',
+  ])
+}
+
 export function toIcs(reminders, options = {}) {
   if (!Array.isArray(reminders)) throw new TypeError('toIcs requires an array of reminders')
   const opts = options ?? {}
@@ -419,16 +678,7 @@ export function toIcs(reminders, options = {}) {
       `DTSTART:${formatIcsDate(due)}`,
       `SUMMARY:${escapeIcsText(title)}`,
       `DESCRIPTION:${escapeIcsText(`到期：${localDue}（${TIME_ZONE}）`)}`,
-      'BEGIN:VALARM',
-      'TRIGGER:-P1D',
-      'ACTION:DISPLAY',
-      `DESCRIPTION:${escapeIcsText(`提醒：${title}（1 天前）`)}`,
-      'END:VALARM',
-      'BEGIN:VALARM',
-      'TRIGGER:-PT1H',
-      'ACTION:DISPLAY',
-      `DESCRIPTION:${escapeIcsText(`提醒：${title}（1 小时前）`)}`,
-      'END:VALARM',
+      ...alarmLines(reminder, due, title, opts),
       'END:VEVENT',
     )
   }

@@ -1,5 +1,70 @@
 import { DatabaseSync } from 'node:sqlite'
+import { chmodSync, copyFileSync } from 'node:fs'
 import { createHash, createHmac, randomUUID } from 'node:crypto'
+
+/**
+ * Open + write hardening (2026-11-17 robustness audit P0-1/P0-3/P1-2):
+ * - busy_timeout is set before any lock-taking pragma; journal_mode=WAL is
+ *   idempotent and retried with bounded backoff while another process holds
+ *   the database lock.
+ * - Opening no longer runs a full 'PRAGMA quick_check' (that is O(db) and made
+ *   every command slow). Integrity checks live in assertIntegrity() and are
+ *   run by 'advisers doctor' / 'advisers audit --check-db'.
+ * - appendAudit() and saveWithAudit() run in BEGIN IMMEDIATE transactions that
+ *   re-read the previous hash before inserting, so the audit chain cannot fork
+ *   under concurrent writers and a ledger write and its audit row commit
+ *   together or not at all.
+ * - Migrations are refused for a schema newer than this CLI and are preceded
+ *   by a same-directory backup of the old database.
+ */
+export const SCHEMA_VERSION = 18
+const DEFAULT_BUSY_TIMEOUT_MS = 5000
+const OPEN_RETRIES = 6
+const BUSY_ERRCODES = new Set([5, 6]) // SQLITE_BUSY, SQLITE_LOCKED
+
+function isBusyError(error) {
+  if (!error) return false
+  if (typeof error.errcode === 'number' && BUSY_ERRCODES.has(error.errcode)) return true
+  return /SQLITE_BUSY|SQLITE_LOCKED|database (?:table )?is locked/i.test(String(error.message ?? error))
+}
+
+function sleepSync(ms) {
+  if (!ms || ms <= 0) return
+  try {
+    Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, ms)
+  } catch {
+    const end = Date.now() + ms
+    while (Date.now() < end) {}
+  }
+}
+
+function backoffMs(attempt) {
+  return Math.min(2000, 50 * 2 ** attempt)
+}
+
+// Ledger tables are written as a whole snapshot by save(). The id column lets
+// save() merge with rows other processes committed after our load().
+const LEDGER_TABLES = [
+  ['matters', 'id'],
+  ['facts', 'id'],
+  ['commitments', 'id'],
+  ['preferences', 'id'],
+  ['links', 'id'],
+  ['updates', 'id'],
+  ['routines', 'id'],
+  ['routine_patches', 'id'],
+  ['routes', 'key'],
+]
+
+function idsFor(snapshot) {
+  const ids = {}
+  for (const [table, key] of LEDGER_TABLES) {
+    const value = snapshot?.[table]
+    const rows = table === 'routes' ? Object.keys(value ?? {}) : (value ?? []).map((row) => row?.id)
+    ids[table] = new Set(rows.filter((id) => id != null))
+  }
+  return ids
+}
 
 const SCHEMA = `
 CREATE TABLE IF NOT EXISTS matters (
@@ -17,7 +82,7 @@ CREATE TABLE IF NOT EXISTS facts (
 CREATE TABLE IF NOT EXISTS commitments (
   id TEXT PRIMARY KEY, matter_id TEXT NOT NULL, debtor TEXT NOT NULL, creditor TEXT NOT NULL,
   action TEXT NOT NULL, due_at TEXT, timezone TEXT NOT NULL, status TEXT NOT NULL,
-  evidence TEXT NOT NULL, capability TEXT NOT NULL, done_at TEXT
+  evidence TEXT NOT NULL, capability TEXT NOT NULL, done_at TEXT, reminder_offsets TEXT
 );
 CREATE TABLE IF NOT EXISTS preferences (
   id TEXT PRIMARY KEY, kind TEXT NOT NULL, statement TEXT NOT NULL, scope TEXT NOT NULL,
@@ -128,29 +193,137 @@ const parse = (v, fallback = []) => {
 }
 
 export class SqliteStore {
-  constructor(path, { readOnly = false } = {}) {
+  constructor(path, { readOnly = false, checkIntegrity = false, busyTimeoutMs = Number(process.env.ADVISERS_SQLITE_BUSY_TIMEOUT_MS) || DEFAULT_BUSY_TIMEOUT_MS } = {}) {
+    this.path = path
+    this.busyTimeoutMs = busyTimeoutMs
+    this._transactionDepth = 0
+    this._baselineIds = null
     this.db = readOnly ? new DatabaseSync(path, { readOnly: true }) : new DatabaseSync(path)
+    // P0-1: sqlite only applies busy_timeout to statements that run after the
+    // pragma is set; concurrent first-opens used to fail on journal_mode=WAL
+    // because busy_timeout was set afterwards.
+    this.db.exec(`PRAGMA busy_timeout = ${Math.max(0, Math.floor(Number(busyTimeoutMs) || 0))}`)
     if (readOnly) {
-      this.db.exec('PRAGMA busy_timeout = 5000')
-      const integrity = this.db.prepare('PRAGMA quick_check').get()
-      if (integrity && integrity.quick_check !== 'ok') throw new Error(`database integrity check failed: ${integrity.quick_check}`)
+      if (checkIntegrity) this.assertIntegrity()
       return
     }
-    this.db.exec('PRAGMA journal_mode = WAL')
-    this.db.exec('PRAGMA busy_timeout = 5000')
+    this.enableWal()
     this.db.exec('PRAGMA secure_delete = ON')
     this.db.exec('PRAGMA synchronous = NORMAL')
-    const check = this.db.prepare('PRAGMA quick_check').get()
-    if (check && check.quick_check !== 'ok') throw new Error(`database integrity check failed: ${check.quick_check}`)
-    this.db.exec(SCHEMA)
-    this.migrate()
+    this.initializeSchema()
   }
 
+  /** Full-database integrity check; explicit because it is O(database size). */
+  assertIntegrity() {
+    const row = this.db.prepare('PRAGMA quick_check').get()
+    const verdict = row?.quick_check ?? 'unknown'
+    if (verdict !== 'ok') throw new Error(`database integrity check failed: ${verdict}`)
+    return verdict
+  }
+
+  /** WAL is persistent; skip the switch when already enabled and retry on busy. */
+  enableWal() {
+    if (!this.path || this.path === ':memory:') return 'memory'
+    const current = String(this.db.prepare('PRAGMA journal_mode').get()?.journal_mode ?? '').toLowerCase()
+    if (current === 'wal' || current === 'memory') return current
+    let lastError
+    for (let attempt = 0; attempt <= OPEN_RETRIES; attempt++) {
+      try {
+        const result = this.db.prepare('PRAGMA journal_mode = WAL').get()
+        const mode = String(result?.journal_mode ?? '').toLowerCase()
+        if (mode === 'wal' || mode === 'memory') return mode
+        lastError = new Error(`could not enable WAL journal mode (got '${mode || 'unknown'}')`)
+      } catch (error) {
+        lastError = error
+        if (!isBusyError(error)) throw error
+      }
+      sleepSync(backoffMs(attempt))
+    }
+    throw lastError
+  }
+
+  initializeSchema() {
+    this._transaction('IMMEDIATE', () => {
+      this.db.exec(SCHEMA)
+      this.migrate()
+    })
+  }
+
+  /**
+   * Run fn() in a write transaction with bounded SQLITE_BUSY retries.
+   * Nested calls join the outer transaction (no nested BEGIN).
+   */
+  _transaction(mode, fn, { retries = OPEN_RETRIES } = {}) {
+    if (this._transactionDepth > 0) return fn()
+    let lastError
+    for (let attempt = 0; attempt <= retries; attempt++) {
+      let began = false
+      try {
+        this.db.exec(`BEGIN ${mode}`)
+        began = true
+        this._transactionDepth++
+        let result
+        try {
+          result = fn()
+        } finally {
+          this._transactionDepth--
+        }
+        this.db.exec('COMMIT')
+        return result
+      } catch (error) {
+        if (began) { try { this.db.exec('ROLLBACK') } catch {} }
+        lastError = error
+        if (!isBusyError(error) || attempt === retries) throw error
+      }
+      sleepSync(backoffMs(attempt))
+    }
+    throw lastError
+  }
+
+  /** Public transaction helper for multi-statement invariants (returns fn result). */
+  transaction(fn, { mode = 'IMMEDIATE' } = {}) {
+    return this._transaction(mode, fn)
+  }
+
+  /**
+   * Checkpoint the WAL so a copied/sealed database file is self-contained.
+   * Returns busy=true when another connection prevented a full checkpoint.
+   */
+  checkpoint({ mode = 'TRUNCATE', retries = OPEN_RETRIES } = {}) {
+    let last = null
+    for (let attempt = 0; attempt <= retries; attempt++) {
+      last = this.db.prepare(`PRAGMA wal_checkpoint(${mode})`).get()
+      if (!last || Number(last.busy) === 0) {
+        return { busy: false, log: Number(last?.log ?? 0), checkpointed: Number(last?.checkpointed ?? 0) }
+      }
+      sleepSync(backoffMs(attempt))
+    }
+    return { busy: Number(last?.busy ?? 1) !== 0, log: Number(last?.log ?? 0), checkpointed: Number(last?.checkpointed ?? 0) }
+  }
+
+  backupBeforeMigrate(current) {
+    if (!this.path || this.path === ':memory:') return
+    const target = `${this.path}.before-migrate-v${current}-${Date.now()}`
+    try {
+      copyFileSync(this.path, target)
+      try { chmodSync(target, 0o600) } catch {}
+    } catch (error) {
+      throw new Error(`refusing to migrate without a backup of ${this.path}: ${error.message}`)
+    }
+  }
+
+  /**
+   * Bring an older database up to SCHEMA_VERSION. Runs inside the caller's
+   * write transaction (initializeSchema). Refuses futures schemas and keeps
+   * a same-directory backup before altering an existing database.
+   */
   migrate() {
     const row = this.db.prepare('SELECT value FROM meta WHERE key = ?').get('schema_version')
     const current = row ? Number(row.value) : 0
-    if (current >= 17) return
-    this.db.exec('BEGIN')
+    if (!Number.isFinite(current) || current < 0) throw new Error(`invalid schema_version in ${this.path}: ${row?.value}`)
+    if (current > SCHEMA_VERSION) throw new Error(`database schema v${current} is newer than this CLI (v${SCHEMA_VERSION}); upgrade advisers before opening ${this.path}`)
+    if (current >= SCHEMA_VERSION) return
+    if (current > 0) this.backupBeforeMigrate(current)
     try {
       this.db.exec(`CREATE TABLE IF NOT EXISTS seen_events (
         link_id TEXT NOT NULL, account_id TEXT NOT NULL, dedupe_key TEXT NOT NULL,
@@ -196,6 +369,8 @@ export class SqliteStore {
       try { this.db.exec("INSERT INTO turns_fts(turns_fts) VALUES('rebuild')") } catch {}
       const commitmentCols = this.db.prepare('PRAGMA table_info(commitments)').all().map((c) => c.name)
       if (!commitmentCols.includes('done_at')) this.db.exec('ALTER TABLE commitments ADD COLUMN done_at TEXT')
+      // 0.2.0: per-commitment custom reminder offsets (JSON array of strings).
+      if (!commitmentCols.includes('reminder_offsets')) this.db.exec('ALTER TABLE commitments ADD COLUMN reminder_offsets TEXT')
       const factCols = this.db.prepare('PRAGMA table_info(facts)').all().map((c) => c.name)
       for (const [name, type] of [['valid_from','TEXT'],['valid_to','TEXT'],['expired_at','TEXT'],['evidence','TEXT'],['supersedes','TEXT'],['superseded_by','TEXT'],['shadowed_by','TEXT'],['last_seen_at','TEXT'],['deleted_at','TEXT'],['deleted_reason','TEXT']]) {
         if (!factCols.includes(name)) this.db.exec(`ALTER TABLE facts ADD COLUMN ${name} ${type}`)
@@ -237,10 +412,8 @@ CREATE TABLE IF NOT EXISTS task_runs (
         all_day INTEGER NOT NULL DEFAULT 0, tzid TEXT, location TEXT, rrule TEXT,
         source TEXT, imported_at TEXT NOT NULL
       )`)
-      this.db.prepare('INSERT OR REPLACE INTO meta(key,value) VALUES(?,?)').run('schema_version', '17')
-      this.db.exec('COMMIT')
+      this.db.prepare('INSERT OR REPLACE INTO meta(key,value) VALUES(?,?)').run('schema_version', String(SCHEMA_VERSION))
     } catch (error) {
-      this.db.exec('ROLLBACK')
       throw error
     }
   }
@@ -528,7 +701,16 @@ CREATE TABLE IF NOT EXISTS task_runs (
     return this.db.prepare('SELECT COUNT(*) AS n FROM deliveries').get().n
   }
 
+  /**
+   * Append an audit row atomically. BEGIN IMMEDIATE serializes writers and the
+   * previous hash is re-read inside the transaction, so two concurrent writers
+   * can never both chain onto the same predecessor (audit fork, P0-3).
+   */
   appendAudit({ actor, action, allowed, reason }) {
+    return this._transaction('IMMEDIATE', () => this._appendAuditRow({ actor, action, allowed, reason }))
+  }
+
+  _appendAuditRow({ actor, action, allowed, reason }) {
     const last = this.db.prepare('SELECT hash FROM audit ORDER BY seq DESC LIMIT 1').get()
     const prev = last?.hash ?? ''
     const at = new Date().toISOString()
@@ -591,7 +773,7 @@ CREATE TABLE IF NOT EXISTS task_runs (
 
   load() {
     const all = (sql) => this.db.prepare(sql).all()
-    return {
+    const snapshot = {
       version: 1,
       matters: all('SELECT * FROM matters').map((r) => ({
         id: r.id, title: r.title, status: r.status, domain: r.domain, secrecy: r.secrecy,
@@ -609,11 +791,19 @@ CREATE TABLE IF NOT EXISTS task_runs (
         shadowedBy: r.shadowed_by ?? undefined, lastSeenAt: r.last_seen_at ?? undefined,
         deletedAt: r.deleted_at ?? undefined, deletedReason: r.deleted_reason ?? undefined,
       })),
-      commitments: all('SELECT * FROM commitments').map((r) => ({
-        id: r.id, matterId: r.matter_id, debtor: r.debtor, creditor: r.creditor, action: r.action,
-        dueAt: r.due_at ?? undefined, timezone: r.timezone, status: r.status,
-        evidence: parse(r.evidence), capability: r.capability, doneAt: r.done_at ?? undefined,
-      })),
+      commitments: all('SELECT * FROM commitments').map((r) => {
+        // NULL means "never customised": keep the field absent so old snapshots
+        // and the pre-0.2.0 commitment shape stay identical. Corrupt or
+        // non-array JSON degrades to absent rather than breaking the ledger.
+        const parsedOffsets = r.reminder_offsets == null ? null : parse(r.reminder_offsets, null)
+        const reminderOffsets = Array.isArray(parsedOffsets) ? parsedOffsets : undefined
+        return {
+          id: r.id, matterId: r.matter_id, debtor: r.debtor, creditor: r.creditor, action: r.action,
+          dueAt: r.due_at ?? undefined, timezone: r.timezone, status: r.status,
+          evidence: parse(r.evidence), capability: r.capability, doneAt: r.done_at ?? undefined,
+          ...(reminderOffsets === undefined ? {} : { reminderOffsets }),
+        }
+      }),
       preferences: all('SELECT * FROM preferences').map((r) => ({
         id: r.id, kind: r.kind, statement: r.statement, scope: parse(r.scope, {}),
         source: parse(r.source, {}), evidence: parse(r.evidence), confidence: r.confidence,
@@ -641,53 +831,90 @@ CREATE TABLE IF NOT EXISTS task_runs (
       })),
       routes: Object.fromEntries(all('SELECT * FROM routes').map((r) => [r.key, r.matter_id])),
     }
+    // Remember which rows this connection has seen (P1-1): save() only deletes
+    // rows this loader owned, so another process's concurrent additions are
+    // merged instead of being silently overwritten by a stale snapshot.
+    this._baselineIds = idsFor(snapshot)
+    return snapshot
   }
 
   save(snapshot) {
+    return this._transaction('IMMEDIATE', () => this._saveRows(snapshot))
+  }
+
+  /**
+   * Write the ledger snapshot and its audit row in one transaction, so the
+   * audit trail can never claim a write that rolled back (or miss one that
+   * committed). `inside` runs inside the same transaction before the audit row.
+   */
+  saveWithAudit(snapshot, audit, inside) {
+    return this._transaction('IMMEDIATE', () => {
+      this._saveRows(snapshot)
+      if (typeof inside === 'function') inside(this)
+      return this._appendAuditRow(audit)
+    })
+  }
+
+  _saveRows(snapshot) {
     const db = this.db
-    db.exec('BEGIN')
+    const newIds = idsFor(snapshot)
+    const baseline = this._baselineIds
     try {
-      for (const table of ['matters', 'facts', 'commitments', 'preferences', 'links', 'updates', 'routines', 'routine_patches', 'routes']) {
-        db.exec(`DELETE FROM ${table}`)
+      if (baseline) {
+        // P1-1: delete only rows this connection loaded that the new snapshot
+        // dropped; rows another process added after our load() are kept.
+        for (const [table, key] of LEDGER_TABLES) {
+          const removed = [...(baseline[table] ?? [])].filter((id) => !newIds[table].has(id))
+          if (!removed.length) continue
+          const statement = db.prepare(`DELETE FROM ${table} WHERE ${key} = ?`)
+          for (const id of removed) statement.run(id)
+        }
+      } else {
+        // No prior load(): keep the historical full-replace semantics for
+        // direct library use (e.g. importing or seeding a ledger).
+        for (const [table] of LEDGER_TABLES) db.exec(`DELETE FROM ${table}`)
       }
-      const m = db.prepare('INSERT INTO matters VALUES (?,?,?,?,?,?,?,?,?,?,?)')
+      const m = db.prepare('INSERT OR REPLACE INTO matters VALUES (?,?,?,?,?,?,?,?,?,?,?)')
       for (const x of snapshot.matters ?? []) {
         m.run(x.id, x.title, x.status, x.domain, x.secrecy, x.summary ?? null, json(x.participants), json(x.deadlines), json(x.openQuestions), x.createdAt, x.updatedAt)
       }
-      const f = db.prepare(`INSERT INTO facts(id,matter_id,subject,predicate,object,recorded_at,expired_at,authority,confidence,source,evidence,status,valid_from,valid_to,supersedes,superseded_by,shadowed_by,last_seen_at,deleted_at,deleted_reason)
+      const f = db.prepare(`INSERT OR REPLACE INTO facts(id,matter_id,subject,predicate,object,recorded_at,expired_at,authority,confidence,source,evidence,status,valid_from,valid_to,supersedes,superseded_by,shadowed_by,last_seen_at,deleted_at,deleted_reason)
         VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`)
       for (const x of snapshot.facts ?? []) {
         f.run(x.id, x.matterId ?? null, x.subject, x.predicate, x.object, x.recordedAt, x.expiredAt ?? null, x.authority, x.confidence, x.source ? json(x.source) : null, x.evidence ? json(x.evidence) : null, x.status, x.validFrom ?? null, x.validTo ?? null, x.supersedes ?? null, x.supersededBy ?? null, x.shadowedBy ?? null, x.lastSeenAt ?? null, x.deletedAt ?? null, x.deletedReason ?? null)
       }
-      const c = db.prepare('INSERT INTO commitments VALUES (?,?,?,?,?,?,?,?,?,?,?)')
+      const c = db.prepare(`INSERT OR REPLACE INTO commitments(id,matter_id,debtor,creditor,action,due_at,timezone,status,evidence,capability,done_at,reminder_offsets)
+        VALUES (?,?,?,?,?,?,?,?,?,?,?,?)`)
       for (const x of snapshot.commitments ?? []) {
-        c.run(x.id, x.matterId, x.debtor, x.creditor, x.action, x.dueAt ?? null, x.timezone, x.status, json(x.evidence), x.capability, x.doneAt ?? null)
+        // A missing/undefined list stays NULL so a round-trip keeps the pre-0.2.0
+        // "no field" shape; an explicit [] is preserved as its own value.
+        const reminderOffsets = Array.isArray(x.reminderOffsets) ? JSON.stringify(x.reminderOffsets) : null
+        c.run(x.id, x.matterId, x.debtor, x.creditor, x.action, x.dueAt ?? null, x.timezone, x.status, json(x.evidence), x.capability, x.doneAt ?? null, reminderOffsets)
       }
-      const p = db.prepare('INSERT INTO preferences VALUES (?,?,?,?,?,?,?,?,?,?,?,?)')
+      const p = db.prepare('INSERT OR REPLACE INTO preferences VALUES (?,?,?,?,?,?,?,?,?,?,?,?)')
       for (const x of snapshot.preferences ?? []) {
         p.run(x.id, x.kind, x.statement, json(x.scope), json(x.source), json(x.evidence), x.confidence, x.status, x.validFrom, x.lastConfirmed ?? null, x.expiresAt ?? null, x.priority)
       }
-      const l = db.prepare('INSERT INTO links VALUES (?,?,?,?,?,?,?,?,?)')
+      const l = db.prepare('INSERT OR REPLACE INTO links VALUES (?,?,?,?,?,?,?,?,?)')
       for (const x of snapshot.links ?? []) {
         l.run(x.id, x.fromMatter, x.toMatter, x.type, x.confidence, json(x.evidence), x.status, x.createdBy, x.createdAt)
       }
-      const u = db.prepare('INSERT INTO updates VALUES (?,?,?,?,?,?,?)')
+      const u = db.prepare('INSERT OR REPLACE INTO updates VALUES (?,?,?,?,?,?,?)')
       for (const x of snapshot.updates ?? []) {
         u.run(x.id, x.sourceMatter, x.targetMatter, x.change, x.status, x.createdAt, x.rollback ?? null)
       }
-      const r = db.prepare('INSERT INTO routines VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?)')
+      const r = db.prepare('INSERT OR REPLACE INTO routines VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?)')
       for (const x of snapshot.routines ?? []) {
         r.run(x.id, x.name, x.description, json(x.trigger), json(x.steps), json(x.preferences), json(x.pitfalls), json(x.verification), x.scope ?? null, x.version, x.status, x.createdBy, x.createdAt, x.updatedAt)
       }
-      const rp = db.prepare('INSERT INTO routine_patches VALUES (?,?,?,?,?,?,?,?)')
+      const rp = db.prepare('INSERT OR REPLACE INTO routine_patches VALUES (?,?,?,?,?,?,?,?)')
       for (const x of snapshot.routinePatches ?? []) {
         rp.run(x.id, x.routineId, x.baseVersion, json(x.changes), json(x.before), x.diff, x.status, x.createdAt)
       }
-      const rt = db.prepare('INSERT INTO routes VALUES (?,?)')
+      const rt = db.prepare('INSERT OR REPLACE INTO routes VALUES (?,?)')
       for (const [key, matterId] of Object.entries(snapshot.routes ?? {})) rt.run(key, matterId)
-      db.exec('COMMIT')
+      this._baselineIds = newIds
     } catch (error) {
-      db.exec('ROLLBACK')
       throw error
     }
   }

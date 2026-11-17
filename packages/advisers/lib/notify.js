@@ -1,12 +1,15 @@
 /**
  * E1-T3: best-effort local notification adapter.
  *
- * No cloud push. The caller decides the body; Advisers only sends a short
- * count-style body (not client names/quotes). If no channel is available the
- * caller keeps the local reminder log; this module reports `sent:false`.
+ * No implicit cloud push. The caller decides the body; Advisers only sends a
+ * short count-style body (not client names/quotes). If no local channel is
+ * available the caller keeps the local reminder log; this module reports
+ * `sent:false`. The only outbound channel is the explicit, off-by-default
+ * `ADVISERS_NOTIFY_WEBHOOK` adapter below, which sends counts/levels/dates only.
  */
 import { existsSync } from 'node:fs'
 import { spawn } from 'node:child_process'
+import { localDay } from './remind.js'
 
 function run(cmd, args, timeoutMs = 5000) {
   return new Promise((resolve, reject) => {
@@ -29,6 +32,129 @@ function powershellToastScript(title, body) {
     "$toast = [Windows.UI.Notifications.ToastNotification]::new($t)",
     "[Windows.UI.Notifications.ToastNotificationManager]::CreateToastNotifier('Advisers').Show($toast)",
   ].join('; ')
+}
+
+
+/** Env var that opts a machine into the outbound JSON webhook (off by default). */
+export const WEBHOOK_ENV = 'ADVISERS_NOTIFY_WEBHOOK'
+/** Versioned payload schema; consumers can reject unknown versions. */
+export const WEBHOOK_SCHEMA = 'advisers.notify.webhook.v1'
+const DEFAULT_WEBHOOK_TIMEOUT_MS = 5000
+const MAX_WEBHOOK_DATES = 31
+
+export function isWebhookConfigured(env = process.env) {
+  return String(env?.[WEBHOOK_ENV] ?? '').trim() !== ''
+}
+
+/**
+ * Reduce due reminders to the only data allowed to leave the machine: a count,
+ * per-level counts and the affected local dates. Titles, creditors, actions,
+ * evidence and quotes are never read.
+ */
+export function summarizeReminders(reminders) {
+  if (!Array.isArray(reminders)) throw new TypeError('summarizeReminders requires an array of reminders')
+  const levels = { L1: 0, L2: 0, L3: 0 }
+  const dates = new Set()
+  let count = 0
+  for (const reminder of reminders) {
+    if (!reminder || typeof reminder !== 'object') continue
+    count += 1
+    if (reminder.level === 'L1' || reminder.level === 'L2' || reminder.level === 'L3') levels[reminder.level] += 1
+    const day = localDay(reminder.dueAt)
+    if (day) dates.add(day)
+  }
+  return {
+    schema: WEBHOOK_SCHEMA,
+    count,
+    levels,
+    dates: [...dates].sort().slice(0, MAX_WEBHOOK_DATES),
+  }
+}
+
+function resolveWebhookTarget(options) {
+  const raw = options.url === undefined ? process.env[WEBHOOK_ENV] : options.url
+  if (raw == null || String(raw).trim() === '') return { configured: false }
+  try {
+    const url = new URL(String(raw).trim())
+    if (url.protocol !== 'http:' && url.protocol !== 'https:') return { configured: true, error: 'unsupported-protocol' }
+    return { configured: true, url }
+  } catch {
+    return { configured: true, error: 'invalid-url' }
+  }
+}
+
+function truncateDetail(value, limit = 200) {
+  const text = typeof value === 'string' ? value : String(value ?? '')
+  return text.length > limit ? text.slice(0, limit) : text
+}
+
+/**
+ * Opt-in outbound webhook: POST the sanitized summary as JSON.
+ *
+ * Disabled unless `ADVISERS_NOTIFY_WEBHOOK` (or an explicit `url`) is set. The
+ * function never throws for network/config failures; it returns a structured
+ * result so the caller can fall back to the local log:
+ *
+ *   { sent: true,  channel: 'webhook', configured: true, status, payload }
+ *   { sent: false, channel: 'webhook', configured: false, reason: 'not-configured' }
+ *   { sent: false, channel: 'webhook', configured: true, error: 'network'|'timeout'|'http'|'invalid-url'|'unsupported-protocol', status?, detail? }
+ */
+export async function sendWebhookNotification(reminders, options = {}) {
+  const opts = options ?? {}
+  const summary = summarizeReminders(reminders)
+  const target = resolveWebhookTarget(opts)
+  if (!target.configured) {
+    return { sent: false, channel: 'webhook', configured: false, reason: 'not-configured' }
+  }
+  if (target.error) {
+    return { sent: false, channel: 'webhook', configured: true, error: target.error }
+  }
+  const fetchImpl = opts.fetch ?? globalThis.fetch
+  if (typeof fetchImpl !== 'function') {
+    return { sent: false, channel: 'webhook', configured: true, error: 'fetch-unavailable' }
+  }
+  const timeoutMs = Number.isFinite(opts.timeoutMs) && opts.timeoutMs > 0 ? opts.timeoutMs : DEFAULT_WEBHOOK_TIMEOUT_MS
+  const signal = typeof AbortSignal?.timeout === 'function' ? AbortSignal.timeout(timeoutMs) : undefined
+  try {
+    const response = await fetchImpl(target.url.href, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json', 'user-agent': 'advisers-webhook/1' },
+      body: JSON.stringify(summary),
+      signal,
+    })
+    if (!response || typeof response !== 'object') {
+      return { sent: false, channel: 'webhook', configured: true, error: 'network', detail: 'empty response' }
+    }
+    if (!response.ok) {
+      let detail
+      try {
+        detail = truncateDetail(await response.text())
+      } catch {
+        detail = undefined
+      }
+      return {
+        sent: false,
+        channel: 'webhook',
+        configured: true,
+        error: 'http',
+        status: response.status,
+        ...(detail ? { detail } : {}),
+      }
+    }
+    return { sent: true, channel: 'webhook', configured: true, status: response.status, payload: summary }
+  } catch (error) {
+    const name = String(error?.name ?? '')
+    if (name === 'TimeoutError' || name === 'AbortError') {
+      return { sent: false, channel: 'webhook', configured: true, error: 'timeout', detail: `no response within ${timeoutMs}ms` }
+    }
+    return {
+      sent: false,
+      channel: 'webhook',
+      configured: true,
+      error: 'network',
+      detail: truncateDetail(error?.message ?? error),
+    }
+  }
 }
 
 export async function sendNotification({ title = 'Advisers', body = '', cmd = process.env.ADVISERS_NOTIFY_CMD } = {}) {

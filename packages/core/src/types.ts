@@ -78,6 +78,13 @@ export interface Commitment {
   capability: Capability
   supersedes?: Id
   doneAt?: IsoDate
+  /**
+   * Opt-in reminder offsets for this commitment, e.g. `['-1d', '-2h',
+   * '+0d09:00']`. The core only carries the strings; the advisers `remind`
+   * library parses and validates them (Asia/Shanghai wall clock). Optional so
+   * snapshots written before 0.2.0 keep loading unchanged.
+   */
+  reminderOffsets?: string[]
 }
 
 export type PreferenceKind =
