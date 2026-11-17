@@ -306,7 +306,7 @@ test('wrapToWidth reproduces the prefix-measuring line breaks for the host CJK f
   assert.equal(loaded.getModificationDate().getTime(), fixed.getTime(), '/ModDate is the input generation time')
 })
 
-test('opening a database adds the secondary indexes without bumping schema v18', () => {
+test('opening a database adds the secondary indexes without a schema bump from the indexes', () => {
   const { root, home } = setup('indexes')
   try {
     const db = join(home, 'state.db')
@@ -335,7 +335,9 @@ test('opening a database adds the secondary indexes without bumping schema v18',
       assert.match(plan('SELECT * FROM nudges WHERE commitment_id = ? ORDER BY at DESC LIMIT 3', 'cm_1'), /USING INDEX idx_nudges_commitment_at/)
       assert.match(plan('SELECT * FROM deliveries ORDER BY created_at DESC LIMIT 20'), /idx_deliveries_created/)
       assert.equal(reopened.getMeta('schema_version'), String(SCHEMA_VERSION))
-      assert.equal(SCHEMA_VERSION, 18, 'indexes are not a schema-version change')
+      // v19 is the FTS5 trigram migration (see test/fts-cjk.test.js); the
+      // secondary indexes are still layout only, not the reason for the bump.
+      assert.equal(SCHEMA_VERSION, 19, 'indexes are not a schema-version change')
       assert.ok(matter.id)
     } finally {
       reopened.close()

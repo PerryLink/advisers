@@ -18,7 +18,7 @@ import { dirname, join } from 'node:path'
  * - Migrations are refused for a schema newer than this CLI and are preceded
  *   by a same-directory backup of the old database.
  */
-export const SCHEMA_VERSION = 18
+export const SCHEMA_VERSION = 19
 const DEFAULT_BUSY_TIMEOUT_MS = 5000
 const OPEN_RETRIES = 6
 const BUSY_ERRCODES = new Set([5, 6]) // SQLITE_BUSY, SQLITE_LOCKED
@@ -458,17 +458,6 @@ CREATE TABLE IF NOT EXISTS session_summaries (
   conversation_id TEXT PRIMARY KEY, summary TEXT NOT NULL,
   through_seq INTEGER NOT NULL, updated_at TEXT NOT NULL
 );
-CREATE VIRTUAL TABLE IF NOT EXISTS turns_fts USING fts5(content, content='turns', content_rowid='rowid');
-CREATE TRIGGER IF NOT EXISTS turns_ai AFTER INSERT ON turns BEGIN
-  INSERT INTO turns_fts(rowid, content) VALUES (new.rowid, new.content);
-END;
-CREATE TRIGGER IF NOT EXISTS turns_ad AFTER DELETE ON turns BEGIN
-  INSERT INTO turns_fts(turns_fts, rowid, content) VALUES ('delete', old.rowid, old.content);
-END;
-CREATE TRIGGER IF NOT EXISTS turns_au AFTER UPDATE ON turns BEGIN
-  INSERT INTO turns_fts(turns_fts, rowid, content) VALUES ('delete', old.rowid, old.content);
-  INSERT INTO turns_fts(rowid, content) VALUES (new.rowid, new.content);
-END;
 CREATE TABLE IF NOT EXISTS summary_versions (
   conversation_id TEXT NOT NULL, version INTEGER NOT NULL, summary TEXT NOT NULL,
   through_seq INTEGER NOT NULL, pins TEXT, created_at TEXT NOT NULL,
@@ -490,6 +479,73 @@ CREATE TABLE IF NOT EXISTS calendar_events (
 );
 CREATE TABLE IF NOT EXISTS meta (key TEXT PRIMARY KEY, value TEXT NOT NULL);
 `
+
+// ---------------------------------------------------------------------------
+// Full-text search (schema v19; 2026-11-17 performance audit round 2, P2-6).
+//
+// v18 created turns_fts with the default unicode61 tokenizer, which treats a
+// whole run of CJK characters as one token. It indexed the data but could not
+// answer a Chinese query: 'MATCH "报价单"' returned 0 rows, so every Chinese
+// search fell back to 'content LIKE ?' (a full table scan). v19 rebuilds the
+// turn index (and adds an index for session summaries) with the FTS5 trigram
+// tokenizer. Trigram indexes every 3-character substring, so it supports CJK
+// substring search, phrases, and English substring search with the same query
+// path. Queries shorter than 3 characters cannot produce a trigram, so they
+// keep the LIKE path; malformed/special FTS syntax is caught and also falls
+// back to LIKE.
+//
+// The FTS5 schema is created by migrate() rather than the static SCHEMA so the
+// tokenizer can be probed at runtime. If the SQLite build has no trigram
+// tokenizer the store degrades to unicode61 (Chinese keeps working through
+// LIKE); if FTS5 itself is missing it degrades to LIKE-only. Opening never
+// fails because of a missing tokenizer; ftsWarning explains the degradation.
+//
+// ADVISERS_FTS_TOKENIZER=auto|trigram|unicode61 is an operator override:
+// 'unicode61' forces the legacy tokenizer (and the LIKE path for Chinese),
+// which is also how tests exercise the degraded mode deterministically.
+// ---------------------------------------------------------------------------
+const FTS_TOKENIZER_ENV = 'ADVISERS_FTS_TOKENIZER'
+const FTS_TRIGRAM_MIN_QUERY = 3
+const FTS_TABLE_NAMES = ['turns_fts', 'summaries_fts']
+const FTS_TRIGGER_NAMES = ['turns_ai', 'turns_ad', 'turns_au', 'summaries_ai', 'summaries_ad', 'summaries_au']
+
+function ftsTokenizerPreference() {
+  const raw = String(process.env[FTS_TOKENIZER_ENV] ?? '').trim().toLowerCase()
+  return raw === 'trigram' || raw === 'unicode61' ? raw : 'auto'
+}
+
+/** DDL for both FTS indexes and their sync triggers for one tokenizer. */
+function ftsDdl(tokenizer) {
+  const trigram = tokenizer === 'trigram' ? ", tokenize='trigram'" : ''
+  return {
+    tables: [
+      `CREATE VIRTUAL TABLE turns_fts USING fts5(content, content='turns', content_rowid='rowid'${trigram})`,
+      `CREATE VIRTUAL TABLE summaries_fts USING fts5(summary, content='session_summaries', content_rowid='rowid'${trigram})`,
+    ],
+    triggers: [
+      `CREATE TRIGGER turns_ai AFTER INSERT ON turns BEGIN
+        INSERT INTO turns_fts(rowid, content) VALUES (new.rowid, new.content);
+      END`,
+      `CREATE TRIGGER turns_ad AFTER DELETE ON turns BEGIN
+        INSERT INTO turns_fts(turns_fts, rowid, content) VALUES ('delete', old.rowid, old.content);
+      END`,
+      `CREATE TRIGGER turns_au AFTER UPDATE ON turns BEGIN
+        INSERT INTO turns_fts(turns_fts, rowid, content) VALUES ('delete', old.rowid, old.content);
+        INSERT INTO turns_fts(rowid, content) VALUES (new.rowid, new.content);
+      END`,
+      `CREATE TRIGGER summaries_ai AFTER INSERT ON session_summaries BEGIN
+        INSERT INTO summaries_fts(rowid, summary) VALUES (new.rowid, new.summary);
+      END`,
+      `CREATE TRIGGER summaries_ad AFTER DELETE ON session_summaries BEGIN
+        INSERT INTO summaries_fts(summaries_fts, rowid, summary) VALUES ('delete', old.rowid, old.summary);
+      END`,
+      `CREATE TRIGGER summaries_au AFTER UPDATE ON session_summaries BEGIN
+        INSERT INTO summaries_fts(summaries_fts, rowid, summary) VALUES ('delete', old.rowid, old.summary);
+        INSERT INTO summaries_fts(rowid, summary) VALUES (new.rowid, new.summary);
+      END`,
+    ],
+  }
+}
 
 /**
  * P2-1: secondary indexes for the hot read/write paths (tick, today, history,
@@ -618,6 +674,12 @@ export class SqliteStore {
     this._transactionDepth = 0
     this._baselineIds = null
     this._fullLoad = false
+    // FTS5 state (schema v19): which indexes exist and which tokenizer built
+    // them. Fillable stores discover it after migrate(); read-only stores detect
+    // it from sqlite_master without running DDL (see _initFtsState).
+    this.ftsTokenizer = null
+    this.ftsWarning = null
+    this._ftsTables = new Set()
     // P2-2 (0.2.1): an existing 0-byte file is treated as corrupt instead of a
     // brand-new database. Before this, SQLite turned it into an empty schema and
     // every command reported "no data" while silently rebuilding the ledger.
@@ -629,6 +691,7 @@ export class SqliteStore {
       // because busy_timeout was set afterwards.
       this.db.exec(`PRAGMA busy_timeout = ${Math.max(0, Math.floor(Number(busyTimeoutMs) || 0))}`)
       if (readOnly) {
+        this._initFtsState()
         if (checkIntegrity) this.assertIntegrity()
         return
       }
@@ -679,10 +742,92 @@ export class SqliteStore {
     this._transaction('IMMEDIATE', () => {
       this.db.exec(SCHEMA)
       this.migrate()
+      // migrate() installs the FTS indexes during an upgrade; a database that
+      // was already at SCHEMA_VERSION only needs their tokenizer read back.
+      this._initFtsState()
       // Indexes come after migrate(): some index the columns migrate() adds
       // (e.g. facts.deleted_at), so an old database must be upgraded first.
       this.db.exec(INDEXES)
     })
+  }
+
+  /** Look up which FTS indexes/tokenizer this database actually has on disk. */
+  _initFtsState() {
+    const rows = this.db.prepare("SELECT name, sql FROM sqlite_master WHERE name IN ('turns_fts', 'summaries_fts')").all()
+    this._ftsTables = new Set(rows.map((row) => row.name))
+    const turns = rows.find((row) => row.name === 'turns_fts')
+    // v19 records the tokenizer in the virtual-table DDL. An older or
+    // hand-modified database may have no index at all: search then uses the
+    // LIKE path only, which stays correct.
+    this.ftsTokenizer = turns ? (/tokenize\s*=\s*'?trigram/i.test(String(turns.sql ?? '')) ? 'trigram' : 'unicode61') : null
+    return this.ftsTokenizer
+  }
+
+  _createFts(tokenizer) {
+    const ddl = ftsDdl(tokenizer)
+    for (const sql of ddl.tables) this.db.exec(sql)
+    for (const sql of ddl.triggers) this.db.exec(sql)
+  }
+
+  _dropFts() {
+    // Triggers first: they reference the virtual tables and a leftover trigger
+    // on the source table would break the next write.
+    for (const trigger of FTS_TRIGGER_NAMES) this.db.exec(`DROP TRIGGER IF EXISTS ${trigger}`)
+    for (const table of FTS_TABLE_NAMES) this.db.exec(`DROP TABLE IF EXISTS ${table}`)
+  }
+
+  /**
+   * Install (or rebuild) the v19 FTS5 indexes with the trigram tokenizer.
+   *
+   * Runs inside migrate()'s write transaction, so dropping/creating both
+   * virtual tables, replacing the triggers, and the 'rebuild' backfill are
+   * atomic with the schema_version bump: a failure rolls the migration back
+   * and the old v18 index survives. Rows are re-indexed from the source
+   * tables, so a database upgraded from v18 keeps all searchable data.
+   *
+   * Degrades instead of crashing: trigram (SQLite >= 3.34) -> unicode61 ->
+   * LIKE-only, recording ftsWarning and printing one warning line.
+   */
+  _setupFts() {
+    this._dropFts()
+    const preference = ftsTokenizerPreference()
+    let tokenizer = preference === 'unicode61' ? null : 'trigram'
+    if (tokenizer) {
+      try {
+        this._createFts(tokenizer)
+      } catch (error) {
+        // This build has no trigram tokenizer (or rejected the DDL): drop any
+        // partial index and fall through to the legacy tokenizer.
+        this._dropFts()
+        this.ftsWarning = `FTS5 trigram tokenizer unavailable (${error.message}); Chinese substring search falls back to LIKE`
+        try { console.warn(`advisers: warning: ${this.ftsWarning}`) } catch {}
+        tokenizer = null
+      }
+    } else if (preference === 'unicode61') {
+      this.ftsWarning = 'ADVISERS_FTS_TOKENIZER=unicode61 forces the legacy FTS5 tokenizer; Chinese substring search falls back to LIKE'
+      try { console.warn(`advisers: warning: ${this.ftsWarning}`) } catch {}
+    }
+    if (!tokenizer) {
+      try {
+        this._createFts('unicode61')
+        tokenizer = 'unicode61'
+      } catch (error) {
+        // FTS5 itself is absent: keep the database usable with LIKE-only
+        // search (no index, no triggers). SCHEMA_VERSION still advances so the
+        // migration is not retried on every open.
+        this._dropFts()
+        tokenizer = null
+        this.ftsWarning = `FTS5 is unavailable in this SQLite build (${error.message}); search uses LIKE only`
+        try { console.warn(`advisers: warning: ${this.ftsWarning}`) } catch {}
+      }
+    }
+    this.ftsTokenizer = tokenizer
+    this._ftsTables = new Set(tokenizer ? FTS_TABLE_NAMES : [])
+    if (tokenizer) {
+      this.db.exec("INSERT INTO turns_fts(turns_fts) VALUES('rebuild')")
+      this.db.exec("INSERT INTO summaries_fts(summaries_fts) VALUES('rebuild')")
+    }
+    return tokenizer
   }
 
   /**
@@ -791,18 +936,6 @@ export class SqliteStore {
         conversation_id TEXT PRIMARY KEY, summary TEXT NOT NULL,
         through_seq INTEGER NOT NULL, updated_at TEXT NOT NULL
       )`)
-      this.db.exec(`CREATE VIRTUAL TABLE IF NOT EXISTS turns_fts USING fts5(content, content='turns', content_rowid='rowid')`)
-      this.db.exec(`CREATE TRIGGER IF NOT EXISTS turns_ai AFTER INSERT ON turns BEGIN
-        INSERT INTO turns_fts(rowid, content) VALUES (new.rowid, new.content);
-      END`)
-      this.db.exec(`CREATE TRIGGER IF NOT EXISTS turns_ad AFTER DELETE ON turns BEGIN
-        INSERT INTO turns_fts(turns_fts, rowid, content) VALUES ('delete', old.rowid, old.content);
-      END`)
-      this.db.exec(`CREATE TRIGGER IF NOT EXISTS turns_au AFTER UPDATE ON turns BEGIN
-        INSERT INTO turns_fts(turns_fts, rowid, content) VALUES ('delete', old.rowid, old.content);
-        INSERT INTO turns_fts(rowid, content) VALUES (new.rowid, new.content);
-      END`)
-      try { this.db.exec("INSERT INTO turns_fts(turns_fts) VALUES('rebuild')") } catch {}
       const commitmentCols = this.db.prepare('PRAGMA table_info(commitments)').all().map((c) => c.name)
       if (!commitmentCols.includes('done_at')) this.db.exec('ALTER TABLE commitments ADD COLUMN done_at TEXT')
       // 0.2.0: per-commitment custom reminder offsets (JSON array of strings).
@@ -848,6 +981,11 @@ CREATE TABLE IF NOT EXISTS task_runs (
         all_day INTEGER NOT NULL DEFAULT 0, tzid TEXT, location TEXT, rrule TEXT,
         source TEXT, imported_at TEXT NOT NULL
       )`)
+      // Schema v19 (perf audit round 2, P2-6): rebuild full-text search with the
+      // trigram tokenizer so 3+ character Chinese/substring queries hit FTS5
+      // instead of falling back to a LIKE table scan. Runs last so the source
+      // tables (turns, session_summaries) exist for the 'rebuild' backfill.
+      this._setupFts()
       this.db.prepare('INSERT OR REPLACE INTO meta(key,value) VALUES(?,?)').run('schema_version', String(SCHEMA_VERSION))
     } catch (error) {
       throw error
@@ -1167,15 +1305,6 @@ CREATE TABLE IF NOT EXISTS task_runs (
     return this.getCandidate(id)
   }
 
-  searchTurns(query, { limit = 8 } = {}) {
-    const terms = String(query || '').split(/[^\p{L}\p{N}]+/u).filter((t) => t.length >= 2).slice(0, 8)
-    if (!terms.length) return []
-    const rows = this.db.prepare('SELECT * FROM turns ORDER BY created_at DESC LIMIT 2000').all()
-    const score = (text) => terms.filter((t) => String(text).includes(t)).length
-    return rows.map((r) => ({ id: r.id, conversationId: r.conversation_id, seq: r.seq, role: r.role, text: r.content, createdAt: r.created_at, score: score(r.content) }))
-      .filter((r) => r.score > 0).sort((a, b) => b.score - a.score || Date.parse(b.createdAt) - Date.parse(a.createdAt)).slice(0, limit)
-  }
-
   searchMemory(query, { limit = 6, matterId } = {}) {
     const terms = String(query || '').split(/[^\p{L}\p{N}]+/u).filter((t) => t.length >= 2).slice(0, 8)
     if (!terms.length) return []
@@ -1200,6 +1329,19 @@ CREATE TABLE IF NOT EXISTS task_runs (
     ].sort((a, b) => b.score - a.score || a.id.localeCompare(b.id)).slice(0, limit)
   }
 
+  /**
+   * Full-text turn search (schema v19; perf audit round 2, P2-6).
+   *
+   * 3+ characters go through FTS5 MATCH. With the trigram tokenizer that is
+   * CJK substring/phrase search and English substring search; with the
+   * unicode61 fallback it is word search (Chinese misses then fall through to
+   * LIKE). Shorter queries and malformed/special FTS syntax keep the previous
+   * LIKE path as the correctness backstop. Public shape and limit are unchanged
+   * from v18: { id, conversationId, seq, role, content, createdAt }. Ordering
+   * keeps the v18 conventions: FTS hits are ranked, LIKE hits are in seq order
+   * (so Chinese results move from the old LIKE order to relevance order once
+   * they hit the trigram index).
+   */
   searchTurns(query, { conversationId, matterId, limit = 8 } = {}) {
     const q = String(query ?? '').trim()
     if (!q) return []
@@ -1209,14 +1351,40 @@ CREATE TABLE IF NOT EXISTS task_runs (
     if (matterId) { clauses.push('s.matter_id = ?'); filterArgs.push(matterId) }
     const join = matterId ? ' JOIN sessions s ON s.conversation_id = t.conversation_id' : ''
     const where = clauses.length ? ` AND ${clauses.join(' AND ')}` : ''
-    try {
-      if (q.length >= 3) {
+    const map = (r) => ({ id: r.id, conversationId: r.conversation_id, seq: r.seq, role: r.role, content: r.content, createdAt: r.created_at })
+    if (this.ftsTokenizer && this._ftsTables.has('turns_fts') && q.length >= FTS_TRIGRAM_MIN_QUERY) {
+      try {
         const rows = this.db.prepare(`SELECT t.* FROM turns_fts f JOIN turns t ON t.rowid = f.rowid${join} WHERE turns_fts MATCH ?${where} ORDER BY rank LIMIT ?`).all(q, ...filterArgs, limit)
-        if (rows.length) return rows.map((r) => ({ id: r.id, conversationId: r.conversation_id, seq: r.seq, role: r.role, content: r.content, createdAt: r.created_at }))
+        if (rows.length) return rows.map(map)
+      } catch {
+        // Malformed or special FTS query: use the LIKE scan below.
       }
-    } catch {}
+    }
     const rows = this.db.prepare(`SELECT t.* FROM turns t${join} WHERE t.content LIKE ?${where} ORDER BY t.seq DESC LIMIT ?`).all(`%${q}%`, ...filterArgs, limit)
-    return rows.reverse().map((r) => ({ id: r.id, conversationId: r.conversation_id, seq: r.seq, role: r.role, content: r.content, createdAt: r.created_at }))
+    return rows.reverse().map(map)
+  }
+
+  /**
+   * Full-text session-summary search (schema v19). Same trigram/FTS-then-LIKE
+   * strategy as searchTurns; returns the public summary shape used by
+   * getSessionSummary().
+   */
+  searchSummaries(query, { conversationId, limit = 8 } = {}) {
+    const q = String(query ?? '').trim()
+    if (!q) return []
+    const where = conversationId ? ' AND s.conversation_id = ?' : ''
+    const filterArgs = conversationId ? [conversationId] : []
+    const map = (r) => ({ conversationId: r.conversation_id, summary: r.summary, throughSeq: r.through_seq, updatedAt: r.updated_at })
+    if (this.ftsTokenizer && this._ftsTables.has('summaries_fts') && q.length >= FTS_TRIGRAM_MIN_QUERY) {
+      try {
+        const rows = this.db.prepare(`SELECT s.* FROM summaries_fts f JOIN session_summaries s ON s.rowid = f.rowid WHERE summaries_fts MATCH ?${where} ORDER BY rank LIMIT ?`).all(q, ...filterArgs, limit)
+        if (rows.length) return rows.map(map)
+      } catch {
+        // Malformed or special FTS query: use the LIKE scan below.
+      }
+    }
+    const rows = this.db.prepare(`SELECT s.* FROM session_summaries s WHERE s.summary LIKE ?${where} ORDER BY s.updated_at DESC LIMIT ?`).all(`%${q}%`, ...filterArgs, limit)
+    return rows.map(map)
   }
 
   getSessionSummary(conversationId) {

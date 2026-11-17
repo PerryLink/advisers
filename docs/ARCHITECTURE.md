@@ -58,7 +58,7 @@
 | `ctx.advisers.user` | preference ledger, scope, confidence, forgetting |
 | `ctx.advisers.commitments` | open/done/snoozed/dropped, evidence, nudges |
 | `ctx.advisers.routines` | routine proposals, diffs, versions, rollback |
-| `ctx.advisers.recall` | FTS5 first, vector optional, 1–2 hop graph expansion |
+| `ctx.advisers.recall` | FTS5 first (schema v19 trigram; §11), vector optional, 1–2 hop graph expansion |
 | `ctx.advisers.curator` | design target: nightly reconcile, dedupe, expiry, brief draft (not scheduled in 0.2) |
 | `ctx.advisers.redaction` | forget, pause, private session, export |
 
@@ -159,3 +159,58 @@ These are first-class layers, not prompt tricks.
 The chief-of-staff protocol (receive → clarify → plan → execute → report →
 review) is the interaction contract; the current runtime implements the
 `IntentBrief` half and leaves the full state machine for a later release.
+
+## 11. Full-text search (0.2.2, schema v19)
+
+The 0.2.2 working tree rebuilds local full-text search on FTS5 indexes instead
+of scanning `turns.content`:
+
+- **Indexes**: `turns_fts` over `turns(content)` and `summaries_fts` over
+  `session_summaries(summary)`. Both are FTS5 external-content tables
+  (`content='<table>'`, `content_rowid='rowid'`) kept in sync by insert /
+  update / delete triggers, so the index follows each row transaction and never
+  needs a manual rebuild after normal writes.
+- **Tokenizer**: `tokenize='trigram'` for both (needs SQLite >= 3.34; Node
+  22.16+/24 ships it). A trigram index stores every 3-character substring,
+  which is what makes Chinese substring and phrase search work. v18 used the
+  default unicode61 tokenizer, which treats a run of CJK characters as a single
+  token: in the 2026-11-17 round-2 audit `MATCH '报价单'` returned 0 rows, so
+  every Chinese search fell back to `LIKE '%q%'` (full table scan, 15.4 ms at
+  50k turns).
+- **Query strategy** (`SqliteStore.searchTurns` / `searchSummaries`): 3+
+  characters go through `MATCH` (substring/phrase; trigram matching is
+  case-insensitive for ASCII by default); shorter queries, malformed FTS
+  syntax (`"`, bare `AND`/`NEAR(`, a lone `*`, `;`, ...) and text the
+  index cannot tokenize fall back to the v18 `LIKE` path, which remains the
+  correctness backstop. The fallback keeps SQL LIKE semantics, so `%` and `_`
+  in a query are wildcards (unchanged from v18). The public result shape,
+  filters (`conversationId`/`matterId`) and `limit` are unchanged; ordering
+  keeps the two v18 conventions — FTS hits are ranked (`ORDER BY rank`), LIKE
+  hits come back in `seq` order. One visible consequence: Chinese queries now
+  reach the FTS path, so they are relevance-ranked instead of returned in the
+  old `LIKE` seq order.
+- **Migration**: schema v19 drops the v18 unicode61 index, recreates both
+  trigram indexes and their triggers, and backfills with FTS5's `'rebuild'`
+  from the source tables — all inside the same write transaction that bumps
+  `schema_version`. A `state.db.before-migrate-v18-*` copy is written first by
+  the existing backup-before-migrate mechanism; a failed migration rolls the
+  DDL back and leaves the v18 database usable. A database with a schema newer
+  than this CLI is still refused.
+- **Degradation**: if the SQLite build has no trigram tokenizer, the store
+  rebuilds the legacy unicode61 index, sets `ftsWarning` and prints one stderr
+  warning; Chinese search then answers through `LIKE`. If FTS5 itself is
+  missing, search is LIKE-only. Opening never fails because of a missing
+  tokenizer. `ADVISERS_FTS_TOKENIZER=unicode61` forces the legacy tokenizer
+  (operator escape hatch; the tests use it to pin the degraded path). A database
+  forced to unicode61 keeps it: the schema is already v19, so there is no
+  automatic retry.
+- **Cost** (synthetic 50,000 turns / 500 summaries, /tmp ext4, 2026-11-18):
+  the trigram `turns_fts` is 4.0 MB vs 1.5 MB for unicode61, so the database
+  grows 2.8 MB (+28.7% on 9.7 MB, including the new 72 KB `summaries_fts`).
+  Migrating that database (including the 9.7 MB backup copy) takes ~0.22 s.
+  A 3-character Chinese query that used to run `LIKE` in 12.8 ms now hits FTS
+  in ~5.5 ms; rare phrases drop to ~0.1 ms. `ORDER BY rank` still scores every
+  matching turn, so a very common term (thousands of matches) is the slow end.
+- **Limits**: 2-character CJK queries still take the LIKE scan (there is no
+  2-gram index); trigram ranking is substring-frequency, not semantic; the LIKE
+  fallback treats `%`/`_` as wildcards; the index is larger than unicode61.
