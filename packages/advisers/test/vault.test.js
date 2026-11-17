@@ -1,5 +1,6 @@
 import assert from 'node:assert/strict'
 import test from 'node:test'
+import { tosEnv } from './tos-fixture.js'
 import { decryptJson, encryptJson, isVaultEnvelope } from '../lib/vault.js'
 
 test('P2: encrypted export round-trips and rejects wrong pass/tamper', () => {
@@ -24,7 +25,7 @@ test('E9-T3: vault seal removes plaintext and unseal restores the DB', () => {
   const root = mkdtempSync(join(tmpdir(), 'advisers-vault-cli-'))
   const home = join(root, 'home')
   mkdirSync(home, { recursive: true })
-  const env = { ...process.env, ADVISERS_HOME: home, ADVISERS_CORE_LOCAL: '1', ADVISERS_OFFICE_LOCAL: '1', ADVISERS_NO_MODEL: '1', ADVISERS_VAULT_PASSPHRASE: 'correct horse battery' }
+  const env = tosEnv(home, { ...process.env, ADVISERS_HOME: home, ADVISERS_CORE_LOCAL: '1', ADVISERS_OFFICE_LOCAL: '1', ADVISERS_NO_MODEL: '1', ADVISERS_VAULT_PASSPHRASE: 'correct horse battery' })
   try {
     execFileSync(process.execPath, [bin, 'commit', 'add', '秘密承诺', '--quote', 'q'], { env, encoding: 'utf8' })
     execFileSync(process.execPath, [bin, 'vault', 'seal', '--remove'], { env, encoding: 'utf8' })

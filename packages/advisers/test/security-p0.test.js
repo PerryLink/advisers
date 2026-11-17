@@ -5,13 +5,14 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import test from 'node:test'
+import { tosEnv } from './tos-fixture.js'
 import { Ledger } from '../../core/dist/index.js'
 import { SqliteStore } from '../lib/sqlite.js'
 
 const bin = fileURLToPath(new URL('../bin/advisers.js', import.meta.url))
 
 function env(home, extra = {}) {
-  return { ...process.env, ADVISERS_HOME: home, ADVISERS_CORE_LOCAL: '1', ADVISERS_OFFICE_LOCAL: '1', ADVISERS_NO_MODEL: '1', ADVISERS_STORE: 'sqlite', ...extra }
+  return tosEnv(home, { ...process.env, ADVISERS_HOME: home, ADVISERS_CORE_LOCAL: '1', ADVISERS_OFFICE_LOCAL: '1', ADVISERS_NO_MODEL: '1', ADVISERS_STORE: 'sqlite', ...extra })
 }
 function cli(home, args, extra = {}, cwd = process.cwd()) {
   return execFileSync(process.execPath, [bin, ...args], { cwd, env: env(home, extra), encoding: 'utf8' })

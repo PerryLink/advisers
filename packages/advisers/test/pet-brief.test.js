@@ -6,6 +6,7 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import test from 'node:test'
+import { tosEnv } from './tos-fixture.js'
 import { Ledger } from '../../core/dist/index.js'
 import { SqliteStore } from '../lib/sqlite.js'
 import { readLedgerSnapshotReadOnly } from '../lib/pet-brief-store.js'
@@ -129,7 +130,7 @@ function run(home, args, cwd, extra = {}) {
   return execFileSync(process.execPath, [bin, ...args], {
     cwd,
     encoding: 'utf8',
-    env: { ...process.env, ADVISERS_HOME: home, ADVISERS_CORE_LOCAL: '1', ADVISERS_OFFICE_LOCAL: '1', ADVISERS_NO_MODEL: '1', ADVISERS_STORE: 'sqlite', ...extra },
+    env: tosEnv(home, { ...process.env, ADVISERS_HOME: home, ADVISERS_CORE_LOCAL: '1', ADVISERS_OFFICE_LOCAL: '1', ADVISERS_NO_MODEL: '1', ADVISERS_STORE: 'sqlite', ...extra }),
   })
 }
 
@@ -137,7 +138,7 @@ function runRaw(home, args, cwd, extra = {}) {
   return spawnSync(process.execPath, [bin, ...args], {
     cwd,
     encoding: 'utf8',
-    env: { ...process.env, ADVISERS_HOME: home, ADVISERS_CORE_LOCAL: '1', ADVISERS_OFFICE_LOCAL: '1', ADVISERS_NO_MODEL: '1', ADVISERS_STORE: 'sqlite', ...extra },
+    env: tosEnv(home, { ...process.env, ADVISERS_HOME: home, ADVISERS_CORE_LOCAL: '1', ADVISERS_OFFICE_LOCAL: '1', ADVISERS_NO_MODEL: '1', ADVISERS_STORE: 'sqlite', ...extra }),
   })
 }
 

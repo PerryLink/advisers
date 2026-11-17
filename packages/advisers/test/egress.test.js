@@ -5,6 +5,7 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import test from 'node:test'
+import { tosEnv } from './tos-fixture.js'
 import { egressDeniedReason, secrecyLevel } from '../lib/egress.js'
 
 const bin = fileURLToPath(new URL('../bin/advisers.js', import.meta.url))
@@ -55,7 +56,7 @@ test('research CLI refuses a protected matter before any network call', () => {
     assert.throws(
       () => execFileSync(process.execPath, [bin, 'research', '--web', '敏感问题'], {
         cwd: work,
-        env: {
+        env: tosEnv(home, {
           ...process.env,
           ADVISERS_HOME: home,
           ADVISERS_STORE: 'json',
@@ -63,7 +64,7 @@ test('research CLI refuses a protected matter before any network call', () => {
           ADVISERS_OFFICE_LOCAL: '1',
           ADVISERS_NO_MODEL: '1',
           ADVISERS_API_KEY: 'test-key-not-used',
-        },
+        }),
         encoding: 'utf8',
         stdio: ['ignore', 'pipe', 'pipe'],
       }),

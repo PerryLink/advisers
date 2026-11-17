@@ -7,6 +7,7 @@ import { tmpdir } from "node:os"
 import { join } from "node:path"
 import { fileURLToPath } from "node:url"
 import test from "node:test"
+import { tosEnv } from "./tos-fixture.js"
 import { DatabaseSync } from "node:sqlite"
 import { encryptJson } from "../lib/vault.js"
 import { research } from "../lib/research.js"
@@ -22,7 +23,7 @@ const baseEnv = {
   ADVISERS_NO_MODEL: "1",
   ADVISERS_STORE: "sqlite",
 }
-function env(home, extra) { return { ...baseEnv, ADVISERS_HOME: home, ...(extra || {}) } }
+function env(home, extra) { return tosEnv(home, { ...baseEnv, ...(extra || {}) }) }
 function cli(home, args, extra) {
   return execFileSync(process.execPath, [bin, ...args], { env: env(home, extra), encoding: "utf8" })
 }

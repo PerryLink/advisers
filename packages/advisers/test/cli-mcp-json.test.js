@@ -5,12 +5,13 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import test from 'node:test'
+import { tosEnv } from './tos-fixture.js'
 
 const bin = fileURLToPath(new URL('../bin/advisers.js', import.meta.url))
 function run(home, args, cwd) {
   return execFileSync(process.execPath, [bin, ...args], {
     cwd, encoding: 'utf8',
-    env: { ...process.env, ADVISERS_HOME: home, ADVISERS_CORE_LOCAL: '1', ADVISERS_OFFICE_LOCAL: '1', ADVISERS_NO_MODEL: '1', ADVISERS_STORE: 'sqlite' },
+    env: tosEnv(home, { ...process.env, ADVISERS_HOME: home, ADVISERS_CORE_LOCAL: '1', ADVISERS_OFFICE_LOCAL: '1', ADVISERS_NO_MODEL: '1', ADVISERS_STORE: 'sqlite' }),
   })
 }
 function setup() {
@@ -47,7 +48,7 @@ test('E6-T2: MCP stdio server initializes, lists tools, and serves read-only dat
     ].map((x) => JSON.stringify(x)).join('\n') + '\n'
     const out = spawnSync(process.execPath, [bin, 'mcp', '--stdio'], {
       cwd: work, input, encoding: 'utf8', timeout: 15000,
-      env: { ...process.env, ADVISERS_HOME: home, ADVISERS_CORE_LOCAL: '1', ADVISERS_OFFICE_LOCAL: '1', ADVISERS_NO_MODEL: '1', ADVISERS_STORE: 'sqlite' },
+      env: tosEnv(home, { ...process.env, ADVISERS_HOME: home, ADVISERS_CORE_LOCAL: '1', ADVISERS_OFFICE_LOCAL: '1', ADVISERS_NO_MODEL: '1', ADVISERS_STORE: 'sqlite' }),
     })
     assert.equal(out.status, 0, out.stderr)
     const lines = out.stdout.trim().split('\n').map((l) => JSON.parse(l))

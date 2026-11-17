@@ -54,6 +54,7 @@ const loadRemind = lazyModule(() => import('../lib/remind.js'))
 const loadSync = lazyModule(() => import('../lib/sync.js'))
 const loadTimestamp = lazyModule(() => import('../lib/timestamp.js'))
 const loadVault = lazyModule(() => import('../lib/vault.js'))
+const loadTos = lazyModule(() => import('../lib/tos/index.js'))
 
 let core
 if (process.env.ADVISERS_CORE_LOCAL === '1') {
@@ -419,7 +420,19 @@ function friendlyError(error) {
 }
 process.on('uncaughtException', (error) => { console.error(`advisers: ${friendlyError(error)}`); process.exit(1) })
 process.on('unhandledRejection', (error) => { console.error(`advisers: ${friendlyError(error)}`); process.exit(1) })
-const [command, ...args] = process.argv.slice(2)
+/**
+ * TOS gate: `--accept-tos[=<version>]` is a global pre-dispatch flag, so it is
+ * stripped from argv before the command is parsed (it may appear before or after
+ * the command name). The value is resolved by lib/tos when the gate runs.
+ */
+const rawArgv = process.argv.slice(2)
+let acceptTosFlag
+for (let index = rawArgv.length - 1; index >= 0; index--) {
+  const value = rawArgv[index]
+  if (value === '--accept-tos') { acceptTosFlag = true; rawArgv.splice(index, 1) }
+  else if (value.startsWith('--accept-tos=')) { acceptTosFlag = value.slice('--accept-tos='.length); rawArgv.splice(index, 1) }
+}
+const [command, ...args] = rawArgv
 
 function help() {
   console.log(`advisers — a staff of AI advisers
@@ -525,6 +538,7 @@ Usage:
   advisers soul show          print soul.md
   advisers soul set <file>    set soul.md from a file (human action)
   advisers soul init          write a minimal starter soul.md
+  advisers tos show|status [--json]|accept|revoke  使用条款：全文/状态/接受/撤回
   advisers help
 
 Environment:
@@ -1647,6 +1661,7 @@ async function importLedger(file, { replace = false } = {}) {
   } catch (error) { console.error(`import failed: ${error.message}`); process.exitCode = 1; return }
   const data = payload?.ledger ?? payload
   if (!data || !Array.isArray(data.matters)) { console.error('import file does not contain an Advisers ledger'); process.exitCode = 1; return }
+  await requireTosReaccept({ scope: 'import', subject: basename(file), action: 'import --replace' })
   ensureHome()
   try {
     const store = dbStore()
@@ -1703,7 +1718,7 @@ async function brief(text, deep = false) {
   }
 }
 
-function routine(sub, arg, arg2) {
+async function routine(sub, arg, arg2) {
   const ledger = loadLedger()
   if (typeof ledger.addRoutine !== 'function') {
     console.error('routine requires advisers-core@0.1.0-preview.3 or newer')
@@ -1725,6 +1740,7 @@ function routine(sub, arg, arg2) {
       process.exitCode = 1
       return
     }
+    await requireTosReaccept({ scope: 'routine', subject: 'routine:add', action: 'routine add' })
     const spec = JSON.parse(readFileSync(arg, 'utf8'))
     const routine = ledger.addRoutine({
       name: spec.name,
@@ -1756,6 +1772,7 @@ function routine(sub, arg, arg2) {
       process.exitCode = 1
       return
     }
+    await requireTosReaccept({ scope: 'routine', subject: `routine:${arg}`, action: 'routine patch' })
     const changes = JSON.parse(readFileSync(arg2, 'utf8'))
     const patch = ledger.proposeRoutinePatch(arg, changes)
     saveLedger(ledger)
@@ -1785,6 +1802,7 @@ function routine(sub, arg, arg2) {
   }
   if (sub === 'curate') {
     const apply = arg === '--apply'
+    if (apply) await requireTosReaccept({ scope: 'routine', subject: 'routine:curate', action: 'routine curate --apply' })
     const now = Date.now()
     let changed = 0
     for (const r of ledger.listRoutines().filter((x) => x.status === 'active')) {
@@ -1803,6 +1821,7 @@ function routine(sub, arg, arg2) {
   }
   if (sub === 'restore') {
     if (!arg) { console.error('usage: advisers routine restore <id>'); process.exitCode = 1; return }
+    await requireTosReaccept({ scope: 'routine', subject: `routine:${arg}`, action: 'routine restore' })
     const r = ledger.restoreRoutine(arg)
     saveLedger(ledger)
     console.log(`restored to draft: ${r.id}`)
@@ -1810,6 +1829,7 @@ function routine(sub, arg, arg2) {
   }
   if (sub === 'revert') {
     if (!arg) { console.error('usage: advisers routine revert <patch-id>'); process.exitCode = 1; return }
+    await requireTosReaccept({ scope: 'routine', subject: `routine:${arg}`, action: 'routine revert' })
     const patch = ledger.revertRoutinePatch(arg)
     saveLedger(ledger)
     console.log(`rolled_back: ${patch.id}`)
@@ -1822,6 +1842,7 @@ function routine(sub, arg, arg2) {
       return
     }
     if (sub === 'apply') {
+      await requireTosReaccept({ scope: 'routine', subject: `routine:${arg}`, action: 'routine apply' })
       const pending = ledger.listRoutinePatches('pending').find((p) => p.id === arg)
       if (!pending) { console.error(`unknown or closed routine patch: ${arg}`); process.exitCode = 1; return }
       const routine = ledger.listRoutines().find((r) => r.id === pending.routineId)
@@ -1846,6 +1867,7 @@ function routine(sub, arg, arg2) {
       process.exitCode = 1
       return
     }
+    await requireTosReaccept({ scope: 'routine', subject: `routine:${arg}`, action: `routine ${sub}` })
     const routine = sub === 'approve' ? ledger.approveRoutine(arg) : ledger.archiveRoutine(arg)
     saveLedger(ledger)
     console.log(`${routine.status}: ${routine.id}`)
@@ -3073,7 +3095,7 @@ async function office(kind, specFile, outFile) {
   if (!result.ok) process.exitCode = 1
 }
 
-function soul(sub, file) {
+async function soul(sub, file) {
   if (sub === 'show') {
     const doc = loadSoul()
     if (!doc) {
@@ -3095,6 +3117,7 @@ function soul(sub, file) {
       process.exitCode = 1
       return
     }
+    await requireTosReaccept({ scope: 'config', subject: 'soul', action: 'soul set' })
     const previous = loadSoul()
     const content = readFileSync(file, 'utf8')
     const doc = {
@@ -3113,6 +3136,7 @@ function soul(sub, file) {
       console.log('soul.md already exists; use `advisers soul set <file>` to replace it')
       return
     }
+    await requireTosReaccept({ scope: 'config', subject: 'soul', action: 'soul init' })
     const doc = {
       id: 'soul',
       version: 1,
@@ -3130,6 +3154,296 @@ function soul(sub, file) {
   help()
   process.exitCode = 1
 }
+
+// ---------------------------------------------------------------------------
+// TOS consent gate (docs/TOS.md §2)
+//
+// L1: every non-exempt command requires an accepted TOS for the CURRENT version
+//     + text hash. Missing acceptance: TTY shows a 12-line summary and requires
+//     typing 同意; non-TTY exits 3 with a single E_TOS_REQUIRED stderr line
+//     (`--accept-tos` / `ADVISERS_ACCEPT_TOS=1` records channel=flag|env and
+//     nonInteractive=1, then continues). A version/text change re-requires.
+// L2: modification surfaces (soul set/init, routine writes, import --replace)
+//     each need a fresh confirmation and write audit action=tos.reaccept.
+//
+// The acceptance record is ~/.advisers/tos.json (0600, atomic); the audit chain
+// gets action=tos.accept|tos.block|tos.reaccept|tos.revoke with a reason that
+// names version/sha256/channel and NEVER the terms text.
+// ---------------------------------------------------------------------------
+
+/** Commands usable without accepting the TOS (TOS §2.1: local functions stay usable). */
+const TOS_EXEMPT_COMMANDS = new Set(['help', '--help', 'version', '--version', '-v', 'status', 'doctor', 'init', 'tos'])
+/** Known commands. Unknown commands keep the plain "unknown command" error, not the gate. */
+const KNOWN_COMMANDS = new Set([
+  'version', '--version', '-v', 'help', '--help', 'chat', 'status', 'doctor', 'init', 'history', 'mcp',
+  'deliver', 'timestamp', 'tui', 'ocr', 'evidence', 'receipt', 'deliveries', 'learn', 'commit', 'diff',
+  'undo', 'compact', 'search', 'nudge', 'risks', 'pet-brief', 'today', 'tick', 'ui', 'remind', 'calendar',
+  'who', 'memory', 'digest', 'week', 'prefs', 'privacy', 'audit', 'purge', 'decay', 'correct', 'ls', 'why',
+  'forget', 'sync', 'vault', 'export', 'import', 'backup', 'brief', 'review', 'research', 'capture', 'policy',
+  'office-edit', 'office-read', 'verify', 'office', 'routine', 'template', 'link', 'bridge', 'soul', 'tos',
+])
+
+/** Append a TOS audit row; audit is best-effort (JSON store has no audit chain). */
+function tosAudit(action, allowed, reason) {
+  try {
+    ensureHome()
+    dbStore()?.appendAudit({ actor: 'local', action, allowed, reason })
+  } catch {}
+}
+
+/** Audit reason material: names version/sha256/channel, never the terms text. */
+function tosAuditReason({ version, sha256, channel, nonInteractive, extra = '' }) {
+  return `version=${version};sha256=${sha256};channel=${channel};nonInteractive=${nonInteractive ? 1 : 0}${extra}`
+}
+
+async function recordTosAcceptance(tos, info, { channel, nonInteractive }) {
+  const record = tos.writeAcceptance(HOME, {
+    version: info.version,
+    sha256: info.sha256,
+    acceptedAt: new Date().toISOString(),
+    channel,
+    nonInteractive,
+  })
+  tosAudit('tos.accept', true, tosAuditReason({ version: info.version, sha256: info.sha256, channel, nonInteractive, extra: ';scope=app' }))
+  return record
+}
+
+function tosRequiredLine(version) {
+  return `advisers: 需要先同意使用条款 ${version}（E_TOS_REQUIRED）。运行 advisers tos show 查看全文；非交互环境加 --accept-tos 或 ADVISERS_ACCEPT_TOS=1。`
+}
+
+function tosReacceptRequiredLine(version) {
+  return `advisers: 此修改需要再次确认使用条款 ${version}（E_TOS_REQUIRED）。--yes 不能代替 TOS 确认；非交互环境加 --accept-tos 或 ADVISERS_ACCEPT_TOS=1（运行 advisers tos show 查看全文）。`
+}
+
+/** TOS §2.3 "源码修改版" notice: TTY-only, non-blocking, once per fingerprint change. */
+async function maybeSourceModifiedNotice(tos) {
+  try {
+    if (!process.stdin.isTTY) return
+    const fingerprint = tos.sourceCheckoutFingerprint()
+    if (!fingerprint || !tos.shouldNoticeSourceModified({ home: HOME, fingerprint })) return
+    for (const line of tos.sourceModifiedNotice({ fingerprint })) console.error(line)
+    tos.writeSourceFingerprint(HOME, fingerprint)
+  } catch {}
+}
+
+/** L1 gate: run before dispatch; exits the process on block/reject (exit 3 / exit 1). */
+async function tosGate() {
+  const isTTY = Boolean(process.stdin.isTTY)
+  if (!command) { if (!isTTY) return }
+  else if (TOS_EXEMPT_COMMANDS.has(command) || !KNOWN_COMMANDS.has(command)) return
+  const tos = await loadTos()
+  const info = tos.currentTos()
+  const status = tos.acceptanceStatus({ home: HOME, version: info.version, sha256: info.sha256 })
+  if (status.accepted) { await maybeSourceModifiedNotice(tos); return }
+  const explicit = tos.resolveConsent({ flag: acceptTosFlag, env: process.env.ADVISERS_ACCEPT_TOS, version: info.version, isTTY })
+  if (explicit?.error) { console.error(`advisers: ${explicit.error}`); process.exit(1) }
+  if (explicit?.ok) {
+    await recordTosAcceptance(tos, info, { channel: explicit.channel, nonInteractive: true })
+    await maybeSourceModifiedNotice(tos)
+    return
+  }
+  if (!isTTY) {
+    tosAudit('tos.block', false, tosAuditReason({ version: info.version, sha256: info.sha256, channel: 'none', nonInteractive: true, extra: `;scope=app;reason=${status.reason}` }))
+    console.error(tosRequiredLine(info.version))
+    process.exit(3)
+  }
+  const answer = await tos.promptForConsent({ version: info.version, url: info.url })
+  if (answer.accepted) {
+    await recordTosAcceptance(tos, info, { channel: 'interactive', nonInteractive: false })
+    console.log(`已接受使用条款 v${info.version}（channel=interactive）；撤回：advisers tos revoke。`)
+    await maybeSourceModifiedNotice(tos)
+    return
+  }
+  tosAudit('tos.block', false, tosAuditReason({ version: info.version, sha256: info.sha256, channel: 'interactive', nonInteractive: false, extra: `;scope=app;reason=${answer.reason}` }))
+  console.error(`未接受使用条款 v${info.version}；受门控的命令已停止（运行 advisers tos show 查看全文）。`)
+  process.exit(1)
+}
+
+/** L2 gate: per-modification re-confirmation (TOS §2.3). Returns true when allowed. */
+async function requireTosReaccept({ scope, subject = '', action }) {
+  const tos = await loadTos()
+  const info = tos.currentTos()
+  const isTTY = Boolean(process.stdin.isTTY)
+  const extra = `;scope=${scope}${subject ? `;subject=${subject}` : ''};action=${action ?? '-'}`
+  const explicit = tos.resolveConsent({ flag: acceptTosFlag, env: process.env.ADVISERS_ACCEPT_TOS, version: info.version, isTTY })
+  if (explicit?.error) { console.error(`advisers: ${explicit.error}`); process.exit(1) }
+  if (explicit?.ok) {
+    tosAudit('tos.reaccept', true, tosAuditReason({ version: info.version, sha256: info.sha256, channel: explicit.channel, nonInteractive: true, extra }))
+    return true
+  }
+  if (!isTTY) {
+    tosAudit('tos.block', false, tosAuditReason({ version: info.version, sha256: info.sha256, channel: 'none', nonInteractive: true, extra: `;reason=reaccept-required${extra}` }))
+    console.error(tosReacceptRequiredLine(info.version))
+    process.exit(3)
+  }
+  const answer = await tos.promptForConsent({
+    version: info.version,
+    lines: tos.modificationNotice({ scope, action }),
+    question: '继续？输入“同意”或 y 确认（n 或直接 Enter 取消）：',
+  })
+  if (answer.accepted) {
+    tosAudit('tos.reaccept', true, tosAuditReason({ version: info.version, sha256: info.sha256, channel: 'interactive', nonInteractive: false, extra }))
+    console.log(`已再次确认使用条款（scope=${scope}）；本次确认已写入本地审计链。`)
+    return true
+  }
+  tosAudit('tos.block', false, tosAuditReason({ version: info.version, sha256: info.sha256, channel: 'interactive', nonInteractive: false, extra: `;reason=rejected${extra}` }))
+  console.error(`未确认修改（scope=${scope}）；操作已取消。`)
+  process.exit(1)
+}
+
+function tosAuditState() {
+  if (mode !== 'sqlite') return { available: false, note: 'unavailable (json store)' }
+  if (!existsSync(DB)) return { available: false, note: 'no audit chain yet' }
+  try {
+    const store = openStore()
+    const verify = store.verifyAudit()
+    const counts = { accept: 0, block: 0, reaccept: 0, revoke: 0 }
+    for (const row of store.listAudit(10000)) {
+      if (row.action === 'tos.accept') counts.accept++
+      else if (row.action === 'tos.block') counts.block++
+      else if (row.action === 'tos.reaccept') counts.reaccept++
+      else if (row.action === 'tos.revoke') counts.revoke++
+    }
+    return { available: true, verified: verify.ok, brokenAt: verify.ok ? null : verify.seq, count: verify.count ?? 0, counts }
+  } catch (error) {
+    return { available: false, note: `unavailable (${error.message})` }
+  }
+}
+
+function tosStatusFacts(tos, info, status) {
+  const record = status.record
+  return {
+    version: info.version,
+    manifestVersion: info.manifestVersion,
+    effectiveFrom: info.effectiveFrom,
+    textSha256: info.sha256,
+    canonical: info.canonical,
+    termsPath: info.termsPath,
+    url: info.url,
+    accepted: status.accepted,
+    reason: status.reason,
+    acceptance: record ? {
+      version: record.version,
+      sha256: record.sha256,
+      acceptedAt: record.acceptedAt,
+      channel: record.channel,
+      nonInteractive: record.nonInteractive,
+      ...(record.revokedAt ? { revokedAt: record.revokedAt } : {}),
+    } : null,
+    store: { type: mode, path: mode === 'sqlite' ? DB : STATE },
+    audit: tosAuditState(),
+    futureSeparateConsent: ['content packs / DLC (not shipped in 0.2.0)', 'text-to-speech / TTS (not shipped in 0.2.0)'],
+  }
+}
+
+function printTosStatus(tos, info, status, asJson) {
+  const facts = tosStatusFacts(tos, info, status)
+  if (asJson) { console.log(JSON.stringify(facts, null, 2)); return }
+  const record = facts.acceptance
+  console.log(`version   ${facts.version}（生效 ${facts.effectiveFrom}；manifest ${facts.manifestVersion}）`)
+  console.log(`sha256    ${facts.textSha256}`)
+  if (facts.accepted) {
+    console.log(`accepted  yes · channel=${record.channel} · nonInteractive=${record.nonInteractive ? 1 : 0} · ${record.acceptedAt}`)
+  } else {
+    console.log(`accepted  no · reason=${facts.reason}${record ? ` · last channel=${record.channel} · ${record.acceptedAt}` : ''}${record?.revokedAt ? ` · revokedAt=${record.revokedAt}` : ''}`)
+    console.log('next      advisers tos accept（交互输入“同意”）或非交互加 --accept-tos / ADVISERS_ACCEPT_TOS=1')
+  }
+  console.log(`terms     ${facts.termsPath}`)
+  console.log(`url       ${facts.url}`)
+  console.log(`store     ${facts.store.type}${facts.store.path ? ` (${facts.store.path})` : ''}`)
+  if (facts.audit.available) {
+    const c = facts.audit.counts
+    console.log(`audit     ${facts.audit.verified ? 'verified' : `BROKEN at seq ${facts.audit.brokenAt}`} · ${facts.audit.count} entries · tos.accept=${c.accept} tos.block=${c.block} tos.reaccept=${c.reaccept} tos.revoke=${c.revoke}`)
+  } else {
+    console.log(`audit     ${facts.audit.note}`)
+  }
+  console.log('future    DLC / TTS are not available in 0.2.0; if they ship they will require a separate, explicit consent')
+}
+
+function tosUsage(version = '') {
+  console.log(`usage: advisers tos <show|status|accept|revoke>${version ? `   （当前版本 v${version}）` : ''}
+  advisers tos show                 打印完整使用条款
+  advisers tos status [--json]      版本、接受记录、审计状态（含 DLC/TTS 未来单独同意说明）
+  advisers tos accept               接受当前使用条款（非交互需 --accept-tos 或 ADVISERS_ACCEPT_TOS=1）
+  advisers tos revoke [--yes]       撤回同意（受门控命令随后会重新要求确认）`)
+}
+
+async function tosCommand(argv) {
+  const tos = await loadTos()
+  const sub = argv[0]
+  const info = tos.currentTos()
+  if (!sub || sub === 'help' || sub === '--help') { tosUsage(info.version); return }
+  const status = tos.acceptanceStatus({ home: HOME, version: info.version, sha256: info.sha256 })
+  if (sub === 'show') {
+    console.log(`Advisers 使用条款 v${info.version}（生效 ${info.effectiveFrom}）`)
+    console.log(`文本 SHA-256：${info.sha256}`)
+    console.log(`规范文本：${info.canonical}；随包副本：${info.termsPath}；在线：${info.url}`)
+    console.log('---')
+    process.stdout.write(readFileSync(info.termsPath, 'utf8'))
+    return
+  }
+  if (sub === 'status') { printTosStatus(tos, info, status, argv.includes('--json')); return }
+  if (sub === 'accept') {
+    if (status.accepted) {
+      console.log(`已接受使用条款 v${info.version}（channel=${status.record.channel}，${status.record.acceptedAt}）；撤回：advisers tos revoke。`)
+      return
+    }
+    const isTTY = Boolean(process.stdin.isTTY)
+    const explicit = tos.resolveConsent({ flag: acceptTosFlag, env: process.env.ADVISERS_ACCEPT_TOS, version: info.version, isTTY })
+    if (explicit?.error) { console.error(`advisers: ${explicit.error}`); process.exitCode = 1; return }
+    if (explicit?.ok) {
+      await recordTosAcceptance(tos, info, { channel: explicit.channel, nonInteractive: true })
+      console.log(`已接受使用条款 v${info.version}（channel=${explicit.channel}，nonInteractive=1）；已写入本地审计链。`)
+      return
+    }
+    if (!isTTY) {
+      tosAudit('tos.block', false, tosAuditReason({ version: info.version, sha256: info.sha256, channel: 'none', nonInteractive: true, extra: ';scope=app;reason=command-accept-requires-flag' }))
+      console.error(tosRequiredLine(info.version))
+      process.exitCode = 3
+      return
+    }
+    const answer = await tos.promptForConsent({ version: info.version, url: info.url })
+    if (answer.accepted) {
+      await recordTosAcceptance(tos, info, { channel: 'interactive', nonInteractive: false })
+      console.log(`已接受使用条款 v${info.version}（channel=interactive）；已写入本地审计链。撤回：advisers tos revoke。`)
+      return
+    }
+    tosAudit('tos.block', false, tosAuditReason({ version: info.version, sha256: info.sha256, channel: 'interactive', nonInteractive: false, extra: ';scope=app;reason=rejected' }))
+    console.error(`未接受使用条款 v${info.version}。`)
+    process.exitCode = 1
+    return
+  }
+  if (sub === 'revoke') {
+    const record = tos.readAcceptance(HOME)
+    if (!record || record.revokedAt) { console.log('当前没有有效的同意记录（无需撤回）。'); return }
+    const isTTY = Boolean(process.stdin.isTTY)
+    const confirmedByFlag = argv.includes('--yes')
+    if (!isTTY && !confirmedByFlag) {
+      console.error('advisers: 撤回同意会停止受门控命令；非交互环境请加 --yes 确认（advisers tos revoke --yes）。')
+      process.exitCode = 1
+      return
+    }
+    if (isTTY && !confirmedByFlag) {
+      const answer = await tos.promptForConsent({
+        version: info.version,
+        lines: ['撤回同意 · ' + `v${info.version}`, '撤回后受门控的命令会停止（help/status/doctor/tos 等本地功能仍可用）。', '撤回不影响撤回前已发生行为的效力，也不影响仓库许可证已授予的权利。'],
+        question: '确认撤回？输入“同意”或 y 确认（n 或直接 Enter 取消）：',
+      })
+      if (!answer.accepted) { console.log('已取消撤回。'); return }
+    }
+    const revoked = tos.revokeAcceptance(HOME, { revokedAt: new Date().toISOString() })
+    if (!revoked) { console.log('当前没有有效的同意记录（无需撤回）。'); return }
+    tosAudit('tos.revoke', true, tosAuditReason({ version: revoked.version, sha256: revoked.sha256, channel: isTTY ? 'interactive' : 'command', nonInteractive: isTTY ? false : true, extra: ';scope=app' }))
+    console.log(`已撤回使用条款 v${info.version} 的同意；受门控的命令将重新要求确认（advisers tos accept 可重新接受）。`)
+    return
+  }
+  tosUsage(info.version)
+  process.exitCode = 1
+}
+
+// L1 consent gate: runs once before dispatch (exempt commands return immediately).
+await tosGate()
 
 if (!command) {
   if (process.stdin.isTTY) await repl()
@@ -3482,7 +3796,7 @@ if (!command) {
   await office(args[0], args[1], args[2])
   process.exit(process.exitCode || 0)
 } else if (command === 'routine') {
-  routine(args[0], args[1], args[2])
+  await routine(args[0], args[1], args[2])
 } else if (command === 'template') {
   await template(args[0], args[1], args[2])
   process.exit(process.exitCode || 0)
@@ -3491,7 +3805,9 @@ if (!command) {
 } else if (command === 'bridge') {
   await bridge(args)
 } else if (command === 'soul') {
-  soul(args[0], args[1])
+  await soul(args[0], args[1])
+} else if (command === 'tos') {
+  await tosCommand(args)
 } else {
   console.error(`unknown command: ${command}`)
   help()

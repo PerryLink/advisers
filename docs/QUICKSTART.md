@@ -9,10 +9,17 @@
 > [Privacy & data-flow notice](PRIVACY.md). AI output can be wrong; illegal, infringing,
 > deceptive, or unlabeled synthetic content is prohibited.
 >
-> The first time you use gated features, Advisers shows a short summary of the Terms and
-> asks you to confirm explicitly (type 同意 or press the confirm key); non-interactive
-> environments must use `--accept-tos` or `ADVISERS_ACCEPT_TOS=1`. Continuing to run,
-> pressing Enter, or keeping the default option is not acceptance.
+> The first time you use a gated command (anything except `help`, `--version`, `status`,
+> `doctor`, `init` and `advisers tos ...`), Advisers shows a short Terms summary and asks
+> you to accept by typing 同意 (`y`/`yes` is a shortcut; Enter or `n` rejects). Non-interactive
+> environments must pass `--accept-tos` or set `ADVISERS_ACCEPT_TOS=1`; without them a gated
+> command exits with code 3 and a single `E_TOS_REQUIRED` line on stderr while stdout stays
+> machine-readable. Continuing to run, pressing Enter, or keeping the default is not
+> acceptance. The acceptance record (version, text SHA-256, time, channel) is written to
+> `%ADVISERS_HOME%\tos.json` (0600) and the local audit chain: check it with
+> `advisers tos status`, read the full text with `advisers tos show`, and withdraw with
+> `advisers tos revoke`. Changing the persona (`soul set`/`soul init`), routines or the
+> ledger (`import --replace`) asks for a fresh confirmation each time.
 
 ## Requirements
 
@@ -39,6 +46,7 @@ $env:ADVISERS_OFFICE_LOCAL = "1"   # checkout-only wiring for the office package
 $A = Join-Path $PWD "packages\advisers\bin\advisers.js"
 
 node $A status
+node $A tos status --json   # first-run consent record + audit state
 node $A init
 node $A doctor
 node $A soul init

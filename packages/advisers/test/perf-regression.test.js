@@ -5,6 +5,7 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import test from 'node:test'
+import { tosEnv } from './tos-fixture.js'
 import { Ledger } from '../../core/dist/index.js'
 import { SCHEMA_VERSION, SqliteStore } from '../lib/sqlite.js'
 import { buildSimplePdf, findCjkFont, wrapToWidth } from '../lib/pdf.js'
@@ -24,15 +25,14 @@ function cli(home, args, cwd, extra = {}) {
   return execFileSync(process.execPath, [bin, ...args], {
     cwd,
     encoding: 'utf8',
-    env: {
+    env: tosEnv(home, {
       ...process.env,
-      ADVISERS_HOME: home,
       ADVISERS_CORE_LOCAL: '1',
       ADVISERS_OFFICE_LOCAL: '1',
       ADVISERS_NO_MODEL: '1',
       ADVISERS_STORE: 'sqlite',
       ...extra,
-    },
+    }),
   })
 }
 

@@ -5,13 +5,14 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import test from 'node:test'
+import { tosEnv } from './tos-fixture.js'
 
 const bin = fileURLToPath(new URL('../bin/advisers.js', import.meta.url))
 function cli(home, args, env = {}) {
-  return execFileSync(process.execPath, [bin, ...args], { encoding: 'utf8', env: { ...process.env, ADVISERS_HOME: home, ADVISERS_CORE_LOCAL: '1', ADVISERS_OFFICE_LOCAL: '1', ADVISERS_NO_MODEL: '1', ...env } })
+  return execFileSync(process.execPath, [bin, ...args], { encoding: 'utf8', env: tosEnv(home, { ...process.env, ADVISERS_HOME: home, ADVISERS_CORE_LOCAL: '1', ADVISERS_OFFICE_LOCAL: '1', ADVISERS_NO_MODEL: '1', ...env }) })
 }
 function cliFail(home, args, env = {}) {
-  return spawnSync(process.execPath, [bin, ...args], { encoding: 'utf8', env: { ...process.env, ADVISERS_HOME: home, ADVISERS_CORE_LOCAL: '1', ADVISERS_OFFICE_LOCAL: '1', ADVISERS_NO_MODEL: '1', ...env } })
+  return spawnSync(process.execPath, [bin, ...args], { encoding: 'utf8', env: tosEnv(home, { ...process.env, ADVISERS_HOME: home, ADVISERS_CORE_LOCAL: '1', ADVISERS_OFFICE_LOCAL: '1', ADVISERS_NO_MODEL: '1', ...env }) })
 }
 
 test('P2: file-based E2EE snapshot push/pull and no plaintext in the sync dir', () => {

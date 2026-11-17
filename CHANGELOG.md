@@ -1,6 +1,6 @@
 # Changelog
 
-Unreleased: legal texts updated (TOS v2026.11.2, new PRIVACY notice, content-safety list, legal citations). The 0.2.0 entry is written by the release owner.
+Unreleased: legal texts updated (TOS v2026.11.2, new PRIVACY notice, content-safety list, legal citations); **TOS consent gate** implemented — pre-dispatch first-run/version-change acceptance gate (TTY summary + explicit 同意, non-TTY exit 3 `E_TOS_REQUIRED`, `--accept-tos`/`ADVISERS_ACCEPT_TOS=1` channels), per-modification re-confirmation for `soul set/init`, routine writes and `import --replace`, `advisers tos show|status [--json]|accept|revoke`, local record `~/.advisers/tos.json` (0600, atomic) plus audited `tos.accept|tos.block|tos.reaccept|tos.revoke` events, and 11 new `tos-gate` tests. The 0.2.0 entry is written by the release owner.
 
 ## 0.2.0-preview.71 (published 2026-11-17)
 

@@ -5,6 +5,7 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import test from 'node:test'
+import { tosEnv } from './tos-fixture.js'
 import { runLocalTimestamp } from '../lib/timestamp.js'
 
 const bin = fileURLToPath(new URL('../bin/advisers.js', import.meta.url))
@@ -31,7 +32,7 @@ test('P2: TUI --once renders a read-only dashboard', () => {
   const root = mkdtempSync(join(tmpdir(), 'advisers-tui-'))
   const home = join(root, 'home')
   mkdirSync(home, { recursive: true })
-  const env = { ...process.env, ADVISERS_HOME: home, ADVISERS_CORE_LOCAL: '1', ADVISERS_OFFICE_LOCAL: '1', ADVISERS_NO_MODEL: '1' }
+  const env = tosEnv(home, { ...process.env, ADVISERS_HOME: home, ADVISERS_CORE_LOCAL: '1', ADVISERS_OFFICE_LOCAL: '1', ADVISERS_NO_MODEL: '1' })
   try {
     execFileSync(process.execPath, [bin, 'commit', 'add', '发报价', '--quote', 'q'], { env, encoding: 'utf8' })
     const out = execFileSync(process.execPath, [bin, 'tui', '--once'], { env, encoding: 'utf8' })
