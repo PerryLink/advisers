@@ -3,13 +3,13 @@ import { spawnSync } from 'node:child_process'
 import { chmodSync, closeSync, copyFileSync, existsSync, fsyncSync, mkdirSync, openSync, readdirSync, readFileSync, renameSync, rmSync, statSync, writeFileSync, writeSync } from 'node:fs'
 import { homedir, hostname } from 'node:os'
 import { createHash, randomBytes, randomUUID } from 'node:crypto'
-import { basename, dirname, extname, join } from 'node:path'
+import { basename, dirname, extname, isAbsolute, join } from 'node:path'
 let SqliteStore
 try {
   ({ SqliteStore } = await import('../lib/sqlite.js'))
 } catch (error) {
   if (String(error?.message || error).includes('node:sqlite')) {
-    console.error(`Advisers needs Node >= 22.13 (node:sqlite). You have ${process.version}. Install Node 24 or use nvm-windows.`)
+    console.error(`Advisers needs Node >= 22.16 (node:sqlite). You have ${process.version}. Install Node 24 or use nvm-windows.`)
     process.exit(1)
   }
   throw error
@@ -73,6 +73,7 @@ const loadTimestamp = lazyModule(() => import('../lib/timestamp.js'))
 const loadVault = lazyModule(() => import('../lib/vault.js'))
 const loadTos = lazyModule(() => import('../lib/tos/index.js'))
 const loadMcpServer = lazyModule(() => import('../lib/mcp-server.js'))
+const loadSafety = lazyModule(() => import('../lib/safety/index.js'))
 
 let core
 if (process.env.ADVISERS_CORE_LOCAL === '1') {
@@ -175,11 +176,42 @@ function saveJson(ledger) {
   writeFileSync(STATE, JSON.stringify(ledger.toJSON(), null, 2) + '\n')
 }
 
+/** Sealed vault detection: vault bytes exist but the plaintext database does not. */
+function vaultSealedPath() {
+  if (mode !== 'sqlite') return null
+  const sealed = `${DB}.vault`
+  return !existsSync(DB) && existsSync(sealed) ? sealed : null
+}
+
+/**
+ * Robustness audit P1-1: after `vault seal --remove` every ordinary command used
+ * to create a brand-new empty state.db (and doctor/backup reported on the empty
+ * database). Fail fast with a stable code instead; the vault commands and
+ * `evidence verify` never reach this path.
+ */
+function vaultSealedError(sealed) {
+  const error = new Error(
+    `E_VAULT_SEALED: the database is sealed at ${sealed}; no plaintext database exists. ` +
+      'Run `ADVISERS_VAULT_PASSPHRASE=... advisers vault unseal` (or `advisers vault status`); no empty database was created.',
+  )
+  error.code = 'E_VAULT_SEALED'
+  return error
+}
+
+/** Robustness audit P2-1: SQLite creates -wal/-shm with the process umask (often 0644). */
+function secureDbSidecars() {
+  for (const file of [DB, `${DB}-wal`, `${DB}-shm`]) {
+    try { if (existsSync(file)) chmodSync(file, 0o600) } catch {}
+  }
+}
+
 function openStore({ checkIntegrity = false } = {}) {
   if (!activeStore) {
+    const sealed = vaultSealedPath()
+    if (sealed) throw vaultSealedError(sealed)
     ensureHome()
     activeStore = new SqliteStore(DB, { checkIntegrity })
-    try { chmodSync(DB, 0o600) } catch {}
+    secureDbSidecars()
   } else if (checkIntegrity) {
     activeStore.assertIntegrity()
   }
@@ -189,6 +221,8 @@ function openStore({ checkIntegrity = false } = {}) {
 function loadLedger() {
   ensureHome()
   if (mode === 'json') return loadJson()
+  const sealed = vaultSealedPath()
+  if (sealed) throw vaultSealedError(sealed)
   try {
     if (!existsSync(DB) && existsSync(STATE)) {
       const ledger = loadJson()
@@ -521,7 +555,7 @@ Usage:
   advisers mcp --stdio                          MCP server（7 工具 + 4 resources；写入口仅 pending 候选/回执校验）
   advisers evidence show <id> [--json]          承诺/事实/偏好→原文来源
   advisers deliver [--commit id] [--type confirmation|weekly|statement|ledger] [--format docx|xlsx|pdf] [--out f]  交付物
-  advisers deliveries --pack [--out dir]        证据包（manifest/README/SHA256SUMS + DOCX 回执）
+  advisers deliveries --pack [--out dir] [--ids ...] [--all]  证据包（manifest/README/SHA256SUMS + DOCX 回执；默认上限 2000）
   advisers deliveries --receipt [--out dir] [--ids ...] [--all] [--recipient "Name <mail>"]
                               交付回执包 v1.1（交付文件副本 + 全文件 SHA-256 + 证据；默认上限 2000）
   advisers evidence verify <dir>                离线校验回执包（JSON，exit 0/1；不读账本、不联网）
@@ -586,6 +620,10 @@ Exit codes:
   3  TOS consent required: non-interactive command blocked by the consent gate.
      Run \`advisers tos accept\` in a TTY, or pass --accept-tos / ADVISERS_ACCEPT_TOS=1.
      \`advisers evidence verify <dir>\` is offline/read-only and exempt from the gate.
+     Data-rights commands (audit/export/privacy/purge) and \`tos\` are exempt too.
+
+Requirements:
+  Node >= 22.16 (node:sqlite). Node 22 prints an ExperimentalWarning for SQLite; Node 24 does not.
 `)
 }
 
@@ -938,25 +976,39 @@ function printPrivacy(args = []) {
   const store = dbStore()
   let audit = null
   try { const v = store?.verifyAudit(); if (v) audit = { ok: v.ok, count: v.count ?? 0 } } catch {}
+  // Privacy audit P2-2: list every actual egress surface from the code base
+  // instead of two hardcoded names, and never expose internal numbering.
+  const egressSurfaces = [
+    'model provider — chat / brief --deep / review / learn review (only when ADVISERS_API_KEY is set; ADVISERS_BASE_URL)',
+    'research --web|--url — provider web search/read tool (explicit opt-in; no silent research egress)',
+    'capture --from-imap — read-only IMAP fetch from the server you configure (TLS by default)',
+    'remind --deliver --notify — optional outbound webhook or local notifier you configure',
+    'sync push|pull — the directory you provide; snapshots are AES-256-GCM encrypted before writing',
+    'bridge — Hermes file gateway: inbox/outbox JSON files are handed to the Hermes process',
+    'MCP --stdio / DSH host tools / pet-brief — local consumers; the host or reader may forward the data',
+    'ocr / timestamp — local adapter subprocess you configure (this CLI does not call a cloud OCR/TSA)',
+  ]
   const facts = {
     home: HOME,
     database: DB,
     telemetry: 'none',
     default_egress: 'none',
-    explicit_egress: ['research --web|--url', 'model calls (chat/capture/review/brief --deep)'],
-    provider: { baseUrl: process.env.ADVISERS_BASE_URL ?? 'https://api.deepseek.com', model: process.env.ADVISERS_MODEL ?? 'deepseek-chat' },
-    secret_matter: 'egress fail-closed (secrecy > 0)',
-    at_rest_encryption: 'not implemented for general data; secret-matter encryption is E9-T3',
+    explicit_egress: egressSurfaces,
+    provider: { baseUrl: process.env.ADVISERS_BASE_URL ?? 'https://api.deepseek.com', model: process.env.ADVISERS_MODEL ?? 'deepseek-flash' },
+    secret_matter: 'egress fail-closed for secrecy > 0 on the wired model paths (local rule layer)',
+    at_rest_encryption: 'opt-in database vault (advisers vault seal); general data is not encrypted at rest',
     audit,
     export: 'advisers export --all',
     delete: 'advisers purge <matter> --yes',
   }
   if (asJson) { console.log(JSON.stringify(facts, null, 2)); return }
   console.log('privacy · local data facts')
+  console.log('self-attestation（本地自检口径：只读本机文件/环境与纯函数，不是第三方审计；本命令不联网）')
   console.log(`home:       ${facts.home}`)
   console.log(`database:   ${facts.database}`)
-  console.log(`telemetry:  ${facts.telemetry}`)
-  console.log(`egress:     ${facts.default_egress} by default; explicit: ${facts.explicit_egress.join(', ')}`)
+  console.log(`telemetry:  ${facts.telemetry} (build-time statement; this package contains no telemetry code)`)
+  console.log(`egress:     ${facts.default_egress} by default — nothing leaves the machine until you configure/opt in to:`)
+  for (const surface of egressSurfaces) console.log(`  - ${surface}`)
   console.log(`provider:   ${facts.provider.model} @ ${facts.provider.baseUrl}`)
   console.log(`secret:     ${facts.secret_matter}`)
   console.log(`encryption: ${facts.at_rest_encryption}`)
@@ -965,15 +1017,18 @@ function printPrivacy(args = []) {
   console.log(`delete:     ${facts.delete}`)
   if (prove) {
     const checks = [
-      ['home exists', existsSync(HOME)],
-      ['database exists', existsSync(DB)],
-      ['audit verified', Boolean(audit?.ok)],
-      ['telemetry disabled', facts.telemetry === 'none'],
-      ['no default network egress', facts.default_egress === 'none'],
-      ['secret matter fail-closed', (() => { try { return Boolean(egressDeniedReason({ secrecy: 1 }, 'prove')) && !egressDeniedReason({ secrecy: 0 }, 'prove') } catch { return false } })()],
+      ['home exists', existsSync(HOME), 'local self-check'],
+      ['database exists', existsSync(DB), 'local self-check'],
+      ['audit verified', Boolean(audit?.ok), 'local self-check: keyed hash chain'],
+      ['telemetry disabled', facts.telemetry === 'none', 'local self-check: build-time statement, not network-verified'],
+      ['no default network egress', facts.default_egress === 'none', 'local self-check: build-time statement, not network-verified'],
+      ['secret matter fail-closed', (() => { try { return Boolean(egressDeniedReason({ secrecy: 1 }, 'prove')) && !egressDeniedReason({ secrecy: 0 }, 'prove') } catch { return false } })(), 'local self-check: egress-gate function; per-path wiring is covered by tests'],
     ]
+    console.log('')
+    console.log('self-checks（本地自检：结果只说明本机文件/配置与纯函数检查；不是第三方审计，也不证明运行时无出网）')
     let failed = 0
-    for (const [name, ok] of checks) { if (!ok) failed++; console.log(`[${ok ? 'PASS' : 'FAIL'}] ${name}`) }
+    for (const [name, ok, detail] of checks) { if (!ok) failed++; console.log(`[${ok ? 'PASS' : 'FAIL'}] ${name} (${detail})`) }
+    console.log('egress gate coverage: chat/model, review, research, brief --deep, learn review, bridge and capture are wired to the local secrecy gate; the other surfaces listed above are self-attested.')
     if (failed) process.exitCode = 1
   }
 }
@@ -1181,16 +1236,27 @@ function printPreferences() {
 async function doctor() {
   const rows = []
   const check = (name, ok, detail = '') => rows.push({ name, ok, detail })
-  check('node', Number(process.versions.node.split('.')[0]) > 22 || (Number(process.versions.node.split('.')[0]) === 22 && Number(process.versions.node.split('.')[1]) >= 13), process.version)
+  const [nodeMajor, nodeMinor] = process.versions.node.split('.').map(Number)
+  check('node', nodeMajor > 22 || (nodeMajor === 22 && nodeMinor >= 16), process.version)
   try { ensureHome(); check('home', existsSync(HOME), HOME) } catch (error) { check('home', false, error.message) }
-  try {
-    const store = openStore()
-    const integrity = store.assertIntegrity()
-    check('sqlite', integrity === 'ok', `${DB} (${integrity})`)
-    const audit = store.verifyAudit()
-    check('audit', audit.ok, audit.ok ? `${audit.count} entries` : `BROKEN at seq ${audit.seq}`)
-    check('schema', true, String(store.db.prepare("SELECT value FROM meta WHERE key='schema_version'").get()?.value ?? '?'))
-  } catch (error) { check('sqlite', false, error.message) }
+  // Sealed vault (robustness audit P1-1): report the real state instead of
+  // silently creating an empty database and printing all-PASS diagnostics.
+  const sealed = vaultSealedPath()
+  if (sealed) {
+    check('vault', true, `sealed (${sealed}); run ` + '`advisers vault unseal`')
+    check('sqlite', true, 'skipped (vault sealed)')
+    check('audit', true, 'skipped (vault sealed)')
+    check('schema', true, 'skipped (vault sealed)')
+  } else {
+    try {
+      const store = openStore()
+      const integrity = store.assertIntegrity()
+      check('sqlite', integrity === 'ok', `${DB} (${integrity})`)
+      const audit = store.verifyAudit()
+      check('audit', audit.ok, audit.ok ? `${audit.count} entries` : `BROKEN at seq ${audit.seq}`)
+      check('schema', true, String(store.db.prepare("SELECT value FROM meta WHERE key='schema_version'").get()?.value ?? '?'))
+    } catch (error) { check('sqlite', false, error.message) }
+  }
   let officeOk = false
   try { await import('advisers-office'); officeOk = true } catch { try { await import('../../office/dist/index.js'); officeOk = true } catch {} }
   check('office', officeOk, officeOk ? 'advisers-office resolvable' : 'npm i -g advisers-office@next, or ADVISERS_OFFICE_LOCAL=1 in checkout')
@@ -1328,7 +1394,75 @@ function applyNudgeFeedback(text) {
   } catch {}
 }
 
-async function runTurn({ runtime, ledger, text, conversationId, debug = false, confirm, attachments = [] }) {
+let safetyModule
+let lastTurnSafetyBlock = null
+
+/** Build the structured audit reason for a safety decision (never the original text). */
+function safetyReasonFor(result, fallbackSurface = 'model.output') {
+  try {
+    return safetyModule.buildAuditReason({
+      rulesetVersion: result?.rulesetVersion,
+      surface: result?.surface ?? fallbackSurface,
+      action: result?.action ?? 'block',
+      code: result?.code ?? 'CONTENT_SAFETY_BLOCKED',
+      ruleIds: result?.ruleIds,
+      evidenceHash: result?.evidenceHash,
+    })
+  } catch {
+    return `code=${result?.code ?? 'CONTENT_SAFETY_BLOCKED'}`
+  }
+}
+
+/**
+ * Report a local content-safety block without echoing or persisting the original
+ * text (privacy audit P2 / security audit SEC2-04): user-facing rejection plus a
+ * keyed `actor: 'safety'` audit row so the block is explainable later.
+ */
+function recordSafetyBlock(result, { action = 'safety.chat', surface = 'model.output' } = {}) {
+  const code = result?.code || 'CONTENT_SAFETY_BLOCKED'
+  const ruleIds = Array.isArray(result?.ruleIds) ? result.ruleIds : []
+  console.error('advisers: 内容安全审核未通过（CONTENT_SAFETY_BLOCKED）')
+  console.error('本次输入未发送到模型，也未写入账本或会话；被拒内容不会保存为标题或会话。')
+  console.error(`本地自检（${surface}）：code=${code} rules=${ruleIds.join(',') || '-'}；这是本地规则层判定，不是人工审核。`)
+  if (result?.crisis) console.error('如果你或他人正处于危险中，请立即联系当地紧急服务或可信任的人。')
+  try {
+    ensureHome()
+    dbStore()?.appendAudit({ actor: 'safety', action, allowed: false, reason: safetyReasonFor(result, surface) })
+  } catch {}
+}
+
+/**
+ * Wrapper around runTurnInner: local content-safety pre-flight BEFORE
+ * runtime.ingest()/upsertSession() (SEC2-04). A blocked input must not create a
+ * matter, a session title or a ledger fact, and must not purge the active matter
+ * pointer later (the old order persisted the raw text as sessions.title).
+ */
+async function runTurn(options) {
+  lastTurnSafetyBlock = null
+  ensureHome()
+  safetyModule ??= await loadSafety()
+  const text = String(options?.text ?? '')
+  const decision = safetyModule.classify(text, { surface: 'model.output', hmacKey: process.env.ADVISERS_AUDIT_KEY })
+  if (decision.action === 'block') {
+    lastTurnSafetyBlock = decision
+    recordSafetyBlock(decision, { surface: 'chat.input' })
+    return undefined
+  }
+  try {
+    return await runTurnInner(options)
+  } catch (error) {
+    // Context/history/attachments can still trip the model choke point; audit
+    // it as safety rather than letting it look like an unexplained crash.
+    if (error?.name === 'ContentSafetyError') {
+      lastTurnSafetyBlock = error
+      recordSafetyBlock(error, { surface: error.surface || 'model.output' })
+      return undefined
+    }
+    throw error
+  }
+}
+
+async function runTurnInner({ runtime, ledger, text, conversationId, debug = false, confirm, attachments = [] }) {
   const result = await runtime.ingest({
     linkId: 'cli',
     accountId: 'local',
@@ -1521,6 +1655,7 @@ async function chat(args) {
   const ledger = loadLedger()
   const runtime = runtimeFor(ledger)
   await runTurn({ runtime, ledger, text, conversationId: latestConversationId(), attachments: files })
+  if (lastTurnSafetyBlock) process.exitCode = 1
   saveLedger(ledger)
 }
 
@@ -1883,6 +2018,13 @@ async function importLedger(file, { replace = false } = {}) {
 
 function backup(file) {
   if (!file) { console.error('usage: advisers backup <path.db>'); process.exitCode = 1; return }
+  const sealed = vaultSealedPath()
+  if (sealed) {
+    console.error(`advisers: E_VAULT_SEALED — cannot back up a sealed database (${sealed}).`)
+    console.error('Run `advisers vault unseal` first; the sealed file itself is already an encrypted backup.')
+    process.exitCode = 1
+    return
+  }
   const store = openStore()
   const checkpoint = store.checkpoint()
   if (checkpoint.busy) { console.error('backup failed: database is busy (another advisers process is writing); close it and retry'); process.exitCode = 1; return }
@@ -2172,7 +2314,19 @@ async function research(args) {
   const matterId = activeMatterId(ledger)
   const denied = egressDeniedReason(ledger.getMatter(matterId), 'research')
   if (denied) { console.error(denied); process.exitCode = 1; return }
-  const result = await runResearch({ query, urls, apiKey, baseUrl: process.env.ADVISERS_BASE_URL, deep: Boolean(flags.deep) })
+  // Privacy audit P1-2: the library already redacts upstream bodies, but the CLI
+  // must not print stacks/upstream text either. Print only stable status + code.
+  let result
+  try {
+    result = await runResearch({ query, urls, apiKey, baseUrl: process.env.ADVISERS_BASE_URL, deep: Boolean(flags.deep) })
+  } catch (error) {
+    const status = Number.isFinite(Number(error?.status)) ? `HTTP ${Number(error.status)} ` : ''
+    const rawCode = String(error?.code ?? error?.name ?? 'RESEARCH_FAILED').toUpperCase().replace(/[^A-Z0-9_-]/g, '').slice(0, 40)
+    console.error(`research failed: ${status}(${rawCode || 'RESEARCH_FAILED'})`)
+    console.error('Upstream response bodies and stack traces are not printed. Check ADVISERS_API_KEY, ADVISERS_BASE_URL and the network, then run `advisers doctor`.')
+    process.exitCode = 1
+    return
+  }
   const store = dbStore()
   store?.addResearchRun({ matterId, query: query || urls[0], answer: result.answer, sources: result.sources, usage: result.usage, stopReason: result.stopReason })
   store?.appendAudit({ actor: 'local', action: 'egress.research', allowed: true, reason: `${urls.length ? 'url' : 'search'}:${result.sources.length}` })
@@ -2474,9 +2628,20 @@ async function printCalendarToday() {
   }
 }
 
+/** Host header allowlist for the local read-only UI (DNS-rebinding hardening, SEC2-07). */
+function isLoopbackHostHeader(host) {
+  if (!host) return false
+  const value = String(host).trim().toLowerCase()
+  const bare = value.startsWith('[')
+    ? value.replace(/^\[([^\]]+)\](?::\d+)?$/, '$1')
+    : value.replace(/:\d+$/, '')
+  return bare === '127.0.0.1' || bare === 'localhost' || bare === '::1'
+}
+
 async function ui(args) {
   const flags = parseFlags(args).flags
-  const port = Number(flags.port) || 17860
+  // --port 0 requests an ephemeral port (used by tests and scripts).
+  const port = typeof flags.port === 'string' && flags.port.trim() !== '' ? Number(flags.port) : 17860
   const ledger = loadLedger()
   const store = dbStore()
   const { buildReminders } = await loadRemind()
@@ -2490,6 +2655,18 @@ async function ui(args) {
     reminders: () => buildReminders(ledger, { now: new Date() }),
   }
   const app = createReadOnlyServer({ snapshot, port })
+  // SEC2-07: DNS rebinding can point an attacker origin at 127.0.0.1; the
+  // library only checks method=GET, so validate Host before its handler runs.
+  const handlers = app.server.listeners('request').slice()
+  app.server.removeAllListeners('request')
+  app.server.on('request', (req, res) => {
+    if (!isLoopbackHostHeader(req.headers.host)) {
+      res.writeHead(403, { 'content-type': 'application/json; charset=utf-8', 'cache-control': 'no-store', 'x-content-type-options': 'nosniff' })
+      res.end(JSON.stringify({ error: 'forbidden host header' }))
+      return
+    }
+    for (const handler of handlers) handler.call(app.server, req, res)
+  })
   const url = await app.listen()
   console.log(`advisers ui (read-only): ${url}`)
   console.log('Ctrl-C to stop; no writes, no telemetry, 127.0.0.1 only.')
@@ -2784,7 +2961,23 @@ async function mcpServer() {
     version: VERSION,
     audit: (entry) => store?.appendAudit(entry),
   })
-  await server.serve(process.stdin, process.stdout)
+  // Robustness audit P2-3: a closed client stdout surfaces as an asynchronous
+  // 'error' event (EPIPE) and used to reach the global uncaughtException handler
+  // as "write EPIPE"/exit 1. The MCP host went away, so exit cleanly (0).
+  const onStdoutError = (error) => {
+    if (error?.code === 'EPIPE') {
+      try { process.stdin.pause() } catch {}
+      process.exit(0)
+    }
+    console.error(`advisers: ${friendlyError(error)}`)
+    process.exit(1)
+  }
+  process.stdout.on('error', onStdoutError)
+  try {
+    await server.serve(process.stdin, process.stdout)
+  } finally {
+    process.stdout.removeListener('error', onStdoutError)
+  }
 }
 
 async function ocrCommand(args) {
@@ -2811,13 +3004,70 @@ function vaultPass() {
   return pass
 }
 
+/**
+ * Plaintext database copies left behind by unseal/migrate/import/sync and by an
+ * interrupted unseal (robustness audit P1-2). `vault seal --remove` must delete
+ * these too, otherwise the CLI says "plaintext removed" while a readable SQLite
+ * copy (including the before-unseal backup) is still in HOME.
+ */
+const PLAINTEXT_DB_COPY_RE = /^(?:state\.db\.before-(?:unseal|migrate|sync)-|\.state\.db\.unseal-|import-backup-)/
+function plaintextDbCopies() {
+  try {
+    return readdirSync(HOME).filter((name) => PLAINTEXT_DB_COPY_RE.test(name)).map((name) => join(HOME, name))
+  } catch {
+    return []
+  }
+}
+
+/**
+ * Remove the live plaintext database and every plaintext copy. Failures are
+ * collected (never swallowed) so the caller can report them and exit non-zero.
+ */
+function removePlaintextDatabase() {
+  const removed = []
+  const failures = []
+  for (const file of [DB, `${DB}-wal`, `${DB}-shm`, ...plaintextDbCopies()]) {
+    try {
+      if (!existsSync(file)) continue
+      rmSync(file)
+      removed.push(file)
+    } catch (error) {
+      failures.push(`${file}: ${error.message}`)
+    }
+  }
+  fsyncDir(HOME)
+  return { removed, failures }
+}
+
+/** Print the result of a --remove cleanup; returns true only when nothing failed. */
+function reportPlaintextCleanup(cleanup, out) {
+  if (cleanup.failures.length) {
+    console.error(`vault seal failed: the sealed file ${out} is in place, but ${cleanup.failures.length} plaintext file(s) could not be removed:`)
+    for (const failure of cleanup.failures) console.error(`  ${failure}`)
+    console.error('Close other advisers processes / check file permissions, then rerun `advisers vault seal --remove`.')
+    process.exitCode = 1
+    return false
+  }
+  console.log(`sealed ${DB} -> ${out} (plaintext removed: ${cleanup.removed.length} file(s))`)
+  return true
+}
+
 async function vaultSeal(args) {
   const { flags } = parseFlags(args)
   ensureHome()
-  if (!existsSync(DB)) { console.error(`no database at ${DB}`); process.exitCode = 1; return }
+  const removePlaintext = Boolean(flags.remove) || args.includes('--remove')
+  if (!existsSync(DB)) {
+    const sealed = vaultSealedPath()
+    // Already sealed: --remove still means "purge the leftover plaintext copies".
+    if (sealed && removePlaintext) return reportPlaintextCleanup(removePlaintextDatabase(), sealed)
+    console.error(sealed
+      ? `advisers: E_VAULT_SEALED — no plaintext database at ${DB}; the sealed file ${sealed} is intact.`
+      : `no database at ${DB}`)
+    process.exitCode = 1
+    return
+  }
   const pass = vaultPass(); if (!pass) return
   const { encryptJson, decryptJson } = await loadVault()
-  const removePlaintext = Boolean(flags.remove) || args.includes('--remove')
   try {
     const store = new SqliteStore(DB)
     try {
@@ -2841,10 +3091,10 @@ async function vaultSeal(args) {
     const check = decryptJson(JSON.parse(readFileSync(out, 'utf8')), pass)
     if (check.sha256 !== sha) throw new Error('sealed file verification failed')
     if (removePlaintext) {
-      for (const f of [DB, `${DB}-wal`, `${DB}-shm`]) { try { if (existsSync(f)) rmSync(f) } catch {} }
-      fsyncDir(HOME)
+      if (!reportPlaintextCleanup(removePlaintextDatabase(), out)) return
+      return
     }
-    console.log(`sealed ${DB} -> ${out}${removePlaintext ? ' (plaintext removed)' : ' (plaintext kept; pass --remove)'}`)
+    console.log(`sealed ${DB} -> ${out} (plaintext kept; pass --remove)`)
   } catch (error) { console.error(`vault seal failed: ${error.message}`); process.exitCode = 1 }
 }
 
@@ -2910,6 +3160,8 @@ function vaultStatus() {
   console.log(`database: ${existsSync(DB) ? DB : 'absent'}`)
   console.log(`sealed:   ${existsSync(sealed) ? sealed : 'none'}`)
   console.log(`state:    ${existsSync(DB) ? 'plaintext at rest' : existsSync(sealed) ? 'encrypted at rest (run vault unseal)' : 'empty'}`)
+  const copies = plaintextDbCopies()
+  if (copies.length) console.log(`plaintext copies: ${copies.length} (run \`advisers vault seal --remove\` to purge them)`)
 }
 
 async function timestampCommand(args) {
@@ -3145,8 +3397,21 @@ async function evidencePack(args) {
     facts: ledger.listFacts().map((f) => f.id),
     preferences: ledger.listPreferences({ includeCandidates: false }).map((p) => p.id),
   }
-  const { buildEvidencePack, toDocxRows, verifyPack } = await loadEvidence()
-  const pack = buildEvidencePack({ store, ledger, ids: targetIds })
+  const { buildEvidencePack, toDocxRows, verifyPack, EvidencePackLimitError } = await loadEvidence()
+  let pack
+  try {
+    // Performance audit P1-1: --all was parsed but never forwarded, so the
+    // documented escape hatch was a no-op and large ledgers always failed.
+    pack = buildEvidencePack({ store, ledger, ids: targetIds, all: flags.all === true })
+  } catch (error) {
+    if (error instanceof EvidencePackLimitError || error?.code === 'EVIDENCE_PACK_TOO_LARGE') {
+      console.error('error: ' + error.message)
+      if (error.hint) console.error('hint: ' + error.hint)
+      process.exitCode = 1
+      return
+    }
+    throw error
+  }
   const out = flags.out ? String(flags.out) : join(HOME, 'evidence', `evidence-${new Date().toISOString().replace(/[:.]/g, '-')}`)
   mkdirSync(out, { recursive: true, mode: 0o700 })
   for (const [name, content] of Object.entries(pack.files)) writeFileSync(join(out, name), content, { mode: 0o600 })
@@ -3551,6 +3816,76 @@ function link(sub, from, to, type) {
   process.exitCode = 1
 }
 
+/**
+ * Bridge (Hermes file gateway) hardening — security audit P1-1 / SEC2-09.
+ *
+ * The bridge library owns the wire format; the CLI tightens what it can before
+ * the library sees it: 0700 directories / 0600 files (the library used mkdir and
+ * writeFile defaults), a 1 MiB inbox cap enforced before its unbounded readFile,
+ * and no absolute local attachment paths in the outbox JSON. The library polls
+ * through the instance method, so wrapping pollOnce() covers both the immediate
+ * poll in start() and the interval.
+ */
+const BRIDGE_INBOX_MAX_BYTES = 1024 * 1024
+
+function bridgeDirs(bridgeDir, name) {
+  return {
+    inbox: join(bridgeDir, 'inbox', name),
+    outbox: join(bridgeDir, 'outbox', name),
+    status: join(bridgeDir, 'status', name),
+    registry: join(bridgeDir, 'registry'),
+    quarantine: join(bridgeDir, 'quarantine', name),
+  }
+}
+
+function secureBridgeTree(bridgeDir, name) {
+  const dirs = bridgeDirs(bridgeDir, name)
+  for (const dir of Object.values(dirs)) {
+    try { mkdirSync(dir, { recursive: true, mode: 0o700 }); chmodSync(dir, 0o700) } catch {}
+  }
+  for (const dir of [dirs.outbox, dirs.registry, dirs.inbox]) {
+    let files
+    try { files = readdirSync(dir) } catch { continue }
+    for (const file of files) {
+      try { chmodSync(join(dir, file), 0o600) } catch {}
+    }
+  }
+}
+
+/** Move oversized inbox files out of the library's readFile path (DoS guard). */
+function guardBridgeInbox(bridgeDir, name) {
+  const dirs = bridgeDirs(bridgeDir, name)
+  let files
+  try { files = readdirSync(dirs.inbox) } catch { return }
+  for (const file of files) {
+    if (!file.endsWith('.json')) continue
+    const source = join(dirs.inbox, file)
+    let size
+    try { size = statSync(source).size } catch { continue }
+    try { chmodSync(source, 0o600) } catch {}
+    if (size <= BRIDGE_INBOX_MAX_BYTES) continue
+    try {
+      mkdirSync(dirs.quarantine, { recursive: true, mode: 0o700 })
+      chmodSync(dirs.quarantine, 0o700)
+      renameSync(source, join(dirs.quarantine, file))
+      dbStore()?.appendAudit({ actor: 'bridge', action: 'bridge.inbox_quarantine', allowed: false, reason: `${size} bytes > ${BRIDGE_INBOX_MAX_BYTES}` })
+      console.log(`[bridge] quarantined oversized inbox file ${file} (${size} bytes)`)
+    } catch {}
+  }
+}
+
+/** Never hand an absolute local attachment path to the third-party Hermes side. */
+function sanitizeBridgeOutbound(message) {
+  if (!message || !Array.isArray(message.attachments) || !message.attachments.length) return message
+  const attachments = message.attachments.map((attachment) => {
+    const next = { ...(attachment ?? {}) }
+    delete next.localPath
+    if (typeof next.url === 'string' && isAbsolute(next.url)) delete next.url
+    return next
+  })
+  return { ...message, attachments }
+}
+
 async function bridge(args) {
   let dir
   let name = 'advisers'
@@ -3564,6 +3899,9 @@ async function bridge(args) {
     process.exitCode = 1
     return
   }
+  // Files/directories below are private conversation data; tighten the umask for
+  // every file this process creates in the bridge tree (SEC2-09: outbox 0644).
+  process.umask(0o077)
   let mod
   if (process.env.ADVISERS_BRIDGE_LOCAL === '1') {
     mod = await import('../../bridge-hermes/dist/index.js')
@@ -3579,6 +3917,20 @@ async function bridge(args) {
   const ledger = loadLedger()
   const runtime = runtimeFor(ledger)
   const link = new mod.HermesBridgeLink({ bridgeDir: dir, name })
+  const libraryPollOnce = link.pollOnce.bind(link)
+  link.pollOnce = async () => {
+    guardBridgeInbox(dir, name)
+    const polled = await libraryPollOnce()
+    secureBridgeTree(dir, name)
+    return polled
+  }
+  const librarySend = link.send.bind(link)
+  link.send = async (message) => {
+    const sent = await librarySend(sanitizeBridgeOutbound(message))
+    secureBridgeTree(dir, name)
+    return sent
+  }
+  secureBridgeTree(dir, name)
   const permitSecret = process.env.ADVISERS_PERMIT_SECRET || randomUUID()
   const permitGate = new core.PermitGate(permitSecret, { replay: dbStore()?.permitReplayStore() })
   const host = {
@@ -3593,6 +3945,14 @@ async function bridge(args) {
         } else if (context.policy && !context.policy.allowed) {
           dbStore()?.appendAudit({ actor: 'bridge', action: 'policy.deny', allowed: false, reason: context.policy.code ?? 'DENY' })
           reply = context.policy.reason
+        }
+        // Security audit P1-1: bridge is a model egress path; apply the same
+        // matter-secrecy gate as chat/review/research BEFORE any network call.
+        const bridgeEgressDenied = reply ? null : egressDeniedReason(context.matter, 'bridge')
+        if (bridgeEgressDenied) {
+          dbStore()?.appendAudit({ actor: 'bridge', action: 'policy.egress_deny', allowed: false, reason: 'bridge' })
+          console.log(`[bridge] blocked: ${bridgeEgressDenied}`)
+          reply = '[advisers] received (protected matter: model call denied)'
         }
         const key = process.env.ADVISERS_API_KEY
         if (!reply && key && process.env.ADVISERS_NO_MODEL !== '1') {
@@ -3771,8 +4131,17 @@ async function soul(sub, file) {
 // names version/sha256/channel and NEVER the terms text.
 // ---------------------------------------------------------------------------
 
-/** Commands usable without accepting the TOS (TOS §2.1: local functions stay usable). */
-const TOS_EXEMPT_COMMANDS = new Set(['help', '--help', 'version', '--version', '-v', 'status', 'doctor', 'init', 'tos'])
+/**
+ * Commands usable without accepting the TOS (TOS §2.1: local functions stay usable).
+ * TOS §2.1 / §9.8: reviewing, exporting and deleting your own local data is not
+ * a gated feature. After a revoke the data-rights commands (privacy/export/
+ * audit/purge), tos itself, and the other local-only commands below must stay
+ * usable, otherwise the user must re-consent before exporting or deleting data.
+ */
+const TOS_EXEMPT_COMMANDS = new Set([
+  'help', '--help', '-h', 'version', '--version', '-v', 'status', 'doctor', 'init', 'tos',
+  'privacy', 'export', 'audit', 'purge',
+])
 /** Known commands. Unknown commands keep the plain "unknown command" error, not the gate. */
 const KNOWN_COMMANDS = new Set([
   'version', '--version', '-v', 'help', '--help', 'chat', 'status', 'doctor', 'init', 'history', 'mcp',
