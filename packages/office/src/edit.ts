@@ -1,6 +1,9 @@
 import JSZip from 'jszip'
 import ExcelJS from 'exceljs'
 import { verifyOffice } from './verify.ts'
+import { ZipBudgetError, assertZipBudget, readZipEntryText, type ZipBudget } from './read.ts'
+
+const MAX_INPUT_BYTES = 20 * 1024 * 1024
 
 export type OfficeEditKind = 'docx' | 'xlsx' | 'pptx'
 
@@ -16,6 +19,11 @@ export interface EditResult {
   kind: OfficeEditKind
   changes: string[]
   error?: string
+}
+
+export interface EditOptions {
+  /** Override the default ZIP extraction budgets. */
+  budget?: Partial<ZipBudget>
 }
 
 function escapeXml(text: string): string {
@@ -76,12 +84,34 @@ function replaceTable(xml: string, block: number, rows: string[][]): { xml: stri
   return { xml: xml.slice(0, target.start) + table + xml.slice(target.end), before: 'table' }
 }
 
-export async function editOffice(input: Buffer, kind: OfficeEditKind, ops: EditOp[]): Promise<EditResult> {
+/**
+ * Decompress every entry through the capped reader before ExcelJS or ZIP
+ * re-serialization touches the archive. assertZipBudget() only trusts the
+ * declared central-directory sizes; this pass makes a lying directory (a
+ * hidden expansion bomb) fail instead of inflating later.
+ */
+async function assertEntriesDecompressWithinBudget(zip: JSZip, budget: ZipBudget): Promise<void> {
+  const scanBudget: ZipBudget = { ...budget, maxTextChars: Math.max(budget.maxEntryUncompressed, budget.maxTextChars) }
+  let decoded = 0
+  for (const name of Object.keys(zip.files)) {
+    if (zip.files[name]?.dir) continue
+    decoded += (await readZipEntryText(zip, name, scanBudget)).length
+    if (decoded > budget.maxTotalUncompressed) {
+      throw new ZipBudgetError('total', 'ZIP archive expands to more than ' + budget.maxTotalUncompressed + ' uncompressed bytes')
+    }
+  }
+}
+
+export async function editOffice(input: Buffer, kind: OfficeEditKind, ops: EditOp[], options: EditOptions = {}): Promise<EditResult> {
   const original = Buffer.from(input)
   try {
     if (!Array.isArray(ops) || ops.length === 0) throw new Error('ops must not be empty')
+    if (original.length > MAX_INPUT_BYTES) throw new Error('Office file exceeds 20MB read limit')
     if (kind === 'xlsx') {
       const pre = await JSZip.loadAsync(original)
+      // Reject a zip bomb before ExcelJS expands entries with its own reader.
+      const preBudget = assertZipBudget(pre, options.budget).budget
+      await assertEntriesDecompressWithinBudget(pre, preBudget)
       if (Object.keys(pre.files).some((n) => /^xl\/(charts|drawings|media)\//.test(n))) throw new Error('xlsx with charts/drawings/media is read-only (edit would drop parts)')
       const workbook = new ExcelJS.Workbook()
       await workbook.xlsx.load(original as never)
@@ -98,11 +128,14 @@ export async function editOffice(input: Buffer, kind: OfficeEditKind, ops: EditO
       return { ok: true, buffer, kind, changes: ops.map((op) => JSON.stringify(op)) }
     }
     const zip = await JSZip.loadAsync(original)
+    // Metadata-only gate: reject oversized/unsafe archives before decompressing.
+    const budget = assertZipBudget(zip, options.budget).budget
+    await assertEntriesDecompressWithinBudget(zip, budget)
     const changes: string[] = []
     if (kind === 'docx') {
       const file = zip.files['word/document.xml']
       if (!file) throw new Error('docx is missing word/document.xml')
-      let xml = await file.async('string')
+      let xml = await readZipEntryText(zip, 'word/document.xml', budget)
       let tableOps = 0
       for (const op of ops) {
         if (op.op === 'docx.setText') {
@@ -123,7 +156,7 @@ export async function editOffice(input: Buffer, kind: OfficeEditKind, ops: EditO
         if (op.op !== 'pptx.setText') throw new Error(`unsupported pptx op: ${op.op}`)
         const name = slideNames[op.slide - 1]
         if (!name) throw new Error(`slide not found: ${op.slide}`)
-        let xml = await zip.files[name].async('string')
+        let xml = await readZipEntryText(zip, name, budget)
         const runs = [...xml.matchAll(/<a:t(?:\s[^>]*)?>[\s\S]*?<\/a:t>/g)]
         if (!runs.length) throw new Error(`no text on slide ${op.slide}`)
         if (runs.length > 1) throw new Error(`slide ${op.slide} has multiple text runs; refusing to corrupt them`)
