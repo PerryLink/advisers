@@ -1,9 +1,10 @@
 # MCP 接入（stdio，protocol 2024-11-05）
 
-状态（2026-11-17）：
+状态（2026-11-18，0.2.3 发布候选）：
 
 - **0.2.0 库**：MCP server 已从 `bin/advisers.js` 抽成可测试库 `packages/advisers/lib/mcp-server.js`（工厂 `createMcpServer({store, ledger, version, audit})`）。库提供 **5 个只读工具 + 2 个白名单工具 + 4 个只读 resources**。
 - **CLI 入口（已接线，2026-11-17）**：`advisers mcp --stdio` 与库是同一实现——`bin/advisers.js` 只负责注入 home/store/ledger/version/audit，然后调用 `createMcpServer(...).serve()`；7 工具 + 4 resources 均从 CLI 可用，并自 `0.2.0` 起随 npm 包发布（2026-11-17 已上 `latest`）。仓库内的 `node scripts/mcp-dev.mjs` 保留为开发/双进程冒烟入口，不再是试用新接口的前提。
+- **0.2.3 变化（性能/健壮性，协议面不变）**：`initialize` 只做协议初始化，不再预加载整个账本——可写 store 与逐工具的部分加载推迟到首次 `tools/call`（200k 行账本上 init 从 1.85s 降到 91ms）；只读调用走无锁只读快照，可在 `ui` 等长期写者持锁时工作；协议面仍是 7 工具 + 4 resources。
 - **性质**：stdio、本地、只读为主；不联网、不调模型、不读 API key，也不含 MCP client（不做通用 ingest/编排）。
 
 ## 0. 一句话
@@ -30,6 +31,12 @@ ADVISERS_HOME=/tmp/advisers-mcp node scripts/mcp-dev.mjs
 `scripts/mcp-dev.mjs` 和 CLI 接线到同一个 `createMcpServer` 工厂、协议面相同；它用于在不经过 bin 时验证库，或做真实双进程 stdio 冒烟。
 
 首次运行会在 `ADVISERS_HOME` 下创建 `state.db` 与 `audit.key`；若已有旧版 `state.json`，会像 CLI 一样一次性迁移进 SQLite。
+
+### 1.3 DSH 适配器是 preview，不是 MCP 端
+
+`packages/dsh-advisers` 是 **DSH 宿主内的工具适配器**（5 个工具），不是 MCP server，也不经过本文件的 JSON-RPC 协议。0.2.3 里它仍是 **preview**：bundle 创建内存 runtime，**不打开 `~/.advisers/state.db`**（只读账本接线计划在 0.3）。因此它的三个账本读工具（`advisers_today`/`advisers_who`/`advisers_evidence`）返回的是空的内存账本，必须带 `preview: true`、`source: "preview-no-ledger"`、`note` 三个字段，渲染文本以 `[preview: no ledger]` 开头；`EVIDENCE_NOT_FOUND` 也明确说明只查了 preview 账本。别把 DSH 的空结果当成真实账本为空。
+
+要读**真实账本**，用 CLI（`advisers today --json` / `who --json` / `evidence show <id> --json`）或本文件的 `advisers mcp --stdio`（真实 SQLite 账本，只读视图）。DSH 的 `advisers_office` 仍只写 `config.workspace` 内的文件。
 
 ## 2. 客户端配置片段
 

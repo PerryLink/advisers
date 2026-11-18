@@ -11,7 +11,7 @@ import { classify } from 'advisers/lib/safety/index.js'
 
 export const name = 'advisers'
 export const inject = ['tools']
-export const version = '0.2.2'
+export const version = '0.2.3'
 
 // ---------------------------------------------------------------------------
 // Read-only ledger views: advisers_today / advisers_who / advisers_evidence.

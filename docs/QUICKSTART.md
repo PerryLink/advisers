@@ -1,10 +1,12 @@
 # Quickstart (Windows + PowerShell)
 
-> Current status: `0.2.2` is the **current release**, published on npm `@latest` on
-> 2026-11-18 after the account owner's OTP approval. All six published packages are
-> lockstep at `0.2.2`; install with
-> `npm i -g --registry=https://registry.npmjs.org advisers@latest advisers-office@latest`.
-> The checkout instructions below remain valid for development builds.
+> Current status: `0.2.3` is the **release candidate** (2026-11-18), staged for npm
+> `@latest`; it becomes installable only after the account owner approves it with their
+> own OTP. Until then npm `@latest` remains `0.2.2` (published 2026-11-18), and all six
+> published packages are lockstep at the candidate version. Install with
+> `npm i -g --registry=https://registry.npmjs.org advisers@latest advisers-office@latest`
+> (at the moment that resolves to `0.2.2`). The checkout instructions below remain valid
+> for development builds.
 
 > **Before you start** — read the [Terms of Service](TOS.md) (v2026.11.2),
 > [Disclaimer](DISCLAIMER.md), [Safety & content review](SAFETY.md), and
@@ -92,14 +94,15 @@ node $A memory candidates
 node $A chat "做一份 Q4 汇报 PPT，放到 out\q4.pptx"
 ```
 
-## B. Installed CLI (stable channel = 0.2.2)
+## B. Installed CLI (stable channel = 0.2.2 today, 0.2.3 after owner approval)
 
 ```powershell
-# Stable channel: npm @latest currently resolves to 0.2.2 (published 2026-11-18).
+# Stable channel: npm @latest currently resolves to 0.2.2 (published 2026-11-18);
+# 0.2.3 is the staged release candidate and becomes latest after the owner's OTP approval.
 npm i -g --registry=https://registry.npmjs.org advisers@latest advisers-office@latest
 # Pre-release channel (preview/RC builds land on `next` before promotion):
 # npm i -g --registry=https://registry.npmjs.org advisers@next advisers-office@next
-advisers --version    # expect 0.2.1 today; 0.2.2 after the owner approves the staged release
+advisers --version    # expect 0.2.2 until the owner approves the staged 0.2.3
 advisers status
 advisers soul init
 advisers template weekly weekly.json out\weekly.docx

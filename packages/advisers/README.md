@@ -7,12 +7,12 @@ routines.
 ## Install
 
 ```sh
-# 0.2.2 is published on npm @latest (stable channel = default `latest`):
+# 0.2.3 is staged for npm @latest (0.2.2 is the current published latest; OTP pending):
 #   npm i -g --registry=https://registry.npmjs.org advisers@latest advisers-office@latest
 # From checkout:
 #   corepack pnpm install && corepack pnpm -r build
 #   ADVISERS_OFFICE_LOCAL=1 node packages/advisers/bin/advisers.js status
-# Pre-release/RC builds land on the `next` channel (currently also 0.2.1):
+# Pre-release/RC builds land on the `next` channel (currently 0.2.2):
 #   npm i -g --registry=https://registry.npmjs.org advisers@next advisers-office@next
 advisers soul init
 advisers brief "做一份 Q4 预算 Excel，周五前给老板"
@@ -43,9 +43,10 @@ turn natural language into commitments or artifacts.
 
 ## Status
 
-`0.2.2` is the current release (published on npm `latest` on 2026-11-18):
+`0.2.3` is the release candidate (2026-11-18), staged for npm `latest` and awaiting the
+account owner's OTP approval; `0.2.2` remains the current published `latest` until then:
 
-- SQLite ledger at `~/.advisers/state.db` (JSON fallback with `ADVISERS_STORE=json`);
+- SQLite ledger at `~/.advisers/state.db` (JSON fallback with `ADVISERS_STORE=json`; schema v20, lock-free read snapshot, incremental writes);
 - soul at `~/.advisers/soul.md`, human-owned;
 - local REPL, `chat`, `office`, `template`, `routine`, `link`, `bridge`, `soul`, `ls`, `why`, `forget`, `export`;
 - IntentBrief + clarification policy + readback;
@@ -56,6 +57,7 @@ turn natural language into commitments or artifacts.
 - routine draft/approve/patch/curator + active routine index + `routine_view`;
 - local agent loop with Office/file tools, `commitment_add`, `search_turns`; attachments (txt/md/docx/xlsx/pptx/pdf); optional model via `ADVISERS_API_KEY` / `ADVISERS_BASE_URL` / `ADVISERS_MODEL`;
 - `advisers pet-brief` read-only redacted projection for the desktop-pet consumer (contract v0.2: `schemaVersion: 2` + `displayPolicy`, default `private`; `--json`/`--out`/`--check [--strict]`/`--print-schema`/`--display-policy`; `secrecy >= 2` excluded; 5-minute TTL; v0.1 briefs readable as legacy); no UI wiring yet;
+- `matter add|ls|show|rename|archive|use` (client/project loop, `--matter` validation); `agenda --days 1..31 --json` + deterministic `morning` brief; deterministic `template quote|proposal` (DOCX/XLSX) with `verify --content --template` re-check; operator-entered evidence typed as unverifiable instead of missing;
 - DSH bundle, email IMAP/draft, Feishu webhook, Hermes bridge; strict policy pack;
 - real-account/WS/Office-L3 validation still pending.
 

@@ -26,12 +26,13 @@ Advisers 不是聊天框，也不是情感陪伴。它维护三本账：
 
 ## 状态
 
-`0.2.2` 是 2026-11-18 的**当前发布版本**：8 个 workspace 包统一为 `0.2.2`。其中 6 个发布包为 `advisers`、`advisers-core`、`advisers-office`、`advisers-policy-strict`、`advisers-bridge-hermes`、`dsh-advisers`；两个私有 `advisers-link-*` 包保持同版本但不发布。六包已发布到 npm **`latest` = `0.2.2`**（账号所有者 OTP 于 2026-11-18 批准）；`0.2.1`/`0.2.0` 仍可按版本号安装。registry tarball、许可文件、全新 prefix 安装与逐包 import 冒烟已由 `scripts/verify-release.mjs` 验证（86/86）。
+`0.2.3` 是 2026-11-18 的**发布候选（release candidate）**：8 个 workspace 包统一为 `0.2.3`。其中 6 个发布包为 `advisers`、`advisers-core`、`advisers-office`、`advisers-policy-strict`、`advisers-bridge-hermes`、`dsh-advisers`；两个私有 `advisers-link-*` 包保持同版本但不发布。六包已 **staged 到 npm `latest`**，须账号所有者本人在终端用 OTP 批准后才可安装；在此之前 npm **`latest` 仍是 `0.2.2`**（2026-11-18 发布），`0.2.1`/`0.2.0` 仍可按版本号安装。候选版本已通过 743/743 测试、build/typecheck、打包冒烟、文档/许可/TOS/版本锁步检查、安全套件与故障注入套件（9/9）；registry tarball 验证在 owner 批准后执行。
 
 > 需要 **Node >= 22.16**；Windows/PowerShell/BOM 说明见 [docs/QUICKSTART.md](docs/QUICKSTART.md)。
 
-- SQLite 账本 `~/.advisers/state.db`；
-- turns + 会话摘要 + 中文可用 FTS 检索（FTS5 trigram 索引，schema v19；不足 3 字仍走 LIKE 回退）；开场协议；
+- matter（客户/项目）最小闭环：`matter add|ls|show|rename|archive|use`；7 天议程 `agenda` 与确定性晨报 `morning`（本地、不调模型）；确定性 `template quote|proposal`；
+- SQLite 账本 `~/.advisers/state.db`（schema v20；只读命令走无锁只读快照，热点写命令走增量写）；
+- turns + 会话摘要 + 中文可用 FTS 检索（FTS5 trigram 索引，schema v20；不足 3 字仍走 LIKE 回退）；开场协议；
 - 承诺账 + `commit add/ls/done`、`tick`、`snooze`、nudge outcome；
 - `/memory`、`/week`、`/digest`、`/diff`、`/undo`、`/learn review`；
 - routine draft/approve/patch/curator + active routine index；
@@ -42,17 +43,17 @@ Advisers 不是聊天框，也不是情感陪伴。它维护三本账：
 - `research --web/--url` 是唯一内置的**网页**出网路径；设置 key 后 `chat`/`capture`/`review`/`brief --deep`/`learn review` 会把输入发给配置的模型 API；`status`/`office`/`template`/`verify`/`commit` 等纯本地命令不联网。research 对 `secrecy > 0` 的 matter 拒绝（fail closed）。
 - 提醒：`remind` + `.ics`/VALARM 导出 + 可选的本地调度脚本；`.ics` 日历只读导入；
 - 只读入口：`capture --from-mail` / `--from-transcript`（去重、全部候选需人工 accept、secret matter 拒绝）；
-- 证据/交付：`evidence show`、`deliveries --pack`（manifest + SHA256SUMS + DOCX 回执）、`deliver --type ...`（DOCX/XLSX）；
+- 证据/交付：`evidence show`、`deliveries --pack`（manifest + SHA256SUMS + DOCX 回执）、`deliver --type ...`（DOCX/XLSX）；操作者手工录入的证据（`--quote`/`--evidence`）标记为**不可外部核验（unverifiable）而不是缺失**，回执包单独统计；
 - **交付回执包 v1.1**：`deliveries --receipt [--out dir] [--ids ...] [--all] [--recipient ...]` 复制交付文件并记录每个文件的 SHA-256、生成环境、校验结果与收件人；`evidence verify <dir>` 离线校验（JSON，exit 0/1，不读 `~/.advisers`）。证据条目默认上限 2000（用 `--ids`/`--all` 控制）；旧 `deliveries --pack` 证据包保持兼容。见 `docs/DELIVERY-RECEIPT.md`。
 - **提醒/日历接线（0.2.0）**：`commit add/edit --remind-offsets "-1d,-2h,+0d09:00"` 写入逐承诺 VALARM；`remind --deliver --notify` 增加可选 webhook 并把上次运行写入 `~/.advisers/scheduler/status.json`；`remind install|uninstall|status [--apply]` 默认只打印 dry-run 计划，加 `--apply` 才注册/移除 cron/schtasks；`today --calendar` 本地展开 RRULE（全天 / （循环）标注）。`today`、`capture`、`memory candidates`、`verify` 均有稳定 `--json`（`docs/CLI-JSON.md`）。
 - 隐私/MCP/JSON：`privacy --prove`、`mcp --stdio`（7 工具 + 4 个只读 resources，单行 JSON-RPC 上限 1 MiB；候选写入仅 pending，审计行写失败即 fail-closed）、`ui`（本地只读视图）、`status/commit/who/deliveries/remind/evidence --json`。
 - Pet Brief（只读脱敏投影，契约 v0.2：`schemaVersion: 2` + `displayPolicy`，默认 `private`；v0.1 brief 按 legacy 可读）：`pet-brief --json|--out|--check [--strict]|--print-schema|--display-policy public|private|none`；`secrecy >= 2` 全排除、confidence < 0.7 丢弃、5 分钟 TTL、每节 10 项上限；不调模型、不联网、不改账本；桌宠 UI/传输尚未接通。见 `docs/PET-BRIEF-PRODUCER.md`。
 
 ```sh
-# 0.2.2 已发布到 npm @latest；也可从 checkout 运行：
+# 0.2.3 已 staged 到 npm @latest（当前 registry latest 仍为 0.2.2，待 owner OTP）；也可从 checkout 运行：
 #   corepack pnpm install && corepack pnpm -r build
 #   ADVISERS_OFFICE_LOCAL=1 node packages/advisers/bin/advisers.js status
-# 从 npm 安装（稳定渠道 = 默认 `latest`，当前为 0.2.2）：
+# 从 npm 安装（稳定渠道 = 默认 `latest`，当前为 0.2.2；0.2.3 待 owner 批准后生效）：
 #   npm i -g --registry=https://registry.npmjs.org advisers@latest advisers-office@latest
 # `next` 渠道当前也指向 0.2.2：
 #   npm i -g --registry=https://registry.npmjs.org advisers@next advisers-office@next
@@ -65,7 +66,7 @@ advisers office docx spec.json out.docx
 advisers verify out.docx
 ```
 
-npm 标签：**`latest`** 是稳定渠道（当前为 `0.2.1`，2026-11-17 已发布；`0.2.2` 是已 staged 的发布候选，待账号所有者 OTP 批准后才可安装）；**`next`** 是预发布/候选渠道。需要可复现安装时请固定版本（当前 `advisers@0.2.1`），并直接查询官方 registry（`npm view advisers dist-tags --registry=https://registry.npmjs.org/`）——镜像可能滞后。
+npm 标签：**`latest`** 是稳定渠道（当前为 `0.2.2`，2026-11-18 已发布；`0.2.3` 是已 staged 的发布候选，待账号所有者 OTP 批准后才可安装）；**`next`** 是预发布/候选渠道。需要可复现安装时请固定版本（当前 `advisers@0.2.2`），并直接查询官方 registry（`npm view advisers dist-tags --registry=https://registry.npmjs.org/`）——镜像可能滞后。
 
 ## 许可
 

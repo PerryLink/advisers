@@ -1,7 +1,7 @@
 # Performance
 
-> Status: measured for the `0.2.2` release (published 2026-11-18). The `0.2.1` and
-> `0.2.0` trees are the "before" baselines where a comparison says so below.
+> Status: measured for the `0.2.3` release candidate (2026-11-18). The `0.2.2`,
+> `0.2.1` and `0.2.0` trees are the "before" baselines where a comparison says so below.
 
 How Advisers performs on the hot paths, how to reproduce the numbers, and which
 behaviour the regression tests pin. This is a developer/operator reference, not
@@ -38,6 +38,66 @@ To compare two builds on identical data, generate the data once with
 `--keep`, then run the benchmark twice against that directory with `--home`
 and a different `--bin` (one process at a time; concurrent runs distort each
 other).
+
+## 0.2.3 vs the 0.2.2 baseline
+
+The 0.2.3 change is **incremental writes + a lock-free read path**: the hot write commands
+stop rewriting the whole ledger, and read commands stop needing the writer lock (see the
+next section). Representative A/B on one host with a **200,000-row synthetic ledger**
+(200k facts, 100k commitments, 200k turns, 20k preferences; 224.6 MB database), medians of
+3 fresh CLI child processes per scenario, same data, one process at a time. "Bytes
+written" is the child process's storage-write count (`write_bytes` in `/proc/<pid>/io`,
+max sample; it includes WAL/DB writes and SQLite temp spill, not stdout). The 0.2.2 tree
+is a clean copy of the published code; the 0.2.3 tree is the release candidate.
+
+| Scenario | 0.2.2 | 0.2.3 | Bytes written 0.2.2 → 0.2.3 |
+|---|---:|---:|---:|
+| `status` | 78 ms | 102 ms | 8 KB → 37 KB |
+| `today` | 571 ms | 317 ms | 9.8 MB → 5.3 MB |
+| `today --json` | 641 ms | 598 ms | 9.8 MB → 9.8 MB |
+| `who` | 743 ms | 779 ms | 9.8 MB → 9.8 MB |
+| `receipt` | 167 ms | 147 ms | 41 KB → 37 KB |
+| `deliveries` | 81 ms | 67 ms | 41 KB → 37 KB |
+| `ls` | 1,948 ms | 74 ms | 41 KB → 0 |
+| `memory search` | 2,125 ms | 163 ms | 3.4 MB → 3.3 MB |
+| `remind --json` | 2,931 ms | 972 ms | 41 KB → 37 KB |
+| `pet-brief` | 2,824 ms | 1,809 ms | 37 KB → 21.2 MB |
+| `digest` | 1,866 ms | 641 ms | 41 KB → 37 KB |
+| `tui --once` | 2,291 ms | 814 ms | 41 KB → 37 KB |
+| `commit add` | 3,709 ms | 108 ms | 185 MB → 90 KB |
+| `commit snooze` | 3,518 ms | 126 ms | 185 MB → 78 KB |
+| `commit done` | 3,564 ms | 96 ms | 185 MB → 70 KB |
+| `commit edit` | 3,442 ms | 96 ms | 185 MB → 61 KB |
+| `correct` | 3,296 ms | 105 ms | 185 MB → 90 KB |
+| `decay` | 3,325 ms | 175 ms | 185 MB → 41 KB |
+| `forget` | 3,252 ms | 97 ms | 185 MB → 74 KB |
+| `memory accept` | 3,334 ms | 105 ms | 185 MB → 86 KB |
+| `tick` | 1,053 ms | 735 ms | 49 MB → 5.4 MB |
+| `mcp --stdio` init | 1,850 ms | 91 ms | 41 KB → 41 KB |
+
+Reading the table:
+
+- **Writes are fixed**: all measured write commands now land at ~100–175 ms and write
+  41–123 KB at process level instead of rewriting every table. The 0.2.2 single save
+  wrote ~185 MB in total and grew the WAL by ~93 MB per command; 0.2.3 writes ~90 KB in
+  total and grows the WAL by ~21 KB. This is the release's headline result.
+- **`ls`, `memory search`, `mcp` init** are now partial/lazy reads: the full-table
+  `load()` is gone from their path.
+- **`today`** improved (571 → 317 ms) but still misses its ≤150 ms target; `today --json`
+  (598 ms) is at its ≤600 ms target.
+- **`remind`, `digest`, `tui`, `pet-brief`** improved but still miss the ≤400 ms read
+  target (see "Known limits"): they are the remaining full-ledger read paths.
+- `who` and `status` are within run-to-run noise of their 0.2.2 values (the read path
+  changed but those commands were already partial-load).
+- `pet-brief`'s measured process writes grow from ~37 KB to ~21 MB at 200k rows in this
+  A/B (output and wall time stay correct). The write amplification is logged as a 0.3
+  performance item rather than explained away here.
+
+Targets from the 0.2.3 implementation plan at 200k rows: writes ≤200 ms and WAL ≤1 MB per
+command (met), read commands ≤400 ms (met by `ls` and `memory search`; missed by
+`remind`/`digest`/`tui`/`pet-brief`), `today` ≤150 ms (missed), `mcp` init ≤300 ms
+(met), `status` ≤100 ms (102 ms, noise). Regression tests pin the read shapes
+(`EXPLAIN`/throwing loaders) rather than wall-clock thresholds.
 
 ## 0.2.1 vs the 0.2.0 baseline
 
@@ -83,10 +143,58 @@ regression tests (`test/partial-load.test.js`, `test/perf-partial-load.test.js`)
 *behaviour* — loaders that must not run are replaced with throwing stubs and the SQL is
 checked with `EXPLAIN` — rather than wall-clock thresholds, so CI stays stable.
 
-Full-text search was rebuilt on FTS5 trigram indexes in the same release; index sizes,
-migration cost and query medians are recorded in
-[docs/ARCHITECTURE.md](ARCHITECTURE.md) §11 (Chinese queries of 3+ characters now go
-through `MATCH` instead of a `LIKE` scan; the database grows ~2.8 MB at 50k turns).
+Full-text search was rebuilt on FTS5 trigram indexes in 0.2.2; the v19→v20 migration in
+0.2.3 keeps them and adds the `idx_turns_seq` early-stop index for the 2-character `LIKE`
+fallback. Measured index sizes, migration cost and query medians are recorded in
+[docs/ARCHITECTURE.md](ARCHITECTURE.md) §11. The 0.2.2 note that "the database grows
+~2.8 MB at 50k turns" was measured on a tiny 9.7 MB database and understates the real
+cost: at 50k–200k turns the trigram index is ≈0.8–0.9× the indexed content and **≈19–20%
+of the database** (10.6 / 21.1 / 42.5 MB at 50k / 100k / 200k turns).
+
+## What changed in 0.2.3 and why
+
+### Incremental writes: stop rewriting the whole ledger
+
+Through 0.2.2 every write command ran a full 9-table `load()`, mutated the in-memory
+ledger, and saved the complete snapshot in one transaction: at 200k rows that rewrote
+~185 MB of WAL and took 3.3–3.7 s per `commit add`/`correct`/`memory accept`. 0.2.3 adds
+directed entity INSERT/UPDATE paths (`lib/sqlite.js`) driven by pure operations in
+`packages/core/src/ops.ts`: each command changes only its rows plus one audit row inside
+one `BEGIN IMMEDIATE` transaction. Validation and file checks stay outside the
+transaction; the JSON-store fallback keeps the legacy in-memory path. Rollback leaves the
+ledger and the audit chain unchanged together.
+
+### Lock-free read path
+
+Reads no longer take the cross-process writer lock or open a writable store. They use a
+`readOnly` SQLite connection that performs no DDL, migrations or journal-mode pragmas, so
+they keep working while a long-lived `ui`/`mcp` process holds the writable store, and
+they read the last committed WAL snapshot. Stale or future schemas fail with explicit
+`E_SCHEMA_STALE`/`E_SCHEMA_NEWER` instead of accidentally writing. The read path also
+loads only the tables a command needs (0.2.2 introduced partial loading for six commands;
+0.2.3 extends it to `ls`, `memory search`, `evidence show`, `tui`, `remind`, `digest`,
+`pet-brief`, `today` and the MCP first call).
+
+### `mcp` initialization is lazy
+
+`mcp --stdio` no longer loads the whole ledger at startup. `initialize` is protocol-only;
+the writable store and per-tool partial loads happen on demand, so a client's startup cost
+dropped from 1,850 ms to 91 ms at 200k rows.
+
+### `doctor` split
+
+The default `doctor` path is lightweight: it no longer takes the writer lock and no longer
+runs the O(database) `quick_check`, FTS integrity, WAL sidecar, backup and plaintext/temp
+scans. Those moved behind `doctor --check-db` (and `audit --check-db`), which is the
+explicit maintenance path.
+
+### FTS space measured properly
+
+The 0.2.2 trigram-index cost note was measured on a 9.7 MB database and reported "+2.8 MB
+(+28.7%) at 50k turns". At realistic ledger sizes the trigram index is much larger in
+absolute terms (42.5 MB at 200k turns) but a stable share of the database (≈19–20%). The
+corrected measurement, migration cost and query medians are in
+[ARCHITECTURE.md](ARCHITECTURE.md) §11.
 
 ## What changed in 0.2.1 and why
 
@@ -161,5 +269,12 @@ given generation time beyond those two info entries.
   ±10–20% on a shared machine). Compare two builds on the same host, in the same
   session, one at a time.
 - Partial loading covers the read commands (`status`, `today`, `who`, `week`,
-  `receipt`, `deliveries`); paths that genuinely need the whole ledger (`tick`,
-  `export`/`import`, delivery packs) still load all of it.
+  `receipt`, `deliveries`, and since 0.2.3 also `ls`, `memory search`, `evidence show`,
+  `tui`, `remind`, `digest`, `pet-brief`, the MCP first call and the read-only `ui`
+  snapshot); `tick`, `export`/`import` and delivery packs still need the whole ledger.
+- The 0.2.3 targets that are still missed at 200k rows are `today` (317 ms vs ≤150 ms) and
+  the remaining full-ledger read commands `remind` (972 ms), `digest` (641 ms), `tui`
+  (814 ms) and `pet-brief` (1,809 ms) against the ≤400 ms target. They are 0.3 work;
+  do not advertise the 0.2.3 read targets as fully met.
+- `memory search` and `pet-brief` write several MB during a run at 200k rows (`pet-brief`
+  ~21 MB); large-ledger IO for these paths is part of the 0.3 performance backlog.

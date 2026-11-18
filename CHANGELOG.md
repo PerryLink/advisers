@@ -1,5 +1,237 @@
 # Changelog
 
+## 0.2.3 (release candidate, 2026-11-18)
+
+Release candidate on the 0.2.x stable line: the eight workspace packages are lockstep at
+`0.2.3`, the internal pins/version constants/`pnpm-lock.yaml` follow, and the six
+published packages are **staged for npm `latest`** awaiting the account owner's OTP
+approval. They are not installable until that approval happens: `0.2.2` remains the
+current npm `latest` and `0.2.1`/`0.2.0` stay installable by pinning. The legal texts
+are unchanged from 0.2.0 (TOS v2026.11.2).
+
+### Security
+
+- **Untrusted-data boundary (attachments, tools, web, mail, research)**: external text is
+  wrapped in reserved `<untrusted-data source="…" trust="untrusted">` markers before it
+  enters a model context, and the agent system prompt carries non-negotiable rules saying
+  that block is data, never instructions (no following instructions/role changes/urgency,
+  no credential disclosure, no persistence-file writes, no tool calls requested only by it).
+  Payload text cannot forge the boundary (`<untrusted-data` is escaped) and an
+  unterminated block fails closed. A high-risk injection decision blocks the turn by
+  default (audited; the model never receives the text); `ADVISERS_INJECTION_POLICY=warn`
+  is an explicit operator escape hatch. Legacy 0.2.2 CLI attachments are migrated to the
+  boundary format on read.
+- **Agent file-tool sandbox**: every file path an agent tool touches now goes through one
+  policy boundary — lexical containment in the workspace root (default: cwd), realpath
+  containment so a symlink cannot escape, sensitive-path denial (`.ssh`, `.aws`,
+  `.advisers`, browser profiles, private keys, state backups, `/etc/shadow`, …),
+  write-only persistence denial (`.bashrc`, `authorized_keys`, autostart, cron/systemd
+  units), and a default-off explicit allow list for deliberate out-of-workspace access.
+  The list can widen the workspace, never the sensitive/persistence lists. Every tool call
+  (allowed or denied) is reported to the append-only audit chain through the CLI.
+- **Model-egress redaction**: when the pre-flight classifier flags single-value PII or
+  credentials for `redact`, the provider request body is built from a redacted deep copy;
+  the caller's messages and local ledger originals stay untouched. Values are removed
+  before egress, not just from logs.
+- **Local-adapter environment isolation (all four adapters)**: OCR, timestamp, notification
+  and the new Office recalculation adapter (`ADVISERS_VERIFY_RECALC_CMD`) all run child
+  processes with an explicit OS-basics environment allowlist, so `ADVISERS_API_KEY`,
+  the audit HMAC key, vault/sync/export passphrases and IMAP credentials are never
+  inherited. Adapter input paths are realpath-contained and symlinked targets are
+  rejected/clamped where the adapter reads files.
+- **Safety warnings and audit are wired in the CLI**: structured `safetyWarnings` from the
+  model/agent path are printed to stderr (never the original external text in audit
+  columns) and each warning writes one `actor="safety"` audit row; blocked turns and
+  policy blocks write `allowed=false` audit rows, so a refusal is explainable later.
+  Content-safety rules themselves are unchanged (ruleset `advisers-content-1`); the TOS,
+  PRIVACY, DISCLAIMER and SAFETY legal texts are unchanged.
+
+### Persistence
+
+- **Schema v20 (persistence v2)**: adds the `schema_migrations` ledger
+  (`version, name, applied_at, duration_ms, backup_path`) plus the
+  `idx_turns_seq`/`idx_facts_identity`/`idx_memory_candidates_status` indexes; `migrate()`
+  becomes a per-version idempotent step table instead of one monolithic block. Each step
+  runs inside one `BEGIN IMMEDIATE` transaction, is recorded only after it succeeds, and
+  only then is `meta.schema_version` bumped, so a crash or failure rolls the whole step
+  back and a retry is safe. The wire snapshot format is unchanged (`LedgerSnapshot.version`
+  stays 1).
+- **Pre-migration backup hardening**: the backup is taken before the migration transaction
+  (a WAL checkpoint is required when a second connection prevents it, otherwise the
+  migration is refused), the backup is opened and verified (schema version + row-count
+  samples) before the tag is trusted, and the path is recorded on the migration ledger and
+  in meta. Interrupted/failed migrations leave the old database usable and retryable.
+- **Lock-free read path**: read-only commands open an immutable (`readOnly`) database
+  connection that runs no DDL/migration/journal pragmas and takes no writer instance lock,
+  so reads work while a long-lived writer (ui/mcp) holds it and return the last committed
+  WAL snapshot. A stale schema fails with `E_SCHEMA_STALE` (a writable command must
+  migrate first) and a future one with `E_SCHEMA_NEWER`; the CLI decides whether to fall
+  back to the writable path. Read commands now serve from that snapshot.
+- **Incremental write path**: the hot write commands (`commit add/edit/done/snooze`,
+  `correct`, `memory accept/reject`, `decay`, `forget`, and the other directed ledger
+  writes) replace full-ledger load+save with one directed INSERT/UPDATE for the changed
+  rows plus one audit row inside a single `BEGIN IMMEDIATE` transaction. The 200k-row
+  write cost drops from ~3.5–3.7 s and ~185 MB written (the full save rewrote every table)
+  to ~100–130 ms and ~60–120 KB per command; rollback leaves both ledger and audit
+  unchanged.
+
+### Performance
+
+Measured A/B on the same host with a 200,000-row synthetic ledger (medians of 3 fresh CLI
+child processes; full table and method in [docs/PERFORMANCE.md](docs/PERFORMANCE.md)).
+"Written" is the child process's storage-write count (`/proc/<pid>/io write_bytes`,
+including WAL/DB writes and SQLite temp spill; the 0.2.2 full save grew the WAL by
+~93 MB per write command, 0.2.3 by ~21 KB):
+
+| Scenario | 0.2.2 | 0.2.3 |
+|---|---:|---:|
+| `commit add` | 3,709 ms / 185 MB | 108 ms / 90 KB |
+| `correct` | 3,296 ms / 185 MB | 105 ms / 90 KB |
+| `memory accept` | 3,334 ms / 185 MB | 105 ms / 86 KB |
+| `mcp --stdio` init | 1,850 ms | 91 ms |
+| `ls` | 1,948 ms | 74 ms |
+| `memory search` | 2,125 ms | 163 ms |
+| `today` | 571 ms | 317 ms |
+| `remind --json` | 2,931 ms | 972 ms |
+| `digest` | 1,866 ms | 641 ms |
+| `tui --once` | 2,291 ms | 814 ms |
+| `pet-brief` | 2,824 ms | 1,809 ms |
+| `tick` | 1,053 ms | 735 ms |
+
+Read commands now use the lock-free snapshot and load only the tables they need; `mcp`
+initialization is protocol-only and loads lazily on the first `tools/call`; `ui` serves a
+read snapshot instead of holding a writable store; `doctor` no longer takes the writer
+lock and moves the O(database) `quick_check`/FTS/backup/WAL checks behind
+`doctor --check-db`. FTS5 trigram index space is now documented by measurement (§
+ARCHITECTURE §11): ≈20% of the database (≈0.8–0.9× the indexed content), not the +2.8 MB
+small-database figure from 0.2.2.
+
+### Robustness
+
+- **WAL corruption detection and recovery**: before SQLite can silently ignore a bad WAL,
+  the store classifies the sidecar. An invalid header preserves the exact bytes as
+  `state.db-wal.corrupt-<ts>`, quarantines the unusable WAL (and rebuildable `-shm`) and
+  warns (`E_WAL_CORRUPT`); a truncated WAL keeps the valid prefix, copies it aside as
+  evidence and warns (`E_WAL_TRUNCATED`). No database bytes are deleted; `doctor --check-db`
+  and `inspectWalStatus()` report the sidecar without opening the store.
+- **Crash-safe filesystem writes**: new `lib/fs-safe.js` loops short writes until every
+  byte is written (zero/negative progress is EIO), fsyncs the file and directory, writes
+  through a same-directory temp file whose length is verified before an atomic rename, and
+  retries transient Windows/AV/OneDrive failures (EPERM/EBUSY/EACCES) with bounded
+  backoff. Applied to vault seal, backup/import, sync pull staging, pet-brief output and
+  the other durable CLI writes that opted in, so ENOSPC can no longer install a truncated
+  vault/backup file.
+- **Sync hardening**: snapshot ordering uses the authenticated payload creation time, not
+  file mtime, so a sync tool or clock rewrite cannot make `pull --force` install an older
+  snapshot; a brand-new device bootstraps from an empty ledger without `--force`; forcing
+  an older snapshot or selecting a non-newest `--file` warns instead of staying silent;
+  pulls verify `quick_check` (a 0-byte/truncated snapshot is rejected), keep a verified
+  local backup before replacing the database, and clean up stale staging files.
+- **Plaintext/backup hygiene**: `vault seal --remove` purges unseal/migrate/import/sync
+  plaintext copies and reports purge failures; `doctor --check-db` detects leftover
+  plaintext databases, temp files and backups, and reports them instead of assuming clean.
+- **FTS integrity**: `doctor --check-db` verifies the FTS index against its source tables
+  and reports `db-fts FAIL state=inconsistent`; searches still return rows through the
+  `LIKE` fallback with a warning rather than silently dropping hits (the migration also
+  rebuilds the index transactionally on upgrade).
+- **Migration and backup short-write faults** are covered by the new fault-injection suite
+  (below), which asserts crash-safe invariants end to end.
+
+### Product
+
+- **`matter` CLI + `--matter` validation**: `matter add|ls|show|rename|archive|use`
+  (`--json` on each; `archive --dry-run`) creates/inspects/renames/archives matters and
+  `matter use` records the default matter for later writes. Write commands that take
+  `--matter` now fail with `E_MATTER_NOT_FOUND`/`E_MATTER_ARCHIVED` instead of writing a
+  dangling `matter_id`; Pet Brief no longer drops a commitment silently when its matter is
+  unknown (it is surfaced in the brief instead).
+- **Operator/manual evidence discipline**: a CLI operator can only assert what they typed.
+  `commit add --quote` / `commit done --evidence` now store a typed manual source
+  (`kind/type: "manual"`, `source: "operator"`, `quoteSha256`, `command`, `cliVersion`)
+  instead of the fake `{sessionId:"local",turnId:"cli"}` pointer. Evidence display, packs and
+  receipts classify it as **unverifiable / operator_entered**, never as missing; `evidence
+  show --json` adds `unverifiable[]` and `summary.byKind{observed,manual}`; receipt packs
+  count `operatorEntered` separately from `missing`. No schema migration (evidence is a JSON
+  column), and pre-0.2.3 rows are read through the same classification.
+- **Quote and proposal templates (deterministic, no model)**: `template quote` (DOCX, and
+  XLSX) and `template proposal` (DOCX) build business documents from a JSON data file with
+  strict validation (known fields only, decimal-string money parsed to integer cents with
+  BigInt, date ordering, item/list caps, currency symbols) and no model or network call.
+  The normalized data and totals are embedded in the document so `verify --content
+  --template quote|proposal --data <json>` re-checks totals and a data SHA-256;
+  `--record-delivery` records the delivery with audit.
+- **7-day agenda + deterministic morning brief**: `agenda --days 1..31 [--from]
+  [--matter] [--no-calendar] [--include-done] [--json]` merges open/done commitments and
+  imported calendar events into Asia/Shanghai days, with overdue/waiting/unscheduled lists,
+  calendar-commitment conflict detection, per-day caps and a `degraded` field when the
+  ledger/calendar source is partial. `morning` (also `digest morning`) renders a
+  deterministic local brief (markdown or `--out` mode 600) over the same data with a stable
+  `dataSha256`; no model, no network.
+- **DSH adapter preview is honest about the ledger**: `dsh-advisers` still creates an
+  in-memory runtime and does **not** open `~/.advisers/state.db` (read-only ledger wiring is
+  planned for 0.3). The three read tools therefore carry additive `preview: true`,
+  `source: "preview-no-ledger"` and a `note`, and rendered text is prefixed
+  `[preview: no ledger]` so an empty preview is never mistaken for an empty real ledger;
+  `EVIDENCE_NOT_FOUND` says it only searched the preview. Users are pointed at the CLI/MCP
+  for real data. `advisers_brief` and the workspace-confined `advisers_office` are unchanged.
+
+### Engineering
+
+- **Windows CI smoke**: a `windows-smoke` job (windows-latest, Node 22.16) runs frozen
+  install, build, `pack-smoke` and a minimal CLI flow on a fresh temporary
+  `ADVISERS_HOME` (`--version`, `init`, `status`, `commit add`, `commit ls`,
+  `doctor`, `doctor --check-db`). It does not require Office/Word.
+- **Production-JS static gate (`scripts/check-js.mjs`)**: `node --check` on every
+  production JS file under `packages/*` (excluding builds/tests), no `eval`/`new
+  Function`/`Function()`, no `child_process.exec/execSync`/`shell: true`, no hardcoded
+  credential material (cloud tokens, JWTs, PEM headers); TODO/FIXME markers are counted
+  informationally. Reviewed exceptions live in an explicit (currently empty) allowlist.
+- **Fault-injection suite (`scripts/fault-injection.mjs`)**: 9 deterministic cases against
+  the real CLI on temporary homes — SIGKILL before/after commit, interrupted and failed
+  v19→v20 migration, invalid and truncated WAL, desynchronised FTS, ENOSPC via filesystem
+  stub and (where unprivileged namespaces allow) a real 2 MiB tmpfs — asserting
+  `quick_check`, audit-chain verification, row/audit consistency, no half-installed files
+  and successful recovery. Wired into CI on Node 22.16; full scope/limitations are in
+  [docs/FAULT-INJECTION.md](docs/FAULT-INJECTION.md).
+- **Release verification (this candidate)**: `pnpm -r test` 743/743 PASS (advisers 590,
+  core 74, office 43, dsh-advisers 20, link-feishu 8, link-email 5, bridge-hermes 2,
+  policy-strict 1); `pnpm -r build` and `pnpm -r typecheck` exit 0; `pack-smoke`,
+  `check-docs`, `check-release`, `check-licenses`, `check-tos --release`, `check-deps`,
+  `check-js`, `security-suite` and `fault-injection` (9/9) pass. Registry verification is
+  deliberately not run before the owner approves the staged build.
+
+### Known issues and limits
+
+- **Some performance targets were missed at 200k rows**: the RC meets the write targets
+  (≤200 ms and ≤1 MB written per command), `mcp` init, `ls`, `memory search` and
+  `today --json`; it misses `today` (317 ms vs ≤150 ms target), `remind` (972 ms),
+  `digest` (641 ms), `tui` (814 ms) and `pet-brief` (1,809 ms) against the ≤400 ms read
+  target. The remaining gap is exactly the commands that still need the full ledger/other
+  tables; wiring them onto partial loaders is 0.3 work. `status` (102 ms vs ≤100 ms) is
+  within run-to-run noise. Regression tests pin behaviour (`EXPLAIN`/throwing loaders), not
+  wall-clock thresholds, so CI does not flake on shared runners.
+- **DSH is still a preview, not a real ledger**: the adapter does not open
+  `~/.advisers/state.db`; read results are empty previews with explicit markers. Real
+  read-only ledger wiring is planned for 0.3.
+- **PRIVACY/TOS egress inventory is not yet updated for the bridge path**: the legal texts
+  are unchanged in 0.2.3 (TOS v2026.11.2) and were not re-issued, but the PRIVACY
+  data-flow list and the TOS egress inventory still need a dedicated bridge/outbound-surface
+  review before they can be claimed as complete. Do not read the unchanged texts as a
+  statement that every egress surface has been re-audited.
+- **No npm provenance attestations**: the staged human-approval publishing flow does not
+  attach build provenance. The draft Trusted-Publishing/OIDC CI job exists but does not
+  publish; see [docs/SECURITY.md](docs/SECURITY.md) §4 for the required owner decisions.
+- **Old staged backlog (50 entries) remains inert**: pre-existing staged npm builds from
+  earlier rounds are unapproved and are not part of this release; they do not affect
+  functionality.
+- **Audit tail anchoring is not implemented**: audit is a local hash chain; deleting the
+  tail of the chain is not yet detectable, and the 0.3 target audit-tail anchor remains
+  open. Audit is not a third-party attestation.
+- **Windows results are CI-only for this candidate**: the `windows-smoke` job is the
+  authority for the real Windows runner; no local Windows host was used for this release
+  candidate. Fault-injection is Linux-only and does not cover real power loss or Windows
+  filesystem fault windows.
+
 ## 0.2.2 (published, 2026-11-18)
 
 Published release on the 0.2.x stable line: the eight workspace packages are lockstep at

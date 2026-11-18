@@ -1,7 +1,7 @@
 # 内容安全：本地规则层
 
-> 状态：0.2.2 已发布（2026-11-18，npm latest）。模块位置 `packages/advisers/lib/safety/`，纯 ESM、零第三方依赖、无网络。
-> 规则层已完成 **lib 级 7 条路径的接入**：model / research / capture / pet-brief / attachments / MCP server / DSH 工具（见 §8）；`bin/` 级 CLI 的审计写入、首启 TOS 与 `advisers safety` 子命令仍由后续任务接线（本轮不改 `bin/`，边界见 §8.2）。
+> 状态：0.2.3 发布候选（2026-11-18，已 staged 到 npm latest，待账号所有者 OTP 批准；当前 registry latest 仍为 0.2.2）。模块位置 `packages/advisers/lib/safety/`，纯 ESM、零第三方依赖、无网络。
+> 规则层已完成 **lib 级 7 条路径的接入**：model / research / capture / pet-brief / attachments / MCP server / DSH 工具（见 §8）；0.2.3 起 `bin/` 级 CLI 消费结构化 `safetyWarnings` 并写 `actor=safety` 审计行、block 写 `allowed=false` 审计行（见 §8.2）；首启 TOS 与 `advisers safety` 子命令仍由后续任务接线。
 >
 > 规则集版本：`advisers-content-1`。测试：`packages/advisers/test/safety.test.js`（21 个规则/语料测试）+ `packages/advisers/test/safety-integration.test.js`（13 个接入路径测试）+ `packages/dsh-advisers/test/safety.test.js`（5 个 DSH 结构化错误测试）。
 
@@ -165,11 +165,11 @@ const classifySite = createClassifier({ ruleset, hmacKey: auditKey })
 
 另有**引用/新闻/法律/学术语境降级**：命中非硬拦 block 规则时，若上下文含「新闻/报道/判决/刑法/普法/案例/论文/教材/……」，且不含第一人称求取（「教我/告诉我/帮我/我要/我想/……」，则 block→confirm（`downgraded=true`）。这是误报闸，也是清楚的绕过面：把「教我制作炸药」包装成新闻可以降级为 confirm，因此高危词表与硬拦不公开、CSAM 永不降级。
 
-## 8. 接入点清单与已接入路径（0.2.2 本轮）
+## 8. 接入点清单与已接入路径（0.2.0–0.2.3）
 
-下表是完整接入面；「本轮状态」只描述 0.2.0 稳定版实际落地的内容，**未接线项不假装已实现**。
+下表是完整接入面；状态列描述 0.2.0–0.2.3 各轮实际落地的内容，**未接线项不假装已实现**（0.2.3 只在 `bin/` 侧补齐审计/告警消费，不改变下述 lib 路径的判定行为）。
 
-| 接入点 | 位置 | 检查对象 | 默认动作 | 本轮状态（0.2.2） |
+| 接入点 | 位置 | 检查对象 | 默认动作 | 接入状态（0.2.0–0.2.3） |
 |---|---|---|---|---|
 | chat/agent 输入输出 | `lib/model.js` 的 `chatCompletion()`（`lib/agent.js` 等所有模型调用都经过它） | messages 全文（含 `tool_calls.arguments`）、模型返回文本 | block/warn | **已接入**：发请求前 `inspectMessages`（surface `model.output`）；block 抛 `ContentSafetyError` 且**不建网络请求**；warn/confirm 继续并在返回中新增可选 `safetyWarnings`；模型输出同样后置分类；DeepSeek 通道默认附 `safety_check:{level:'high'}`，`ADVISERS_SAFETY_CLOUD=0` 关闭 |
 | capture（邮件/转写/文件） | `lib/capture.js` `captureCandidates()`；`lib/mcp-server.js` 的写候选路径复用同一门 | 输入文本 surface `capture.input`、候选 payload | warn + 不落候选；block 仅高危 | **已接入**：输入 block 抛错且**不调用模型**；候选 payload 的 `action/creditor/uncertainty` 做 PII 脱敏（`quote` 保持逐字原文用于校验）；不自动 accept |
@@ -203,7 +203,7 @@ const classifySite = createClassifier({ ruleset, hmacKey: auditKey })
 - **lib 层只产出判定字段，不直接写审计链**：`buildAuditReason()` / `ContentSafetyError.auditReason` 已可直接交给 `store.appendAudit()`（`actor='safety'`、`action='safety.<surface>'`、block 时 `allowed=0`）。
 - **MCP 已通过注入的 `audit` 回调记录安全事件**：block 的调用会发 `{actor:'mcp', action, allowed:false, reason:auditReason}`；未注入回调时不写（与既有 MCP 审计约定一致）。
 - **DSH 只返回结构化错误**：宿主审计与 `runtime.audit` 的安全事件扩展由后续接线完成。
-- **`bin/advisers.js` 的审计写入仍由后续接线完成**：`chat`/`repl`、`mcpServer()`、`capture` 等 CLI 入口尚未把 `auditReason` 送进 `appendAudit()`；`evidenceHash` 需要调用方传入 `ensureAuditKey()` 的 key（本轮 lib 提供可选 `hmacKey`/`safetyKey` 参数，CLI 接线后才有值，故当前为 `null`/`-`）。**不改审计表结构、不改 hash-chain material 顺序**。
+- **`bin/advisers.js` 的审计写入（0.2.3 起已接线）**：`chat`/`repl` 的 agent 路径把 `result.safetyWarnings` 打印到 stderr（只含 code/ruleIds/action/source，不含原文或外部文本）并逐条写 `actor="safety"`、`action="safety.warning"` 审计行；被拦截的轮次与 policy block 写 `allowed=false` 审计行（`safety.chat` / `policy.agent.block`），`reason` 由 `buildAuditReason()` 生成、≤300 字符、不含原文。`ADVISERS_AUDIT_KEY` 存在时附带 `evidenceHash`。**未改审计表结构、未改 hash-chain material 顺序**；`capture`/`mcpServer()` 的 CLI 入口仍以各自的既有审计为准。
 - 原文边界：`classify()` 结果、错误对象、MCP/DSH 结构化错误、新增 `safetyWarnings`/`safety` 字段都不含原文；`redact()` 只返回替换后的文本与不含值的命中。接入测试对 7 条路径逐条断言「不泄漏原文」。
 
 ### 8.3 接入后的误报处理（用户可见路径）
@@ -214,7 +214,7 @@ const classifySite = createClassifier({ ruleset, hmacKey: auditKey })
 - `ADVISERS_SAFETY_CLOUD=0` 只关闭 DeepSeek 的 `safety_check` 网络侧参数，**不关闭本地规则**；CSAM 硬拦不可通过配置关闭。
 - 误报规则可通过 `resolveRuleset()` 的 JSON 覆盖禁用（CSAM/block 白名单不可放宽）；`advisers safety report`（误报反馈 CLI）仍为 0.2.1 计划。
 - **上游 `safety_check` 兼容性 TODO**：参数按 DeepSeek 官方文档（2026-11-17）添加，仅用于 DeepSeek 通道；尚未做活体灰度验证（研究报告 §10-R1）。若上游发现不兼容，用 `ADVISERS_SAFETY_CLOUD=0` 关闭即可，本地规则不受影响；不要删除或改写请求其余字段。
-- **dsh-advisers 打包（0.2.1 已修）**：`packages/dsh-advisers/index.js` 改为从发布包 `advisers` 的公开子路径 `advisers/lib/safety/index.js` 引用本模块；`dsh-advisers/package.json` 显式声明 `"advisers": "0.2.2"` 依赖，`advisers/package.json` 增加 `"./lib/safety/index.js"` export 子路径（0.2.0 的 `../advisers/lib/safety/index.js` 相对引用在干净安装后 `ERR_MODULE_NOT_FOUND`）。`pack-smoke` 不再放行跨包相对 import，`verify-release` 对每包做 `import()` 冒烟（含 `dsh-advisers`）。
+- **dsh-advisers 打包（0.2.1 已修）**：`packages/dsh-advisers/index.js` 改为从发布包 `advisers` 的公开子路径 `advisers/lib/safety/index.js` 引用本模块；`dsh-advisers/package.json` 显式声明 `"advisers": "0.2.3"` 依赖，`advisers/package.json` 增加 `"./lib/safety/index.js"` export 子路径（0.2.0 的 `../advisers/lib/safety/index.js` 相对引用在干净安装后 `ERR_MODULE_NOT_FOUND`）。`pack-smoke` 不再放行跨包相对 import，`verify-release` 对每包做 `import()` 冒烟（含 `dsh-advisers`）。
 
 ## 9. 审计与可解释
 

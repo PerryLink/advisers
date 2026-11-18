@@ -43,14 +43,16 @@ on any link package; adapters load one only when configured.
 
 ## Status
 
-`0.2.2` is the **current release** (2026-11-18): the eight workspace packages are
-lockstep at `0.2.2`. The six published packages are `advisers`, `advisers-core`,
+`0.2.3` is the **release candidate** (2026-11-18): the eight workspace packages are
+lockstep at `0.2.3`. The six published packages are `advisers`, `advisers-core`,
 `advisers-office`, `advisers-policy-strict`, `advisers-bridge-hermes` and `dsh-advisers`;
 the two private `advisers-link-*` packages are held at the same version but are not
-published. The six packages are published on npm **`latest` = `0.2.2`** (account owner
-OTP approved on 2026-11-18); `0.2.1` and `0.2.0` remain installable by pinning them.
-Registry tarballs, license files, a fresh-prefix install and per-package `import()` smoke
-were verified with `scripts/verify-release.mjs` (86/86 checks).
+published. The six packages are **staged for npm `latest`** and become installable only
+once the account owner approves them with their own OTP; until then npm **`latest` remains
+`0.2.2`** (published 2026-11-18), and `0.2.1`/`0.2.0` stay installable by pinning. The
+candidate passed 743/743 tests, build/typecheck, packaging smoke, docs/licence/TOS/
+release-lockstep checks, the security suite and the fault-injection suite (9/9); registry
+verification of the published tarballs runs after that approval.
 
 > Requires **Node >= 22.16**. See [docs/QUICKSTART.md](docs/QUICKSTART.md) for Windows/PowerShell and BOM notes.
 
@@ -60,14 +62,15 @@ were verified with `scripts/verify-release.mjs` (86/86 checks).
 - `advisers-office`: DOCX/XLSX/PPTX/Mermaid/draw.io/XMind + 7 templates; read/edit/verify;
 - routine v0 (draft/approve/archive + patch/diff/apply);
 - local agent loop with tools (`office_build`, `office_template`, `file_read/write/list`, `commitment_add`, `routine_view`, `search_turns`); attachments (txt/md/docx/xlsx/pptx/pdf); optional model with `ADVISERS_API_KEY`;
-- turns + summaries + CJK-capable FTS search (FTS5 trigram index, schema v19; <3-character queries keep the LIKE fallback), `/memory`, `/week`, `/digest`, `/tick`, `/today`, `/undo`, `/diff`, `/learn review`;
+- turns + summaries + CJK-capable FTS search (FTS5 trigram index, schema v20; <3-character queries keep the LIKE fallback), `/memory`, `/week`, `/digest`, `/tick`, `/today`, `/undo`, `/diff`, `/learn review`;
 - `advisers capture` extracts candidate commitments from Chinese work text with verbatim quotes. Candidates stay pending until you explicitly accept one; no command auto-accepts.
 - `advisers research --web` / `--url` does cited research through DeepSeek server web tools. This is an explicit **web** egress path; web citations are provider output, not local file evidence.
 - `advisers remind` + `.ics`/VALARM export + opt-in scheduler scripts; `calendar import --ics`; `capture --from-mail`/`--from-transcript` (read-only, deduped, pending candidates only);
-- `advisers evidence show` / `deliveries --pack` (manifest + SHA256SUMS + DOCX receipt) / `deliver --type ...` (DOCX/XLSX);
+- `advisers evidence show` / `deliveries --pack` (manifest + SHA256SUMS + DOCX receipt) / `deliver --type ...` (DOCX/XLSX); operator-entered manual evidence (`--quote`/`--evidence`) is typed as **unverifiable, not missing** — packs and receipts count it separately;
 - **delivery receipt pack v1.1**: `advisers deliveries --receipt [--out dir] [--ids ...] [--all] [--recipient ...]` copies the delivered files and records every SHA-256, the generator, verify results and recipient; `advisers evidence verify <dir>` verifies a pack offline (JSON, exit 0/1, no `~/.advisers`). Evidence entries default to a 2000 cap (`--ids`/`--all` control it); the old `deliveries --pack` evidence pack is unchanged. See `docs/DELIVERY-RECEIPT.md`.
 - **reminder/calendar wiring (0.2.0)**: `commit add/edit --remind-offsets "-1d,-2h,+0d09:00"` stores per-commitment VALARMs; `remind --deliver --notify` adds the opt-in webhook and records the last run in `~/.advisers/scheduler/status.json`; `remind install|uninstall|status [--apply]` prints a dry-run OS plan first and only registers a cron/schtasks entry with `--apply`; `today --calendar` expands RRULEs locally (all-day `全天`, recurring `（循环）`). `today`, `capture`, `memory candidates` and `verify` now have stable `--json` shapes (`docs/CLI-JSON.md`).
 - `advisers privacy --prove`, `advisers mcp --stdio` (7 tools + 4 read-only resources, 1 MiB JSON-RPC line cap; candidate writes are pending-only and fail closed when the audit row cannot be written), `advisers ui`（本地只读视图）, and JSON output for status/commit/who/deliveries/remind/evidence.
+- **0.2.3 product additions**: `matter add|ls|show|rename|archive|use` (client/project loop; `--matter` is validated on writes); `agenda --days 1..31 --json` (7-day Asia/Shanghai agenda with conflicts) and deterministic `morning` brief; `template quote|proposal` (DOCX/XLSX, integer-cent money, no model) with offline `verify --content --template quote|proposal --data`; `doctor --check-db` (FTS/WAL/backup/plaintext maintenance checks).
 - `advisers pet-brief --json|--out [path]|--check [--strict]|--print-schema|--display-policy public|private|none` projects a **read-only, redacted** Pet Brief (contract v0.2: `schemaVersion: 2` + `displayPolicy`, default `private`; v0.1 briefs stay readable as legacy) for the desktop-pet consumer: `secrecy >= 2` matters excluded, facts below confidence 0.7 dropped, 5-minute TTL, 10-item caps; no model call, no network, no ledger writes. UI/transport is not wired yet. See `docs/PET-BRIEF-PRODUCER.md`.
 - each turn sends a `latest_reminder` date/weekday/location/language marker so relative dates are grounded;
 - thinking mode: `ADVISERS_THINKING=off|on|auto`, `ADVISERS_THINKING_EFFORT=low|high|max`; `reasoning_content` is kept in memory only for the current tool loop and is not written to turns/summaries/audit/export/backup. This does not control provider-side logs or OS crash dumps;
@@ -76,11 +79,11 @@ were verified with `scripts/verify-release.mjs` (86/86 checks).
 - real-account/WS/Office-L3 validation still pending.
 
 ```sh
-# 0.2.2 is published on npm @latest; or run from the checkout:
+# 0.2.3 is staged for npm @latest (0.2.2 is the current published latest); or run from the checkout:
 git clone https://github.com/PerryLink/advisers.git
 cd advisers && corepack pnpm install && corepack pnpm -r build
 ADVISERS_OFFICE_LOCAL=1 node packages/advisers/bin/advisers.js status
-# From npm (stable channel = default `latest`, currently 0.2.2):
+# From npm (stable channel = default `latest`, currently 0.2.2; 0.2.3 after owner OTP):
 #   npm i -g --registry=https://registry.npmjs.org advisers@latest advisers-office@latest
 # The `next` channel currently also points at 0.2.2:
 #   npm i -g --registry=https://registry.npmjs.org advisers@next advisers-office@next
@@ -95,7 +98,8 @@ advisers bridge --dir "$BRIDGE_DIR"   # Hermes gateway bridge
 
 Local interaction: `advisers` starts a REPL; `/help`, `/status`, `/new`, `/brief`, `/debug`, `/quit`. With an API key the model can call local Office/file tools and report the generated paths. File writes are confined to the working directory, overwrites require confirmation unless `ADVISERS_FORCE=1`, and local tools do not send file contents to the model unless you attach/read them.
 
-npm tags: **`latest`** is the stable channel (currently `0.2.2`, published 2026-11-18),
+npm tags: **`latest`** is the stable channel (currently `0.2.2`, published 2026-11-18;
+`0.2.3` becomes latest after the owner approves the staged build),
 **`next`** is the pre-release channel (currently also `0.2.2`). Pin an exact version
 (`advisers@0.2.2` today) when you need a reproducible install,
 and query the official registry directly

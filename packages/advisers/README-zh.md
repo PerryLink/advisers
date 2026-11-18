@@ -5,13 +5,13 @@
 ## 安装
 
 ```sh
-# 0.2.2 是已 staged 到 npm @latest 的发布候选，待账号所有者 OTP 批准；
-# 0.2.1 是当前已发布的 @latest（稳定渠道 = 默认 `latest`）：
+# 0.2.3 是已 staged 到 npm @latest 的发布候选，待账号所有者 OTP 批准；
+# 0.2.2 是当前已发布的 @latest（稳定渠道 = 默认 `latest`）：
 #   npm i -g --registry=https://registry.npmjs.org advisers@latest advisers-office@latest
 # 从 checkout 运行：
 #   corepack pnpm install && corepack pnpm -r build
 #   ADVISERS_OFFICE_LOCAL=1 node packages/advisers/bin/advisers.js status
-# preview/RC 构建使用 `next` 渠道（当前 `next` 也指向 0.2.1）：
+# preview/RC 构建使用 `next` 渠道（当前 `next` 也指向 0.2.2）：
 #   npm i -g --registry=https://registry.npmjs.org advisers@next advisers-office@next
 advisers soul init
 advisers brief "做一份 Q4 预算 Excel，周五前给老板"
@@ -37,9 +37,9 @@ CLI 是**本地秘书运行时**：一个 REPL、用户账/承诺账/流程账�
 
 ## 状态
 
-`0.2.2` 是当前发布版本（已发布到 npm `latest`，2026-11-18）：
+`0.2.3` 是发布候选（2026-11-18）：已 staged 到 npm `latest`，待账号所有者 OTP 批准；在此之前 `0.2.2` 仍是当前已发布的 `latest`：
 
-- SQLite 账本 `~/.advisers/state.db`（JSON fallback）；
+- SQLite 账本 `~/.advisers/state.db`（JSON fallback；schema v20、无锁只读快照、增量写）；
 - soul 位于 `~/.advisers/soul.md`，人类独占；
 - turns + 摘要 + FTS 检索；开场协议；`/resume`；
 - 承诺账 + `commit add/ls/done`、`tick`、`snooze`、nudge outcome；
@@ -47,6 +47,7 @@ CLI 是**本地秘书运行时**：一个 REPL、用户账/承诺账/流程账�
 - routine draft/approve/patch/curator + active routine index + `routine_view`；
 - `advisers-office` 提供 DOCX/XLSX/PPTX/Mermaid/draw.io/XMind builder 与 7 个模板；
 - `advisers pet-brief`：只读脱敏 Pet Brief 投影（契约 v0.2：`schemaVersion: 2` + `displayPolicy`，默认 `private`；`--json`/`--out`/`--check [--strict]`/`--print-schema`/`--display-policy`；`secrecy >= 2` 全排除；5 分钟 TTL；v0.1 brief 按 legacy 可读；未接桌宠 UI）；
+- `matter add|ls|show|rename|archive|use`（客户/项目最小闭环，`--matter` 校验）；`agenda --days 1..31 --json` + 确定性 `morning` 晨报；确定性 `template quote|proposal`（DOCX/XLSX，`verify --content --template` 可复核）；操作者手工证据标记为不可外部核验而非缺失；
 - 真实 IM/Office 打开验证仍未完成。
 
 核心与架构：
