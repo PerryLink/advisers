@@ -368,8 +368,27 @@ export function readReceiptDirectory(dir) {
  * @param {Function|Date} [options.now] Clock used by reminders (defaults to new Date()).
  * @returns {{protocolVersion: string, handle: Function, handleLine: Function, serve: Function, tools: Function, resources: Function}}
  */
-export function createMcpServer({ store, ledger, version = '0.0.0', audit, readPack, now = () => new Date() } = {}) {
+export function createMcpServer({ store, ledger, loadLedger, loadStore, version = '0.0.0', audit, readPack, now = () => new Date() } = {}) {
   const serverVersion = String(version ?? '0.0.0')
+  // 0.2.3 P0-2: the CLI wires lazy loaders instead of a preloaded ledger/store so
+  // `initialize` stays protocol-only (200k-row ledgers used to cost ~2s before the
+  // first response). Anything that needs data resolves it on first use; an
+  // explicit ledger/store object (tests, embedders) still wins, and the resolved
+  // value is cached per table subset. kind: 'commitments' | 'matters' | 'full'.
+  let resolvedLedger = ledger
+  let resolvedStore = store
+  const ledgerCache = new Map()
+  function ledgerFor(kind = 'full') {
+    if (resolvedLedger !== undefined) return resolvedLedger
+    if (ledgerCache.has(kind)) return ledgerCache.get(kind)
+    const loaded = typeof loadLedger === 'function' ? loadLedger(kind) : undefined
+    ledgerCache.set(kind, loaded)
+    return loaded
+  }
+  function storeFor() {
+    if (resolvedStore === undefined && typeof loadStore === 'function') resolvedStore = loadStore()
+    return resolvedStore
+  }
 
   function nowDate() {
     const value = typeof now === 'function' ? now() : now
@@ -377,22 +396,24 @@ export function createMcpServer({ store, ledger, version = '0.0.0', audit, readP
     return Number.isNaN(date.getTime()) ? new Date() : date
   }
 
-  function requireLedger() {
-    if (!ledger || typeof ledger.openCommitments !== 'function' || typeof ledger.listCommitments !== 'function') {
+  function requireLedger(kind = 'full') {
+    const ledgerApi = ledgerFor(kind)
+    if (!ledgerApi || typeof ledgerApi.openCommitments !== 'function' || typeof ledgerApi.listCommitments !== 'function') {
       throw new ToolError('ledger unavailable')
     }
-    return ledger
+    return ledgerApi
   }
 
   function requireStore() {
-    if (!store || typeof store.proposeCandidate !== 'function') throw new ToolError('candidate store unavailable')
-    return store
+    const storeApi = storeFor()
+    if (!storeApi || typeof storeApi.proposeCandidate !== 'function') throw new ToolError('candidate store unavailable')
+    return storeApi
   }
 
   /* ------------------------------ read models ------------------------------ */
 
   function todayData() {
-    const open = requireLedger().openCommitments()
+    const open = requireLedger('commitments').openCommitments()
     return {
       open: open.length,
       commitments: open.map((c) => ({ id: c.id, debtor: c.debtor, creditor: c.creditor, action: c.action, dueAt: c.dueAt })),
@@ -400,14 +421,14 @@ export function createMcpServer({ store, ledger, version = '0.0.0', audit, readP
   }
 
   function commitRows(all) {
-    return requireLedger()
+    return requireLedger('commitments')
       .listCommitments()
       .filter((c) => all || c.status === 'open')
       .map((c) => ({ id: c.id, status: c.status, action: c.action, dueAt: c.dueAt, creditor: c.creditor }))
   }
 
   function whoData() {
-    const open = requireLedger().openCommitments()
+    const open = requireLedger('commitments').openCommitments()
     return {
       mine: open.filter((c) => c.debtor === 'user' || c.debtor === 'agent'),
       waiting: open.filter((c) => c.debtor === 'third' || String(c.debtor).startsWith('third:')),
@@ -416,22 +437,24 @@ export function createMcpServer({ store, ledger, version = '0.0.0', audit, readP
 
   function remindData() {
     try {
-      return buildReminders(requireLedger(), { now: nowDate() })
+      return buildReminders(requireLedger('commitments'), { now: nowDate() })
     } catch {
       throw new ToolError('reminder planning failed')
     }
   }
 
   function evidenceData(id) {
-    const ledgerApi = requireLedger()
-    if (id.startsWith('cm_')) return evidenceForCommitment(store, ledgerApi, id)
-    if (id.startsWith('fact_')) return evidenceForFact(store, ledgerApi, id)
-    if (id.startsWith('pref_')) return evidenceForPreference(store, ledgerApi, id)
+    const ledgerApi = requireLedger('full')
+    const storeApi = storeFor()
+    if (id.startsWith('cm_')) return evidenceForCommitment(storeApi, ledgerApi, id)
+    if (id.startsWith('fact_')) return evidenceForFact(storeApi, ledgerApi, id)
+    if (id.startsWith('pref_')) return evidenceForPreference(storeApi, ledgerApi, id)
     throw new ToolError('unknown evidence id prefix (want cm_/fact_/pref_)')
   }
 
   function evidenceIndex() {
-    const ledgerApi = requireLedger()
+    const ledgerApi = requireLedger('full')
+    const storeApi = storeFor()
     const limit = 50
     const summarize = (kind, id, result) => ({
       kind,
@@ -443,13 +466,13 @@ export function createMcpServer({ store, ledger, version = '0.0.0', audit, readP
     const commitments = ledgerApi
       .listCommitments()
       .slice(0, limit)
-      .map((c) => summarize('commitment', c.id, evidenceForCommitment(store, ledgerApi, c.id)))
+      .map((c) => summarize('commitment', c.id, evidenceForCommitment(storeApi, ledgerApi, c.id)))
     const facts = (typeof ledgerApi.listFacts === 'function' ? ledgerApi.listFacts() : [])
       .slice(0, limit)
-      .map((f) => summarize('fact', f.id, evidenceForFact(store, ledgerApi, f.id)))
+      .map((f) => summarize('fact', f.id, evidenceForFact(storeApi, ledgerApi, f.id)))
     const preferences = (typeof ledgerApi.listPreferences === 'function' ? ledgerApi.listPreferences({ includeCandidates: false }) : [])
       .slice(0, limit)
-      .map((p) => summarize('preference', p.id, evidenceForPreference(store, ledgerApi, p.id)))
+      .map((p) => summarize('preference', p.id, evidenceForPreference(storeApi, ledgerApi, p.id)))
     return { limits: { perKind: limit }, commitments, facts, preferences }
   }
 
@@ -466,11 +489,12 @@ export function createMcpServer({ store, ledger, version = '0.0.0', audit, readP
     const debtor = optionalEnum(args, 'debtor', ['user', 'agent', 'third'], 'user')
     const creditor = optionalString(args, 'creditor', { max: 200 }) ?? 'someone'
     const dueAt = optionalIsoDate(args, 'dueAt')
+    const mattersLedger = ledgerFor('matters')
     let matterId = optionalString(args, 'matterId', { max: 120 })
     if (matterId !== undefined) {
-      if (typeof ledger?.getMatter !== 'function' || !ledger.getMatter(matterId)) throw invalidParams('unknown matter id')
+      if (typeof mattersLedger?.getMatter !== 'function' || !mattersLedger.getMatter(matterId)) throw invalidParams('unknown matter id')
     } else {
-      matterId = typeof ledger?.listMatters === 'function' ? ledger.listMatters()[0]?.id : undefined
+      matterId = typeof mattersLedger?.listMatters === 'function' ? mattersLedger.listMatters()[0]?.id : undefined
     }
 
     const payload = { debtor, creditor: redact(creditor).text, action: redact(action).text, capability: 'none' }
@@ -494,7 +518,8 @@ export function createMcpServer({ store, ledger, version = '0.0.0', audit, readP
 
   function rollbackCandidate(id) {
     try {
-      if (store && typeof store.reviewCandidate === 'function') store.reviewCandidate(id, 'rejected', 'audit_failed')
+      const storeApi = storeFor()
+      if (storeApi && typeof storeApi.reviewCandidate === 'function') storeApi.reviewCandidate(id, 'rejected', 'audit_failed')
     } catch {
       // best effort compensation only
     }

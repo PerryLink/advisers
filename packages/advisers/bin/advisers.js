@@ -8,8 +8,19 @@ let SqliteStore
 let acquireInstanceLock
 let instanceLockPath
 let inspectWalStatus
+let readInstanceLock
+let instanceLockIsStale
+let openReadStoreLib
 try {
-  ({ SqliteStore, acquireInstanceLock, instanceLockPath, inspectWalStatus } = await import('../lib/sqlite.js'))
+  ({
+    SqliteStore,
+    acquireInstanceLock,
+    instanceLockPath,
+    inspectWalStatus,
+    readInstanceLock,
+    instanceLockIsStale,
+    openReadStore: openReadStoreLib,
+  } = await import('../lib/sqlite.js'))
 } catch (error) {
   if (String(error?.message || error).includes('node:sqlite')) {
     console.error(`Advisers needs Node >= 22.16 (node:sqlite). You have ${process.version}. Install Node 24 or use nvm-windows.`)
@@ -200,28 +211,47 @@ function readAuditKey() {
 }
 function ensureAuditKey() {
   if (process.env.ADVISERS_AUDIT_KEY) return
-  try {
-    if (existsSync(AUDIT_KEY_FILE)) {
-      process.env.ADVISERS_AUDIT_KEY = readAuditKey()
-      return
-    }
-    const key = randomBytes(32).toString('hex')
+  // P0-4: O_EXCL so two first-run processes agree on exactly one key. The loser
+  // must read the winner's key, not overwrite it (that would leave rows signed
+  // with a key that no longer exists on disk). A loser can observe the winner's
+  // file between open() and write(), so a short/empty read is retried briefly
+  // instead of failing the whole command (0.2.3 read path makes first opens
+  // faster and the window is easier to hit under concurrent first runs).
+  const waitBuffer = new Int32Array(new SharedArrayBuffer(4))
+  const pause = (ms) => { try { Atomics.wait(waitBuffer, 0, 0, ms) } catch {} }
+  let lastError = null
+  for (let attempt = 0; attempt < 25; attempt++) {
     try {
-      // P0-4: O_EXCL so two first-run processes agree on exactly one key. The
-      // loser must read the winner's key, not overwrite it (that would leave
-      // rows signed with a key that no longer exists on disk).
-      writeFileSync(AUDIT_KEY_FILE, key, { mode: 0o600, flag: 'wx' })
+      if (existsSync(AUDIT_KEY_FILE)) {
+        const key = readFileSync(AUDIT_KEY_FILE, 'utf8').trim()
+        if (key.length >= 16) { process.env.ADVISERS_AUDIT_KEY = key; return }
+        lastError = new Error(`audit key file is too short (${key.length} chars, expected >= 16): ${AUDIT_KEY_FILE}`)
+        pause(5)
+        continue
+      }
+      const key = randomBytes(32).toString('hex')
+      try { writeFileSync(AUDIT_KEY_FILE, key, { mode: 0o600, flag: 'wx' }) } catch (error) {
+        if (error?.code !== 'EEXIST') throw error
+        pause(5)
+        continue
+      }
       process.env.ADVISERS_AUDIT_KEY = key
+      return
     } catch (error) {
-      if (error?.code !== 'EEXIST') throw error
-      process.env.ADVISERS_AUDIT_KEY = readAuditKey()
+      lastError = error
+      pause(5)
     }
-  } catch (error) {
-    console.error(`advisers: audit key unavailable (${error.message})`)
-    console.error(`  expected a readable ${AUDIT_KEY_FILE} with at least 16 characters.`)
-    console.error('  refusing to write an unkeyed audit chain. Restore the key file; if it is lost, move it aside and rerun (the existing chain will then verify as BROKEN).')
-    process.exit(1)
   }
+  try {
+    process.env.ADVISERS_AUDIT_KEY = readAuditKey()
+  } catch (error) {
+    lastError = error
+  }
+  if (process.env.ADVISERS_AUDIT_KEY) return
+  console.error(`advisers: audit key unavailable (${lastError?.message ?? 'unknown error'})`)
+  console.error(`  expected a readable ${AUDIT_KEY_FILE} with at least 16 characters.`)
+  console.error('  refusing to write an unkeyed audit chain. Restore the key file; if it is lost, move it aside and rerun (the existing chain will then verify as BROKEN).')
+  process.exit(1)
 }
 function ensureHome() {
   mkdirSync(HOME, { recursive: true, mode: 0o700 })
@@ -363,6 +393,147 @@ function secureDbSidecars() {
   }
 }
 
+// ---------------------------------------------------------------------------
+// 0.2.3 persistence v2 read path (03-design-persistence-v2.md §4).
+//
+// Pure-read commands open state.db with DatabaseSync({ readOnly: true }) and take
+// NO HOME instance lock: the lock now protects only writers and whole-file
+// maintenance (migrate/vault/sync/import/backup). A reader sees the last
+// committed WAL snapshot, so it keeps working while a long-lived writer (mcp,
+// bridge, older ui) holds the lock. Writes still go through openStore() and its
+// E_DB_LOCKED behaviour.
+//
+// `ADVISERS_READ_LOCKFREE=0` is the kill switch: read commands fall back to the
+// exact 0.2.2 path (writable store + HOME lock). A read-only volume / read-only
+// directory can make SQLite fail to create the -shm sidecar; that case also
+// degrades to the writable path (which reports the historical error messages).
+// ---------------------------------------------------------------------------
+
+function readLockfreeEnabled() {
+  return process.env.ADVISERS_READ_LOCKFREE !== '0'
+}
+
+/** Sleep without busy-waiting; only used for the bounded schema-migration retry. */
+const READ_SLEEP_BUFFER = new Int32Array(new SharedArrayBuffer(4))
+function sleepSync(ms) {
+  try { Atomics.wait(READ_SLEEP_BUFFER, 0, 0, Math.max(0, Math.floor(Number(ms) || 0))) } catch {}
+}
+
+/** True for a read-only volume / sidecar-creation failure (documented fallback). */
+function isReadOnlyFallbackError(error) {
+  const code = String(error?.code ?? '')
+  if (code === 'E_SCHEMA_STALE' || code === 'E_SCHEMA_NEWER' || code === 'E_DB_CORRUPT' || code === 'E_DB_LOCKED' || code === 'E_VAULT_SEALED' || code === 'E_READ_ONLY') return false
+  if (code === 'EACCES' || code === 'EPERM' || code === 'EROFS') return true
+  const message = String(error?.message ?? '')
+  return /readonly database|read-only database|unable to open database file|cannot open database/i.test(message)
+}
+
+/**
+ * Briefly take the writer lock, open the database writable (which runs the
+ * backup + per-version migration) and release it again, so a reader that found
+ * a stale schema can retry the read-only open. A lock held by another process is
+ * a bounded, retried failure; a failed migration backup/corrupt DB is re-thrown
+ * fail-closed (the original database is untouched).
+ */
+function migrateUnderLock() {
+  ensureHome()
+  const previousLock = instanceLock?.held ? instanceLock : null
+  const lock = ensureInstanceLock()
+  try {
+    const store = new SqliteStore(DB)
+    store.close()
+  } finally {
+    if (lock?.held && lock !== previousLock) releaseInstanceLock()
+  }
+}
+
+let activeReadStore = null
+
+/**
+ * Open (once per process) the lock-free read-only store.
+ *
+ * - JSON store legacy mode → null (loadJson()).
+ * - missing database → initialize through the writable path once, then drop the
+ *   writer lock so a long-lived reader (ui/tui) does not block writers forever.
+ * - stale schema → bounded retry after a short write-lock migration (§4.4).
+ * - newer schema / corrupt database / sealed vault → fail closed, never migrate.
+ */
+function openReadStore() {
+  if (mode === 'json') return null
+  ensureHome()
+  const sealed = vaultSealedPath()
+  if (sealed) throw vaultSealedError(sealed)
+  if (activeReadStore) return activeReadStore
+  if (!readLockfreeEnabled()) return openStore()
+  if (!existsSync(DB)) {
+    // First run keeps the historical behaviour: a command may create the store.
+    // A pure reader must not keep the writer lock for its whole lifetime.
+    const store = openStore()
+    activeStore = undefined
+    try { store.close() } catch {}
+    releaseInstanceLock()
+  }
+  let lastError = null
+  for (let attempt = 0; attempt < 3; attempt++) {
+    let store
+    try {
+      store = openReadStoreLib(DB)
+    } catch (error) {
+      if (error?.code === 'E_SCHEMA_NEWER') throw error
+      if (error?.code !== 'E_SCHEMA_STALE') {
+        if (isReadOnlyFallbackError(error)) return openStore()
+        throw error
+      }
+      lastError = error
+      try {
+        migrateUnderLock()
+      } catch (migrationError) {
+        // A failed migration is not a transient read-path problem: retrying it
+        // would only create more backups (and can hide the real failure). Only
+        // lock contention is retried; everything else is re-thrown fail-closed.
+        const retryableLock = migrationError?.code === 'E_DB_LOCKED' || migrationError?.code === 'E_MIGRATE_BUSY'
+        if (!retryableLock) throw migrationError
+        lastError = migrationError
+      }
+      sleepSync(50 * (attempt + 1))
+      continue
+    }
+    activeReadStore = store
+    return store
+  }
+  const error = new Error(
+    `E_SCHEMA_STALE: could not bring ${DB} to the current schema for a read-only open after 3 attempts` +
+      (lastError?.message ? ` (${lastError.message})` : '') +
+      '; if another advisers process is upgrading it, retry in a moment; otherwise run a writable command (for example `advisers doctor`) and retry.',
+  )
+  error.code = 'E_SCHEMA_STALE'
+  throw error
+}
+
+/** The lock-free read store (null for the legacy JSON store). */
+function readStore() {
+  return mode === 'json' ? null : openReadStore()
+}
+
+/** Print the documented store error for a read command and exit 1. */
+function exitReadStoreFailure(error) {
+  if (error?.code === 'E_SCHEMA_STALE' || error?.code === 'E_SCHEMA_NEWER') { console.error(error.message); process.exit(1) }
+  if (error?.code === 'E_VAULT_SEALED') { console.error(error.message); process.exit(1) }
+  const hint = storeFailureHint(error)
+  if (hint) { console.error(hint); process.exit(1) }
+  console.error(`sqlite unavailable: ${error.message}`)
+  console.error('Run `advisers doctor`; refusing to silently switch to JSON (would split the ledger).')
+  process.exit(1)
+}
+
+/** Read store for commands that query the store directly (null in JSON mode). */
+function readStoreOrExit() {
+  ensureHome()
+  if (mode !== 'sqlite') return null
+  try { return openReadStore() } catch (error) { exitReadStoreFailure(error) }
+}
+
+
 function openStore({ checkIntegrity = false } = {}) {
   if (!activeStore) {
     const sealed = vaultSealedPath()
@@ -462,6 +633,59 @@ function loadLedger(parts = null) {
   }
 }
 
+/**
+ * Load the ledger for a PURE-READ command through the lock-free read-only store
+ * (0.2.3 persistence v2 §4.6). Same partial-loading contract as loadLedger(),
+ * but it never takes the HOME writer lock and never runs DDL/migration.
+ * Write commands must keep using loadLedger()/dbStore().
+ */
+function loadReadLedger(parts = null) {
+  ensureHome()
+  if (mode === 'json') return loadJson()
+  try {
+    const store = openReadStore()
+    if (!parts) return Ledger.fromJSON(store.read(() => store.load()), LOCAL_PORTS)
+    const snapshot = store.read(() => {
+      const partial = { version: 1 }
+      for (const [table, options] of Object.entries(parts)) {
+        const loader = LEDGER_PART_LOADERS[table]
+        if (!loader) throw new Error(`unknown ledger table for partial load: ${table}`)
+        partial[table] = loader(store, options ?? {})
+      }
+      return partial
+    })
+    return Ledger.fromParts(snapshot, LOCAL_PORTS)
+  } catch (error) {
+    exitReadStoreFailure(error)
+  }
+}
+
+/**
+ * Read a partial ledger for a pure-read command. Thin alias of loadReadLedger()
+ * so the dispatch reads as "this command only reads", while write commands keep
+ * calling loadLedger()/dbStore() (writer lock + WAL).
+ */
+function readLedgerForCommand(parts = null) {
+  return loadReadLedger(parts)
+}
+
+/**
+ * Minimal open-commitment rows for the HUMAN `today` view (0.2.3 hot path).
+ *
+ * `today` classifies every open commitment but only displays id/debtor/creditor/
+ * action/dueAt. Loading them through loadCommitments() maps the full entity
+ * (JSON.parse of evidence/reminder_offsets, defaults, sortable objects) which at
+ * 200k rows is ~365ms in-process vs ~139ms for the six columns actually needed.
+ * The JSON/sources forms keep the full entities (their contract needs them).
+ * The query runs on the lock-free read connection and is read-only.
+ */
+function loadOpenCommitmentRowsForToday() {
+  const store = readStoreOrExit()
+  if (!store) return []
+  const rows = store.db.prepare("SELECT id, debtor, creditor, action, due_at FROM commitments WHERE status = 'open' ORDER BY rowid").all()
+  return rows.map((row) => ({ id: row.id, debtor: row.debtor, creditor: row.creditor, action: row.action, dueAt: row.due_at ?? undefined }))
+}
+
 function exitStoreWriteFailure(error) {
   // P0-2: never fall back to state.json. The SQLite database is the only ledger
   // once it exists, so a JSON fallback would silently split the book (and the
@@ -497,28 +721,83 @@ function saveLedgerWithAudit(ledger, audit, inside) {
   }
 }
 
-function updateStoreWithAudit(fn, audit) {
+/**
+ * 0.2.3 persistence v2 write helper: one BEGIN IMMEDIATE containing the directed
+ * business writes and exactly one audit row (03-design-persistence-v2.md §3.2).
+ * In JSON-store mode the caller keeps the legacy load/save path and this returns
+ * { legacyJson: true } so the command can fall back without a second code path.
+ */
+function mutateWithAudit(fn, audit) {
   ensureHome()
   const store = dbStore()
-  if (!store) return
+  if (!store) return { legacyJson: true }
   try {
-    return store.transaction(() => {
-      fn(store)
-      return store.appendAudit(audit)
-    })
+    return store.mutate(fn, audit)
   } catch (error) {
     exitStoreWriteFailure(error)
   }
 }
 
+/** Alias kept for the existing call sites (memory reject, ...): same channel. */
+function updateStoreWithAudit(fn, audit) {
+  return mutateWithAudit(fn, audit)
+}
+
+/**
+ * Record a delivery row + its audit row in one transaction.
+ *
+ * P0-3 (performance audit): the old path called loadLedger() just to resolve the
+ * active matter id, i.e. a hidden FULL load on every deliver/template/pack
+ * command (two full loads per deliver at 200k rows). Resolve it from the latest
+ * session or the first active matter instead: both are single indexed lookups.
+ */
+function activeMatterIdForWrite(store) {
+  try {
+    const latest = store?.listSessions(1)?.[0]
+    if (latest?.matterId) return latest.matterId
+  } catch {}
+  try { return store?.firstActiveMatter?.()?.id ?? 'matter' } catch { return 'matter' }
+}
+
+/**
+ * Delivery matter id resolved INSIDE the write transaction: latest session's
+ * matter > first active matter > a newly inserted default matter (defaults
+ * identical to Ledger.addMatter({title:'默认事项'})). This keeps the historical
+ * "a delivery always points at a real matter" behaviour without the old hidden
+ * full loadLedger() (P0-3); the default matter and the delivery row commit
+ * together with the audit row.
+ */
+function resolveDeliveryMatterId(store) {
+  try {
+    const latest = store.listSessions(1)?.[0]
+    if (latest?.matterId) return latest.matterId
+  } catch {}
+  const active = store.firstActiveMatter?.()
+  if (active) return active.id
+  const timestamp = now()
+  const matter = {
+    id: LOCAL_PORTS.ids.next('matter'),
+    title: '默认事项',
+    status: 'active',
+    domain: 'general',
+    secrecy: 0,
+    participants: [],
+    deadlines: [],
+    openQuestions: [],
+    createdAt: timestamp,
+    updatedAt: timestamp,
+  }
+  store.insertMatter(matter)
+  return matter.id
+}
+
 function recordDeliveryWithAudit({ files, tool, title, validation, audit }) {
   const store = dbStore()
   if (!store) return
-  let matterId = 'matter'
-  try { matterId = activeMatterId(loadLedger()) } catch {}
+  const conversationId = latestConversationId()
   updateStoreWithAudit((s) => s.addDelivery({
-    matterId,
-    conversationId: latestConversationId(),
+    matterId: resolveDeliveryMatterId(s),
+    conversationId,
     files,
     tool,
     title,
@@ -574,7 +853,7 @@ function latestConversationId() {
 }
 
 function printHistory() {
-  const store = dbStore()
+  const store = readStoreOrExit()
   const rows = store?.listSessions(12) ?? []
   if (!rows.length) {
     console.log('no saved sessions yet')
@@ -586,12 +865,17 @@ function printHistory() {
 }
 
 function printReceipt() {
-  const store = dbStore()
+  const store = readStoreOrExit()
   if (!store) { console.log('receipt requires SQLite store'); return }
-  const delivery = store.listDeliveries(1)[0]
+  // 0.2.3: one read snapshot for the delivery row, model usage and research row.
+  const { delivery, usage, research } = store.read(() => ({
+    delivery: store.listDeliveries(1)[0],
+    usage: store.sumModelUsage(),
+    research: store.listResearch?.(1)?.[0],
+  }))
   if (!delivery) { console.log('还没有交付记录；先运行 `advisers office` / `advisers template`。'); return }
   // P1-2 (0.2.2): only this delivery's matter and its open commitments are read.
-  const ledger = loadLedger({ commitments: { status: 'open', matterId: delivery.matterId } })
+  const ledger = loadReadLedger({ commitments: { status: 'open', matterId: delivery.matterId } })
   const open = ledger.openCommitments(delivery.matterId)
   console.log(`回执 ${delivery.id}`)
   console.log(`时间：${delivery.createdAt}`)
@@ -601,9 +885,7 @@ function printReceipt() {
   console.log(`校验：${delivery.validation || '未记录'}`)
   console.log(`未完成承诺：${open.length}`)
   for (const c of open.slice(0, 3)) console.log(`  ${c.id}  ${c.action}${c.dueAt ? ` · ${c.dueAt.slice(0, 10)}` : ''}`)
-  const usage = store.sumModelUsage()
   if (usage.calls) console.log(`模型：${usage.calls} calls · ${usage.total_tokens} tokens`)
-  const research = store.listResearch?.(1)?.[0]
   if (research) {
     console.log(`研究：${research.query}`)
     for (const source of research.sources.slice(0, 3)) console.log(`  web: ${source.title || '(untitled)'} ${source.url}`)
@@ -612,7 +894,7 @@ function printReceipt() {
 }
 
 function printDeliveries() {
-  const store = dbStore()
+  const store = readStoreOrExit()
   const rows = store?.listDeliveries(12) ?? []
   if (!rows.length) {
     console.log('no deliveries yet')
@@ -620,7 +902,7 @@ function printDeliveries() {
   }
   // P1-2 (0.2.2): only matter titles are needed for the fallback label.
   let matters = []
-  try { matters = loadLedger({ matters: {} }).listMatters() } catch {}
+  try { matters = loadReadLedger({ matters: {} }).listMatters() } catch {}
   const title = new Map(matters.map((m) => [m.id, m.title]))
   for (const row of rows) {
     console.log(`${row.createdAt.slice(0, 19)}  ${row.title ?? title.get(row.matterId) ?? row.matterId}  [${row.tool ?? 'tool'}] ${row.validation ?? ''}`)
@@ -831,11 +1113,14 @@ Agent workspace:
   other sensitive paths stay denied even then.
 
 Concurrency:
-  One advisers process per ADVISERS_HOME uses the SQLite ledger at a time. The
-  CLI takes ~/.advisers/instance.lock before opening state.db; a second process
-  waits up to ADVISERS_LOCK_TIMEOUT_MS and then exits with E_DB_LOCKED instead
-  of writing from a stale ledger snapshot. ui / mcp / bridge keep the lock while
-  they run, so stop them before running other commands (or raise the timeout).
+  One advisers WRITER per ADVISERS_HOME uses the SQLite ledger at a time. The
+  CLI takes ~/.advisers/instance.lock before opening state.db for a write; a
+  second writer waits up to ADVISERS_LOCK_TIMEOUT_MS and then exits with
+  E_DB_LOCKED instead of writing from a stale ledger snapshot. mcp / bridge keep
+  the lock while they run (they write audit rows), so stop them before running
+  other writes (or raise the timeout). Read-only commands (status/today/who/...,
+  ui, tui, pet-brief) do NOT take the lock: they read a consistent WAL snapshot,
+  so they keep working and never block a writer.
   A stale lock (dead pid, or not refreshed for 1h) is reclaimed; SIGINT/SIGTERM
   and normal exit release the lock. Concurrent commands therefore either run one
   after another or fail explicitly — they never silently overwrite each other.
@@ -883,25 +1168,106 @@ function learnPreference(ledger, statement, quote, { explicit = false } = {}) {
   return { preference: pref, promoted: false }
 }
 
+/**
+ * `advisers purge <matter> [--yes]` — privacy delete one matter.
+ *
+ * 0.2.3 §3.3.12: the dry-run is a pure read (lock-free, partial tables). With
+ * --yes the ledger tombstones, the non-ledger row deletion and the audit row all
+ * commit in ONE transaction; the business rules are the same as
+ * core Ledger.purgeMatter (test/incremental-write.test.js pins the SQL half).
+ * The historical raw UPDATEs for links/updates/routes are the documented P1
+ * exception: SqliteStore has no targeted primitives for those tables yet.
+ * VACUUM cannot run inside a transaction, so it runs after COMMIT.
+ */
 function purgeMatter(id, confirmed) {
   if (!id) { console.error('usage: advisers purge <matter-id> [--yes]'); process.exitCode = 1; return }
-  const ledger = loadLedger()
-  const matter = ledger.getMatter(id)
-  if (!matter) { console.error(`unknown matter: ${id}`); process.exitCode = 1; return }
-  const facts = ledger.listFacts(id).length
-  const links = ledger.listLinks(id).length
-  const updates = ledger.listUpdates().filter((u) => u.sourceMatter === id || u.targetMatter === id).length
-  const commitments = ledger.openCommitments(id).length
-  console.log(`matter ${id}: ${matter.title}`)
-  console.log(`facts=${facts} links=${links} updates=${updates} open_commitments=${commitments}`)
-  if (!confirmed) {
-    console.log('dry-run only; re-run with --yes to purge')
+  if (mode === 'json') {
+    const ledger = loadJson()
+    const matter = ledger.getMatter(id)
+    if (!matter) { console.error(`unknown matter: ${id}`); process.exitCode = 1; return }
+    const facts = ledger.listFacts(id).length
+    const links = ledger.listLinks(id).length
+    const updates = ledger.listUpdates().filter((u) => u.sourceMatter === id || u.targetMatter === id).length
+    const commitments = ledger.openCommitments(id).length
+    console.log(`matter ${id}: ${matter.title}`)
+    console.log(`facts=${facts} links=${links} updates=${updates} open_commitments=${commitments}`)
+    if (!confirmed) { console.log('dry-run only; re-run with --yes to purge'); return }
+    const counts = ledger.purgeMatter(id)
+    saveJson(ledger)
+    console.log(`purged: ${JSON.stringify(counts)} sqlite={}`)
     return
   }
-  const counts = ledger.purgeMatter(id)
-  const sqlite = dbStore()?.purgeMatterData(id)
-  saveLedgerWithAudit(ledger, { actor: 'local', action: 'matter.purge', allowed: true, reason: `${id} ${JSON.stringify(counts)}` })
-  console.log(`purged: ${JSON.stringify(counts)} sqlite=${JSON.stringify(sqlite ?? {})}`)
+  if (!confirmed) {
+    try {
+      const store = readStoreOrExit()
+      const { matter, facts, links, updates, commitments } = store.read(() => {
+        const target = store.getMatter(id)
+        if (!target) return { matter: undefined }
+        return {
+          matter: target,
+          facts: store.loadFacts({ matterId: id }).filter((f) => f.status !== 'deleted').length,
+          links: store.loadLinks({}).filter((l) => (l.fromMatter === id || l.toMatter === id) && l.status !== 'rejected').length,
+          updates: store.loadUpdates().filter((u) => (u.sourceMatter === id || u.targetMatter === id) && u.status === 'pending').length,
+          commitments: store.loadCommitments({ matterId: id, status: 'open' }).length,
+        }
+      })
+      if (!matter) { console.error(`unknown matter: ${id}`); process.exitCode = 1; return }
+      console.log(`matter ${id}: ${matter.title}`)
+      console.log(`facts=${facts} links=${links} updates=${updates} open_commitments=${commitments}`)
+      console.log('dry-run only; re-run with --yes to purge')
+    } catch (error) { reportCommandFailure(error) }
+    return
+  }
+  const audit = { actor: 'local', action: 'matter.purge', allowed: true, reason: '' }
+  try {
+    const { result } = mutateWithAudit((store) => {
+      const timestamp = now()
+      const counts = { facts: 0, links: 0, updates: 0, commitments: 0, preferences: 0, routes: 0 }
+      for (const fact of store.loadFacts({ matterId: id })) {
+        if (fact.status === 'deleted') continue
+        store.updateFact(fact.id, { status: 'deleted', object: '[purged]', source: null, evidence: null, deletedAt: timestamp, deletedReason: 'matter_purged' })
+        counts.facts++
+      }
+      for (const link of store.loadLinks({})) {
+        if ((link.fromMatter === id || link.toMatter === id) && link.status !== 'rejected') {
+          store.db.prepare('UPDATE links SET status = ?, evidence = ? WHERE id = ?').run('rejected', '[]', link.id)
+          counts.links++
+        }
+      }
+      for (const update of store.loadUpdates()) {
+        if ((update.sourceMatter === id || update.targetMatter === id) && update.status === 'pending') {
+          store.db.prepare('UPDATE updates SET status = ?, change = ?, rollback = NULL WHERE id = ?').run('rejected', '[purged]', update.id)
+          counts.updates++
+        }
+      }
+      for (const commitment of store.loadCommitments({ matterId: id })) {
+        if (commitment.status !== 'open') continue
+        store.updateCommitment(commitment.id, { status: 'dropped', action: '[purged]', creditor: '[purged]', evidence: [] })
+        counts.commitments++
+      }
+      for (const preference of store.loadPreferences()) {
+        if (preference.scope?.level === 'matter' && preference.scope?.value === id && preference.status !== 'deprecated') {
+          store.updatePreference(preference.id, { status: 'deprecated', statement: '[purged]', evidence: [] })
+          counts.preferences++
+        }
+      }
+      for (const [key, matterId] of Object.entries(store.loadRoutes())) {
+        if (matterId !== id) continue
+        store.db.prepare('DELETE FROM routes WHERE key = ?').run(key)
+        counts.routes++
+      }
+      store.updateMatter(id, { status: 'archived', title: '[purged]', summary: null, updatedAt: timestamp })
+      const sqlite = store.purgeMatterData(id, { vacuum: false })
+      audit.reason = `${id} ${JSON.stringify(counts)}`
+      return { counts, sqlite }
+    }, audit)
+    try {
+      const store = dbStore()
+      store.checkpoint({ mode: 'TRUNCATE' })
+      store.db.exec('VACUUM')
+    } catch {}
+    console.log(`purged: ${JSON.stringify(result.counts)} sqlite=${JSON.stringify(result.sqlite ?? {})}`)
+  } catch (error) { reportCommandFailure(error) }
 }
 
 function parseFlags(args) {
@@ -936,9 +1302,8 @@ function recordManualDelivery(files, tool, title, validation) {
   try {
     const store = dbStore()
     if (!store) return
-    const ledger = loadLedger()
     store.addDelivery({
-      matterId: activeMatterId(ledger),
+      matterId: activeMatterIdForWrite(store),
       conversationId: latestConversationId(),
       files,
       tool,
@@ -955,6 +1320,81 @@ function activeMatterId(ledger, explicit) {
     if (latest) return latest.matterId
   } catch {}
   return ledger.listMatters()[0]?.id ?? ledger.addMatter({ title: '默认事项' }).id
+}
+
+// ---------------------------------------------------------------------------
+// 0.2.3 incremental-write command helpers (03-design-persistence-v2.md §3.3).
+//
+// Every directed write resolves its matter/session/ids BEFORE entering the
+// transaction and only calls targeted store.get*/insert*/update*/setMeta inside
+// it: no loadLedger()/saveLedger() may run inside mutateWithAudit (a full load
+// inside the transaction would both block writers and re-introduce the
+// 107MB-WAL write amplification this path exists to remove).
+// ---------------------------------------------------------------------------
+
+/**
+ * Matter id for a directed write: explicit --matter (trusted, matching the
+ * historical semantics), else the latest session's matter, else the first active
+ * matter, else a newly inserted default matter (defaults identical to
+ * Ledger.addMatter({title:'默认事项'})).
+ */
+function resolveWriteMatterId(store, explicit) {
+  if (explicit) return String(explicit)
+  try {
+    const latest = store.listSessions(1)?.[0]
+    if (latest?.matterId) return latest.matterId
+  } catch {}
+  const active = store.firstActiveMatter?.()
+  if (active) return active.id
+  const timestamp = now()
+  const matter = {
+    id: LOCAL_PORTS.ids.next('matter'),
+    title: '默认事项',
+    status: 'active',
+    domain: 'general',
+    secrecy: 0,
+    participants: [],
+    deadlines: [],
+    openQuestions: [],
+    createdAt: timestamp,
+    updatedAt: timestamp,
+  }
+  store.insertMatter(matter)
+  return matter.id
+}
+
+/** Session id stamped on CLI-made evidence; falls back to 'local' like before. */
+function latestConversationIdFor(store) {
+  try { return store.listSessions(1)?.[0]?.conversationId ?? 'local' } catch { return 'local' }
+}
+
+/**
+ * Report a command failure either as a store write failure (E_DB_LOCKED etc.,
+ * with the documented hint) or as a plain business error (usage/unknown id) with
+ * exit code 1. Keeps the 0.2.2 stderr text for business errors unchanged.
+ */
+function reportCommandFailure(error) {
+  const code = error?.code
+  const storeFailure = code === 'E_DB_LOCKED' || code === 'E_DB_CORRUPT' || code === 'E_MIGRATE_BUSY' ||
+    code === 'E_MIGRATION_BACKUP' || code === 'E_READ_ONLY' || code === 'E_TX_REQUIRED' ||
+    code === 'E_SCHEMA_STALE' || code === 'E_SCHEMA_NEWER' || code === 'E_VAULT_SEALED' ||
+    error?.errcode !== undefined || /SQLITE_|database is locked|disk I\/O error|database or disk is full/i.test(String(error?.message ?? ''))
+  if (storeFailure) { exitStoreWriteFailure(error); return }
+  console.error(error?.message ?? String(error))
+  process.exitCode = 1
+}
+
+/** Shared output lines of `commit add` (kept byte-identical to 0.2.2). */
+function printCommitAdded(c, reminderOffsets) {
+  console.log(`${c.id} open ${c.action}${c.dueAt ? ` due ${c.dueAt}` : ''}`)
+  if (reminderOffsets !== undefined) console.log('reminder-offsets: ' + JSON.stringify(reminderOffsets))
+}
+
+/** Shared output lines of `commit edit` (kept byte-identical to 0.2.2). */
+function printCommitUpdated(c, patch) {
+  console.log(`updated: ${c.id}`)
+  if ('reminderOffsets' in patch) console.log('reminder-offsets: ' + JSON.stringify(c.reminderOffsets ?? []))
+  if (patch.dueAt !== undefined) console.log('due: ' + (c.dueAt ?? '未定'))
 }
 
 function printCommitments(ledger, asJson = false) {
@@ -987,7 +1427,7 @@ function printWeek(ledger) {
   const open = commitments.filter((c) => c.status === 'open')
   const overdue = open.filter((c) => c.dueAt && Date.parse(c.dueAt) < now)
   let deliveries = []
-  try { deliveries = dbStore()?.listDeliveries(100) ?? [] } catch {}
+  try { deliveries = readStoreOrExit()?.listDeliveries(100) ?? [] } catch {}
   const weekDeliveries = deliveries.filter((d) => Date.parse(d.createdAt) >= weekAgo)
   console.log(`本周（${new Date(weekAgo).toISOString().slice(0, 10)} – ${new Date(now).toISOString().slice(0, 10)}）`)
   console.log(`承诺：到期 ${due.length} 件，完成 ${done.length} 件，未完成 ${open.length} 件，逾期 ${overdue.length} 件。`)
@@ -1048,31 +1488,52 @@ async function printSources(ledger) {
   for (const r of rows.slice(0, 20)) console.log(`  ${r.commitmentId}  ${r.action}  ← ${r.label} (${r.ref ?? '-'})  「${r.quote.slice(0, 80)}」`)
 }
 
-async function today(ledger, { calendar = false, sources = false, json = false } = {}) {
+async function today(openRows, { calendar = false, sources = false, json = false, ledger = null } = {}) {
   const nowMs = Date.now()
   const localDay = localDayOf(nowMs)
   const weekAhead = nowMs + 7 * 86400_000
-  // P0-1: classify in one pass, formatting each due date at most once (the old
-  // four filters called day() up to four times per commitment).
+  // P0-1/P1-2 (0.2.3): cache the parsed time + Asia/Shanghai calendar day of
+  // every DISTINCT dueAt string. A 200k ledger has ~66k open commitments but
+  // only a few hundred distinct due dates, so the old per-row Date.parse /
+  // localDayOf calls (and the sort comparator that re-parsed every dueAt)
+  // dominated today's hot path. Rows with an unparseable dueAt are counted as
+  // no-due instead of crashing on Intl.format(Invalid Date).
+  const dueCache = new Map()
+  const dueInfo = (dueAt) => {
+    let info = dueCache.get(dueAt)
+    if (info === undefined) {
+      const ms = Date.parse(dueAt)
+      info = { ms, day: Number.isNaN(ms) ? null : localDayOf(ms) }
+      dueCache.set(dueAt, info)
+    }
+    return info
+  }
+  // P0-1: classify in one pass, formatting each due date at most once.
   const overdue = []
   const todayDue = []
   const week = []
   const waiting = []
   const noDue = []
-  for (const c of ledger.openCommitments()) {
+  let next = null
+  let nextMs = Infinity
+  for (const c of openRows) {
     if (c.debtor === 'third' || c.debtor.startsWith('third:')) waiting.push(c)
     if (!c.dueAt) { noDue.push(c); continue }
-    const due = Date.parse(c.dueAt)
-    if (due < nowMs) {
-      if (localDayOf(c.dueAt) !== localDay) overdue.push(c)
+    const info = dueInfo(c.dueAt)
+    if (info.day === null) { noDue.push(c); continue }
+    if (info.ms < nowMs) {
+      if (info.day !== localDay) overdue.push(c)
       else todayDue.push(c)
-    } else if (localDayOf(c.dueAt) === localDay) {
+    } else if (info.day === localDay) {
       todayDue.push(c)
-    } else if (due <= weekAhead) {
+    } else if (info.ms <= weekAhead) {
       week.push(c)
     }
+    // next = the earliest due row among the three buckets ; all of them have
+    // ms <= weekAhead, so this single comparison replaces the old Date.parse
+    // sort of the concatenated buckets.
+    if (info.ms <= weekAhead && info.ms < nextMs) { nextMs = info.ms; next = c }
   }
-  const next = [...overdue, ...todayDue, ...week].sort((a, b) => Date.parse(a.dueAt) - Date.parse(b.dueAt))[0]
   if (json) {
     // JSON contract v1 (docs/CLI-JSON.md): same classification as the human view.
     const payload = {
@@ -1087,7 +1548,7 @@ async function today(ledger, { calendar = false, sources = false, json = false }
       next: next ? { id: next.id, action: next.action, dueAt: next.dueAt } : null,
     }
     if (calendar) payload.calendar = (await calendarOccurrencesToday()).occurrences
-    if (sources) {
+    if (sources && ledger) {
       payload.sources = (await collectSourceRows(ledger)).map(({ commitmentId, action, type, ref, quote }) => ({ commitmentId, action, type, ref, quote }))
     }
     console.log(JSON.stringify(payload, null, 2))
@@ -1101,7 +1562,7 @@ async function today(ledger, { calendar = false, sources = false, json = false }
   }
   console.log('下一件：' + (next?.action ?? '先定一个承诺或交付。'))
   if (calendar) await printCalendarToday()
-  if (sources) await printSources(ledger)
+  if (sources && ledger) await printSources(ledger)
 }
 
 function tick(ledger, asJson = false) {
@@ -1112,7 +1573,7 @@ function tick(ledger, asJson = false) {
   const due = []
   const candidates = []
   const snoozeKeys = []
-  let statusChanged = false
+  const wakeIds = []
   // P0-2: one meta query for every snooze deadline instead of getMeta() per
   // snoozed commitment.
   const snoozeUntil = store ? store.listMetaByPrefix('snooze:') : new Map()
@@ -1122,7 +1583,7 @@ function tick(ledger, asJson = false) {
       const until = snoozeUntil.get(`snooze:${c.id}`)
       if (until && Date.parse(until) > now) continue
       c.status = 'open'
-      statusChanged = true
+      wakeIds.push(c.id)
       snoozeKeys.push(`snooze:${c.id}`)
     }
     if (!c.dueAt || Date.parse(c.dueAt) > weekAhead) continue
@@ -1170,11 +1631,17 @@ function tick(ledger, asJson = false) {
     nudgeRows.push({ localDay, level, commitmentId: c.id, body: c.action })
     due.push({ ...c, level })
   }
-  // P0-2: one transaction for all nudge inserts and one for snooze cleanup;
-  // the ledger snapshot is only rewritten when a snooze actually woke up.
-  if (store && nudgeRows.length) store.addNudges(nudgeRows)
-  if (store && snoozeKeys.length) store.deleteMetaKeys(snoozeKeys)
-  if (statusChanged) saveLedger(ledger)
+  // 0.2.3 §3.3.5: nudge inserts, conditional snooze wake-ups and the snooze
+  // meta cleanup commit in ONE applyTick transaction (no audit row, matching the
+  // historical tick behaviour). A nudge can therefore never be recorded while
+  // its wake-up is lost; the old path did a full saveLedger() on wake-up.
+  if (store && (nudgeRows.length || wakeIds.length || snoozeKeys.length)) {
+    store.applyTick({ nudgeRows, wakeIds, snoozeKeys })
+  } else if (mode === 'json' && wakeIds.length) {
+    // Legacy JSON store has no nudge/meta tables: only the in-memory wake-up can
+    // be persisted (the historical behaviour).
+    saveJson(ledger)
+  }
   if (asJson) {
     console.log(JSON.stringify({ now: new Date(now).toISOString(), localDay, due }, null, 2))
     return
@@ -1189,7 +1656,7 @@ function tick(ledger, asJson = false) {
 
 function printAudit(args = []) {
   ensureHome()
-  const store = dbStore()
+  const store = readStoreOrExit()
   if (!store) { console.log('audit requires SQLite store'); return }
   if (args.includes('--check-db')) {
     try {
@@ -1213,7 +1680,7 @@ function printPrivacy(args = []) {
   ensureHome()
   const asJson = args.includes('--json')
   const prove = args.includes('--prove')
-  const store = dbStore()
+  const store = readStoreOrExit()
   let audit = null
   try { const v = store?.verifyAudit(); if (v) audit = { ok: v.ok, count: v.count ?? 0 } } catch {}
   // Privacy audit P2-2: list every actual egress surface from the code base
@@ -1274,7 +1741,7 @@ function printPrivacy(args = []) {
 }
 
 function printLinks() {
-  const ledger = loadLedger()
+  const ledger = loadReadLedger({ links: {}, matters: {} })
   const rows = ledger.listLinks()
   if (!rows.length) { console.log('no links yet'); return }
   const title = new Map(ledger.listMatters().map((m) => [m.id, m.title]))
@@ -1434,21 +1901,40 @@ async function petBrief(args) {
       if (!result.ok) process.exitCode = 1
       return
     }
-    // P1-1/P0-1: pet-brief reads state.db read-only, but it still shares the
-    // single-writer HOME. Report a sealed vault with the stable code instead of
-    // "store not found", and take the instance lock so the read cannot race a
-    // seal/unseal/sync-pull replacing the database.
+    // P1-1/P0-1: pet-brief is a pure read. Report a sealed vault with the stable
+    // code instead of "store not found"; 0.2.3's read path takes no HOME lock, so
+    // a live writer cannot block it and it writes/chmods nothing. A missing
+    // plaintext database stays the documented structured "store not found" error
+    // (this command never initializes a database).
     if (mode === 'sqlite') {
       const sealed = vaultSealedPath()
       if (sealed) return fail('E_VAULT_SEALED', 'the database is sealed at ' + sealed + '; run "ADVISERS_VAULT_PASSPHRASE=... advisers vault unseal" first (no empty database was created)')
-      ensureInstanceLock()
     }
-    const { readLedgerSnapshotReadOnly } = await import('../lib/pet-brief-store.js')
     let snapshot
-    try {
-      snapshot = readLedgerSnapshotReadOnly({ store: mode, dbPath: DB, statePath: STATE })
-    } catch (error) {
-      return fail(error?.code ?? 'E_STORE', error?.message ?? String(error))
+    if (mode === 'json' || !existsSync(DB)) {
+      const { readLedgerSnapshotReadOnly } = await import('../lib/pet-brief-store.js')
+      try {
+        snapshot = readLedgerSnapshotReadOnly({ store: mode, dbPath: DB, statePath: STATE })
+      } catch (error) {
+        return fail(error?.code ?? 'E_STORE', error?.message ?? String(error))
+      }
+    } else {
+      // 0.2.3 P1-1: buildPetBrief only reads matters/commitments/facts, so the
+      // projection no longer pays for the full nine-table snapshot.
+      try {
+        const store = openReadStore()
+        snapshot = store.read(() => ({
+          version: 1,
+          matters: store.loadMatters(),
+          commitments: store.loadCommitments(),
+          // buildPetBrief only ever reads listFacts(), i.e. confirmed + not
+          // expired/deleted; filtering status in SQL avoids mapping history rows.
+          facts: store.loadFacts({ status: 'confirmed' }),
+        }))
+      } catch (error) {
+        const code = error?.code === 'E_SCHEMA_STALE' || error?.code === 'E_SCHEMA_NEWER' ? error.code : 'E_STORE'
+        return fail(code, error?.message ?? String(error))
+      }
     }
     const ledger = Ledger.fromJSON(snapshot)
     const brief = buildPetBrief(ledger, displayPolicy ? { now: Date.now(), displayPolicy } : { now: Date.now() })
@@ -1484,7 +1970,7 @@ function printLearnReceipt(result) {
 }
 
 function printPreferences() {
-  const ledger = loadLedger()
+  const ledger = loadReadLedger({ preferences: {} })
   const rows = ledger.listPreferences({ includeCandidates: true })
   if (!rows.length) { console.log('no preferences yet'); return }
   for (const p of rows) {
@@ -1517,30 +2003,79 @@ async function doctor(args = []) {
     check('sqlite', true, 'skipped (vault sealed)')
     check('audit', true, 'skipped (vault sealed)')
     check('schema', true, 'skipped (vault sealed)')
+  } else if (mode === 'json') {
+    // Legacy JSON store: there is no SQLite file/WAL/audit chain to inspect.
+    check('database', true, existsSync(STATE) ? `${STATE} (JSON store)` : `${STATE} (JSON store, not initialized yet)`)
+    check('sqlite', true, 'skipped (ADVISERS_STORE=json)')
+    check('audit', true, 'unavailable (the JSON store has no audit chain)')
+    check('schema', true, 'n/a (JSON store)')
+    if (checkDb) check('db-integrity', true, 'skipped (JSON store mode)')
   } else {
+    // 0.2.3 §4.7: doctor no longer takes the writer lock. The lock row reports
+    // who holds it (informational, never a FAIL), and every read-only check runs
+    // on the lock-free snapshot -- a live mcp/bridge therefore no longer makes
+    // doctor red or blocks diagnosis.
+    let lockDetail = `${LOCK_PATH} (not held)`
     try {
-      const store = openStore()
-      // P0-1: doctor holds the instance lock while it inspects the store; the
-      // row also exposes the lock path so a stuck holder can be diagnosed.
-      check('lock', true, `${instanceLock?.path ?? LOCK_PATH} (held by pid ${process.pid})`)
+      const lockInfo = readInstanceLock(HOME)
+      if (lockInfo?.record && !instanceLockIsStale(lockInfo)) {
+        lockDetail = `${lockInfo.file} (held by pid ${lockInfo.record.pid}${lockInfo.record.command ? `: ${lockInfo.record.command}` : ''})`
+      } else if (lockInfo) {
+        lockDetail = `${lockInfo.file} (stale, reclaimable)`
+      }
+    } catch (error) { lockDetail = `${LOCK_PATH} (unreadable: ${error.message})` }
+    check('lock', true, lockDetail)
+    try {
+      const store = openReadStore()
       let dbBytes = 0
       try { dbBytes = statSync(DB).size } catch {}
       check('database', dbBytes > 0, dbBytes > 0 ? `${DB} (${dbBytes} bytes)` : `E_DB_CORRUPT: ${DB} is 0 bytes; back it up and restore`)
-      // The open already inspected/quarantined a broken WAL; surface it here
-      // (cheap) even without --check-db.
+      // The open inspected a broken WAL; surface it here (cheap) even without
+      // --check-db. A read-only open never quarantines: --check-db tells the
+      // user to run a writable command for that.
       const wal = store.walStatus ?? inspectWalStatus(DB)
       const walBad = ['invalid', 'truncated', 'unreadable'].includes(String(wal?.status))
-      check('wal', !walBad, `${wal?.status ?? 'unknown'}${wal?.bytes ? ` bytes=${wal.bytes}` : ''}${wal?.reason ? ` (${wal.reason})` : ''}${checkDb ? '' : '; run --check-db for quick_check + FTS'}`)
+      // The lightweight read-only open cannot quarantine a broken WAL. With
+      // --check-db the writable maintenance section below handles it; only the
+      // default (lightweight) doctor reports it as a standing failure.
+      const walDeferred = checkDb && walBad
+      check('wal', !walBad || walDeferred, `${wal?.status ?? 'unknown'}${wal?.bytes ? ` bytes=${wal.bytes}` : ''}${wal?.reason ? ` (${wal.reason})` : ''}${walDeferred ? '; deferred to --check-db maintenance' : checkDb ? '' : '; run --check-db for quick_check + FTS'}`)
       // 0.2.3 Wave 1: quick_check/FTS moved behind --check-db so the default
       // doctor stays sub-200ms on a large ledger.
-      check('sqlite', true, `${DB} (opened; run --check-db for quick_check + FTS integrity)`)
+      check('sqlite', true, `${DB} (opened read-only; run --check-db for quick_check + FTS integrity)`)
       const audit = store.verifyAudit()
       check('audit', audit.ok, audit.ok ? `${audit.count} entries` : `BROKEN at seq ${audit.seq}`)
-      check('schema', true, String(store.db.prepare("SELECT value FROM meta WHERE key='schema_version'").get()?.value ?? '?'))
-      if (checkDb) {
+      check('schema', true, String(store.schemaVersion() ?? '?'))
+    } catch (error) {
+      if (error?.code === 'E_DB_LOCKED') {
+        // Only possible before the database exists (a first run needs the
+        // writable path); nothing can be read, so this stays a real FAIL.
+        check('sqlite', false, 'skipped (database does not exist yet and another instance holds the writer lock)')
+      } else if (error?.code === 'E_DB_CORRUPT') {
+        check('database', false, error.message)
+        check('sqlite', false, 'refusing to open a 0-byte/corrupt database (no silent rebuild)')
+        check('audit', false, 'skipped (database damaged)')
+        check('schema', false, 'skipped (database damaged)')
+      } else if (error?.code === 'E_SCHEMA_STALE' || error?.code === 'E_SCHEMA_NEWER') {
+        check('sqlite', false, error.message)
+        check('schema', false, 'skipped (schema needs a writable command)')
+      } else {
+        check('sqlite', false, error.message)
+      }
+    }
+    if (checkDb && !sealed) {
+      // 0.2.3 §4.7: --check-db is the explicit maintenance path. FTS5's
+      // 'integrity-check' writes an internal row, so quick_check/FTS verification
+      // needs a WRITABLE connection inside the instance lock; a read-only one
+      // reports 'attempt to write a readonly database' and turned a healthy
+      // fresh home into a FAIL. A live ui/mcp/bridge holder therefore fails this
+      // explicit check with a clear E_DB_LOCKED hint instead; the default
+      // lightweight doctor above stays read-only and works while locked.
+      try {
+        const maintenanceStore = openStore()
         // One aggregate report reuses the Wave 0 lib contracts:
         // store.integrityReport() (quick_check + walReport + verifyFtsIntegrity).
-        const report = store.integrityReport({ quickCheck: true, fts: true })
+        const report = maintenanceStore.integrityReport({ quickCheck: true, fts: true })
         const quick = report.quickCheck
         check('db-quick-check', quick?.ok === true, quick ? (quick.ok ? 'ok' : String(quick.verdict ?? quick.error ?? 'failed')) : 'skipped')
         const fts = report.fts
@@ -1548,25 +2083,15 @@ async function doctor(args = []) {
         check('db-fts', ftsOk, !fts
           ? 'skipped'
           : `state=${fts.state} tokenizer=${fts.tokenizer ?? '-'}${ftsOk ? '' : ` errors=${(fts.errors ?? []).slice(0, 2).join(' | ')}`}`)
-        const walReport = report.wal ?? store.walReport()
+        const walReport = report.wal ?? maintenanceStore.walReport()
         check('db-wal', walReport.ok === true, `journal=${walReport.journalMode ?? '?'} initial=${walReport.initial?.status ?? '?'} current=${walReport.current?.status ?? '?'}${walReport.ok ? '' : `; ${(report.errors ?? []).slice(0, 1).join('')}`}`)
         checkBackupReadable(check)
-      }
-    } catch (error) {
-      if (error?.code === 'E_DB_LOCKED') {
-        // Another live process holds the store; this is a real FAIL, not a
-        // reason to silently inspect a stale snapshot.
-        check('lock', false, error.message)
-        check('sqlite', false, 'skipped (another instance holds the instance lock)')
-      } else if (error?.code === 'E_DB_CORRUPT') {
-        check('lock', true, `${instanceLock?.path ?? LOCK_PATH} (held by pid ${process.pid})`)
-        check('database', false, error.message)
-        check('sqlite', false, 'refusing to open a 0-byte/corrupt database (no silent rebuild)')
-        check('audit', false, 'skipped (database damaged)')
-        check('schema', false, 'skipped (database damaged)')
-      } else {
-        check('lock', Boolean(instanceLock?.held), instanceLock?.held ? `${LOCK_PATH} (held by pid ${process.pid})` : 'not taken')
-        check('sqlite', false, error.message)
+      } catch (error) {
+        if (error?.code === 'E_DB_LOCKED') {
+          check('db-integrity', false, `${error.message}; stop the long-running advisers process (ui/mcp/bridge) and retry, or run the lightweight \`advisers doctor\` without --check-db`)
+        } else {
+          check('db-integrity', false, `cannot open a writable connection for the database checks: ${error.message}`)
+        }
       }
     }
   }
@@ -1637,14 +2162,25 @@ function printStatus(asJson = false) {
     // count four of them (664ms / 352MB RSS at 50k rows in the round-2 audit).
     // listMatters()/listPreferences()/listRoutines()/listLinks() filter status,
     // so the counts replicate those filters exactly.
-    const store = openLedgerStore()
-    data.matters = store.countMatters({ status: 'active' })
-    data.prefs = store.countPreferences({ status: 'confirmed' })
-    data.routines = store.countRoutines()
-    data.links = store.countLinks({ excludeRejected: true })
-    data.sessions = store.countSessions()
-    data.deliveries = store.countDeliveries()
-    const usage = store.sumModelUsage()
+    // 0.2.3: read through the lock-free store; one read transaction keeps the
+    // seven aggregates on the same committed snapshot (§4.5).
+    const store = readStoreOrExit()
+    const counts = store.read(() => ({
+      matters: store.countMatters({ status: 'active' }),
+      prefs: store.countPreferences({ status: 'confirmed' }),
+      routines: store.countRoutines(),
+      links: store.countLinks({ excludeRejected: true }),
+      sessions: store.countSessions(),
+      deliveries: store.countDeliveries(),
+      usage: store.sumModelUsage(),
+    }))
+    data.matters = counts.matters
+    data.prefs = counts.prefs
+    data.routines = counts.routines
+    data.links = counts.links
+    data.sessions = counts.sessions
+    data.deliveries = counts.deliveries
+    const usage = counts.usage
     if (usage.calls) data.modelUsage = usage
   }
   if (asJson) { console.log(JSON.stringify(data, null, 2)); return }
@@ -2348,7 +2884,7 @@ async function repl({ allowPaths = [] } = {}) {
 }
 
 function ls() {
-  const matters = loadLedger().listMatters()
+  const matters = loadReadLedger({ matters: {} }).listMatters()
   if (!matters.length) {
     console.log('no matters yet')
     return
@@ -2365,7 +2901,7 @@ function why(id) {
     return
   }
   if (id.startsWith('fact_')) {
-    const ledger = loadLedger()
+    const ledger = loadReadLedger({ facts: {} })
     const fact = ledger.listFacts(undefined, true).find((f) => f.id === id)
     if (!fact) { console.error(`unknown fact: ${id}`); process.exitCode = 1; return }
     console.log(`${fact.id} [${fact.authority}] ${fact.subject} ${fact.predicate} ${fact.object}`)
@@ -2373,7 +2909,7 @@ function why(id) {
     for (const e of fact.evidence ?? []) console.log(`evidence: ${e.ref ?? '-'} 「${e.quote ?? ''}」`)
     return
   }
-  const pref = loadLedger().findPreference(id)
+  const pref = loadReadLedger({ preferences: {} }).findPreference(id)
   if (!pref) {
     console.error(`unknown preference: ${id}`)
     process.exitCode = 1
@@ -2385,24 +2921,60 @@ function why(id) {
   console.log(`confidence: ${pref.confidence}; status: ${pref.status}`)
 }
 
+/**
+ * `advisers forget <id>` — soft delete (fact tombstone / preference deprecated).
+ *
+ * 0.2.3 §3.3.8: one targeted UPDATE, no full load/save and (as in 0.2.2) no audit
+ * row. An unknown id writes nothing and keeps the "unknown <kind>: <id>" text.
+ */
 function forget(id) {
   if (!id) {
     console.error('usage: advisers forget <pref-id>')
     process.exitCode = 1
     return
   }
-  const ledger = loadLedger()
   const kind = id.startsWith('fact_') ? 'fact' : 'preference'
-  const ok = ledger.forget(kind, id)
-  saveLedger(ledger)
-  console.log(ok ? `forgotten: ${id}` : `unknown ${kind}: ${id}`)
-  if (!ok) process.exitCode = 1
+  if (mode === 'json') {
+    const ledger = loadJson()
+    const ok = ledger.forget(kind, id)
+    saveJson(ledger)
+    console.log(ok ? `forgotten: ${id}` : `unknown ${kind}: ${id}`)
+    if (!ok) process.exitCode = 1
+    return
+  }
+  try {
+    const { result: ok } = mutateWithAudit((store) => {
+      if (kind === 'fact') {
+        if (!store.getFact(id)) return false
+        store.updateFact(id, { status: 'deleted', deletedAt: now() })
+        return true
+      }
+      if (!store.getPreference(id)) return false
+      store.updatePreference(id, { status: 'deprecated' })
+      return true
+    }, null)
+    console.log(ok ? `forgotten: ${id}` : `unknown ${kind}: ${id}`)
+    if (!ok) process.exitCode = 1
+  } catch (error) { reportCommandFailure(error) }
 }
 
 async function exportLedger(all = false, options = {}) {
-  const ledger = loadLedger().toJSON()
+  // 0.2.3 §4.3: exporting to stdout is a pure read (lock-free, one read
+  // transaction). --out additionally appends an audit row, so that variant keeps
+  // the writer lock; the legacy JSON store keeps the in-memory path.
+  const writesAudit = Boolean(options.out)
+  let ledger
+  let store = null
+  if (mode === 'json') {
+    ledger = loadJson().toJSON()
+  } else if (writesAudit) {
+    store = dbStore()
+    ledger = loadLedger().toJSON()
+  } else {
+    store = readStoreOrExit()
+    ledger = store.read(() => store.load())
+  }
   const payload = all ? (() => {
-    const store = dbStore()
     const tables = ['sessions', 'turns', 'session_summaries', 'summary_versions', 'deliveries', 'nudges', 'task_runs', 'audit', 'memory_candidates', 'permit_consumed']
     const data = {}
     for (const table of tables) data[table] = store ? store.db.prepare(`SELECT * FROM ${table}`).all() : []
@@ -2426,7 +2998,7 @@ async function exportLedger(all = false, options = {}) {
       process.exitCode = 1
       return
     }
-    dbStore()?.appendAudit({ actor: 'local', action: options.encrypted ? 'export.encrypted' : 'export', allowed: true, reason: basename(options.out) })
+    store?.appendAudit({ actor: 'local', action: options.encrypted ? 'export.encrypted' : 'export', allowed: true, reason: basename(options.out) })
     console.log(`wrote ${options.out}${options.encrypted ? ' (AES-256-GCM)' : ''}`)
   } else console.log(text)
 }
@@ -2454,12 +3026,23 @@ async function importLedger(file, { replace = false } = {}) {
   try {
     const store = dbStore()
     if (store) {
+      // 0.2.3 §3.3.11: fold the WAL into the main database before copying, so the
+      // pre-import backup cannot silently miss committed transactions (the old
+      // copyFileSync could). A busy checkpoint refuses the import: the ledger is
+      // not replaced and the current database stays authoritative.
+      const checkpoint = store.checkpoint({ mode: 'TRUNCATE' })
+      if (checkpoint.busy) {
+        console.error('import failed: database is busy (another advisers process is writing); close it and retry. The ledger was NOT replaced.')
+        process.exitCode = 1
+        return
+      }
       // 0.2.3 Wave 1: the pre-import backup is plaintext data. Copy with retry
       // and fsync it; if the backup cannot be made, refuse to replace the ledger
       // (never proceed without a recovery copy).
       const backupFile = join(HOME, `import-backup-${Date.now()}.db`)
       copyFileWithRetrySync(DB, backupFile)
       fsyncFileSync(backupFile)
+      try { chmodSync(backupFile, 0o600) } catch {}
     }
   } catch (error) {
     console.error(`import failed: cannot back up the current database before replacing it (${describeFsError(error, { action: 'copying', target: DB })})`)
@@ -2516,8 +3099,12 @@ async function brief(text, deep = false) {
   console.log(core.renderIntentBrief(brief))
   console.log('\n' + core.renderReadback(brief))
   if (deep && process.env.ADVISERS_API_KEY) {
-    const briefLedger = loadLedger()
-    const briefDenied = egressDeniedReason(briefLedger.getMatter(activeMatterId(briefLedger)), 'brief --deep')
+    // 0.2.3: --deep only reads the active matter for the egress gate (the model
+    // call itself is explicit egress); it takes no writer lock.
+    const briefStore = mode === 'sqlite' ? readStoreOrExit() : null
+    const briefLedger = readLedgerForCommand({ matters: {} })
+    const briefMatterId = briefStore?.listSessions(1)?.[0]?.matterId ?? briefLedger.listMatters()[0]?.id
+    const briefDenied = egressDeniedReason(briefLedger.getMatter(briefMatterId), 'brief --deep')
     if (briefDenied) { console.error(briefDenied); process.exitCode = 1; return }
     try {
       const { chatCompletion } = await loadModel()
@@ -3120,8 +3707,10 @@ async function ui(args) {
   const flags = parseFlags(args).flags
   // --port 0 requests an ephemeral port (used by tests and scripts).
   const port = typeof flags.port === 'string' && flags.port.trim() !== '' ? Number(flags.port) : 17860
-  const ledger = loadLedger()
-  const store = dbStore()
+  // 0.2.3 §4.8: ui only serves a read snapshot. It loads the tables it needs
+  // (commitments) through the lock-free read store and holds NO writer lock, so
+  // ordinary CLI writes keep working while it runs.
+  const ledger = loadReadLedger({ commitments: {} })
   const { buildReminders } = await loadRemind()
   const snapshot = {
     today: () => {
@@ -3156,11 +3745,17 @@ async function ui(args) {
 async function remind(args) {
   const { flags, positional } = parseFlags(args)
   ensureHome()
-  const store = dbStore()
-  const ledger = loadLedger()
-  const scheduler = await loadScheduler()
   const sub = positional[0]
   const apply = flags.apply === true
+  // 0.2.3 §4.3: only the branches that write (audit rows for install/uninstall/
+  // ICS export/delivered reminders) take the writer lock; the plain
+  // `remind`/`--json`/`status` reads use the lock-free store and load only
+  // commitments. These branches are mutually exclusive with a plain read.
+  const mutating = sub === 'install' || sub === 'uninstall' || flags.install === true ||
+    flags.uninstall === true || flags.ics !== undefined || flags.deliver === true || flags.notify === true
+  const store = mutating ? dbStore() : readStoreOrExit()
+  const ledger = mutating ? loadLedger({ commitments: {} }) : loadReadLedger({ commitments: {} })
+  const scheduler = await loadScheduler()
   if (sub === 'install' || flags.install) {
     const dir = join(HOME, 'scheduler')
     mkdirSync(dir, { recursive: true, mode: 0o700 })
@@ -3229,11 +3824,9 @@ async function remind(args) {
     return
   }
   const { buildReminders, toIcs } = await loadRemind()
+  // One prefix query instead of getMeta() per commitment (read-only store safe).
   const snoozed = {}
-  for (const c of ledger.listCommitments()) {
-    const until = store?.getMeta('snooze:' + c.id)
-    if (until) snoozed[c.id] = until
-  }
+  for (const [key, value] of store?.listMetaByPrefix('snooze:') ?? []) snoozed[key.slice('snooze:'.length)] = value
   const reminders = buildReminders(ledger, { now: new Date(), snoozedUntil: snoozed })
   if (flags.ics) {
     const path = typeof flags.ics === 'string' ? flags.ics : (positional[0] || join(HOME, 'reminders.ics'))
@@ -3434,12 +4027,23 @@ async function deliver(args) {
  */
 async function mcpServer() {
   ensureHome()
+  // 0.2.3 P0-2 / §4.8: `initialize` is protocol-only. The writable store (writer
+  // lock + audit sink) opens now, but the LEDGER is loaded lazily on the first
+  // tool that needs it, and only the tables that tool reads — so a 200k-row
+  // ledger no longer costs ~2s before the first response. mcp still writes audit
+  // rows, so it keeps the writer lock (0.3 makes it a shared writer).
   const store = dbStore()
-  const ledger = loadLedger()
+  const loadLedgerFor = (kind) => {
+    if (mode === 'json') return loadJson()
+    if (!store) return new Ledger(LOCAL_PORTS)
+    if (kind === 'matters') return Ledger.fromParts({ version: 1, matters: store.loadMatters() }, LOCAL_PORTS)
+    if (kind === 'commitments') return Ledger.fromParts({ version: 1, commitments: store.loadCommitments() }, LOCAL_PORTS)
+    return Ledger.fromJSON(store.load(), LOCAL_PORTS)
+  }
   const { createMcpServer } = await loadMcpServer()
   const server = createMcpServer({
     store,
-    ledger,
+    loadLedger: loadLedgerFor,
     version: VERSION,
     audit: (entry) => store?.appendAudit(entry),
   })
@@ -3744,8 +4348,9 @@ async function tui(args) {
   const once = args.includes('--once')
   const { buildReminders } = await loadRemind()
   const render = () => {
-    const ledger = loadLedger()
-    const store = dbStore()
+    // 0.2.3 §4.8: no writer lock; each refresh reads the current committed snapshot.
+    const ledger = loadReadLedger({ commitments: {} })
+    const store = readStoreOrExit()
     const open = ledger.openCommitments()
     const localDay = localDayOf(Date.now())
     const due = open.filter((c) => c.dueAt && c.dueAt.slice(0, 10) <= localDay)
@@ -3964,10 +4569,12 @@ async function printEvidence(args) {
     return
   }
   ensureHome()
-  const store = dbStore()
-  const ledger = loadLedger()
+  // 0.2.3 §4.3: evidence show is a pure read. The lock-free store supplies the
+  // turn lookup and only the one ledger table the id prefix needs is loaded.
+  const store = mode === 'sqlite' ? readStoreOrExit() : null
   const id = positional[1] || positional[0]
   if (!id) { console.error('usage: advisers evidence show <id> [--json]'); process.exitCode = 1; return }
+  const ledger = readLedgerForCommand(id.startsWith('fact_') ? { facts: {} } : id.startsWith('pref_') ? { preferences: {} } : { commitments: {} })
   let result
   try {
     const { evidenceForCommitment, evidenceForFact, evidenceForPreference } = await loadEvidence()
@@ -5058,49 +5665,54 @@ if (!command) {
 } else if (command === 'deliveries') {
   if (args.includes('--receipt')) await receiptPack(args)
   else if (args.includes('--pack')) await evidencePack(args)
-  else if (args.includes('--json')) console.log(JSON.stringify(dbStore()?.listDeliveries(100) ?? [], null, 2))
+  else if (args.includes('--json')) console.log(JSON.stringify(readStoreOrExit()?.listDeliveries(100) ?? [], null, 2))
   else printDeliveries()
 } else if (command === 'learn') {
   const sub = args[0]
-  const store = dbStore()
-  let learnDenied = null
-  if (sub === 'review') {
-    const learnLedger = loadLedger()
-    learnDenied = egressDeniedReason(learnLedger.getMatter(activeMatterId(learnLedger)), 'learn review')
-  }
-  if (sub === 'review' && learnDenied) { console.error(learnDenied); process.exitCode = 1 }
-  else if (sub === 'ls') {
-    for (const r of store?.listTaskRuns(20) ?? []) console.log(`${r.id}\t${r.outcome}\t${r.tools.map((t) => t.name).join(',')}\t${r.task.slice(0, 60)}`)
+  if (sub === 'ls') {
+    // 0.2.3: read-only task-run list, lock-free.
+    for (const r of readStoreOrExit()?.listTaskRuns(20) ?? []) console.log(`${r.id}\t${r.outcome}\t${r.tools.map((t) => t.name).join(',')}\t${r.task.slice(0, 60)}`)
   } else if (sub === 'review') {
-    const run = store?.listTaskRuns(100).find((r) => r.id === args[1])
-    const apiKey = process.env.ADVISERS_API_KEY
-    if (!run || !apiKey) { console.error('usage: ADVISERS_API_KEY=... advisers learn review <run-id>'); process.exitCode = 1 }
+    const learnLedger = loadLedger()
+    const learnDenied = egressDeniedReason(learnLedger.getMatter(activeMatterId(learnLedger)), 'learn review')
+    if (learnDenied) { console.error(learnDenied); process.exitCode = 1 }
     else {
-      const ledger = loadLedger()
-      const { reviewRun, lintReview, materializeReview } = await loadReview()
-      const review = await reviewRun({ run, routines: ledger.listRoutines(), apiKey, baseUrl: process.env.ADVISERS_BASE_URL, model: process.env.ADVISERS_MODEL })
-      const checked = lintReview(review, { run, routines: ledger.listRoutines() })
-      if (!checked.ok) { console.error(`review rejected: ${checked.error}`); process.exitCode = 1 }
+      const store = dbStore()
+      const run = store?.listTaskRuns(100).find((r) => r.id === args[1])
+      const apiKey = process.env.ADVISERS_API_KEY
+      if (!run || !apiKey) { console.error('usage: ADVISERS_API_KEY=... advisers learn review <run-id>'); process.exitCode = 1 }
       else {
-        const made = materializeReview(checked.review, { run, ledger })
-        saveLedger(ledger)
-        console.log(`verdict: ${made.verdict}${made.routine ? ` draft ${made.routine.id}` : made.patch ? ` patch ${made.patch.id}` : ''}`)
+        const ledger = loadLedger()
+        const { reviewRun, lintReview, materializeReview } = await loadReview()
+        const review = await reviewRun({ run, routines: ledger.listRoutines(), apiKey, baseUrl: process.env.ADVISERS_BASE_URL, model: process.env.ADVISERS_MODEL })
+        const checked = lintReview(review, { run, routines: ledger.listRoutines() })
+        if (!checked.ok) { console.error(`review rejected: ${checked.error}`); process.exitCode = 1 }
+        else {
+          const made = materializeReview(checked.review, { run, ledger })
+          saveLedger(ledger)
+          console.log(`verdict: ${made.verdict}${made.routine ? ` draft ${made.routine.id}` : made.patch ? ` patch ${made.patch.id}` : ''}`)
+        }
       }
     }
   } else { console.error('usage: advisers learn ls|review <run-id>'); process.exitCode = 1 }
 } else if (command === 'commit') {
+  // 0.2.3 persistence v2 §3.3.1-§3.3.4: every commit write is one directed
+  // INSERT/UPDATE + meta upsert + exactly one audit row inside a single
+  // BEGIN IMMEDIATE (mutateWithAudit). Validation and file checks stay outside
+  // the transaction; JSON-store mode keeps the legacy in-memory path.
   const sub = args[0]
-  const ledger = loadLedger()
   const { flags, positional } = parseFlags(args.slice(1))
   if (sub === 'add') {
+    const usage = 'usage: advisers commit add "<action>" --quote "<原话>" [--due ISO] [--debtor user|agent] [--creditor name] [--matter id] [--remind-offsets "-1d,-2h"]'
     const action = positional.join(' ').trim()
-    if (!action || !flags.quote) { console.error('usage: advisers commit add "<action>" --quote "<原话>" [--due ISO] [--debtor user|agent] [--creditor name] [--matter id] [--remind-offsets "-1d,-2h"]'); process.exitCode = 1 }
+    if (!action || !flags.quote) { console.error(usage); process.exitCode = 1 }
     else {
       let reminderOffsets
       let offsetsError
       try { reminderOffsets = await parseReminderOffsetsFlag(flags) } catch (error) { offsetsError = error }
       if (offsetsError) { console.error(offsetsError.message); process.exitCode = 1 }
-      else {
+      else if (mode === 'json') {
+        const ledger = loadJson()
         const c = ledger.addCommitment({
           matterId: activeMatterId(ledger, flags.matter),
           debtor: flags.debtor ?? 'user',
@@ -5112,9 +5724,30 @@ if (!command) {
           evidence: [{ sessionId: latestConversationId(), turnId: 'cli', quote: String(flags.quote) }],
           ...(reminderOffsets !== undefined ? { reminderOffsets } : {}),
         })
-        saveLedgerWithAudit(ledger, { actor: 'local', action: 'commit.add', allowed: true, reason: c.id })
-        console.log(`${c.id} open ${c.action}${c.dueAt ? ` due ${c.dueAt}` : ''}`)
-        if (reminderOffsets !== undefined) console.log('reminder-offsets: ' + JSON.stringify(reminderOffsets))
+        saveJson(ledger)
+        printCommitAdded(c, reminderOffsets)
+      } else {
+        const conversationId = latestConversationId()
+        const audit = { actor: 'local', action: 'commit.add', allowed: true, reason: '' }
+        try {
+          const { result: c } = mutateWithAudit((store) => {
+            const commitment = core.createCommitment({ clock: LOCAL_PORTS.clock, ids: LOCAL_PORTS.ids }, {
+              matterId: resolveWriteMatterId(store, flags.matter),
+              debtor: flags.debtor ?? 'user',
+              creditor: flags.creditor ?? /(?:发给|给|向|对)([\u4e00-\u9fa5A-Za-z0-9_]{1,12})/.exec(action)?.[1] ?? 'someone',
+              action,
+              dueAt: flags.due,
+              timezone: flags.tz ?? 'Asia/Shanghai',
+              capability: flags.capability ?? 'todo',
+              evidence: [{ sessionId: conversationId, turnId: 'cli', quote: String(flags.quote) }],
+              ...(reminderOffsets !== undefined ? { reminderOffsets } : {}),
+            })
+            store.insertCommitment(commitment)
+            audit.reason = commitment.id
+            return commitment
+          }, audit)
+          printCommitAdded(c, reminderOffsets)
+        } catch (error) { reportCommandFailure(error) }
       }
     }
   } else if (sub === 'edit' || sub === 'update') {
@@ -5139,38 +5772,77 @@ if (!command) {
       else if (!Object.keys(patch).length) { console.error(usage); process.exitCode = 1 }
       else {
         try {
-          const c = ledger.updateCommitment(id, patch)
-          saveLedgerWithAudit(ledger, { actor: 'local', action: 'commit.update', allowed: true, reason: id })
-          console.log(`updated: ${c.id}`)
-          if ('reminderOffsets' in patch) console.log('reminder-offsets: ' + JSON.stringify(c.reminderOffsets ?? []))
-          if (patch.dueAt !== undefined) console.log('due: ' + (c.dueAt ?? '未定'))
-        } catch (error) { console.error(error.message); process.exitCode = 1 }
+          if (mode === 'json') {
+            const ledger = loadJson()
+            const c = ledger.updateCommitment(id, patch)
+            saveJson(ledger)
+            printCommitUpdated(c, patch)
+          } else {
+            const audit = { actor: 'local', action: 'commit.update', allowed: true, reason: id }
+            const { result: c } = mutateWithAudit((store) => {
+              const current = store.getCommitment(id)
+              if (!current) throw new Error(`unknown commitment: ${id}`)
+              const next = core.updateCommitmentFields(current, patch)
+              store.updateCommitment(id, patch)
+              return next
+            }, audit)
+            printCommitUpdated(c, patch)
+          }
+        } catch (error) { reportCommandFailure(error) }
       }
     }
-  } else if (sub === 'ls') printCommitments(ledger, flags.json)
-  else if (sub === 'snooze') {
+  } else if (sub === 'ls') {
+    if (mode === 'json') printCommitments(loadJson(), flags.json)
+    else printCommitments(loadReadLedger({ commitments: {} }), flags.json)
+  } else if (sub === 'snooze') {
     const id = positional[0]
     const hours = Number(positional[1] ?? 24)
-    const c = ledger.listCommitments().find((x) => x.id === id)
-    if (!c || !Number.isFinite(hours) || hours <= 0) { console.error('usage: advisers commit snooze <id> <hours>'); process.exitCode = 1 }
-    else {
-      c.status = 'snoozed'
-      saveLedgerWithAudit(ledger, { actor: 'local', action: 'commit.snooze', allowed: true, reason: id }, (store) => store.setMeta(`snooze:${id}`, new Date(Date.now() + hours * 3600_000).toISOString()))
-      console.log(`snoozed: ${id} for ${hours}h`)
+    const usage = 'usage: advisers commit snooze <id> <hours>'
+    if (!id || !Number.isFinite(hours) || hours <= 0) { console.error(usage); process.exitCode = 1 }
+    else if (mode === 'json') {
+      const ledger = loadJson()
+      const c = ledger.listCommitments().find((x) => x.id === id)
+      if (!c) { console.error(usage); process.exitCode = 1 }
+      else { c.status = 'snoozed'; saveJson(ledger); console.log(`snoozed: ${id} for ${hours}h`) }
+    } else {
+      try {
+        if (!dbStore().getCommitment(id)) { console.error(usage); process.exitCode = 1 }
+        else {
+          const audit = { actor: 'local', action: 'commit.snooze', allowed: true, reason: id }
+          mutateWithAudit((store) => {
+            store.updateCommitment(id, { status: 'snoozed' })
+            store.setMeta(`snooze:${id}`, new Date(Date.now() + hours * 3600_000).toISOString())
+          }, audit)
+          console.log(`snoozed: ${id} for ${hours}h`)
+        }
+      } catch (error) { reportCommandFailure(error) }
     }
   }
   else if (sub === 'done') {
     const id = positional[0]
     const evidence = flags.evidence
     if (!id || !evidence) { console.error('usage: advisers commit done <id> --evidence "<证据/原话>"'); process.exitCode = 1 }
-    else {
-      if (String(evidence).startsWith('file:') && !existsSync(String(evidence).slice(5))) {
-        console.error(`evidence file not found: ${String(evidence).slice(5)}`); process.exitCode = 1
-      } else {
+    else if (String(evidence).startsWith('file:') && !existsSync(String(evidence).slice(5))) {
+      console.error(`evidence file not found: ${String(evidence).slice(5)}`); process.exitCode = 1
+    } else if (mode === 'json') {
+      const ledger = loadJson()
+      try {
         ledger.completeCommitment(id, [{ sessionId: latestConversationId(), turnId: 'cli', quote: String(evidence) }])
-        saveLedgerWithAudit(ledger, { actor: 'local', action: 'commit.done', allowed: true, reason: id })
+        saveJson(ledger)
         console.log(`done: ${id}`)
-      }
+      } catch (error) { console.error(error.message); process.exitCode = 1 }
+    } else {
+      const conversationId = latestConversationId()
+      const audit = { actor: 'local', action: 'commit.done', allowed: true, reason: id }
+      try {
+        mutateWithAudit((store) => {
+          const current = store.getCommitment(id)
+          if (!current) throw new Error(`unknown commitment: ${id}`)
+          const next = core.completeCommitment(current, [{ sessionId: conversationId, turnId: 'cli', quote: String(evidence) }], now())
+          store.updateCommitment(id, { status: next.status, doneAt: next.doneAt, evidence: next.evidence })
+        }, audit)
+        console.log(`done: ${id}`)
+      } catch (error) { reportCommandFailure(error) }
     }
   } else { console.error('usage: advisers commit add|edit|ls|done|snooze'); process.exitCode = 1 }
 } else if (command === 'diff') {
@@ -5188,11 +5860,14 @@ if (!command) {
     if (!result.ok) process.exitCode = 1
   }
 } else if (command === 'compact') {
-  const store = dbStore()
-  const conversationId = latestConversationId()
   if (args[0] === 'ls') {
+    // 0.2.3: version listing is a pure read (lock-free).
+    const store = readStoreOrExit()
+    const conversationId = store?.listSessions(1)?.[0]?.conversationId ?? 'local'
     for (const v of store?.listSummaryVersions(conversationId) ?? []) console.log(`${v.version}\t${v.throughSeq}\t${v.summary.slice(0, 100)}`)
   } else if (args[0] === 'rollback') {
+    const store = dbStore()
+    const conversationId = latestConversationId()
     const version = Number(args[1])
     const old = store?.listSummaryVersions(conversationId).find((v) => v.version === version)
     if (!old) { console.error('usage: advisers compact rollback <version>'); process.exitCode = 1 }
@@ -5202,30 +5877,41 @@ if (!command) {
   const q = args.join(' ').trim()
   if (!q) { console.error('usage: advisers search <text>'); process.exitCode = 1 }
   else {
-    const rows = dbStore()?.searchTurns(q, { limit: 10 }) ?? []
+    // 0.2.3: turn search is a pure read (lock-free; reads the WAL snapshot).
+    const rows = readStoreOrExit()?.searchTurns(q, { limit: 10 }) ?? []
     if (!rows.length) console.log('没有匹配')
     for (const r of rows) console.log(`${r.seq}\t${r.role}\t${r.content.replace(/\s+/g, ' ').slice(0, 160)}`)
   }
 } else if (command === 'nudge') {
   const sub = args[0]
-  const store = dbStore()
   if (sub === 'list') {
-    for (const n of store?.listNudges(50) ?? []) console.log(`${n.id}\t${n.local_day}\t${n.level}\t${n.outcome}\t${n.body}`)
+    for (const n of readStoreOrExit()?.listNudges(50) ?? []) console.log(`${n.id}\t${n.local_day}\t${n.level}\t${n.outcome}\t${n.body}`)
   } else if (sub === 'done' || sub === 'ignore') {
     const id = args[1]
+    const store = dbStore()
     if (!id || !store?.setNudgeOutcome(id, sub === 'done' ? 'accepted' : 'ignored')) { console.error('usage: advisers nudge done|ignore <nudge-id>'); process.exitCode = 1 }
     else console.log(`${sub}: ${id}`)
   } else { console.error('usage: advisers nudge list|done|ignore'); process.exitCode = 1 }
 } else if (command === 'risks') {
-  risks(loadLedger({ commitments: { status: 'open' } }))
+  risks(readLedgerForCommand({ commitments: { status: 'open' } }))
 } else if (command === 'pet-brief') {
   await petBrief(args)
 } else if (command === 'today') {
   // P1-2 (0.2.2): today only reads open commitments; --sources reports source
-  // rows for every commitment, so that flag keeps the wider load.
+  // rows for every commitment, so that flag keeps the wider load. 0.2.3 reads
+  // it through the lock-free store.
   const sources = args.includes('--sources')
-  await today(loadLedger({ commitments: sources ? {} : { status: 'open' } }), { calendar: args.includes('--calendar'), sources, json: args.includes('--json') })
+  const asJson = args.includes('--json')
+  if (asJson || sources) {
+    // The JSON contract and --sources need full commitment entities (evidence).
+    const ledger = readLedgerForCommand({ commitments: sources ? {} : { status: 'open' } })
+    await today(ledger.openCommitments(), { calendar: args.includes('--calendar'), sources, json: asJson, ledger })
+  } else {
+    // Human view: six columns + the cached classification (0.2.3 hot path).
+    await today(loadOpenCommitmentRowsForToday(), { calendar: args.includes('--calendar') })
+  }
 } else if (command === 'tick') {
+  // tick is a WRITER (nudges + snooze wake-ups) but only needs commitments.
   tick(loadLedger({ commitments: {} }), args.includes('--json'))
 } else if (command === 'ui') {
   await ui(args)
@@ -5234,7 +5920,7 @@ if (!command) {
 } else if (command === 'calendar') {
   await calendarImport(args.slice(1))
 } else if (command === 'who') {
-  const open = loadLedger({ commitments: { status: 'open' } }).openCommitments()
+  const open = readLedgerForCommand({ commitments: { status: 'open' } }).openCommitments()
   const mine = open.filter((c) => c.debtor === 'user' || c.debtor === 'agent')
   const waiting = open.filter((c) => c.debtor === 'third' || c.debtor.startsWith('third:'))
   if (args.includes('--json')) { console.log(JSON.stringify({ mine, waiting }, null, 2)); }
@@ -5245,66 +5931,102 @@ if (!command) {
     for (const c of waiting) console.log(`  ${c.id}  ${c.debtor} · ${c.action}${c.dueAt ? ` · ${c.dueAt.slice(0, 10)}` : ''}`)
   }
 } else if (command === 'memory') {
-  const ledger = loadLedger()
-  if (args[0] === 'candidates') {
-    const rows = dbStore()?.listCandidates(args.includes('--all') ? 'all' : 'pending') ?? []
+  // 0.2.3: candidates/search printMemory are pure reads (lock-free, partial);
+  // accept is the most involved directed write (§3.3.9) — candidate status,
+  // entity row and audit all commit or roll back together.
+  const sub = args[0]
+  const sourceRef = (e) => ({ ...(e.sessionId ? { quote: e.quote, ref: `${e.sessionId}#${e.turnId}` } : { quote: e.quote, ref: e.turnId ? `legacy#${e.turnId}` : undefined }), ...(e.source ? { source: e.source } : {}) })
+  if (sub === 'candidates') {
+    const store = readStoreOrExit()
+    const rows = store?.listCandidates(args.includes('--all') ? 'all' : 'pending') ?? []
     if (args.includes('--json')) console.log(JSON.stringify(rows, null, 2))
     else {
       if (!rows.length) console.log('（没有待确认记忆）')
       for (const c of rows) console.log(`${c.id}\t${c.kind}\t${JSON.stringify(c.payload)}\t${c.status}`)
     }
-  } else if (args[0] === 'accept') {
+  } else if (sub === 'accept') {
+    if (mode === 'json') {
+      // The legacy JSON store has no candidate table (same as 0.2.2).
+      console.error('candidate not found'); process.exitCode = 1
+    } else {
+      const store = dbStore()
+      const candidate = store?.getCandidate(args[1])
+      if (!candidate) { console.error('candidate not found'); process.exitCode = 1 }
+      else {
+        try {
+          const commitmentEvidence = (e) => {
+            if (!e.sessionId) return { quote: e.quote, turnId: e.turnId, sessionId: 'legacy', ...(e.source ? { source: e.source } : {}) }
+            const turn = store.getTurn(e.turnId)
+            if (!turn || turn.conversationId !== e.sessionId) throw new Error(`evidence turn not found: ${e.turnId}`)
+            return { quote: e.quote, turnId: e.turnId, sessionId: e.sessionId, ...(e.source ? { source: e.source } : {}) }
+          }
+          const audit = { actor: 'local', action: 'memory.accept', allowed: true, reason: candidate.id }
+          mutateWithAudit((s) => {
+            const opsPorts = { clock: LOCAL_PORTS.clock, ids: LOCAL_PORTS.ids }
+            if (candidate.kind === 'fact') {
+              const input = { ...candidate.payload, authority: 'user', evidence: candidate.evidence.map(sourceRef) }
+              const current = s.findFactCurrent({ subject: input.subject, predicate: input.predicate, matterId: input.matterId ?? null })
+              const outcome = core.applyRemember(current, input, opsPorts)
+              if (outcome.op === 'update') {
+                s.updateFact(outcome.row.id, { evidence: outcome.row.evidence, source: outcome.row.source, authority: outcome.row.authority, lastSeenAt: outcome.row.lastSeenAt })
+              } else if (outcome.op === 'insert') {
+                s.insertFact(outcome.row)
+              } else {
+                s.updateFact(outcome.old.id, { status: outcome.old.status, validTo: outcome.old.validTo, expiredAt: outcome.old.expiredAt, supersededBy: outcome.old.supersededBy })
+                s.insertFact(outcome.row)
+              }
+            } else if (candidate.kind === 'preference') {
+              s.insertPreference(core.createPreference(opsPorts, { ...candidate.payload, evidence: candidate.evidence.map(sourceRef) }))
+            } else if (candidate.kind === 'commitment') {
+              const input = {
+                ...candidate.payload,
+                matterId: candidate.payload.matterId ?? s.firstActiveMatter?.()?.id,
+                evidence: candidate.evidence.map(commitmentEvidence),
+              }
+              s.insertCommitment(core.createCommitment(opsPorts, input))
+            }
+            s.reviewCandidate(candidate.id, 'accepted')
+          }, audit)
+          console.log(`accepted ${candidate.id}`)
+        } catch (error) { console.error(error.message); process.exitCode = 1 }
+      }
+    }
+  } else if (sub === 'reject') {
     const store = dbStore()
     const candidate = store?.getCandidate(args[1])
     if (!candidate) { console.error('candidate not found'); process.exitCode = 1 }
     else {
       try {
-        const sourceRef = (e) => ({ ...(e.sessionId ? { quote: e.quote, ref: `${e.sessionId}#${e.turnId}` } : { quote: e.quote, ref: e.turnId ? `legacy#${e.turnId}` : undefined }), ...(e.source ? { source: e.source } : {}) })
-        const commitmentEvidence = (e) => {
-          if (!e.sessionId) return { quote: e.quote, turnId: e.turnId, sessionId: 'legacy', ...(e.source ? { source: e.source } : {}) }
-          const turn = store.getTurn(e.turnId)
-          if (!turn || turn.conversationId !== e.sessionId) throw new Error(`evidence turn not found: ${e.turnId}`)
-          return { quote: e.quote, turnId: e.turnId, sessionId: e.sessionId, ...(e.source ? { source: e.source } : {}) }
-        }
-        if (candidate.kind === 'fact') ledger.remember({ ...candidate.payload, authority: 'user', evidence: candidate.evidence.map(sourceRef) })
-        else if (candidate.kind === 'preference') ledger.addPreference({ ...candidate.payload, evidence: candidate.evidence.map(sourceRef) })
-        else if (candidate.kind === 'commitment') ledger.addCommitment({ ...candidate.payload, matterId: candidate.payload.matterId ?? ledger.listMatters()[0]?.id, evidence: candidate.evidence.map(commitmentEvidence) })
-        saveLedgerWithAudit(ledger, { actor: 'local', action: 'memory.accept', allowed: true, reason: candidate.id }, (s) => s.reviewCandidate(candidate.id, 'accepted'))
-        console.log(`accepted ${candidate.id}`)
-      } catch (error) { console.error(error.message); process.exitCode = 1 }
+        updateStoreWithAudit((s) => s.reviewCandidate(candidate.id, 'rejected', args.slice(2).join(' ') || undefined), { actor: 'local', action: 'memory.reject', allowed: true, reason: candidate.id })
+        console.log(`rejected ${candidate.id}`)
+      } catch (error) { reportCommandFailure(error) }
     }
-  } else if (args[0] === 'reject') {
-    const store = dbStore()
-    const candidate = store?.getCandidate(args[1])
-    if (!candidate) { console.error('candidate not found'); process.exitCode = 1 }
-    else {
-      updateStoreWithAudit((s) => s.reviewCandidate(candidate.id, 'rejected', args.slice(2).join(' ') || undefined), { actor: 'local', action: 'memory.reject', allowed: true, reason: candidate.id })
-      console.log(`rejected ${candidate.id}`)
-    }
-  } else if (args[0] === 'search') {
+  } else if (sub === 'search') {
     const q = args.slice(1).join(' ').trim()
     if (!q) { console.error('usage: advisers memory search <query>'); process.exitCode = 1 }
     else {
-      const store = dbStore()
-      const rows = store?.searchMemory(q) ?? ledger.searchMemory(q)
+      const store = readStoreOrExit()
+      const rows = store ? store.searchMemory(q) : loadJson().searchMemory(q)
       if (!rows.length) console.log('（没有记忆匹配）')
       for (const r of rows) console.log(`${r.kind}\t${r.id}\t${r.text}${r.matterId ? `\t[${r.matterId}]` : ''}`)
       const turns = store?.searchTurns(q) ?? []
       for (const t of turns) console.log(`turn\t${t.conversationId}#${t.seq}\t${String(t.text).replace(/\s+/g, ' ').slice(0, 120)}`)
     }
-  } else printMemory(ledger)
+  } else if (mode === 'json') printMemory(loadJson())
+  else printMemory(loadReadLedger({ preferences: {}, commitments: {}, routines: {} }))
 } else if (command === 'digest') {
   const period = args[0] === 'week' ? 'week' : 'day'
-  const store = dbStore()
+  const store = readStoreOrExit()
   const { buildDigest } = await loadDigest()
-  console.log(buildDigest({
-    period,
-    turns: store?.listTurns(latestConversationId(), 200) ?? [],
-    commitments: loadLedger().listCommitments(),
-    deliveries: store?.listDeliveries(100) ?? [],
-  }))
+  const ledger = mode === 'json' ? loadJson() : loadReadLedger({ commitments: {} })
+  const conversationId = store?.listSessions(1)?.[0]?.conversationId ?? 'local'
+  const { turns, deliveries } = store
+    ? store.read(() => ({ turns: store.listTurns(conversationId, 200), deliveries: store.listDeliveries(100) }))
+    : { turns: [], deliveries: [] }
+  console.log(buildDigest({ period, turns, commitments: ledger.listCommitments(), deliveries }))
 } else if (command === 'week') {
-  printWeek(loadLedger({ commitments: {} }))
+  if (mode === 'json') printWeek(loadJson())
+  else printWeek(loadReadLedger({ commitments: {} }))
 } else if (command === 'prefs') {
   printPreferences()
 } else if (command === 'privacy') {
@@ -5314,19 +6036,67 @@ if (!command) {
 } else if (command === 'purge') {
   purgeMatter(args[0], args.includes('--yes'))
 } else if (command === 'decay') {
-  const ledger = loadLedger()
+  // 0.2.3 §3.3.7: read one table, update only the changed preferences (no audit,
+  // historical behaviour). WAL grows with changed rows, not ledger size.
   const { applyPreferenceDecay } = await loadLearning()
-  const changed = applyPreferenceDecay(ledger.listPreferences({ includeCandidates: true }))
-  saveLedger(ledger)
-  console.log(`[decay] ${changed.length} preference(s) updated`)
+  if (mode === 'json') {
+    const ledger = loadJson()
+    const changed = applyPreferenceDecay(ledger.listPreferences({ includeCandidates: true }))
+    saveJson(ledger)
+    console.log(`[decay] ${changed.length} preference(s) updated`)
+  } else {
+    try {
+      const store = dbStore()
+      const changed = applyPreferenceDecay(store.loadPreferences())
+      if (changed.length) {
+        mutateWithAudit((s) => {
+          for (const pref of changed) s.updatePreference(pref.id, { confidence: pref.confidence, status: pref.status })
+        }, null)
+      }
+      console.log(`[decay] ${changed.length} preference(s) updated`)
+    } catch (error) { reportCommandFailure(error) }
+  }
 } else if (command === 'correct') {
+  // 0.2.3 §3.3.6: same confirmation rule as learnPreference, applied as one
+  // targeted UPDATE/INSERT + audit (no full ledger load/save).
   const statement = args.join(' ').trim()
   if (!statement) { console.error('usage: advisers correct <statement>'); process.exitCode = 1 }
-  else {
-    const ledger = loadLedger()
+  else if (mode === 'json') {
+    const ledger = loadJson()
     const result = learnPreference(ledger, statement, statement, { explicit: true })
-    saveLedgerWithAudit(ledger, { actor: 'local', action: 'correct', allowed: true, reason: result.preference.id })
+    saveJson(ledger)
     printLearnReceipt(result)
+  } else {
+    try {
+      const timestamp = now()
+      const audit = { actor: 'local', action: 'correct', allowed: true, reason: '' }
+      const { result } = mutateWithAudit((store) => {
+        const opsPorts = { clock: LOCAL_PORTS.clock, ids: LOCAL_PORTS.ids }
+        const existing = store.findPreferenceByStatement(statement)
+        let next
+        if (existing) {
+          next = core.confirmPreference(existing, timestamp)
+          store.updatePreference(existing.id, {
+            confidence: next.preference.confidence,
+            lastConfirmed: next.preference.lastConfirmed,
+            status: next.preference.status,
+          })
+        } else {
+          const pref = core.createPreference(opsPorts, {
+            kind: 'preference',
+            statement,
+            source: { type: 'user_explicit', quote: statement },
+            confidence: 0.8,
+            status: 'confirmed',
+          })
+          store.insertPreference(pref)
+          next = { preference: pref, promoted: false }
+        }
+        audit.reason = next.preference.id
+        return next
+      }, audit)
+      printLearnReceipt(result)
+    } catch (error) { reportCommandFailure(error) }
   }
 } else if (command === 'ls') {
   ls()

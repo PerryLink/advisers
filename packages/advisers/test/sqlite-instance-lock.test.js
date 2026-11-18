@@ -113,26 +113,52 @@ function startUi(home) {
   }
 }
 
-test("instance lock: a running CLI holds ~/.advisers/instance.lock with pid/startedAt/command and releases it", async () => {
+/** Start a real MCP stdio server: a long-lived WRITER that keeps the HOME lock. */
+function startMcp(home) {
+  const child = spawn(process.execPath, [bin, "mcp", "--stdio"], { env: env(home), stdio: ["pipe", "pipe", "pipe"] })
+  let stdout = ""
+  let stderr = ""
+  child.stdout.on("data", (chunk) => { stdout += chunk })
+  child.stderr.on("data", (chunk) => { stderr += chunk })
+  return {
+    child,
+    // Ready only once the server answered initialize: the lock alone appears
+    // before state.db is fully created, and a SIGKILL in that window leaves a
+    // 0-byte database (a real crash, but not what these lock tests mean to probe).
+    ready: async () => {
+      try { child.stdin.write(JSON.stringify({ jsonrpc: "2.0", id: 1, method: "initialize", params: {} }) + "\n") } catch {}
+      const initialized = await waitFor(() => stdout.includes('"jsonrpc"'), 15000)
+      return initialized && existsSync(lockFile(home))
+    },
+    stderr: () => stderr,
+    stop: async () => {
+      child.kill("SIGTERM")
+      await Promise.race([new Promise((resolve) => child.once("close", resolve)), sleep(8000)])
+      if (child.exitCode === null) child.kill("SIGKILL")
+    },
+  }
+}
+
+test("instance lock: a running writer CLI holds ~/.advisers/instance.lock with pid/startedAt/command and releases it", async () => {
   const root = mkdtempSync(join(tmpdir(), "advisers-lock-content-"))
   const home = join(root, "home")
   try {
-    const ui = startUi(home)
+    // mcp is a writer (audit rows for every tools/call) and is the 0.2.3
+    // long-lived holder; ui/tui are read-only and take no writer lock any more.
+    const mcp = startMcp(home)
     try {
-      assert.ok(await ui.ready(), "ui did not start: " + ui.stderr())
+      assert.ok(await mcp.ready(), "mcp did not start: " + mcp.stderr())
       const lockPath = lockFile(home)
-      assert.ok(await waitFor(() => existsSync(lockPath)), "instance lock was not created")
       const info = readInstanceLock(home)
       assert.ok(info?.record, "instance lock has no pid record")
-      assert.equal(info.record.pid, ui.child.pid, "instance lock must name the running CLI pid")
+      assert.equal(info.record.pid, mcp.child.pid, "instance lock must name the running CLI pid")
       assert.ok(info.record.startedAt, "instance lock must record startedAt")
-      assert.match(info.record.command, /ui --port 0/, "instance lock must record the command")
+      assert.match(info.record.command, /mcp --stdio/, "instance lock must record the command")
       assert.equal(statSync(lockPath).mode & 0o777, 0o600, "instance lock must be 0600")
-    } finally {
-      ui.child.kill("SIGTERM")
-      await Promise.race([ui.wait(), sleep(8000)])
-      if (ui.child.exitCode === null) ui.child.kill("SIGKILL")
-    }
+      // Lock-free read path: pure reads work while the writer holds the lock.
+      const read = cliOk(home, ["status"])
+      assert.match(read.stdout, /store\s+sqlite/)
+    } finally { await mcp.stop() }
     assert.equal(existsSync(lockFile(home)), false, "instance lock must be released when the process exits")
   } finally { rmSync(root, { recursive: true, force: true }) }
 })
@@ -159,11 +185,14 @@ test("instance lock: a second command waits for a live holder and then succeeds 
   }
 })
 
-test("instance lock: timeout fails closed with E_DB_LOCKED (no state.db, no JSON fallback) and doctor FAILs", async () => {
+test("instance lock: timeout fails closed with E_DB_LOCKED for writes; the lightweight doctor stays green (read-only) and --check-db reports E_DB_LOCKED", async () => {
   const root = mkdtempSync(join(tmpdir(), "advisers-lock-timeout-"))
   const home = join(root, "home")
   const holderScript = writeLockHolder(root)
   mkdirSync(home, { recursive: true })
+  // Seed a real database first, then hold the writer lock: 0.2.3's read path
+  // works while the lock is held, so doctor can inspect this committed snapshot.
+  cliOk(home, ["commit", "add", "seed before lock", "--quote", "q"])
   // Hold until the test kills us: the doctor invocation below pays the
   // (office-import warming) cold start, so a fixed hold duration would be flaky.
   const holder = startHolder(holderScript, home, 0)
@@ -174,15 +203,26 @@ test("instance lock: timeout fails closed with E_DB_LOCKED (no state.db, no JSON
     assert.match(stderrOf(busy), /E_DB_LOCKED/, "stderr must name E_DB_LOCKED")
     assert.match(stderrOf(busy), /instance\.lock/, "stderr must name the lock file")
     assert.match(stderrOf(busy), /test-holder|pid \d+/, "stderr should name the holder")
-    assert.equal(existsSync(join(home, "state.db")), false, "a timed-out command must not create state.db")
     assert.equal(existsSync(join(home, "state.json")), false, "a timed-out command must not create state.json")
+    assert.equal(count(home, "SELECT COUNT(*) AS n FROM commitments"), 1, "the blocked write must not have landed")
     assert.equal(existsSync(join(home, "instance.lock")), true, "the waiter must not remove the holder's lock file")
     assert.doesNotMatch(binSource, /falling back to JSON/)
 
+    // The default doctor is lightweight/read-only: it must PASS while a writer
+    // holds the lock and report the holder instead of failing the lock row.
     const doctor = cli(home, ["doctor"], { ADVISERS_LOCK_TIMEOUT_MS: "150" })
-    assert.equal(doctor.status, 1, "doctor must FAIL while another instance holds the lock")
-    assert.match(doctor.stdout, /FAIL  lock/, "doctor must report the lock failure")
-    assert.match(stderrOf(doctor), /E_DB_LOCKED/)
+    assert.equal(doctor.status, 0, "default doctor must work on the lock-free snapshot: " + doctor.stdout + doctor.stderr)
+    assert.match(doctor.stdout, /PASS  lock/)
+    assert.match(doctor.stdout, /held by pid \d+/)
+    assert.doesNotMatch(stderrOf(doctor), /E_DB_LOCKED/)
+    // --check-db is the explicit writable maintenance pass (FTS integrity-check
+    // needs a write): with the lock held it must say E_DB_LOCKED, never a
+    // confusing 'attempt to write a readonly database'.
+    const checked = cli(home, ["doctor", "--check-db"], { ADVISERS_LOCK_TIMEOUT_MS: "150" })
+    assert.equal(checked.status, 1, "doctor --check-db must fail closed while the writer lock is held")
+    assert.match(stderrOf(checked) + checked.stdout, /E_DB_LOCKED/)
+    assert.match(checked.stdout, /FAIL  db-integrity/)
+    assert.doesNotMatch(stderrOf(checked) + checked.stdout, /readonly database|read-only database/)
     assert.equal(existsSync(join(home, "instance.lock")), true, "doctor must not remove the holder's lock file")
   } finally {
     holder.child.kill("SIGKILL")
@@ -221,43 +261,32 @@ test("instance lock: an unrefreshed lock older than the stale threshold is recla
   } finally { rmSync(root, { recursive: true, force: true }) }
 })
 
-test("instance lock: SIGTERM/SIGINT release the lock; a SIGKILLed holder is reclaimed by the next command", async () => {
+test("instance lock: SIGTERM/SIGINT release the lock; a SIGKILLed writer is reclaimed by the next command", async () => {
   const root = mkdtempSync(join(tmpdir(), "advisers-lock-signal-"))
   const homeTerm = join(root, "home-term")
   const homeKill = join(root, "home-kill")
   const homeInt = join(root, "home-int")
   try {
-    const ui = startUi(homeTerm)
-    assert.ok(await ui.ready(), "ui did not start: " + ui.stderr())
-    assert.ok(await waitFor(() => existsSync(lockFile(homeTerm))))
-    ui.child.kill("SIGTERM")
-    const term = await Promise.race([ui.wait(), sleep(8000).then(() => "timeout")])
-    assert.notEqual(term, "timeout", "ui did not exit on SIGTERM")
+    const term = startMcp(homeTerm)
+    assert.ok(await term.ready(), "mcp did not take the lock: " + term.stderr())
+    term.child.kill("SIGTERM")
+    const termResult = await Promise.race([new Promise((resolve) => term.child.once("close", resolve)), sleep(8000).then(() => "timeout")])
+    assert.notEqual(termResult, "timeout", "mcp did not exit on SIGTERM")
     assert.equal(existsSync(lockFile(homeTerm)), false, "SIGTERM must release the instance lock")
     cliOk(homeTerm, ["commit", "add", "after sigterm", "--quote", "q"])
 
-    const mcp = spawn(process.execPath, [bin, "mcp", "--stdio"], { env: env(homeInt), stdio: ["pipe", "pipe", "pipe"] })
-    let mcpStderr = ""
-    mcp.stderr.on("data", (chunk) => { mcpStderr += chunk })
-    try {
-      assert.ok(await waitFor(() => existsSync(lockFile(homeInt)), 10000), "mcp did not take the lock: " + mcpStderr)
-      mcp.kill("SIGINT")
-      await Promise.race([new Promise((resolve) => mcp.once("exit", resolve)), sleep(8000)])
-    } finally {
-      if (mcp.exitCode === null) mcp.kill("SIGKILL")
-    }
+    const interrupted = startMcp(homeInt)
+    assert.ok(await interrupted.ready(), "mcp did not take the lock: " + interrupted.stderr())
+    interrupted.child.kill("SIGINT")
+    await Promise.race([new Promise((resolve) => interrupted.child.once("close", resolve)), sleep(8000)])
+    if (interrupted.child.exitCode === null) interrupted.child.kill("SIGKILL")
     assert.equal(existsSync(lockFile(homeInt)), false, "SIGINT must release the instance lock")
 
-    const killed = startUi(homeKill)
-    try {
-      assert.ok(await killed.ready(), "ui did not start: " + killed.stderr())
-      assert.ok(await waitFor(() => existsSync(lockFile(homeKill))))
-      killed.child.kill("SIGKILL")
-      await Promise.race([killed.wait(), sleep(8000)])
-      assert.equal(existsSync(lockFile(homeKill)), true, "SIGKILL leaves the lock file behind (stale)")
-    } finally {
-      if (killed.child.exitCode === null) killed.child.kill("SIGKILL")
-    }
+    const killed = startMcp(homeKill)
+    assert.ok(await killed.ready(), "mcp did not take the lock: " + killed.stderr())
+    killed.child.kill("SIGKILL")
+    await Promise.race([new Promise((resolve) => killed.child.once("close", resolve)), sleep(8000)])
+    assert.equal(existsSync(lockFile(homeKill)), true, "SIGKILL leaves the lock file behind (stale)")
     const reclaim = cli(homeKill, ["commit", "add", "after sigkill", "--quote", "q"], { ADVISERS_LOCK_TIMEOUT_MS: "3000" })
     assert.equal(reclaim.status, 0, "the next command must reclaim a SIGKILLed holder's lock: " + reclaim.stderr)
     assert.equal(existsSync(lockFile(homeKill)), false)
@@ -380,10 +409,12 @@ test("instance lock: seal/unseal/sync/backup refuse with E_DB_LOCKED while anoth
     }
     writeFileSync(join(home, "state.db.vault"), JSON.stringify(encryptJson(sealedPayload, PASSPHRASE)) + "\n")
 
-    const ui = startUi(home)
+    // A dedicated lock holder (the same primitive a long-lived writer uses) is
+    // enough: these maintenance commands only inspect the HOME instance lock.
+    const holderScript = writeLockHolder(root)
+    const holder = startHolder(holderScript, home, 0)
     try {
-      assert.ok(await ui.ready(), "ui did not start: " + ui.stderr())
-      assert.ok(await waitFor(() => existsSync(lockFile(home))))
+      assert.ok(await holder.ready(), "lock holder did not start: " + holder.stderr())
       const busyEnv = { ADVISERS_LOCK_TIMEOUT_MS: "200" }
       const operations = [
         [["vault", "seal", "--remove"], { ADVISERS_VAULT_PASSPHRASE: PASSPHRASE }],
@@ -401,9 +432,8 @@ test("instance lock: seal/unseal/sync/backup refuse with E_DB_LOCKED while anoth
       assert.equal(existsSync(join(root, "out.db")), false, "backup must not write a file when blocked")
       assert.equal(existsSync(syncDir), false, "sync must not write while blocked")
     } finally {
-      ui.child.kill("SIGTERM")
-      await Promise.race([ui.wait(), sleep(8000)])
-      if (ui.child.exitCode === null) ui.child.kill("SIGKILL")
+      holder.child.kill("SIGKILL")
+      await Promise.race([holder.wait(), sleep(5000)])
     }
     assert.match(cliOk(home, ["commit", "ls"]).stdout, /held by server/, "data must survive the blocked operations")
   } finally { rmSync(root, { recursive: true, force: true }) }
@@ -530,5 +560,85 @@ test("concurrency: two import --replace processes serialize without corrupting t
     const audit = cli(home, ["audit"])
     assert.equal(audit.status, 0)
     assert.match(audit.stdout, /audit: verified/)
+  } finally { rmSync(root, { recursive: true, force: true }) }
+})
+
+// 0.2.3 persistence v2 §4: the HOME lock protects WRITERS only. Pure reads open a
+// read-only WAL snapshot and must keep working while a long-lived writer (mcp,
+// bridge, older ui) holds it; writes still fail closed with E_DB_LOCKED.
+const READ_ONLY_COMMANDS = [
+  ["status"], ["today"], ["today", "--json"], ["who"], ["week"], ["risks"],
+  ["receipt"], ["deliveries"], ["deliveries", "--json"], ["ls"], ["history"],
+  ["memory"], ["memory", "search", "报价"], ["remind", "--json"], ["digest", "day"],
+  ["tui", "--once"], ["pet-brief", "--json"], ["audit"], ["privacy"], ["doctor"],
+  ["commit", "ls"], ["commit", "ls", "--json"], ["search", "报价"], ["prefs"],
+  ["learn", "ls"], ["nudge", "list"],
+]
+
+function sha256(path) { return createHash("sha256").update(readFileSync(path)).digest("hex") }
+
+test("read commands work while a live writer holds the lock; writes still fail E_DB_LOCKED", async () => {
+  const root = mkdtempSync(join(tmpdir(), "advisers-lock-readers-"))
+  const home = join(root, "home")
+  try {
+    cliOk(home, ["commit", "add", "被锁期间仍可读", "--quote", "q"])
+    const mcp = startMcp(home)
+    try {
+      assert.ok(await mcp.ready(), "mcp did not start: " + mcp.stderr())
+      for (const args of READ_ONLY_COMMANDS) {
+        const result = cli(home, args)
+        assert.equal(result.status, 0, "advisers " + args.join(" ") + " must work while a writer holds the lock: " + result.stderr)
+      }
+      const write = cli(home, ["commit", "add", "blocked write", "--quote", "q"], { ADVISERS_LOCK_TIMEOUT_MS: "150" })
+      assert.equal(write.status, 1, "a write must still fail closed while the writer lock is held")
+      assert.match(stderrOf(write), /E_DB_LOCKED/)
+      assert.equal(count(home, "SELECT COUNT(*) AS n FROM commitments"), 1, "the blocked write must not have landed")
+      assert.equal(existsSync(lockFile(home)), true, "read commands must not remove the writer's lock")
+    } finally { await mcp.stop() }
+    assert.equal(existsSync(lockFile(home)), false, "mcp must release the lock on exit")
+  } finally { rmSync(root, { recursive: true, force: true }) }
+})
+
+test("pure read commands take no HOME lock and do not modify state.db", () => {
+  const root = mkdtempSync(join(tmpdir(), "advisers-lock-readonly-"))
+  const home = join(root, "home")
+  try {
+    cliOk(home, ["commit", "add", "只读不应改库", "--quote", "q"])
+    const dbPath = join(home, "state.db")
+    const before = sha256(dbPath)
+    const beforeFiles = readdirSync(home).sort()
+    for (const args of READ_ONLY_COMMANDS) {
+      cliOk(home, args)
+      assert.equal(existsSync(lockFile(home)), false, "advisers " + args.join(" ") + " must not create instance.lock")
+    }
+    assert.equal(sha256(dbPath), before, "pure reads must not modify state.db")
+    const created = readdirSync(home).filter((name) => !beforeFiles.includes(name))
+    assert.deepEqual(created.filter((name) => !name.endsWith("-wal") && !name.endsWith("-shm")), [], "reads create no database/migration artifact")
+  } finally { rmSync(root, { recursive: true, force: true }) }
+})
+
+test("ui/tui are lock-free readers: no writer lock, no blocked writes, no DB mutation", async () => {
+  const root = mkdtempSync(join(tmpdir(), "advisers-lock-ui-reader-"))
+  const home = join(root, "home")
+  try {
+    cliOk(home, ["commit", "add", "ui 期间可写", "--quote", "q"])
+    const dbPath = join(home, "state.db")
+    const before = sha256(dbPath)
+    const ui = startUi(home)
+    try {
+      assert.ok(await ui.ready(), "ui did not start: " + ui.stderr())
+      assert.equal(existsSync(lockFile(home)), false, "ui must not hold the HOME writer lock")
+      const tui = cliOk(home, ["tui", "--once"])
+      assert.match(tui.stdout, /Advisers TUI/)
+      assert.equal(sha256(dbPath), before, "ui/tui reads must not modify state.db")
+      // A normal write lands while ui is serving its read-only snapshot.
+      cliOk(home, ["commit", "add", "ui 运行期间的写", "--quote", "q"])
+    } finally {
+      ui.child.kill("SIGTERM")
+      await Promise.race([ui.wait(), sleep(8000)])
+      if (ui.child.exitCode === null) ui.child.kill("SIGKILL")
+    }
+    assert.equal(existsSync(lockFile(home)), false, "ui must not leave a lock behind")
+    assert.equal(count(home, "SELECT COUNT(*) AS n FROM commitments"), 2, "the concurrent write must have landed")
   } finally { rmSync(root, { recursive: true, force: true }) }
 })

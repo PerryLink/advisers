@@ -203,9 +203,11 @@ test('50k synthetic: the preload assertion catches a regression to store.load()'
   const { root, home, work, db } = setup('control')
   try {
     seed50k(db)
-    // Negative control: `commit ls` still reads the full ledger, so the same
-    // stubbing must fail it. This proves the assertion above is not vacuous.
-    const control = runWithForbiddenLoaders({ root, home, work }, ['commit', 'ls'], ALL_TABLE_LOADERS)
+    // Negative control: a command that genuinely still needs the full ledger
+    // (`routine ls` is a write-path command outside the 0.2.3 incremental-write
+    // scope) must be failed by the same stubbing. This proves the assertions
+    // above are not vacuous now that commit status reads are partial too.
+    const control = runWithForbiddenLoaders({ root, home, work }, ['routine', 'ls'], ALL_TABLE_LOADERS)
     assert.notEqual(control.status, 0)
     assert.match(control.stderr, /ASSERT: forbidden loader called: load/)
   } finally { rmSync(root, { recursive: true, force: true }) }

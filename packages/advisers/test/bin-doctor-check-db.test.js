@@ -1,12 +1,12 @@
 import assert from 'node:assert/strict'
-import { spawnSync } from 'node:child_process'
+import { spawn, spawnSync } from 'node:child_process'
 import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, utimesSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import test from 'node:test'
 import { tosEnv } from './tos-fixture.js'
-import { SqliteStore } from '../lib/sqlite.js'
+import { SqliteStore, instanceLockPath } from '../lib/sqlite.js'
 
 // 0.2.3 Wave 1 (robustness audit P1-4/P1-5/P1-6):
 // - default doctor stays lightweight (no O(db) quick_check / O(index) FTS);
@@ -182,3 +182,75 @@ test('vault status/doctor list the new plaintext artifacts, and a sealed vault f
     rmSync(root, { recursive: true, force: true })
   }
 })
+// 0.2.3 persistence v2 §4.7: default doctor is a lock-free read and stays green
+// while a live writer holds the HOME lock; --check-db is the explicit writable
+// maintenance pass (FTS5's integrity-check writes an internal row), so it must
+// report E_DB_LOCKED rather than a confusing 'attempt to write a readonly
+// database' when a long-lived process is holding the store.
+function sleep(ms) { return new Promise((resolve) => setTimeout(resolve, ms)) }
+async function waitFor(predicate, timeoutMs = 10000) {
+  const started = Date.now()
+  while (Date.now() - started < timeoutMs) {
+    if (predicate()) return true
+    await sleep(25)
+  }
+  return false
+}
+function startWriter(home) {
+  const child = spawn(process.execPath, [bin, 'mcp', '--stdio'], { env: env(home), stdio: ['pipe', 'pipe', 'pipe'] })
+  let stderr = ''
+  child.stderr.on('data', (chunk) => { stderr += chunk })
+  return {
+    child,
+    ready: () => waitFor(() => existsSync(instanceLockPath(home))),
+    stderr: () => stderr,
+    stop: async () => {
+      child.kill('SIGTERM')
+      await Promise.race([new Promise((resolve) => child.once('close', resolve)), sleep(8000)])
+      if (child.exitCode === null) child.kill('SIGKILL')
+    },
+  }
+}
+
+test('doctor --check-db on a fresh home PASSes: FTS integrity-check uses a writable maintenance connection', () => {
+  const { root, home } = makeHome()
+  try {
+    // Brand-new user path: every check must PASS; a read-only connection used to
+    // fail db-fts with 'attempt to write a readonly database'.
+    const fresh = runOk(home, ['doctor', '--check-db'])
+    assert.match(fresh.stdout, /PASS  db-quick-check/)
+    assert.match(fresh.stdout, /PASS  db-fts .*state=ok/)
+    assert.match(fresh.stdout, /PASS  db-wal .*journal=wal/)
+    assert.doesNotMatch(output(fresh), /readonly database|read-only database/)
+    assert.doesNotMatch(fresh.stdout, /FAIL/)
+    // Re-running on the now-existing database must stay green as well.
+    const again = runOk(home, ['doctor', '--check-db'])
+    assert.match(again.stdout, /PASS  db-fts/)
+  } finally {
+    rmSync(root, { recursive: true, force: true })
+  }
+})
+
+test('doctor: default read-only pass while a live writer holds the lock; --check-db fails with E_DB_LOCKED (not readonly)', async () => {
+  const { root, home } = seededHome()
+  const writer = startWriter(home)
+  try {
+    assert.ok(await writer.ready(), 'writer did not take the lock: ' + writer.stderr())
+    const lightweight = runOk(home, ['doctor'])
+    assert.match(lightweight.stdout, /PASS  lock/)
+    assert.match(lightweight.stdout, /held by pid \d+/)
+    assert.doesNotMatch(output(lightweight), /E_DB_LOCKED/)
+    assert.doesNotMatch(output(lightweight), /readonly database|read-only database/)
+
+    const checked = run(home, ['doctor', '--check-db'], { ADVISERS_LOCK_TIMEOUT_MS: '150' })
+    assert.equal(checked.status, 1, 'doctor --check-db must fail closed while the writer lock is held')
+    assert.match(output(checked), /E_DB_LOCKED/)
+    assert.match(checked.stdout, /FAIL  db-integrity/)
+    assert.doesNotMatch(output(checked), /readonly database|read-only database/)
+    assert.match(output(checked), /stop the long-running advisers process/)
+  } finally {
+    await writer.stop()
+    rmSync(root, { recursive: true, force: true })
+  }
+})
+

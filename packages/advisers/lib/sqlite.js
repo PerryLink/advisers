@@ -984,7 +984,12 @@ export function prepareWalForOpen(dbPath, { readOnly = false, now = Date.now() }
   const report = inspectWalStatus(dbPath)
   if (report.status !== 'invalid' && report.status !== 'truncated') return report
   if (readOnly) {
-    report.note = 'read-only open: the WAL was inspected but not preserved; run a writable command to quarantine it'
+    report.note = 'read-only open: the WAL was inspected but not modified; run a writable maintenance command (for example `advisers doctor --check-db`) to preserve and quarantine it'
+    if (report.status === 'invalid') {
+      report.warning = `E_WAL_CORRUPT: the WAL file ${report.path} cannot be used by SQLite (${report.reason}); read-only open left it untouched. Run 'advisers doctor --check-db' to preserve and quarantine it; transactions committed after the last checkpoint may be lost.`
+    } else {
+      report.warning = `${report.warning}. Read-only open left it untouched; run 'advisers doctor --check-db' to preserve it.`
+    }
     return report
   }
   const preserved = preserveWalCopy(dbPath, report, { now })
@@ -1072,6 +1077,19 @@ export class SqliteStore {
         return
       }
       this.enableWal()
+      // A torn WAL was preserved by the pre-open check. Fold its valid prefix
+      // into the main database and truncate the sidecar so subsequent opens are
+      // clean; the preserved copy remains available for forensics.
+      if (this.walStatus?.status === 'truncated' && this.walStatus.backup) {
+        try {
+          this.db.exec('PRAGMA wal_checkpoint(TRUNCATE)')
+          this.walStatus.recovered = true
+          this.walStatus.current = inspectWalStatus(path)
+        } catch (error) {
+          this.walStatus.recovered = false
+          this.walStatus.recoveryError = String(error?.message ?? error)
+        }
+      }
       this.db.exec('PRAGMA secure_delete = ON')
       this.db.exec('PRAGMA synchronous = NORMAL')
       this.initializeSchema()
@@ -1327,7 +1345,15 @@ export class SqliteStore {
       report.checkpoint = { busy: Number(checkpoint?.busy ?? 0) !== 0, log: Number(checkpoint?.log ?? 0), checkpointed: Number(checkpoint?.checkpointed ?? 0) }
     } catch (error) { report.checkpoint = { error: String(error?.message ?? error) } }
     const bad = (status) => ['invalid', 'truncated', 'unreadable'].includes(String(status))
-    report.ok = !bad(report.initial.status) && !bad(report.current.status) && report.initial.preserveError == null
+    // A WAL that was preserved and then quarantined/checkpointed is reported as
+    // recovered, but the maintenance check still fails once: data committed
+    // after the last checkpoint may have been lost. The next open is clean.
+    report.recovered = Boolean(
+      report.initial.preserveError == null &&
+      (report.initial.quarantined === true ||
+        (report.initial.backup && (report.initial.recovered === true || !bad(report.current.status)))),
+    )
+    report.ok = !bad(report.current.status) && !bad(report.initial.status) && report.initial.preserveError == null
     return report
   }
 

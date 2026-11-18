@@ -508,14 +508,21 @@ async function walInvalidHeader() {
   const result = cli(home, ['commit', 'ls', '--json'])
   check(result.status === 0, 'a corrupted WAL made a read command fail: ' + String(result.stderr + result.stdout).slice(0, 400))
   check(/E_WAL_CORRUPT/.test(String(result.stderr)), 'expected an E_WAL_CORRUPT warning, got: ' + String(result.stderr).slice(0, 400))
+  // 0.2.3 read path is lock-free/read-only: it must warn but must not modify the WAL.
+  check(files(home).filter((name) => name.includes('-wal.corrupt-')).length === 0, 'read-only command modified the WAL evidence')
+  check(existsSync(walPath), 'read-only command moved the WAL aside')
+  // A writable maintenance command performs the preservation/quarantine.
+  const doctor = doctorCheckDb(home)
+  check(doctor.status !== 0, 'the maintenance pass did not report the data-loss risk of a corrupt WAL')
+  check(/FAIL\s+db-wal/.test(String(doctor.stdout)), 'doctor did not report FAIL db-wal: ' + String(doctor.stdout).slice(0, 500))
   const backups = files(home).filter((name) => name.includes('-wal.corrupt-'))
   check(backups.length === 1, 'expected exactly one preserved WAL copy, found ' + backups.length)
   check(readFileSync(join(home, backups[0])).equals(corrupt), 'the preserved WAL copy differs from the corrupt input bytes')
-  check(!existsSync(walPath), 'the unusable WAL was not moved aside')
+  check(!existsSync(walPath), 'the unusable WAL was not moved aside by the writable maintenance command')
   check(commitmentRows(home).length === 1, 'the main database lost its commitment row')
   checkDoctorOk(home, 'after quarantining an invalid WAL')
   auditCount(home)
-  return 'zeroed WAL header: E_WAL_CORRUPT detected, original bytes preserved as ' + backups[0] + ', WAL quarantined, DB and audit verified'
+  return 'zeroed WAL header: read-only path warned E_WAL_CORRUPT without touching it; doctor --check-db preserved the bytes as ' + backups[0] + ' and quarantined the WAL; DB/audit verified'
 }
 
 async function walTruncated() {
@@ -532,13 +539,17 @@ async function walTruncated() {
   const result = cli(home, ['commit', 'ls', '--json'])
   check(result.status === 0, 'a truncated WAL made a read command fail: ' + String(result.stderr + result.stdout).slice(0, 400))
   check(/E_WAL_TRUNCATED/.test(String(result.stderr)), 'expected an E_WAL_TRUNCATED warning, got: ' + String(result.stderr).slice(0, 400))
+  check(files(home).filter((name) => name.includes('-wal.corrupt-')).length === 0, 'read-only command modified the torn WAL')
+  const doctor = doctorCheckDb(home)
+  check(doctor.status !== 0, 'the maintenance pass did not report the data-loss risk of a torn WAL')
+  check(/FAIL\s+db-wal/.test(String(doctor.stdout)), 'doctor did not report FAIL db-wal: ' + String(doctor.stdout).slice(0, 500))
   const backups = files(home).filter((name) => name.includes('-wal.corrupt-'))
   check(backups.length === 1, 'expected exactly one preserved WAL copy, found ' + backups.length)
   check(statSync(join(home, backups[0])).size === truncatedSize, 'preserved WAL copy has the wrong size')
   check(commitmentRows(home).length === 1, 'the main database lost its commitment row')
   checkDoctorOk(home, 'after recovering a truncated WAL')
   auditCount(home)
-  return 'torn WAL frame: E_WAL_TRUNCATED detected, ' + truncatedSize + '-byte WAL preserved, valid prefix recovered, DB and audit verified'
+  return 'torn WAL frame: read-only path warned E_WAL_TRUNCATED without touching it; doctor --check-db preserved the ' + truncatedSize + '-byte WAL, valid prefix recovered, DB/audit verified'
 }
 
 async function ftsDesynchronised() {
