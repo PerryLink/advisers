@@ -1,6 +1,6 @@
 # Performance
 
-> Status: measured for the `0.2.2` release candidate (2026-11-18). The `0.2.1` and
+> Status: measured for the `0.2.2` release (published 2026-11-18). The `0.2.1` and
 > `0.2.0` trees are the "before" baselines where a comparison says so below.
 
 How Advisers performs on the hot paths, how to reproduce the numbers, and which

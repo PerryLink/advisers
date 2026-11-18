@@ -26,7 +26,7 @@ Advisers 不是聊天框，也不是情感陪伴。它维护三本账：
 
 ## 状态
 
-`0.2.2` 是 2026-11-18 的**发布候选（release candidate）**：8 个 workspace 包统一为 `0.2.2`。其中 6 个发布包为 `advisers`、`advisers-core`、`advisers-office`、`advisers-policy-strict`、`advisers-bridge-hermes`、`dsh-advisers`；两个私有 `advisers-link-*` 包保持同版本但不发布。候选版本**已 staged 到 npm `latest`，待账号所有者 OTP 批准**；批准前 npm `latest` 仍为 `0.2.1`（2026-11-17 已发布），`0.2.0` 仍可按版本号安装。registry tarball、许可文件、全新 prefix 安装与逐包 import 冒烟由 `scripts/verify-release.mjs` 在批准后校验。
+`0.2.2` 是 2026-11-18 的**当前发布版本**：8 个 workspace 包统一为 `0.2.2`。其中 6 个发布包为 `advisers`、`advisers-core`、`advisers-office`、`advisers-policy-strict`、`advisers-bridge-hermes`、`dsh-advisers`；两个私有 `advisers-link-*` 包保持同版本但不发布。六包已发布到 npm **`latest` = `0.2.2`**（账号所有者 OTP 于 2026-11-18 批准）；`0.2.1`/`0.2.0` 仍可按版本号安装。registry tarball、许可文件、全新 prefix 安装与逐包 import 冒烟已由 `scripts/verify-release.mjs` 验证（86/86）。
 
 > 需要 **Node >= 22.16**；Windows/PowerShell/BOM 说明见 [docs/QUICKSTART.md](docs/QUICKSTART.md)。
 
@@ -49,13 +49,12 @@ Advisers 不是聊天框，也不是情感陪伴。它维护三本账：
 - Pet Brief（只读脱敏投影，契约 v0.2：`schemaVersion: 2` + `displayPolicy`，默认 `private`；v0.1 brief 按 legacy 可读）：`pet-brief --json|--out|--check [--strict]|--print-schema|--display-policy public|private|none`；`secrecy >= 2` 全排除、confidence < 0.7 丢弃、5 分钟 TTL、每节 10 项上限；不调模型、不联网、不改账本；桌宠 UI/传输尚未接通。见 `docs/PET-BRIEF-PRODUCER.md`。
 
 ```sh
-# 0.2.2 是已 staged 到 npm @latest 的发布候选，待账号所有者 OTP 批准；
-# 0.2.1 是当前已发布的 @latest。也可从 checkout 运行：
+# 0.2.2 已发布到 npm @latest；也可从 checkout 运行：
 #   corepack pnpm install && corepack pnpm -r build
 #   ADVISERS_OFFICE_LOCAL=1 node packages/advisers/bin/advisers.js status
-# 从 npm 安装（稳定渠道 = 默认 `latest`，当前为 0.2.1）：
+# 从 npm 安装（稳定渠道 = 默认 `latest`，当前为 0.2.2）：
 #   npm i -g --registry=https://registry.npmjs.org advisers@latest advisers-office@latest
-# `next` 渠道当前也指向 0.2.1：
+# `next` 渠道当前也指向 0.2.2：
 #   npm i -g --registry=https://registry.npmjs.org advisers@next advisers-office@next
 advisers soul init
 advisers commit add "周五前发报价给王工" --quote "周五前发报价给王工" --due 2026-11-13T18:00:00+08:00

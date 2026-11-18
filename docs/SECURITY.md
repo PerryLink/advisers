@@ -10,7 +10,7 @@ versions, how a release is built and published, what provenance exists today,
 and how to verify what you install. It describes the current state; "not yet
 implemented" is written as such.
 
-Status: 2026-11-17, covering the 0.2.x stable line.
+Status: 2026-11-18, covering the 0.2.x stable line (latest: 0.2.2).
 
 ## 1. Reporting a vulnerability
 

@@ -1,9 +1,8 @@
 # Quickstart (Windows + PowerShell)
 
-> Current status: `0.2.2` is the **release candidate** (2026-11-18). All six published
-> packages are lockstep at `0.2.2`, staged to npm `@latest` and awaiting the account
-> owner's OTP approval. Until that approval npm `@latest` still resolves to `0.2.1`
-> (published 2026-11-17); install the current stable release with
+> Current status: `0.2.2` is the **current release**, published on npm `@latest` on
+> 2026-11-18 after the account owner's OTP approval. All six published packages are
+> lockstep at `0.2.2`; install with
 > `npm i -g --registry=https://registry.npmjs.org advisers@latest advisers-office@latest`.
 > The checkout instructions below remain valid for development builds.
 
@@ -93,11 +92,10 @@ node $A memory candidates
 node $A chat "做一份 Q4 汇报 PPT，放到 out\q4.pptx"
 ```
 
-## B. Installed CLI (stable channel = 0.2.1; 0.2.2 staged, OTP pending)
+## B. Installed CLI (stable channel = 0.2.2)
 
 ```powershell
-# Stable channel: npm @latest currently resolves to 0.2.1 (published 2026-11-17).
-# 0.2.2 is the staged release candidate; it becomes installable after the owner's OTP approval.
+# Stable channel: npm @latest currently resolves to 0.2.2 (published 2026-11-18).
 npm i -g --registry=https://registry.npmjs.org advisers@latest advisers-office@latest
 # Pre-release channel (preview/RC builds land on `next` before promotion):
 # npm i -g --registry=https://registry.npmjs.org advisers@next advisers-office@next

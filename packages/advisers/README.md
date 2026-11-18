@@ -7,8 +7,7 @@ routines.
 ## Install
 
 ```sh
-# 0.2.2 is the release candidate staged to npm @latest (owner OTP pending);
-# 0.2.1 is the published @latest (stable channel = default `latest`):
+# 0.2.2 is published on npm @latest (stable channel = default `latest`):
 #   npm i -g --registry=https://registry.npmjs.org advisers@latest advisers-office@latest
 # From checkout:
 #   corepack pnpm install && corepack pnpm -r build
@@ -44,9 +43,7 @@ turn natural language into commitments or artifacts.
 
 ## Status
 
-`0.2.2` is the release candidate (2026-11-18), staged to npm `latest` and awaiting
-the account owner's OTP approval; npm `latest` still resolves to `0.2.1` (published
-2026-11-17):
+`0.2.2` is the current release (published on npm `latest` on 2026-11-18):
 
 - SQLite ledger at `~/.advisers/state.db` (JSON fallback with `ADVISERS_STORE=json`);
 - soul at `~/.advisers/soul.md`, human-owned;

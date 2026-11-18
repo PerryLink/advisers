@@ -1,11 +1,11 @@
 # Changelog
 
-## 0.2.2 (release candidate, 2026-11-18)
+## 0.2.2 (published, 2026-11-18)
 
-Release candidate on the 0.2.x stable line: the eight workspace packages are lockstep at
+Published release on the 0.2.x stable line: the eight workspace packages are lockstep at
 `0.2.2`, internal pins/version constants/`pnpm-lock.yaml` follow, and the six published
-packages are staged to npm `latest` and await the account owner's OTP approval (`latest`
-still resolves to 0.2.1 until then). The legal texts are unchanged from 0.2.0
+packages were published to npm `latest` on 2026-11-18 after the account owner's OTP
+approval. The legal texts are unchanged from 0.2.0
 (TOS v2026.11.2).
 
 ### Added
@@ -52,8 +52,8 @@ still resolves to 0.2.1 until then). The legal texts are unchanged from 0.2.0
   internal workspace pins (including `dsh-advisers` → `advisers`), the three version
   constants and `pnpm-lock.yaml` follow.
 - **Version references**: user-facing READMEs/QUICKSTART/PERFORMANCE advertise `0.2.2`
-  as a release candidate staged to npm `latest` and pending the owner's OTP approval;
-  `0.2.1` stays the installable `latest` and is kept in historical narrative.
+  as the current release (published on npm `latest` on 2026-11-18); `0.2.1` and `0.2.0`
+  remain installable by pinning and are kept in historical narrative.
 - **Generated third-party notices**: the six per-package `THIRD-PARTY-NOTICES.md` files
   were regenerated (`node scripts/check-licenses.mjs --write`) so their embedded package
   version says `0.2.2`; the dependency list itself is unchanged (203 third-party
@@ -82,6 +82,15 @@ still resolves to 0.2.1 until then). The legal texts are unchanged from 0.2.0
 - **WPS compatibility layer is not MS Office**: the smoke machine has no
   `WINWORD.EXE`; the `Word.Application` COM server is WPS 12.1.0.29680. The Office
   rendering result describes WPS only, not Microsoft Word.
+- **Release verification**: `pnpm -r test` 535/535 PASS; `pnpm -r build` and
+  `pnpm -r typecheck` exit 0; `pack-smoke`, `check-docs`, `check-release`,
+  `check-tos --release`, `check-licenses`, `check-deps`, `security-suite` and
+  `verify-office` PASS.
+- **Registry verification**: `node scripts/verify-release.mjs --version 0.2.2 --tag latest`
+  → PASS, 86 checks (six tarballs, sha1/sha512, LICENSE/NOTICE/TPN and packaged legal
+  texts, fresh-prefix install, per-package `import()` including `dsh-advisers`).
+- **npm**: the six packages were published to `latest` and `next` = 0.2.2 on
+  2026-11-18 after the account owner OTP approval.
 
 ### Known issues
 
