@@ -20,7 +20,13 @@ on:
         type: choice
         options: [latest, next]
       confirm:
-        description: "run the trusted-publishing draft job (it does not publish)"
+        description: "run the trusted-publishing OIDC job"
+        required: true
+        default: "no"
+        type: choice
+        options: ["no", "yes"]
+      stage:
+        description: "actually stage with provenance (needs confirm=yes and the version to be unreleased)"
         required: true
         default: "no"
         type: choice
@@ -114,6 +120,17 @@ jobs:
           echo "This exercises the npm --provenance / OIDC path. It is expected to fail or"
           echo "warn until a Trusted Publisher is configured for every package."
           node scripts/release.mjs --dry-run --provenance
+      - name: Stage with Trusted Publishing + provenance (owner-authorized)
+        if: ${{ inputs.confirm == 'yes' && inputs.stage == 'yes' }}
+        env:
+          RELEASE_TAG: ${{ inputs.release_tag }}
+        run: |
+          if [ -n "$NPM_TOKEN" ]; then
+            echo "::error::NPM_TOKEN must not be set for Trusted Publishing; OIDC supplies the short-lived token"
+            exit 1
+          fi
+          node scripts/release.mjs --provenance
+
       - name: Trusted Publisher setup and owner decision
         run: |
           echo "This draft job does NOT publish or stage anything."
