@@ -1,6 +1,6 @@
 # Performance
 
-> Status: measured for the `0.2.3` release candidate (2026-11-18). The `0.2.2`,
+> Status: measured for the published `0.2.3` release (2026-11-18). The `0.2.2`,
 > `0.2.1` and `0.2.0` trees are the "before" baselines where a comparison says so below.
 
 How Advisers performs on the hot paths, how to reproduce the numbers, and which
@@ -48,7 +48,7 @@ next section). Representative A/B on one host with a **200,000-row synthetic led
 3 fresh CLI child processes per scenario, same data, one process at a time. "Bytes
 written" is the child process's storage-write count (`write_bytes` in `/proc/<pid>/io`,
 max sample; it includes WAL/DB writes and SQLite temp spill, not stdout). The 0.2.2 tree
-is a clean copy of the published code; the 0.2.3 tree is the release candidate.
+is a clean copy of the published code; the 0.2.3 tree is the published release.
 
 | Scenario | 0.2.2 | 0.2.3 | Bytes written 0.2.2 → 0.2.3 |
 |---|---:|---:|---:|

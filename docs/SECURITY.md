@@ -10,8 +10,7 @@ versions, how a release is built and published, what provenance exists today,
 and how to verify what you install. It describes the current state; "not yet
 implemented" is written as such.
 
-Status: 2026-11-18, covering the 0.2.x stable line (npm `latest`: 0.2.2; `0.2.3` is
-the staged release candidate awaiting the account owner's OTP approval).
+Status: 2026-11-18, covering the 0.2.x stable line (npm `latest`: 0.2.3).
 
 ## 1. Reporting a vulnerability
 
@@ -229,7 +228,7 @@ and check-js gates are blocking.
   (`scripts/fault-injection.mjs`, see [FAULT-INJECTION.md](FAULT-INJECTION.md));
   aligned the T1-T5 labels with the test files the security suite actually runs
   and recorded the 0.3 target matrix explicitly as not implemented.
-- 2026-11-18 (0.2.3 release candidate): 743/743 tests, `check-js`, the Windows
+- 2026-11-18 (0.2.3 published): 743/743 tests, `check-js`, the Windows
   smoke job definition and the fault-injection suite (9/9) are part of the
   candidate gate. Provenance status is unchanged (no attestations; draft OIDC
   job only), the audit tail anchor is still unimplemented, and the legal texts

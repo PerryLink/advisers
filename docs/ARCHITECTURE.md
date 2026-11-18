@@ -1,7 +1,6 @@
 # Advisers architecture
 
-> Status: 0.2.3 release candidate (2026-11-18), staged for npm `latest` awaiting the
-> account owner's OTP approval; `0.2.2` is the current published `latest` until then.
+> Status: 0.2.3 (published on npm `latest` on 2026-11-18).
 > This document fixes the vocabulary and the invariants; the implementation is allowed to
 > be smaller than the document.
 

@@ -1,6 +1,6 @@
 # 内容安全：本地规则层
 
-> 状态：0.2.3 发布候选（2026-11-18，已 staged 到 npm latest，待账号所有者 OTP 批准；当前 registry latest 仍为 0.2.2）。模块位置 `packages/advisers/lib/safety/`，纯 ESM、零第三方依赖、无网络。
+> 状态：0.2.3 已发布（2026-11-18，npm latest）。模块位置 `packages/advisers/lib/safety/`，纯 ESM、零第三方依赖、无网络。
 > 规则层已完成 **lib 级 7 条路径的接入**：model / research / capture / pet-brief / attachments / MCP server / DSH 工具（见 §8）；0.2.3 起 `bin/` 级 CLI 消费结构化 `safetyWarnings` 并写 `actor=safety` 审计行、block 写 `allowed=false` 审计行（见 §8.2）；首启 TOS 与 `advisers safety` 子命令仍由后续任务接线。
 >
 > 规则集版本：`advisers-content-1`。测试：`packages/advisers/test/safety.test.js`（21 个规则/语料测试）+ `packages/advisers/test/safety-integration.test.js`（13 个接入路径测试）+ `packages/dsh-advisers/test/safety.test.js`（5 个 DSH 结构化错误测试）。

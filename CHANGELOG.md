@@ -1,12 +1,11 @@
 # Changelog
 
-## 0.2.3 (release candidate, 2026-11-18)
+## 0.2.3 (published, 2026-11-18)
 
-Release candidate on the 0.2.x stable line: the eight workspace packages are lockstep at
+Published release on the 0.2.x stable line: the eight workspace packages are lockstep at
 `0.2.3`, the internal pins/version constants/`pnpm-lock.yaml` follow, and the six
-published packages are **staged for npm `latest`** awaiting the account owner's OTP
-approval. They are not installable until that approval happens: `0.2.2` remains the
-current npm `latest` and `0.2.1`/`0.2.0` stay installable by pinning. The legal texts
+published packages were published to npm `latest` on 2026-11-18 after the account
+owner's OTP approval. `0.2.2`/`0.2.1`/`0.2.0` remain installable by pinning. The legal texts
 are unchanged from 0.2.0 (TOS v2026.11.2).
 
 ### Security
@@ -193,16 +192,19 @@ small-database figure from 0.2.2.
   `quick_check`, audit-chain verification, row/audit consistency, no half-installed files
   and successful recovery. Wired into CI on Node 22.16; full scope/limitations are in
   [docs/FAULT-INJECTION.md](docs/FAULT-INJECTION.md).
-- **Release verification (this candidate)**: `pnpm -r test` 743/743 PASS (advisers 590,
+- **Release verification (published release)**: `pnpm -r test` 743/743 PASS (advisers 590,
   core 74, office 43, dsh-advisers 20, link-feishu 8, link-email 5, bridge-hermes 2,
   policy-strict 1); `pnpm -r build` and `pnpm -r typecheck` exit 0; `pack-smoke`,
   `check-docs`, `check-release`, `check-licenses`, `check-tos --release`, `check-deps`,
-  `check-js`, `security-suite` and `fault-injection` (9/9) pass. Registry verification is
-  deliberately not run before the owner approves the staged build.
+  `check-js`, `security-suite` and `fault-injection` (9/9) pass. The published registry
+  tarballs were verified after approval: `verify-release.mjs --version 0.2.3 --tag latest`
+  → PASS, 86 checks (tarballs, sha1/sha512, licence files, fresh-prefix install, per-package
+  `import()`). npm: the six packages were published to `latest` and `next` = 0.2.3 on
+  2026-11-18 after the account owner OTP approval.
 
 ### Known issues and limits
 
-- **Some performance targets were missed at 200k rows**: the RC meets the write targets
+- **Some performance targets were missed at 200k rows**: the release meets the write targets
   (≤200 ms and ≤1 MB written per command), `mcp` init, `ls`, `memory search` and
   `today --json`; it misses `today` (317 ms vs ≤150 ms target), `remind` (972 ms),
   `digest` (641 ms), `tui` (814 ms) and `pet-brief` (1,809 ms) against the ≤400 ms read
@@ -227,9 +229,9 @@ small-database figure from 0.2.2.
 - **Audit tail anchoring is not implemented**: audit is a local hash chain; deleting the
   tail of the chain is not yet detectable, and the 0.3 target audit-tail anchor remains
   open. Audit is not a third-party attestation.
-- **Windows results are CI-only for this candidate**: the `windows-smoke` job is the
-  authority for the real Windows runner; no local Windows host was used for this release
-  candidate. Fault-injection is Linux-only and does not cover real power loss or Windows
+- **Windows results are CI-only for this release**: the `windows-smoke` job is the
+  authority for the real Windows runner (it passed for the 0.2.3 release commit); no local
+  Windows host was used for this release. Fault-injection is Linux-only and does not cover real power loss or Windows
   filesystem fault windows.
 
 ## 0.2.2 (published, 2026-11-18)

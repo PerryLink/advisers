@@ -5,8 +5,7 @@
 ## 安装
 
 ```sh
-# 0.2.3 是已 staged 到 npm @latest 的发布候选，待账号所有者 OTP 批准；
-# 0.2.2 是当前已发布的 @latest（稳定渠道 = 默认 `latest`）：
+# 0.2.3 已发布到 npm @latest（稳定渠道 = 默认 `latest`）：
 #   npm i -g --registry=https://registry.npmjs.org advisers@latest advisers-office@latest
 # 从 checkout 运行：
 #   corepack pnpm install && corepack pnpm -r build
@@ -37,7 +36,7 @@ CLI 是**本地秘书运行时**：一个 REPL、用户账/承诺账/流程账�
 
 ## 状态
 
-`0.2.3` 是发布候选（2026-11-18）：已 staged 到 npm `latest`，待账号所有者 OTP 批准；在此之前 `0.2.2` 仍是当前已发布的 `latest`：
+`0.2.3` 是当前发布版本（已发布到 npm `latest`，2026-11-18）：
 
 - SQLite 账本 `~/.advisers/state.db`（JSON fallback；schema v20、无锁只读快照、增量写）；
 - soul 位于 `~/.advisers/soul.md`，人类独占；

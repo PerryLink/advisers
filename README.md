@@ -43,16 +43,15 @@ on any link package; adapters load one only when configured.
 
 ## Status
 
-`0.2.3` is the **release candidate** (2026-11-18): the eight workspace packages are
+`0.2.3` is the **current release** (2026-11-18): the eight workspace packages are
 lockstep at `0.2.3`. The six published packages are `advisers`, `advisers-core`,
 `advisers-office`, `advisers-policy-strict`, `advisers-bridge-hermes` and `dsh-advisers`;
 the two private `advisers-link-*` packages are held at the same version but are not
-published. The six packages are **staged for npm `latest`** and become installable only
-once the account owner approves them with their own OTP; until then npm **`latest` remains
-`0.2.2`** (published 2026-11-18), and `0.2.1`/`0.2.0` stay installable by pinning. The
-candidate passed 743/743 tests, build/typecheck, packaging smoke, docs/licence/TOS/
-release-lockstep checks, the security suite and the fault-injection suite (9/9); registry
-verification of the published tarballs runs after that approval.
+published. The six packages are published on npm **`latest` = `0.2.3`** (owner OTP
+approved on 2026-11-18); `0.2.2`/`0.2.1`/`0.2.0` remain installable by pinning. The
+release passed 743/743 tests, build/typecheck, packaging smoke, docs/licence/TOS/
+release-lockstep checks, the security suite and the fault-injection suite (9/9); the
+published tarballs were verified with `scripts/verify-release.mjs` (86/86 checks).
 
 > Requires **Node >= 22.16**. See [docs/QUICKSTART.md](docs/QUICKSTART.md) for Windows/PowerShell and BOM notes.
 
@@ -79,13 +78,13 @@ verification of the published tarballs runs after that approval.
 - real-account/WS/Office-L3 validation still pending.
 
 ```sh
-# 0.2.3 is staged for npm @latest (0.2.2 is the current published latest); or run from the checkout:
+# 0.2.3 is published on npm @latest; or run from the checkout:
 git clone https://github.com/PerryLink/advisers.git
 cd advisers && corepack pnpm install && corepack pnpm -r build
 ADVISERS_OFFICE_LOCAL=1 node packages/advisers/bin/advisers.js status
-# From npm (stable channel = default `latest`, currently 0.2.2; 0.2.3 after owner OTP):
+# From npm (stable channel = default `latest`, currently 0.2.3):
 #   npm i -g --registry=https://registry.npmjs.org advisers@latest advisers-office@latest
-# The `next` channel currently also points at 0.2.2:
+# The `next` channel currently also points at 0.2.3:
 #   npm i -g --registry=https://registry.npmjs.org advisers@next advisers-office@next
 advisers
 # or one-shot:

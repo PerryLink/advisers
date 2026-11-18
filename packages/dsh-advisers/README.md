@@ -9,8 +9,7 @@ DSH bundle for **Advisers**. It registers:
 - `advisers_who` — read-only **preview** of who owes whom (what I owe vs what I am waiting on);
 - `advisers_evidence` — read-only **preview** evidence lookup (quotes/refs/sources) for a `cm_…`, `fact_…`, or `pref_…` id.
 
-`0.2.3` is the release candidate (2026-11-18), staged for npm `latest` awaiting the
-account owner's OTP approval; `0.2.2` remains the current published `latest` until then.
+`0.2.3` is the current release (published on npm `latest` on 2026-11-18); `0.2.2`/`0.2.1`/`0.2.0` remain installable by pinning.
 
 It does **not** send messages or write the ledger. The three ledger read tools only
 read `runtime.ledger` — an in-memory **preview** ledger: this bundle does not open

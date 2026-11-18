@@ -26,7 +26,7 @@ Advisers 不是聊天框，也不是情感陪伴。它维护三本账：
 
 ## 状态
 
-`0.2.3` 是 2026-11-18 的**发布候选（release candidate）**：8 个 workspace 包统一为 `0.2.3`。其中 6 个发布包为 `advisers`、`advisers-core`、`advisers-office`、`advisers-policy-strict`、`advisers-bridge-hermes`、`dsh-advisers`；两个私有 `advisers-link-*` 包保持同版本但不发布。六包已 **staged 到 npm `latest`**，须账号所有者本人在终端用 OTP 批准后才可安装；在此之前 npm **`latest` 仍是 `0.2.2`**（2026-11-18 发布），`0.2.1`/`0.2.0` 仍可按版本号安装。候选版本已通过 743/743 测试、build/typecheck、打包冒烟、文档/许可/TOS/版本锁步检查、安全套件与故障注入套件（9/9）；registry tarball 验证在 owner 批准后执行。
+`0.2.3` 是 2026-11-18 的**当前发布版本**：8 个 workspace 包统一为 `0.2.3`。其中 6 个发布包为 `advisers`、`advisers-core`、`advisers-office`、`advisers-policy-strict`、`advisers-bridge-hermes`、`dsh-advisers`；两个私有 `advisers-link-*` 包保持同版本但不发布。六包已发布到 npm **`latest` = `0.2.3`**（账号所有者 OTP 于 2026-11-18 批准）；`0.2.2`/`0.2.1`/`0.2.0` 仍可按版本号安装。版本已通过 743/743 测试、build/typecheck、打包冒烟、文档/许可/TOS/版本锁步检查、安全套件与故障注入套件（9/9）；registry tarball 由 `scripts/verify-release.mjs` 验证（86/86）。
 
 > 需要 **Node >= 22.16**；Windows/PowerShell/BOM 说明见 [docs/QUICKSTART.md](docs/QUICKSTART.md)。
 
@@ -50,10 +50,10 @@ Advisers 不是聊天框，也不是情感陪伴。它维护三本账：
 - Pet Brief（只读脱敏投影，契约 v0.2：`schemaVersion: 2` + `displayPolicy`，默认 `private`；v0.1 brief 按 legacy 可读）：`pet-brief --json|--out|--check [--strict]|--print-schema|--display-policy public|private|none`；`secrecy >= 2` 全排除、confidence < 0.7 丢弃、5 分钟 TTL、每节 10 项上限；不调模型、不联网、不改账本；桌宠 UI/传输尚未接通。见 `docs/PET-BRIEF-PRODUCER.md`。
 
 ```sh
-# 0.2.3 已 staged 到 npm @latest（当前 registry latest 仍为 0.2.2，待 owner OTP）；也可从 checkout 运行：
+# 0.2.3 已发布到 npm @latest；也可从 checkout 运行：
 #   corepack pnpm install && corepack pnpm -r build
 #   ADVISERS_OFFICE_LOCAL=1 node packages/advisers/bin/advisers.js status
-# 从 npm 安装（稳定渠道 = 默认 `latest`，当前为 0.2.2；0.2.3 待 owner 批准后生效）：
+# 从 npm 安装（稳定渠道 = 默认 `latest`，当前为 0.2.3）：
 #   npm i -g --registry=https://registry.npmjs.org advisers@latest advisers-office@latest
 # `next` 渠道当前也指向 0.2.2：
 #   npm i -g --registry=https://registry.npmjs.org advisers@next advisers-office@next
