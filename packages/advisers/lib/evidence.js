@@ -174,6 +174,52 @@ export function parseSourceRef(ref) {
   return { sessionId, turnId }
 }
 
+/**
+ * 0.2.3 evidence discipline (B3): manual/operator-entered sources.
+ *
+ * A CLI operator can only state what they typed. Before 0.2.3 those rows were
+ * written as `{sessionId:'local', turnId:'cli'}`, i.e. a fake conversation
+ * pointer that every reader resolved as MISSING (turn_not_found). The honest
+ * shape is a typed manual source: it is unverifiable by construction, not
+ * missing. Legacy rows are mapped on read (never rewritten), so old packs and
+ * ledgers keep working without a migration.
+ */
+export const MANUAL_SOURCE_KIND = 'manual'
+export const MANUAL_RESOLUTION = 'unverifiable'
+export const MANUAL_REASON = 'operator_entered'
+
+/** True for a new manual source, a legacy {sessionId:'local',turnId:'cli'} row, or an operator-marked item. */
+export function isManualEvidence(item) {
+  if (!item || typeof item !== 'object' || Array.isArray(item)) return false
+  if (item.kind === MANUAL_SOURCE_KIND || item.type === MANUAL_SOURCE_KIND) return true
+  if (item.source === 'operator') return true
+  // 0.2.2 forged CLI evidence: written by `commit add --quote` / `commit done`.
+  return item.sessionId === 'local' && item.turnId === 'cli'
+}
+
+/**
+ * Render one manual source for evidence show / packs.
+ * The stored quote is always re-hashed locally; a stale or forged hash never wins.
+ */
+export function manualEvidenceSource(item) {
+  const clamped = clampQuote(typeof item?.quote === 'string' ? item.quote : '')
+  const entry = {
+    kind: MANUAL_SOURCE_KIND,
+    type: MANUAL_SOURCE_KIND,
+    source: 'operator',
+    quote: clamped.quote,
+    quoteChars: clamped.quoteChars,
+    truncated: clamped.truncated,
+    quoteSha256: clamped.quoteSha256,
+    resolution: MANUAL_RESOLUTION,
+    reason: MANUAL_REASON,
+  }
+  for (const key of ['capturedAt', 'capturedBy', 'command', 'cliVersion']) {
+    if (typeof item?.[key] === 'string' && item[key]) entry[key] = item[key]
+  }
+  return entry
+}
+
 function lookupTurn(store, sessionId, turnId) {
   if (!store || typeof store !== 'object') return { turn: undefined, failed: false }
   let failed = false
@@ -356,9 +402,14 @@ function collectSourceRefs(...lists) {
 function resolveSourceRefs(store, items) {
   const sources = []
   const missing = []
+  const unverifiable = []
   for (const item of items) {
     if (!item || typeof item !== 'object' || Array.isArray(item)) {
       missing.push({ reason: 'invalid_source' })
+      continue
+    }
+    if (isManualEvidence(item)) {
+      unverifiable.push(manualEvidenceSource(item))
       continue
     }
     const quote = typeof item.quote === 'string' ? item.quote : ''
@@ -389,7 +440,7 @@ function resolveSourceRefs(store, items) {
     }
     sources.push({ sessionId: parsed.sessionId, turnId: parsed.turnId, quote, turn: lookup.turn })
   }
-  return { sources, missing }
+  return { sources, missing, unverifiable }
 }
 
 /**
@@ -402,12 +453,17 @@ function resolveSourceRefs(store, items) {
 export function evidenceForCommitment(store, ledger, commitmentId, index) {
   const commitment = findCommitment(ledger, commitmentId, index)
   if (!commitment) {
-    return { commitment: undefined, sources: [], missing: [{ id: commitmentId, reason: 'commitment_not_found' }] }
+    return { schemaVersion: 2, commitment: undefined, sources: [], missing: [{ id: commitmentId, reason: 'commitment_not_found' }], unverifiable: [] }
   }
   const sources = []
   const missing = []
+  const unverifiable = []
   const evidence = Array.isArray(commitment.evidence) ? commitment.evidence : []
   for (const item of evidence) {
+    if (isManualEvidence(item)) {
+      unverifiable.push(manualEvidenceSource(item))
+      continue
+    }
     const sessionId = typeof item?.sessionId === 'string' ? item.sessionId : ''
     const turnId = typeof item?.turnId === 'string' ? item.turnId : ''
     const quote = typeof item?.quote === 'string' ? item.quote : ''
@@ -431,29 +487,29 @@ export function evidenceForCommitment(store, ledger, commitmentId, index) {
     }
     sources.push({ sessionId, turnId, quote, turn: lookup.turn })
   }
-  return { commitment, sources, missing }
+  return { schemaVersion: 2, commitment, sources, missing, unverifiable }
 }
 
 /** Trace a fact's `SourceRef[]` (plus its primary `source`) back to turns. */
 export function evidenceForFact(store, ledger, factId, index) {
   const fact = findFact(ledger, factId, index)
   if (!fact) {
-    return { fact: undefined, sources: [], missing: [{ id: factId, reason: 'fact_not_found' }] }
+    return { schemaVersion: 2, fact: undefined, sources: [], missing: [{ id: factId, reason: 'fact_not_found' }], unverifiable: [] }
   }
   const refs = collectSourceRefs(fact.evidence, primarySourceCandidates(fact.source))
   const resolved = resolveSourceRefs(store, refs)
-  return { fact, sources: resolved.sources, missing: resolved.missing }
+  return { schemaVersion: 2, fact, sources: resolved.sources, missing: resolved.missing, unverifiable: resolved.unverifiable }
 }
 
 /** Trace a preference's `SourceRef[]` (plus its primary `source`) back to turns. */
 export function evidenceForPreference(store, ledger, preferenceId, index) {
   const preference = findPreference(ledger, preferenceId, index)
   if (!preference) {
-    return { preference: undefined, sources: [], missing: [{ id: preferenceId, reason: 'preference_not_found' }] }
+    return { schemaVersion: 2, preference: undefined, sources: [], missing: [{ id: preferenceId, reason: 'preference_not_found' }], unverifiable: [] }
   }
   const refs = collectSourceRefs(preference.evidence, primarySourceCandidates(preference.source))
   const resolved = resolveSourceRefs(store, refs)
-  return { preference, sources: resolved.sources, missing: resolved.missing }
+  return { schemaVersion: 2, preference, sources: resolved.sources, missing: resolved.missing, unverifiable: resolved.unverifiable }
 }
 
 // ---------------------------------------------------------------------------
@@ -528,14 +584,35 @@ function compactMissing(item) {
   return out
 }
 
+function compactUnverifiable(item) {
+  const out = {
+    kind: MANUAL_SOURCE_KIND,
+    type: MANUAL_SOURCE_KIND,
+    resolution: MANUAL_RESOLUTION,
+    reason: typeof item?.reason === 'string' && item.reason ? item.reason : MANUAL_REASON,
+  }
+  const clamped = clampQuote(item?.quote)
+  Object.assign(out, clamped)
+  for (const key of ['capturedAt', 'capturedBy', 'command']) {
+    if (typeof item?.[key] === 'string' && item[key]) out[key] = item[key]
+  }
+  return out
+}
+
 function compactEntry(entry) {
-  return {
+  const out = {
     kind: typeof entry.kind === 'string' ? entry.kind : 'unknown',
     id: String(entry.id ?? ''),
     found: Boolean(entry.found),
     sources: (Array.isArray(entry.sources) ? entry.sources : []).map(compactSource),
     missing: (Array.isArray(entry.missing) ? entry.missing : []).map(compactMissing),
   }
+  // Additive (0.2.3 B3): operator-entered sources are unverifiable, not missing.
+  // Kept absent when empty so pre-0.2.3 pack bytes do not change.
+  if (Array.isArray(entry.unverifiable) && entry.unverifiable.length) {
+    out.unverifiable = entry.unverifiable.map(compactUnverifiable)
+  }
+  return out
 }
 
 function inferKindFromId(id) {
@@ -607,21 +684,23 @@ function buildReadme({ createdAt, entries, manifestDigest }) {
   const counts = { commitment: 0, fact: 0, preference: 0, unknown: 0 }
   let sourceCount = 0
   let missingCount = 0
+  let unverifiableCount = 0
   let truncatedCount = 0
   for (const entry of entries) {
     counts[entry.kind] = (counts[entry.kind] ?? 0) + 1
     sourceCount += entry.sources.length
     missingCount += entry.missing.length
+    unverifiableCount += (entry.unverifiable ?? []).length
     truncatedCount += entry.sources.filter((source) => source.truncated).length
   }
   const lines = [
     'Advisers evidence pack',
     '======================',
     '',
-    `format:   ${MANIFEST_FORMAT} v${MANIFEST_VERSION}`,
-    `created:  ${createdAt}`,
-    `entries:  ${entries.length} (commitment ${counts.commitment}, fact ${counts.fact}, preference ${counts.preference}, unknown ${counts.unknown})`,
-    `sources:  ${sourceCount} resolved, ${missingCount} missing`,
+    'format:   ' + MANIFEST_FORMAT + ' v' + MANIFEST_VERSION,
+    'created:  ' + createdAt,
+    'entries:  ' + entries.length + ' (commitment ' + counts.commitment + ', fact ' + counts.fact + ', preference ' + counts.preference + ', unknown ' + counts.unknown + ')',
+    'sources:  ' + sourceCount + ' resolved, ' + missingCount + ' missing' + (unverifiableCount ? ', ' + unverifiableCount + ' operator-entered (not externally verified, not missing)' : ''),
     `quotes:   verbatim, at most ${MAX_QUOTE_CHARS} characters each; ${truncatedCount} truncated`,
     '',
     'Files',
@@ -642,9 +721,13 @@ function buildReadme({ createdAt, entries, manifestDigest }) {
   if (!entries.length) lines.push('(no evidence requested)')
   const shown = entries.slice(0, README_ENTRY_CAP)
   for (const entry of shown) {
+    const manualCount = (entry.unverifiable ?? []).length
     lines.push(
-      `- ${entry.kind} ${entry.id}  sources=${entry.sources.length} missing=${entry.missing.length}${entry.found ? '' : ' (record not found)'}`,
+      `- ${entry.kind} ${entry.id}  sources=${entry.sources.length} missing=${entry.missing.length}${manualCount ? ` manual=${manualCount}` : ''}${entry.found ? '' : ' (record not found)'}`,
     )
+    for (const item of (entry.unverifiable ?? []).slice(0, README_REF_CAP)) {
+      lines.push(`    manual operator-entered (unverifiable): ${item.reason ?? MANUAL_REASON}`)
+    }
     const refs = entry.sources.slice(0, README_REF_CAP)
     for (const source of refs) {
       lines.push(`    source ${formatRef(source.sessionId, source.turnId)}${source.truncated ? ' (quote truncated)' : ''}`)
@@ -730,11 +813,12 @@ export function buildEvidencePack({
       found: Boolean(result.commitment),
       sources: result.sources,
       missing: result.missing,
+      unverifiable: result.unverifiable,
     })
   }
   for (const id of requested.facts) {
     const result = evidenceForFact(store, ledger, id, index)
-    entries.push({ kind: 'fact', id, found: Boolean(result.fact), sources: result.sources, missing: result.missing })
+    entries.push({ kind: 'fact', id, found: Boolean(result.fact), sources: result.sources, missing: result.missing, unverifiable: result.unverifiable })
   }
   for (const id of requested.preferences) {
     const result = evidenceForPreference(store, ledger, id, index)
@@ -744,6 +828,7 @@ export function buildEvidencePack({
       found: Boolean(result.preference),
       sources: result.sources,
       missing: result.missing,
+      unverifiable: result.unverifiable,
     })
   }
   for (const id of requested.unknown) {
@@ -763,11 +848,16 @@ export function buildEvidencePack({
   const counts = { commitment: 0, fact: 0, preference: 0, unknown: 0 }
   let sourceCount = 0
   let missingCount = 0
+  let unverifiableCount = 0
+  let operatorEnteredCount = 0
   let truncatedCount = 0
   for (const entry of compacted) {
     counts[entry.kind] = (counts[entry.kind] ?? 0) + 1
     sourceCount += entry.sources.length
     missingCount += entry.missing.length
+    const manual = entry.unverifiable ?? []
+    unverifiableCount += manual.length
+    operatorEnteredCount += manual.filter((item) => item.kind === MANUAL_SOURCE_KIND || item.type === MANUAL_SOURCE_KIND).length
     truncatedCount += entry.sources.filter((source) => source.truncated).length
   }
 
@@ -785,6 +875,8 @@ export function buildEvidencePack({
       counts,
       sourceCount,
       missingCount,
+      unverifiableCount,
+      operatorEnteredCount,
       truncatedCount,
       notFound: compacted.filter((entry) => !entry.found).map((entry) => entry.id),
       fileHashes: { 'manifest.json': manifestDigest, 'README.txt': readmeDigest },
@@ -1131,15 +1223,34 @@ function receiptMissing(item) {
   return out
 }
 
+function receiptUnverifiable(item) {
+  if (!item || typeof item !== 'object' || Array.isArray(item)) return null
+  const out = {
+    kind: MANUAL_SOURCE_KIND,
+    type: MANUAL_SOURCE_KIND,
+    resolution: MANUAL_RESOLUTION,
+    reason: typeof item.reason === 'string' && item.reason ? item.reason : MANUAL_REASON,
+  }
+  Object.assign(out, clampQuote(item.quote))
+  for (const key of ['capturedAt', 'capturedBy', 'command']) {
+    if (typeof item[key] === 'string' && item[key]) out[key] = item[key].slice(0, 120)
+  }
+  return out
+}
+
 function receiptEvidenceEntry(entry) {
   if (!entry || typeof entry !== 'object' || Array.isArray(entry)) return null
-  return {
+  const out = {
     kind: typeof entry.kind === 'string' ? entry.kind : 'unknown',
     id: String(entry.id === undefined || entry.id === null ? '' : entry.id),
     found: Boolean(entry.found),
     sources: (Array.isArray(entry.sources) ? entry.sources : []).map(receiptSource),
     missing: (Array.isArray(entry.missing) ? entry.missing : []).map(receiptMissing),
   }
+  if (Array.isArray(entry.unverifiable) && entry.unverifiable.length) {
+    out.unverifiable = entry.unverifiable.map(receiptUnverifiable).filter(Boolean)
+  }
+  return out
 }
 
 function normalizeReceiptEvidence(evidence) {
@@ -1183,10 +1294,15 @@ function normalizeReceiptEvidence(evidence) {
   const counts = { commitment: 0, fact: 0, preference: 0, unknown: 0 }
   let sourceCount = 0
   let missingCount = 0
+  let unverifiableCount = 0
+  let operatorEnteredCount = 0
   for (const entry of entries) {
     counts[entry.kind] = (counts[entry.kind] || 0) + 1
     sourceCount += entry.sources.length
     missingCount += entry.missing.length
+    const manual = entry.unverifiable ?? []
+    unverifiableCount += manual.length
+    operatorEnteredCount += manual.filter((item) => item.kind === MANUAL_SOURCE_KIND || item.type === MANUAL_SOURCE_KIND).length
   }
   return {
     format: meta.format,
@@ -1195,6 +1311,8 @@ function normalizeReceiptEvidence(evidence) {
     counts,
     sourceCount,
     missingCount,
+    unverifiableCount,
+    operatorEnteredCount,
     entries,
   }
 }
@@ -1564,6 +1682,7 @@ function receiptDocxSpec(input) {
     paragraphs: [
       '证据条目：' + evidence.entryCount + '（commitment ' + evidence.counts.commitment + ' / fact ' + evidence.counts.fact + ' / preference ' + evidence.counts.preference + ' / unknown ' + evidence.counts.unknown + '）',
       '已解析来源：' + evidence.sourceCount + '；缺失来源：' + evidence.missingCount,
+      ...(evidence.unverifiableCount ? ['未外部核验（操作者录入）：' + evidence.unverifiableCount + ' 条（不是缺失；请勿当作已核验证据）'] : []),
       '完整证据条目（session#turn 引用与截断引用原话）见 manifest.json 的 evidence 字段。',
     ],
   })
@@ -1637,6 +1756,7 @@ function buildReceiptReadme(input) {
     'SHA256SUMS     sha256 of every other file in this pack',
     '',
     'Evidence entries: ' + evidence.entryCount + ' (sources ' + evidence.sourceCount + ', missing ' + evidence.missingCount + ')',
+    ...(evidence.unverifiableCount ? ['unverifiable: ' + evidence.unverifiableCount + ' (operator-entered; not externally verified, NOT missing)'] : []),
     '(references and capped quotes only; see manifest.json evidence.entries)',
     '',
     'Verify (offline, no ~/.advisers database needed)',
@@ -1877,6 +1997,8 @@ export async function buildReceiptPack(options = {}) {
       counts: evidence.counts,
       sourceCount: evidence.sourceCount,
       missingCount: evidence.missingCount,
+      unverifiableCount: evidence.unverifiableCount ?? 0,
+      operatorEnteredCount: evidence.operatorEnteredCount ?? 0,
     },
     anchored: anchors.length > 0,
     fileMode: RECEIPT_FILE_MODE,
@@ -1906,6 +2028,7 @@ function entryFromResult(result) {
     found: true,
     sources: Array.isArray(result.sources) ? result.sources : [],
     missing: Array.isArray(result.missing) ? result.missing : [],
+    unverifiable: Array.isArray(result.unverifiable) ? result.unverifiable : [],
   }
 }
 
@@ -1963,7 +2086,8 @@ export function toDocxRows(input, { maxRows = 200 } = {}) {
     const id = String(entry.id ?? '')
     const sources = Array.isArray(entry.sources) ? entry.sources : []
     const missing = Array.isArray(entry.missing) ? entry.missing : []
-    if (!sources.length && !missing.length) {
+    const unverifiable = Array.isArray(entry.unverifiable) ? entry.unverifiable : []
+    if (!sources.length && !missing.length && !unverifiable.length) {
       rows.push([kind, id, '', '', entry.found === false ? '记录不存在' : '无证据'])
       continue
     }
@@ -1982,7 +2106,16 @@ export function toDocxRows(input, { maxRows = 200 } = {}) {
         id,
         item.ref || formatRef(item.sessionId, item.turnId) || String(item.id ?? ''),
         clampQuote(item.quote).quote,
-        `missing: ${item.reason ?? 'unknown'}`,
+        'missing: ' + (item.reason ?? 'unknown'),
+      ])
+    }
+    for (const item of unverifiable) {
+      rows.push([
+        kind,
+        id,
+        '',
+        clampQuote(item.quote).quote,
+        MANUAL_SOURCE_KIND + ': operator-entered (unverifiable, not missing)',
       ])
     }
   }

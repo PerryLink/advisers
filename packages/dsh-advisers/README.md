@@ -3,15 +3,20 @@
 DSH bundle for **Advisers**. It registers:
 
 - a cordis service `advisers` (an `AdvisersRuntime`);
-- `advisers_brief` — turns a request into an `IntentBrief` (goal, deliverable, risk, at most one question, two-line readback);
+- `advisers_brief` — turns a request into an `IntentBrief` (goal, deliverable, risk, at most one question, two-line readback); it does not touch the ledger;
 - `advisers_office` — builds a DOCX/XLSX/PPTX/XMind/Mermaid/draw.io artifact **inside** the configured workspace;
-- `advisers_today` — read-only today/week/waiting view of the commitment ledger (counts, capped lists, earliest due item);
-- `advisers_who` — read-only who-owes-whom view (what I owe vs what I am waiting on);
-- `advisers_evidence` — read-only evidence lookup (quotes/refs/sources) for a `cm_…`, `fact_…`, or `pref_…` id.
+- `advisers_today` — read-only **preview** of the today/week/waiting ledger view (counts, capped lists, earliest due item);
+- `advisers_who` — read-only **preview** of who owes whom (what I owe vs what I am waiting on);
+- `advisers_evidence` — read-only **preview** evidence lookup (quotes/refs/sources) for a `cm_…`, `fact_…`, or `pref_…` id.
 
-It does **not** send messages or write the ledger. The three read-only tools only read
-`runtime.ledger`; `advisers_office` writes files only under `config.workspace`
-(path-confined). The DSH adapter is a thin channel, not the full product.
+It does **not** send messages or write the ledger. The three ledger read tools only
+read `runtime.ledger` — an in-memory **preview** ledger: this bundle does not open
+`~/.advisers/state.db` (read-only ledger wiring is planned for 0.3). Every read
+result therefore carries `preview: true`, `source: "preview-no-ledger"`, and a
+`note`, and the rendered text starts with `[preview: no ledger]`, so an empty
+preview is never mistaken for a real empty ledger. `advisers_office` writes files
+only under `config.workspace` (path-confined). The DSH adapter is a thin channel,
+not the full product.
 
 ## Tools
 
@@ -19,15 +24,50 @@ It does **not** send messages or write the ledger. The three read-only tools onl
 |---|---|---|---|
 | `advisers_brief` | read-only (no ledger) | `text` (string, required) | IntentBrief fields, or `{ ok: false, error }` when content safety blocks |
 | `advisers_office` | write (workspace-confined) | `kind`, `out`, `spec` (required) | `{ ok, path, bytes }`, or `{ ok: false, error }` when content safety blocks |
-| `advisers_today` | read-only | none | `{ ok, data }` with `now`, `timezone`, `localDay`, `counts`, `overdue`, `today`, `week`, `waiting`, `noDue`, optional `next`, `truncated` |
-| `advisers_who` | read-only | none | `{ ok, data }` with `counts` (`mine`/`waiting`/`open`), `mine`, `waiting`, `truncated` |
-| `advisers_evidence` | read-only | `id` (string, required) | `{ ok, data }` with `id`, `kind`, `record`, `sources`, `missing`, `counts`, `verified: false`, `truncated` |
+| `advisers_today` | read-only (preview) | none | `{ ok, data }` with `now`, `timezone`, `localDay`, `counts`, `overdue`, `today`, `week`, `waiting`, `noDue`, optional `next`, `truncated`, plus `preview: true`, `source: "preview-no-ledger"`, `note` |
+| `advisers_who` | read-only (preview) | none | `{ ok, data }` with `counts` (`mine`/`waiting`/`open`), `mine`, `waiting`, `truncated`, plus the same three preview fields |
+| `advisers_evidence` | read-only (preview) | `id` (string, required) | `{ ok, data }` with `id`, `kind`, `record`, `sources`, `missing`, `counts`, `verified: false`, `truncated`, plus the same three preview fields |
 
 The read-only tools take no write path: they call `ledger.openCommitments()`,
 `ledger.listCommitments()`, `ledger.listFacts()`, and `ledger.findPreference()`
 only. Lists are capped (`today`: 10 per bucket, `who`: 50 per side, `evidence`:
 20 sources/missing entries); the `counts` fields carry the full totals and
 `truncated` is true when a list was cut.
+
+### Preview mode (0.2.3)
+
+The bundle creates an `AdvisersRuntime` with an in-memory ledger and does **not**
+open `~/.advisers/state.db` (the read-only ledger connection is planned for 0.3).
+The three read tools therefore run in **preview mode**: their data is empty
+unless something in the same DSH process seeds the `advisers` service, and an
+empty preview must not be reported as an empty real ledger.
+
+Every successful read result carries three required, additive fields:
+
+| Field | Value | Meaning |
+|---|---|---|
+| `data.preview` | `true` | The payload is a preview, not the real books. |
+| `data.source` | `"preview-no-ledger"` | Stable machine-readable source marker. 0.3 replaces the value with the read-only ledger source and keeps the field names. |
+| `data.note` | one English sentence | Names `~/.advisers/state.db` and points at the CLI/MCP alternatives. The same text is returned by all three tools. |
+
+These fields are added to the 0.2.x payload: `counts`, lists, `sources`,
+`missing`, `verified`, `truncated` and the other fields keep their shape and
+meaning. The rendered text shown to the model is prefixed with
+`[preview: no ledger]`; `advisers_evidence` not-found errors keep the stable
+`EVIDENCE_NOT_FOUND` code and say they only searched the preview ledger. The
+`{ ok: false, error: { code, message } }` envelope is otherwise unchanged.
+
+For the **real** ledger, use the CLI or MCP (both read the real local store):
+
+```sh
+advisers today --json
+advisers who --json
+advisers evidence show cm_… --json
+advisers mcp --stdio   # 7 tools + 4 resources, real ledger, read-only views
+```
+
+`advisers_brief` does not depend on the ledger and keeps its current behavior;
+`advisers_office` still writes only inside `config.workspace`.
 
 ### Result envelope and error codes
 
@@ -39,14 +79,14 @@ domain exception:
 ```
 
 ```json
-{ "ok": false, "error": { "code": "EVIDENCE_NOT_FOUND", "message": "no commitment with id cm_abc" } }
+{ "ok": false, "error": { "code": "EVIDENCE_NOT_FOUND", "message": "no commitment with id cm_abc (preview ledger: the DSH adapter does not open ~/.advisers/state.db)" } }
 ```
 
 | Code | Meaning |
 |---|---|
 | `INVALID_ARGUMENT` | A supplied argument is unusable (e.g. an empty evidence id). |
 | `UNKNOWN_ID_PREFIX` | Evidence id is not `cm_…`, `fact_…`, or `pref_…`. |
-| `EVIDENCE_NOT_FOUND` | No commitment/fact/preference with that id exists in the ledger. |
+| `EVIDENCE_NOT_FOUND` | No commitment/fact/preference with that id exists in the preview ledger. The message also notes that `~/.advisers/state.db` is not opened, so a real-ledger id is **not** evidence that the record does not exist. |
 | `INTERNAL_ERROR` | Unexpected ledger/read failure; the tool stays up and reports it. |
 | `CONTENT_BLOCKED` | `advisers_brief`/`advisers_office` input was blocked by the local content-safety layer. The error carries `surface`, `ruleIds`, and `rulesetVersion`; the original text is never echoed. |
 
@@ -60,19 +100,16 @@ classifies `{ kind, out, spec }` with the `dsh.tool` surface. A blocked call
 returns `{ ok: false, error: { code: "CONTENT_BLOCKED", surface, ruleIds,
 rulesetVersion } }` and does not write a file; benign input is unchanged.
 
-### Data source and audit
-
-The views read the `AdvisersRuntime` instance that this bundle creates; the DSH
-adapter does not open `~/.advisers/state.db`. Seed the in-memory ledger through
-the `advisers` service (a persistence port is future work). `advisers_evidence`
-reports the refs stored on the ledger row (`verified: false`) because there is no
-turn store in this adapter; it never fabricates a turn body.
+### Audit
 
 If the runtime exposes an audit sink (`runtime.audit(event)`), each read call
 reports `{ actor: 'dsh', action: 'tool.read', allowed, reason }`. A missing or
 failing sink is a no-op and never turns a read into an error. The in-memory
-runtime in `advisers-core@0.2.2` ships no audit sink, so by default
-these tools are strictly read-only.
+runtime in `advisers-core@0.2.2` ships no audit sink, so by default these tools
+are strictly read-only.
+
+`advisers_evidence` reports the refs stored on the ledger row (`verified: false`)
+because there is no turn store in this adapter; it never fabricates a turn body.
 
 ## Examples
 
@@ -80,21 +117,26 @@ these tools are strictly read-only.
 {"name": "advisers_today", "arguments": {}}
 ```
 
+The default result is an empty preview (this adapter has no ledger connection
+yet); the three marker fields are always present:
+
 ```json
 {
   "ok": true,
   "data": {
-    "now": "2026-11-17T03:34:03.415Z",
+    "now": "2026-11-18T03:34:03.415Z",
     "timezone": "Asia/Shanghai",
-    "localDay": "2026-11-17",
-    "counts": { "open": 2, "overdue": 0, "today": 1, "week": 1, "waiting": 0, "noDue": 0 },
+    "localDay": "2026-11-18",
+    "counts": { "open": 0, "overdue": 0, "today": 0, "week": 0, "waiting": 0, "noDue": 0 },
     "overdue": [],
-    "today": [{ "id": "cm_…", "debtor": "user", "creditor": "boss", "action": "send the Q4 deck", "status": "open", "dueAt": "2026-11-17T10:00:00.000Z" }],
+    "today": [],
     "week": [],
     "waiting": [],
     "noDue": [],
-    "next": { "id": "cm_…", "debtor": "user", "creditor": "boss", "action": "send the Q4 deck", "status": "open", "dueAt": "2026-11-17T10:00:00.000Z" },
-    "truncated": false
+    "truncated": false,
+    "preview": true,
+    "source": "preview-no-ledger",
+    "note": "Preview only: the DSH adapter does not open ~/.advisers/state.db, so this comes from an empty in-memory ledger, not your real books. Use the advisers CLI (advisers today --json / who --json / evidence show <id> --json) or \"advisers mcp --stdio\" for real ledger data."
   }
 }
 ```
@@ -118,7 +160,10 @@ these tools are strictly read-only.
     "missing": [],
     "counts": { "sources": 1, "missing": 0 },
     "verified": false,
-    "truncated": false
+    "truncated": false,
+    "preview": true,
+    "source": "preview-no-ledger",
+    "note": "Preview only: the DSH adapter does not open ~/.advisers/state.db, so this comes from an empty in-memory ledger, not your real books. Use the advisers CLI (advisers today --json / who --json / evidence show <id> --json) or \"advisers mcp --stdio\" for real ledger data."
   }
 }
 ```

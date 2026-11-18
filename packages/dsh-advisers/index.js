@@ -22,6 +22,11 @@ export const version = '0.2.2'
 // react to a domain error without a failed tool call. If the runtime exposes an
 // audit sink (runtime.audit), every read call is reported there; a missing or
 // failing sink is a no-op and never turns a read into a failure.
+//
+// 0.2.3 honesty: this bundle still creates an in-memory AdvisersRuntime and does
+// not open ~/.advisers/state.db (read-only ledger wiring is planned for 0.3).
+// Every read payload therefore carries the preview marker defined below, so an
+// empty preview ledger can never be mistaken for a real ledger with no work.
 // ---------------------------------------------------------------------------
 
 const TIME_ZONE = 'Asia/Shanghai'
@@ -39,6 +44,29 @@ const ERROR_CODES = Object.freeze({
   INTERNAL_ERROR: 'INTERNAL_ERROR',
   CONTENT_BLOCKED: 'CONTENT_BLOCKED',
 })
+
+// ---------------------------------------------------------------------------
+// Honest-preview contract (0.2.3 subset, additive to the 0.2.x read payloads).
+//
+// The bundle creates an in-memory ledger and never opens ~/.advisers/state.db
+// (read-only ledger wiring is planned for 0.3). Without a marker an empty
+// preview is indistinguishable from a real ledger with no open commitments, so
+// the model could answer "nothing is due" about books it has never read. Every
+// successful payload from the three read tools therefore carries:
+//
+//   preview: true                    the data is a preview, not the real books
+//   source: 'preview-no-ledger'      stable machine-readable source marker
+//   note: '...'                      one-line disclosure for the model and user
+//
+// The field names are part of the 0.2.3 contract; 0.3 replaces the *value* of
+// `source` with the read-only store and keeps the names. Existing 0.2.x fields
+// (counts, lists, sources, missing, verified, truncated, ...) are untouched, and
+// the { ok: false, error: { code, message } } envelope keeps its stable codes.
+// ---------------------------------------------------------------------------
+const PREVIEW_NOTE = 'Preview only: the DSH adapter does not open ~/.advisers/state.db, so this comes from an empty in-memory ledger, not your real books. Use the advisers CLI (advisers today --json / who --json / evidence show <id> --json) or "advisers mcp --stdio" for real ledger data.'
+const PREVIEW = Object.freeze({ preview: true, source: 'preview-no-ledger', note: PREVIEW_NOTE })
+// Appended to EVIDENCE_NOT_FOUND so a real-ledger id does not look deleted/absent.
+const PREVIEW_ERROR_HINT = ' (preview ledger: the DSH adapter does not open ~/.advisers/state.db)'
 
 // Stable structured error for a local content-safety block. Shape is deliberately
 // additive to the existing { ok, path, bytes } / IntentBrief results; no host
@@ -119,6 +147,28 @@ const errorDetailSchema = {
   },
 }
 
+// Additive preview marker shared by the three read-tool payload schemas. The
+// fields are required so a later edit cannot silently drop the disclosure.
+const previewDataSchema = {
+  preview: {
+    type: 'boolean',
+    const: true,
+    required: true,
+    description: 'True while the DSH adapter reads an in-memory preview ledger instead of ~/.advisers/state.db.',
+  },
+  source: {
+    type: 'string',
+    enum: ['preview-no-ledger'],
+    required: true,
+    description: 'Where the payload came from. Always "preview-no-ledger" in 0.2.3; 0.3 adds the read-only ledger source.',
+  },
+  note: {
+    type: 'string',
+    required: true,
+    description: 'One-line disclosure that the payload is a preview, not the real ledger.',
+  },
+}
+
 /** Success = { ok: true, data }; failure = { ok: false, error }. */
 function readOnlyResultSchema(dataSchema) {
   return {
@@ -147,6 +197,7 @@ const todayDataSchema = {
   type: 'object',
   additionalProperties: false,
   properties: {
+    ...previewDataSchema,
     now: { type: 'string', required: true, description: 'ISO-8601 timestamp of the read.' },
     timezone: { type: 'string', required: true },
     localDay: { type: 'string', required: true, description: 'Calendar day in Asia/Shanghai (YYYY-MM-DD).' },
@@ -178,6 +229,7 @@ const whoDataSchema = {
   type: 'object',
   additionalProperties: false,
   properties: {
+    ...previewDataSchema,
     counts: {
       type: 'object',
       additionalProperties: false,
@@ -264,6 +316,7 @@ const evidenceDataSchema = {
   type: 'object',
   additionalProperties: false,
   properties: {
+    ...previewDataSchema,
     id: { type: 'string', required: true },
     kind: { type: 'string', enum: ['commitment', 'fact', 'preference'], required: true },
     record: { ...evidenceRecordSchema, required: true },
@@ -314,6 +367,18 @@ function isWaitingOnThirdParty(commitment) {
   return debtor === 'third' || (typeof debtor === 'string' && debtor.startsWith('third:'))
 }
 
+/** Additive honest-preview marker for every read payload (0.2.x fields untouched). */
+function withPreview(data) {
+  return { ...data, ...PREVIEW }
+}
+
+// '[preview: no ledger] ' prefix for the rendered text, so the model cannot read
+// the counts as if they came from the real books.
+function previewTag(value) {
+  const data = value && value.ok === true ? value.data : undefined
+  return data && data.preview === true ? '[preview: no ledger] ' : ''
+}
+
 /** Today/week/waiting buckets, mirroring the CLI today/who read views. */
 function buildToday(runtime) {
   const nowMs = Date.now()
@@ -357,7 +422,7 @@ function buildToday(runtime) {
   }
   if (candidates.length > 0) data.next = commitmentView(candidates[0])
   return {
-    data,
+    data: withPreview(data),
     audit: `open=${counts.open} overdue=${counts.overdue} today=${counts.today} week=${counts.week} waiting=${counts.waiting}`,
   }
 }
@@ -372,12 +437,12 @@ function buildWho(runtime) {
     else if (commitment?.debtor === 'user' || commitment?.debtor === 'agent') mine.push(commitment)
   }
   return {
-    data: {
+    data: withPreview({
       counts: { mine: mine.length, waiting: waiting.length, open: open.length },
       mine: mine.slice(0, WHO_LIST_CAP).map(commitmentView),
       waiting: waiting.slice(0, WHO_LIST_CAP).map(commitmentView),
       truncated: mine.length > WHO_LIST_CAP || waiting.length > WHO_LIST_CAP,
-    },
+    }),
     audit: `mine=${mine.length} waiting=${waiting.length}`,
   }
 }
@@ -538,19 +603,19 @@ function buildEvidence(runtime, args) {
   if (id.startsWith('cm_')) {
     kind = 'commitment'
     const commitment = findCommitment(ledger, id)
-    if (!commitment) throw new ReadToolError(ERROR_CODES.EVIDENCE_NOT_FOUND, `no commitment with id ${id}`)
+    if (!commitment) throw new ReadToolError(ERROR_CODES.EVIDENCE_NOT_FOUND, `no commitment with id ${id}${PREVIEW_ERROR_HINT}`)
     record = commitmentRecord(commitment)
     traced = traceCommitmentEvidence(commitment)
   } else if (id.startsWith('fact_')) {
     kind = 'fact'
     const fact = findFact(ledger, id)
-    if (!fact) throw new ReadToolError(ERROR_CODES.EVIDENCE_NOT_FOUND, `no fact with id ${id}`)
+    if (!fact) throw new ReadToolError(ERROR_CODES.EVIDENCE_NOT_FOUND, `no fact with id ${id}${PREVIEW_ERROR_HINT}`)
     record = factRecord(fact)
     traced = traceSourceRefs(fact)
   } else if (id.startsWith('pref_')) {
     kind = 'preference'
     const preference = findPreference(ledger, id)
-    if (!preference) throw new ReadToolError(ERROR_CODES.EVIDENCE_NOT_FOUND, `no preference with id ${id}`)
+    if (!preference) throw new ReadToolError(ERROR_CODES.EVIDENCE_NOT_FOUND, `no preference with id ${id}${PREVIEW_ERROR_HINT}`)
     record = preferenceRecord(preference)
     traced = traceSourceRefs(preference)
   } else {
@@ -558,7 +623,7 @@ function buildEvidence(runtime, args) {
   }
   const counts = { sources: traced.sources.length, missing: traced.missing.length }
   return {
-    data: {
+    data: withPreview({
       id,
       kind,
       record,
@@ -567,7 +632,7 @@ function buildEvidence(runtime, args) {
       counts,
       verified: false,
       truncated: counts.sources > EVIDENCE_LIST_CAP || counts.missing > EVIDENCE_LIST_CAP,
-    },
+    }),
     audit: `${kind} ${id} sources=${counts.sources} missing=${counts.missing}`,
   }
 }
@@ -614,25 +679,26 @@ function renderToday(value) {
   const next = data.next
     ? `; next: ${asString(data.next.action)}${typeof data.next.dueAt === 'string' ? ` (${data.next.dueAt.slice(0, 10)})` : ''}`
     : ''
-  return `today ${asString(data.localDay)}: ${counts.today ?? 0} due today, ${counts.overdue ?? 0} overdue, ${counts.week ?? 0} in 7 days, ${counts.waiting ?? 0} waiting, ${counts.noDue ?? 0} without due date${next}`
+  return `${previewTag(value)}today ${asString(data.localDay)}: ${counts.today ?? 0} due today, ${counts.overdue ?? 0} overdue, ${counts.week ?? 0} in 7 days, ${counts.waiting ?? 0} waiting, ${counts.noDue ?? 0} without due date${next}`
 }
 
 function renderWho(value) {
   if (!value || value.ok !== true) return renderError(value)
   const counts = (value.data ?? {}).counts ?? {}
-  return `who: ${counts.mine ?? 0} owed by me, ${counts.waiting ?? 0} waiting on others (${counts.open ?? 0} open)`
+  return `${previewTag(value)}who: ${counts.mine ?? 0} owed by me, ${counts.waiting ?? 0} waiting on others (${counts.open ?? 0} open)`
 }
 
 function renderEvidence(value) {
   if (!value || value.ok !== true) return renderError(value)
   const data = value.data ?? {}
   const counts = data.counts ?? {}
-  return `${asString(data.kind)} ${asString(data.id)}: ${counts.sources ?? 0} source(s), ${counts.missing ?? 0} missing (ledger refs only; turns not verified)`
+  return `${previewTag(value)}${asString(data.kind)} ${asString(data.id)}: ${counts.sources ?? 0} source(s), ${counts.missing ?? 0} missing (ledger refs only; turns not verified)`
 }
 
 /**
  * DSH bundle entry point. It registers the service plus the read-only brief /
- * today / who / evidence tools and the workspace-confined office builder.
+ * today / who / evidence tools and the workspace-confined office builder. The
+ * three ledger readers are preview-only in 0.2.3 (see PREVIEW above).
  */
 export function apply(ctx, config = {}) {
   const runtime = new AdvisersRuntime({
@@ -765,7 +831,7 @@ export function apply(ctx, config = {}) {
 
   ctx.tools.register(defineTool({
     name: 'advisers_today',
-    description: 'Read-only today/week/waiting view of the commitment ledger: counts, capped lists, and the earliest due item. Never writes the ledger and never sends a message.',
+    description: 'Read-only PREVIEW of the commitment ledger (today/week/waiting counts, capped lists, earliest due item). The DSH adapter does not open ~/.advisers/state.db yet: it reads an empty in-memory ledger and marks every payload preview:true / source:"preview-no-ledger", so "0 due today" means "no preview data", not "nothing is due". Use the advisers CLI (advisers today --json) or MCP for the real ledger. Never writes the ledger and never sends a message.',
     parameters: {},
     output: {
       schema: readOnlyResultSchema(todayDataSchema),
@@ -778,7 +844,7 @@ export function apply(ctx, config = {}) {
 
   ctx.tools.register(defineTool({
     name: 'advisers_who',
-    description: 'Read-only who-owes-whom view: open commitments I owe (user/agent debtor) and ones I am waiting on (third-party debtor). Never writes the ledger and never sends a message.',
+    description: 'Read-only PREVIEW of who-owes-whom: open commitments I owe (user/agent debtor) and ones I am waiting on (third-party debtor). The DSH adapter does not open ~/.advisers/state.db yet: it reads an empty in-memory ledger and marks every payload preview:true / source:"preview-no-ledger". Use the advisers CLI (advisers who --json) or MCP for the real ledger. Never writes the ledger and never sends a message.',
     parameters: {},
     output: {
       schema: readOnlyResultSchema(whoDataSchema),
@@ -791,7 +857,7 @@ export function apply(ctx, config = {}) {
 
   ctx.tools.register(defineTool({
     name: 'advisers_evidence',
-    description: 'Read-only evidence lookup for a commitment (cm_…), fact (fact_…), or preference (pref_…) id. Returns the stored quotes/refs from the ledger; it does not resolve turn bodies, write the ledger, or send a message.',
+    description: 'Read-only PREVIEW evidence lookup for a commitment (cm_…), fact (fact_…), or preference (pref_…) id. The DSH adapter does not open ~/.advisers/state.db yet, so ids from your real ledger are not found here; payloads are marked preview:true / source:"preview-no-ledger" and EVIDENCE_NOT_FOUND says it only searched the preview ledger. Use advisers evidence show <id> --json or MCP for real evidence. Returns the stored quotes/refs from the preview ledger; it does not resolve turn bodies, write the ledger, or send a message.',
     parameters: {
       id: { type: 'string', required: true, description: 'Evidence id: cm_… for a commitment, fact_… for a fact, pref_… for a preference.' },
     },

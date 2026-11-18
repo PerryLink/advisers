@@ -734,7 +734,11 @@ function mutateWithAudit(fn, audit) {
   try {
     return store.mutate(fn, audit)
   } catch (error) {
-    exitStoreWriteFailure(error)
+    // Only store-level failures get the "nothing was written" explanation; a
+    // business error (unknown matter/commitment, validation) is rethrown so the
+    // command can print its own stable message/code (E_MATTER_NOT_FOUND, ...).
+    if (isStoreWriteFailure(error)) exitStoreWriteFailure(error)
+    throw error
   }
 }
 
@@ -752,10 +756,10 @@ function updateStoreWithAudit(fn, audit) {
  * session or the first active matter instead: both are single indexed lookups.
  */
 function activeMatterIdForWrite(store) {
-  try {
-    const latest = store?.listSessions(1)?.[0]
-    if (latest?.matterId) return latest.matterId
-  } catch {}
+  const routed = activeMatterIdFromStore(store)
+  if (routed) return routed
+  const sessionMatter = sessionMatterIdIfActive(store)
+  if (sessionMatter) return sessionMatter
   try { return store?.firstActiveMatter?.()?.id ?? 'matter' } catch { return 'matter' }
 }
 
@@ -768,10 +772,10 @@ function activeMatterIdForWrite(store) {
  * together with the audit row.
  */
 function resolveDeliveryMatterId(store) {
-  try {
-    const latest = store.listSessions(1)?.[0]
-    if (latest?.matterId) return latest.matterId
-  } catch {}
+  const routed = activeMatterIdFromStore(store)
+  if (routed) return routed
+  const sessionMatter = sessionMatterIdIfActive(store)
+  if (sessionMatter) return sessionMatter
   const active = store.firstActiveMatter?.()
   if (active) return active.id
   const timestamp = now()
@@ -791,12 +795,13 @@ function resolveDeliveryMatterId(store) {
   return matter.id
 }
 
-function recordDeliveryWithAudit({ files, tool, title, validation, audit }) {
+function recordDeliveryWithAudit({ files, tool, title, validation, audit, matterId }) {
   const store = dbStore()
   if (!store) return
   const conversationId = latestConversationId()
   updateStoreWithAudit((s) => s.addDelivery({
-    matterId: resolveDeliveryMatterId(s),
+    // An explicit --matter is validated inside the transaction (no dangling id).
+    matterId: matterId ? assertMatterForWrite(s, matterId) : resolveDeliveryMatterId(s),
     conversationId,
     files,
     tool,
@@ -837,6 +842,35 @@ async function backupCliFile(path) {
 
 function now() {
   return new Date().toISOString()
+}
+
+/**
+ * 0.2.3 B3: honest manual evidence for operator-entered quotes.
+ *
+ * Before this the CLI wrote `{sessionId:'local', turnId:'cli'}`, a fake
+ * conversation pointer that every reader resolved as MISSING (turn_not_found)
+ * and every receipt counted as a missing source. A manual source is
+ * unverifiable by construction, not missing: evidence.js maps this shape to
+ * resolution=unverifiable/operator_entered and receipts count operatorEntered
+ * separately from missingCount. No DB migration: evidence is a JSON column.
+ */
+function sha256HexText(text) {
+  return createHash('sha256').update(String(text), 'utf8').digest('hex')
+}
+
+function manualEvidence(quote, command) {
+  const text = String(quote ?? '')
+  return {
+    kind: 'manual',
+    type: 'manual',
+    source: 'operator',
+    quote: text,
+    quoteSha256: sha256HexText(text),
+    capturedAt: now(),
+    capturedBy: 'local',
+    command,
+    cliVersion: VERSION,
+  }
 }
 
 function dbStore() {
@@ -998,7 +1032,11 @@ Usage:
                               read-only redacted Pet Brief (contract v0.2); --print-schema prints the JSON Schema
   advisers tick               due commitments in the next 7 days
   advisers week               last 7 days
-  advisers digest day|week    short digest
+  advisers agenda [--days 7] [--json]
+                              7-day agenda: commitments + calendar_events, Asia/Shanghai days
+  advisers morning [--json] [--out f]
+                              deterministic local morning brief (no model, no network)
+  advisers digest day|week|morning    short digest (morning = the deterministic brief)
   advisers diff                show the last changed file
   advisers undo [--list]      restore the last file write
   advisers learn ls           recent task trajectories
@@ -1018,7 +1056,11 @@ Usage:
                               per-commitment reminder offsets (Asia/Shanghai wall clock)
   advisers deliveries         recent generated files
   advisers receipt            one-screen delivery receipt
-  advisers ls                 list matters
+  advisers ls                 list matters (alias of matter ls)
+  advisers matter add <title> [--secrecy 0-3] [--domain d] [--summary s] [--json]
+  advisers matter ls [--all] [--json]
+  advisers matter show|rename|archive|use <id> ...
+                              create/inspect/rename/archive a matter; 'use' sets the write default
   advisers privacy [--json] [--prove]  show/verify local data & egress facts
   advisers why <pref-id>      explain a preference
   advisers forget <pref-id>   forget a preference (tombstone)
@@ -1070,6 +1112,9 @@ Usage:
   advisers routine check <id>         run file/manual verification
   advisers routine curate [--apply]   mark stale/deprecated routines
   advisers routine restore <id>       restore an archived routine to draft
+  advisers template quote <data.json> <out.docx|out.xlsx> [--json] [--record-delivery] [--matter id]
+  advisers template proposal <data.json> <out.docx> [--json] [--record-delivery]
+                              deterministic quote / proposal (DOCX; quote also XLSX); amount strings
   advisers template <weekly|budget|presentation|flow|mindmap|minutes|notice> <data.json> <out>
                               build a template into docx/xlsx/pptx/mmd/drawio/xmind
   advisers link ls            list matter links
@@ -1273,7 +1318,7 @@ function purgeMatter(id, confirmed) {
 function parseFlags(args) {
   const flags = {}
   const positional = []
-  const booleanFlags = new Set(['web', 'deep', 'all', 'yes', 'json', 'list', 'force', 'apply', 'quiet', 'help', 'content', 'ics', 'deliver', 'install', 'uninstall', 'status', 'calendar', 'sources', 'pack', 'receipt', 'from-imap', 'remove', 'force', 'notify', 'no-remind'])
+  const booleanFlags = new Set(['web', 'deep', 'all', 'yes', 'json', 'list', 'force', 'apply', 'quiet', 'help', 'content', 'ics', 'deliver', 'install', 'uninstall', 'status', 'calendar', 'sources', 'pack', 'receipt', 'from-imap', 'remove', 'force', 'notify', 'no-remind', 'dry-run', 'unclassified', 'no-calendar', 'include-done', 'record-delivery'])
   for (let i = 0; i < args.length; i++) {
     if (args[i].startsWith('--')) {
       const key = args[i].slice(2)
@@ -1313,11 +1358,48 @@ function recordManualDelivery(files, tool, title, validation) {
   } catch {}
 }
 
+/** `advisers matter use <id>` marker: meta row in SQLite, route in the JSON store. */
+function activeMatterIdFromStore(store) {
+  try {
+    const id = store?.getMeta?.('active_matter_id')
+    if (!id) return undefined
+    const matter = store.getMatter(id)
+    return matter && matter.status === 'active' ? id : undefined
+  } catch { return undefined }
+}
+
+function activeMatterIdFromLedgerRoute(ledger) {
+  try {
+    const id = ledger?.getRoute?.('active-matter')
+    if (!id) return undefined
+    const matter = ledger.getMatter(id)
+    return matter && matter.status === 'active' ? id : undefined
+  } catch { return undefined }
+}
+
+/**
+ * Latest session's matter, but only when it still exists and is active.
+ * Without this check a legacy/archived session reference could silently write
+ * a dangling or archived matter_id (the exact class of bug --matter had).
+ */
+function sessionMatterIdIfActive(store) {
+  try {
+    const latest = store?.listSessions?.(1)?.[0]
+    if (!latest?.matterId) return undefined
+    const matter = store.getMatter?.(latest.matterId)
+    return matter && matter.status === 'active' ? matter.id : undefined
+  } catch { return undefined }
+}
+
 function activeMatterId(ledger, explicit) {
   if (explicit) return explicit
+  // `matter use` wins over the latest session, so a CLI-only user can pick the
+  // default matter for subsequent `commit add` without opening a chat session.
+  const routed = (mode === 'json' ? undefined : activeMatterIdFromStore(dbStore())) ?? activeMatterIdFromLedgerRoute(ledger)
+  if (routed) return routed
   try {
-    const latest = dbStore()?.listSessions(1)[0]
-    if (latest) return latest.matterId
+    const sessionMatter = sessionMatterIdIfActive(dbStore())
+    if (sessionMatter) return sessionMatter
   } catch {}
   return ledger.listMatters()[0]?.id ?? ledger.addMatter({ title: '默认事项' }).id
 }
@@ -1338,12 +1420,40 @@ function activeMatterId(ledger, explicit) {
  * matter, else a newly inserted default matter (defaults identical to
  * Ledger.addMatter({title:'默认事项'})).
  */
+/** Business error with a stable code (message keeps the code for plain stderr). */
+function matterCommandError(code, message, hint) {
+  const error = new Error(code + ': ' + message + (hint ? ' (hint: ' + hint + ')' : ''))
+  error.code = code
+  if (hint) error.hint = hint
+  return error
+}
+
+/** Validate an explicit matter id for a write: exists and active, else throw. */
+function assertMatterForWrite(store, explicit) {
+  const id = String(explicit)
+  const matter = store.getMatter?.(id)
+  if (!matter) throw matterCommandError('E_MATTER_NOT_FOUND', 'unknown matter: ' + id, 'advisers matter add "…"')
+  if (matter.status !== 'active') throw matterCommandError('E_MATTER_ARCHIVED', 'matter is archived: ' + id, 'advisers matter ls')
+  return matter.id
+}
+
+/** Resolve an explicit --matter on a ledger loaded in memory (JSON store / readers). */
+function resolveMatterForCommand(ledger, explicit, command = 'write') {
+  if (explicit === undefined || explicit === null) return activeMatterId(ledger)
+  if (explicit === true) throw matterCommandError('E_USAGE', '--matter requires a matter id', 'advisers matter ls')
+  const id = String(explicit)
+  const matter = ledger?.getMatter?.(id)
+  if (!matter) throw matterCommandError('E_MATTER_NOT_FOUND', 'unknown matter: ' + id + ' (' + command + ')', 'advisers matter add "…"')
+  if (matter.status !== 'active') throw matterCommandError('E_MATTER_ARCHIVED', 'matter is archived: ' + id + ' (' + command + ')', 'advisers matter ls')
+  return matter.id
+}
+
 function resolveWriteMatterId(store, explicit) {
-  if (explicit) return String(explicit)
-  try {
-    const latest = store.listSessions(1)?.[0]
-    if (latest?.matterId) return latest.matterId
-  } catch {}
+  if (explicit) return assertMatterForWrite(store, explicit)
+  const routed = activeMatterIdFromStore(store)
+  if (routed) return routed
+  const sessionMatter = sessionMatterIdIfActive(store)
+  if (sessionMatter) return sessionMatter
   const active = store.firstActiveMatter?.()
   if (active) return active.id
   const timestamp = now()
@@ -1373,13 +1483,16 @@ function latestConversationIdFor(store) {
  * with the documented hint) or as a plain business error (usage/unknown id) with
  * exit code 1. Keeps the 0.2.2 stderr text for business errors unchanged.
  */
-function reportCommandFailure(error) {
+function isStoreWriteFailure(error) {
   const code = error?.code
-  const storeFailure = code === 'E_DB_LOCKED' || code === 'E_DB_CORRUPT' || code === 'E_MIGRATE_BUSY' ||
+  return code === 'E_DB_LOCKED' || code === 'E_DB_CORRUPT' || code === 'E_MIGRATE_BUSY' ||
     code === 'E_MIGRATION_BACKUP' || code === 'E_READ_ONLY' || code === 'E_TX_REQUIRED' ||
     code === 'E_SCHEMA_STALE' || code === 'E_SCHEMA_NEWER' || code === 'E_VAULT_SEALED' ||
     error?.errcode !== undefined || /SQLITE_|database is locked|disk I\/O error|database or disk is full/i.test(String(error?.message ?? ''))
-  if (storeFailure) { exitStoreWriteFailure(error); return }
+}
+
+function reportCommandFailure(error) {
+  if (isStoreWriteFailure(error)) { exitStoreWriteFailure(error); return }
   console.error(error?.message ?? String(error))
   process.exitCode = 1
 }
@@ -1437,6 +1550,756 @@ function printWeek(ledger) {
   console.log('下周一件：' + (next?.action ?? open[0]?.action ?? '先定一个承诺或交付。'))
 }
 
+// ---------------------------------------------------------------------------
+// 0.2.3 P1a: matter (客户/项目) minimal closed loop.
+//
+// Before this the CLI had exactly two creation paths (the automatic default
+// matter and link ingest), and --matter was trusted blindly, so users could
+// write matter_id='client-wang' while matters was empty. pet-brief then
+// dropped that commitment silently. These commands create/list/show/rename/
+// archive a matter and 'matter use' records the default for later writes.
+// No schema change: the matters table already exists (schema v20).
+// ---------------------------------------------------------------------------
+function matterFail(code, message, hint) {
+  console.error(JSON.stringify({ error: { code: code, message: message, ...(hint ? { hint: hint } : {}) } }))
+  process.exitCode = 1
+}
+
+function matterNextDueAt(open) {
+  const next = open
+    .map((commitment) => dueInstantOfValue(commitment.dueAt))
+    .filter((ms) => ms !== null)
+    .sort((a, b) => a - b)[0]
+  return next === undefined ? null : toShanghaiIso(next)
+}
+
+function matterJsonRow(matter, openByMatter) {
+  const open = openByMatter.get(matter.id) ?? []
+  return {
+    id: matter.id,
+    title: matter.title,
+    status: matter.status,
+    domain: matter.domain ?? 'general',
+    secrecy: Number(matter.secrecy ?? 0),
+    clientId: null,
+    projectId: null,
+    openCommitments: open.length,
+    nextDueAt: matterNextDueAt(open),
+  }
+}
+
+async function matterCommand(args) {
+  const sub = args[0]
+  const parsed = parseFlags(args.slice(1))
+  const flags = parsed.flags
+  const positional = parsed.positional
+  const asJson = flags.json === true
+  const fail = (code, message, hint) => { matterFail(code, message, hint) }
+  if (sub === 'add') {
+    const title = positional.join(' ').trim()
+    if (!title) { fail('E_USAGE', 'matter add requires a title', 'advisers matter add "王工 · 官网改版"'); return }
+    let secrecy = 0
+    if (flags.secrecy !== undefined) {
+      if (flags.secrecy === true || !/^[0-3]$/.test(String(flags.secrecy))) { fail('E_USAGE', '--secrecy must be an integer 0..3'); return }
+      secrecy = Number(flags.secrecy)
+    }
+    const domain = typeof flags.domain === 'string' ? flags.domain : 'general'
+    const summary = typeof flags.summary === 'string' ? flags.summary : undefined
+    if (mode === 'json') {
+      const ledger = loadJson()
+      const matter = ledger.addMatter({ title: title, domain: domain, secrecy: secrecy, summary: summary })
+      saveJson(ledger)
+      if (asJson) { console.log(JSON.stringify({ ok: true, command: 'matter add', matter: matter }, null, 2)); return }
+      console.log('created ' + matter.id + '  ' + matter.title)
+      return
+    }
+    try {
+      const audit = { actor: 'local', action: 'matter.add', allowed: true, reason: '' }
+      const made = mutateWithAudit((store) => {
+        const timestamp = now()
+        const row = {
+          id: LOCAL_PORTS.ids.next('matter'), title: title, status: 'active', domain: domain, secrecy: secrecy,
+          ...(summary === undefined ? {} : { summary: summary }),
+          participants: [], deadlines: [], openQuestions: [], createdAt: timestamp, updatedAt: timestamp,
+        }
+        store.insertMatter(row)
+        audit.reason = row.id
+        return row
+      }, audit)
+      const matter = made.result
+      if (asJson) { console.log(JSON.stringify({ ok: true, command: 'matter add', matter: matter }, null, 2)); return }
+      console.log('created ' + matter.id + '  ' + matter.title)
+    } catch (error) { reportCommandFailure(error) }
+    return
+  }
+  if (sub === 'ls') {
+    try {
+      const ledger = mode === 'json' ? loadJson() : readLedgerForCommand({ matters: {}, commitments: { status: 'open' } })
+      const statuses = flags.all === true ? ['active', 'paused', 'archived'] : ['active']
+      const matters = statuses.flatMap((status) => ledger.listMatters(status))
+      const openByMatter = new Map()
+      for (const commitment of ledger.listCommitments()) {
+        if (commitment.status !== 'open') continue
+        const list = openByMatter.get(commitment.matterId) ?? []
+        list.push(commitment)
+        openByMatter.set(commitment.matterId, list)
+      }
+      const rows = matters.map((matter) => matterJsonRow(matter, openByMatter))
+      rows.sort((a, b) => (a.status === b.status ? (a.id < b.id ? -1 : a.id > b.id ? 1 : 0) : (a.status < b.status ? -1 : 1)))
+      if (asJson) { console.log(JSON.stringify(rows, null, 2)); return }
+      if (!rows.length) { console.log('（没有事项）'); return }
+      for (const row of rows) console.log(row.id + '\t' + row.status + '\tsecrecy=' + row.secrecy + '\topen=' + row.openCommitments + '\t' + (row.nextDueAt ?? '无截止') + '\t' + row.title)
+    } catch (error) { reportCommandFailure(error) }
+    return
+  }
+  if (sub === 'show') {
+    const id = positional[0]
+    if (!id) { fail('E_USAGE', 'matter show requires a matter id', 'advisers matter ls'); return }
+    try {
+      const ledger = mode === 'json' ? loadJson() : readLedgerForCommand({ matters: {}, commitments: { matterId: id } })
+      const matter = ledger.getMatter(id)
+      if (!matter) { fail('E_MATTER_NOT_FOUND', 'unknown matter: ' + id, 'advisers matter ls'); return }
+      const commitments = ledger.listCommitments().filter((commitment) => commitment.matterId === id)
+      const open = commitments.filter((commitment) => commitment.status === 'open')
+      const payload = {
+        ok: true,
+        command: 'matter show',
+        matter: matter,
+        counts: { commitments: commitments.length, open: open.length, done: commitments.filter((c) => c.status === 'done').length },
+        open: open.map((c) => ({ id: c.id, action: c.action, dueAt: c.dueAt ?? null, debtor: c.debtor, creditor: c.creditor })),
+        nextDueAt: matterNextDueAt(open),
+      }
+      if (asJson) { console.log(JSON.stringify(payload, null, 2)); return }
+      console.log(matter.id + '  ' + matter.title)
+      console.log('状态 ' + matter.status + ' · 保密 ' + Number(matter.secrecy ?? 0) + ' · 领域 ' + (matter.domain ?? 'general'))
+      if (matter.summary) console.log('摘要：' + matter.summary)
+      console.log('未完成承诺 ' + open.length + ' · 总承诺 ' + commitments.length + ' · 下一截止 ' + (payload.nextDueAt ?? '无'))
+      for (const c of open.slice(0, 20)) console.log('  ' + c.id + '  ' + c.action + (c.dueAt ? ' · ' + c.dueAt : ''))
+    } catch (error) { reportCommandFailure(error) }
+    return
+  }
+  if (sub === 'rename') {
+    const id = positional[0]
+    const title = positional.slice(1).join(' ').trim()
+    if (!id || !title) { fail('E_USAGE', 'matter rename requires <id> <title>', 'advisers matter rename matter_x "新标题"'); return }
+    if (mode === 'json') {
+      const ledger = loadJson()
+      const matter = ledger.getMatter(id)
+      if (!matter) { fail('E_MATTER_NOT_FOUND', 'unknown matter: ' + id, 'advisers matter ls'); return }
+      matter.title = title
+      matter.updatedAt = now()
+      saveJson(ledger)
+      if (asJson) { console.log(JSON.stringify({ ok: true, command: 'matter rename', matter: matter }, null, 2)); return }
+      console.log('renamed ' + id + '  ' + title)
+      return
+    }
+    try {
+      const audit = { actor: 'local', action: 'matter.rename', allowed: true, reason: id }
+      const made = mutateWithAudit((store) => {
+        const current = store.getMatter(id)
+        if (!current) throw matterCommandError('E_MATTER_NOT_FOUND', 'unknown matter: ' + id, 'advisers matter ls')
+        store.updateMatter(id, { title: title, updatedAt: now() })
+        return store.getMatter(id)
+      }, audit)
+      if (asJson) { console.log(JSON.stringify({ ok: true, command: 'matter rename', matter: made.result }, null, 2)); return }
+      console.log('renamed ' + id + '  ' + made.result.title)
+    } catch (error) { reportCommandFailure(error) }
+    return
+  }
+  if (sub === 'archive') {
+    const id = positional[0]
+    if (!id) { fail('E_USAGE', 'matter archive requires a matter id', 'advisers matter ls'); return }
+    const dryRun = flags['dry-run'] === true
+    try {
+      if (mode === 'json') {
+        const ledger = loadJson()
+        const matter = ledger.getMatter(id)
+        if (!matter) { fail('E_MATTER_NOT_FOUND', 'unknown matter: ' + id, 'advisers matter ls'); return }
+        if (dryRun) {
+          if (asJson) console.log(JSON.stringify({ ok: true, command: 'matter archive', dryRun: true, matter: matter }, null, 2))
+          else console.log('would archive ' + id + '  ' + matter.title + '（dry-run，未写入）')
+          return
+        }
+        matter.status = 'archived'
+        matter.updatedAt = now()
+        saveJson(ledger)
+        if (asJson) { console.log(JSON.stringify({ ok: true, command: 'matter archive', matter: matter }, null, 2)); return }
+        console.log('archived ' + id + '  ' + matter.title)
+        return
+      }
+      if (dryRun) {
+        const ledger = readLedgerForCommand({ matters: {} })
+        const matter = ledger.getMatter(id)
+        if (!matter) { fail('E_MATTER_NOT_FOUND', 'unknown matter: ' + id, 'advisers matter ls'); return }
+        if (asJson) console.log(JSON.stringify({ ok: true, command: 'matter archive', dryRun: true, matter: matter }, null, 2))
+        else console.log('would archive ' + id + '  ' + matter.title + '（dry-run，未写入）')
+        return
+      }
+      const audit = { actor: 'local', action: 'matter.archive', allowed: true, reason: id }
+      const made = mutateWithAudit((store) => {
+        const current = store.getMatter(id)
+        if (!current) throw matterCommandError('E_MATTER_NOT_FOUND', 'unknown matter: ' + id, 'advisers matter ls')
+        store.updateMatter(id, { status: 'archived', updatedAt: now() })
+        return store.getMatter(id)
+      }, audit)
+      if (asJson) { console.log(JSON.stringify({ ok: true, command: 'matter archive', matter: made.result }, null, 2)); return }
+      console.log('archived ' + id + '  ' + made.result.title)
+    } catch (error) { reportCommandFailure(error) }
+    return
+  }
+  if (sub === 'use') {
+    const id = positional[0]
+    if (!id) { fail('E_USAGE', 'matter use requires a matter id', 'advisers matter ls'); return }
+    try {
+      if (mode === 'json') {
+        const ledger = loadJson()
+        const matter = ledger.getMatter(id)
+        if (!matter) { fail('E_MATTER_NOT_FOUND', 'unknown matter: ' + id, 'advisers matter ls'); return }
+        if (matter.status !== 'active') { fail('E_MATTER_ARCHIVED', 'matter is archived: ' + id, 'advisers matter ls'); return }
+        ledger.setRoute('active-matter', id)
+        saveJson(ledger)
+        if (asJson) { console.log(JSON.stringify({ ok: true, command: 'matter use', matterId: id }, null, 2)); return }
+        console.log('active matter: ' + id + '  ' + matter.title)
+        return
+      }
+      const audit = { actor: 'local', action: 'matter.use', allowed: true, reason: id }
+      const made = mutateWithAudit((store) => {
+        const current = store.getMatter(id)
+        if (!current) throw matterCommandError('E_MATTER_NOT_FOUND', 'unknown matter: ' + id, 'advisers matter ls')
+        if (current.status !== 'active') throw matterCommandError('E_MATTER_ARCHIVED', 'matter is archived: ' + id, 'advisers matter ls')
+        store.setMeta('active_matter_id', id)
+        return current
+      }, audit)
+      if (asJson) { console.log(JSON.stringify({ ok: true, command: 'matter use', matterId: id }, null, 2)); return }
+      console.log('active matter: ' + id + '  ' + made.result.title)
+    } catch (error) { reportCommandFailure(error) }
+    return
+  }
+  if (!sub || sub === 'help' || sub === '--help') {
+    console.log('usage: advisers matter <add|ls|show|rename|archive|use> ...')
+    console.log('  advisers matter add <title> [--secrecy 0-3] [--domain name] [--summary text] [--json]')
+    console.log('  advisers matter ls [--all] [--json]')
+    console.log('  advisers matter show <id> [--json]')
+    console.log('  advisers matter rename <id> <title> [--json]')
+    console.log('  advisers matter archive <id> [--dry-run] [--json]')
+    console.log('  advisers matter use <id> [--json]     set the default matter for later writes')
+    return
+  }
+  fail('E_USAGE', 'unknown matter subcommand: ' + sub, 'advisers matter help')
+}
+
+// ---------------------------------------------------------------------------
+// 0.2.3 P3: 7-day agenda + deterministic morning brief.
+//
+// Time semantics (design §1.4/§5.4): the display/storage split is fixed to
+// Asia/Shanghai. Storage keeps UTC instants; every window boundary, grouping
+// decision and label below is computed on the Shanghai calendar day, never on
+// new Date().toISOString().slice(0,10) (the 0.2.2 'week' bug). A date-only
+// dueAt means "done before 23:59:59.999 local time". RRULE expansion reuses
+// lib/ical.js expandRrule; unsupported rules/timezones are degraded, skipped
+// and reported, never guessed. No model call, no network call, no writes.
+// ---------------------------------------------------------------------------
+const AGENDA_TIMEZONE = 'Asia/Shanghai'
+const AGENDA_DAY_MS = 86400_000
+const AGENDA_OFFSET_MS = 8 * 3600_000
+const AGENDA_WEEKDAYS = ['周日', '周一', '周二', '周三', '周四', '周五', '周六']
+const AGENDA_DATE_ONLY = /^\d{4}-\d{2}-\d{2}$/
+const AGENDA_LOCAL_TIME = /^\d{4}-\d{2}-\d{2}[T ]\d{2}:\d{2}(?::\d{2}(?:\.\d{1,3})?)?$/
+
+function agendaDayNumber(day) {
+  const text = String(day ?? '')
+  if (!AGENDA_DATE_ONLY.test(text)) return null
+  const parts = text.split('-').map(Number)
+  if (parts.some((part) => !Number.isFinite(part))) return null
+  return Math.round(Date.UTC(parts[0], parts[1] - 1, parts[2]) / AGENDA_DAY_MS)
+}
+
+function agendaDayFromNumber(number) {
+  return new Date(number * AGENDA_DAY_MS).toISOString().slice(0, 10)
+}
+
+function agendaAddDays(day, delta) {
+  const number = agendaDayNumber(day)
+  return number === null ? null : agendaDayFromNumber(number + delta)
+}
+
+function agendaWeekday(day) {
+  const number = agendaDayNumber(day)
+  return number === null ? '' : AGENDA_WEEKDAYS[new Date(number * AGENDA_DAY_MS).getUTCDay()]
+}
+
+function agendaDayStartInstant(day) {
+  return agendaDayNumber(day) * AGENDA_DAY_MS - AGENDA_OFFSET_MS
+}
+
+function agendaDayEndInstant(day) {
+  return agendaDayNumber(day) * AGENDA_DAY_MS - AGENDA_OFFSET_MS + AGENDA_DAY_MS - 1
+}
+
+function agendaLocalDayOfInstant(ms) {
+  return agendaDayFromNumber(Math.floor((ms + AGENDA_OFFSET_MS) / AGENDA_DAY_MS))
+}
+
+function agendaLocalTimeOfInstant(ms) {
+  const wall = new Date(ms + AGENDA_OFFSET_MS)
+  return String(wall.getUTCHours()).padStart(2, '0') + ':' + String(wall.getUTCMinutes()).padStart(2, '0')
+}
+
+/** UTC instant -> Shanghai wall-clock ISO string with an explicit +08:00 offset. */
+function toShanghaiIso(ms) {
+  return new Date(ms + AGENDA_OFFSET_MS).toISOString().replace('Z', '+08:00')
+}
+
+/**
+ * Resolve a stored dueAt to an absolute instant.
+ * - YYYY-MM-DD            -> end of that Shanghai day
+ * - local ISO without zone -> Shanghai wall clock (+08:00)
+ * - anything with Z/offset -> its absolute instant
+ * Returns null for invalid/dirty data (callers degrade instead of guessing).
+ */
+function dueInstantOfValue(dueAt) {
+  if (dueAt === undefined || dueAt === null) return null
+  const text = String(dueAt).trim()
+  if (!text) return null
+  if (AGENDA_DATE_ONLY.test(text)) return agendaDayEndInstant(text)
+  if (AGENDA_LOCAL_TIME.test(text)) {
+    const ms = Date.parse(text.replace(' ', 'T') + '+08:00')
+    return Number.isFinite(ms) ? ms : null
+  }
+  const ms = Date.parse(text)
+  return Number.isFinite(ms) ? ms : null
+}
+
+function agendaClip(value, max) {
+  const text = String(value ?? '').replace(/\s+/g, ' ').trim()
+  const chars = Array.from(text)
+  return chars.length <= max ? text : chars.slice(0, max).join('')
+}
+
+function agendaIsDateOnlyDue(dueAt) {
+  const text = String(dueAt ?? '')
+  return AGENDA_DATE_ONLY.test(text) || !/[T ]\d{2}:\d{2}/.test(text)
+}
+
+function agendaCommitmentItem(commitment, dueMs) {
+  const allDay = agendaIsDateOnlyDue(commitment.dueAt)
+  return {
+    id: commitment.id,
+    kind: 'commitment',
+    title: agendaClip(commitment.action, 120),
+    allDay: allDay,
+    at: new Date(dueMs).toISOString(),
+    localDate: agendaLocalDayOfInstant(dueMs),
+    localTime: allDay ? null : agendaLocalTimeOfInstant(dueMs),
+    matterId: commitment.matterId ?? null,
+    ref: { kind: 'commitment', id: commitment.id },
+    meta: { creditor: commitment.creditor },
+  }
+}
+
+function agendaCompareItems(a, b) {
+  if (Boolean(a.allDay) !== Boolean(b.allDay)) return a.allDay ? 1 : -1
+  const left = Date.parse(a.at)
+  const right = Date.parse(b.at)
+  if (Number.isFinite(left) && Number.isFinite(right) && left !== right) return left - right
+  return a.id < b.id ? -1 : a.id > b.id ? 1 : 0
+}
+
+function agendaCalendarMeta(instance) {
+  const meta = {}
+  if (instance.rrule) meta.rrule = String(instance.rrule)
+  if (instance.location) meta.location = String(instance.location)
+  return meta
+}
+
+/**
+ * Build the deterministic agenda view shared by 'agenda' and 'digest morning'.
+ * Pure projection: no writes, no model/network calls, no clock reads besides
+ * the injected nowMs. All arrays are deterministically sorted.
+ */
+async function buildAgendaData(input) {
+  const { expandRrule } = await loadIcal()
+  const nowMs = input.nowMs
+  const days = input.days
+  const includeCalendar = input.includeCalendar !== false
+  const includeDone = input.includeDone === true
+  const matterId = input.matterId
+  const startDay = input.fromDay ?? agendaLocalDayOfInstant(nowMs)
+  const lastDay = agendaAddDays(startDay, days - 1)
+  const degraded = []
+  const overdue = []
+  const waiting = []
+  const unscheduled = []
+  const dayItems = new Map()
+  const pushDay = (day, item) => {
+    const list = dayItems.get(day) ?? []
+    list.push(item)
+    dayItems.set(day, list)
+  }
+  for (const commitment of input.ledger.listCommitments()) {
+    if (matterId && commitment.matterId !== matterId) continue
+    const status = commitment.status
+    if (status === 'done') {
+      if (!includeDone) continue
+    } else if (status !== 'open' && status !== 'snoozed') continue
+    const isWaiting = typeof commitment.debtor === 'string' && (commitment.debtor === 'third' || commitment.debtor.startsWith('third:'))
+    const dueMs = commitment.dueAt ? dueInstantOfValue(commitment.dueAt) : null
+    if (commitment.dueAt && dueMs === null) {
+      unscheduled.push({ id: commitment.id, kind: 'commitment', title: agendaClip(commitment.action, 120), allDay: true, at: null, localDate: null, ref: { kind: 'commitment', id: commitment.id }, meta: { debtor: commitment.debtor } })
+      degraded.push({ source: 'commitments', code: 'E_TIME_INVALID', id: commitment.id, reason: 'invalid dueAt' })
+      continue
+    }
+    if (isWaiting && status !== 'done') {
+      waiting.push({ id: commitment.id, kind: 'commitment', title: agendaClip(commitment.action, 120), allDay: true, at: dueMs === null ? null : new Date(dueMs).toISOString(), localDate: null, debtor: commitment.debtor, ref: { kind: 'commitment', id: commitment.id } })
+      continue
+    }
+    if (dueMs === null) {
+      unscheduled.push({ id: commitment.id, kind: 'commitment', title: agendaClip(commitment.action, 120), allDay: true, at: null, localDate: null, ref: { kind: 'commitment', id: commitment.id } })
+      continue
+    }
+    if (status !== 'done' && dueMs < nowMs) {
+      overdue.push(agendaCommitmentItem(commitment, dueMs))
+      continue
+    }
+    if (status === 'done') {
+      const doneDay = agendaLocalDayOfInstant(dueMs)
+      if (doneDay >= startDay && doneDay <= lastDay) pushDay(doneDay, Object.assign(agendaCommitmentItem(commitment, dueMs), { kind: 'done' }))
+      continue
+    }
+    const dueDay = agendaLocalDayOfInstant(dueMs)
+    if (dueDay >= startDay && dueDay <= lastDay) pushDay(dueDay, agendaCommitmentItem(commitment, dueMs))
+  }
+  if (includeCalendar) {
+    for (const row of input.events ?? []) {
+      const tzid = row.tzid === undefined || row.tzid === null ? '' : String(row.tzid)
+      if (tzid && !['Asia/Shanghai', 'UTC', 'Etc/UTC', 'GMT', 'Z'].includes(tzid)) {
+        degraded.push({ source: 'calendar', code: 'E_CALENDAR_SKIP', id: row.uid ?? null, reason: 'unsupported tzid: ' + tzid })
+        continue
+      }
+      let instances
+      try {
+        instances = expandRrule(row, { from: startDay, to: lastDay })
+      } catch (error) {
+        degraded.push({ source: 'calendar', code: 'E_CALENDAR_SKIP', id: row.uid ?? null, reason: String(error && error.message ? error.message : error) })
+        continue
+      }
+      for (const instance of instances) {
+        if (instance.allDay) {
+          const day = String(instance.startsAt ?? '').slice(0, 10)
+          if (agendaDayNumber(day) === null || day < startDay || day > lastDay) continue
+          pushDay(day, {
+            id: instance.uid ?? day, kind: 'calendar', title: agendaClip(instance.summary, 120), allDay: true,
+            at: new Date(agendaDayStartInstant(day)).toISOString(), localDate: day, localTime: null,
+            matterId: null, ref: { kind: 'calendar', id: instance.uid ?? day }, meta: agendaCalendarMeta(instance),
+          })
+          continue
+        }
+        const startMs = Date.parse(instance.startsAt)
+        if (!Number.isFinite(startMs)) {
+          degraded.push({ source: 'calendar', code: 'E_CALENDAR_SKIP', id: instance.uid ?? null, reason: 'invalid startsAt' })
+          continue
+        }
+        const day = agendaLocalDayOfInstant(startMs)
+        if (day < startDay || day > lastDay) continue
+        const endMs = instance.endsAt ? Date.parse(instance.endsAt) : null
+        const item = {
+          id: instance.uid ?? String(instance.startsAt), kind: 'calendar', title: agendaClip(instance.summary, 120), allDay: false,
+          at: new Date(startMs).toISOString(), localDate: day, localTime: agendaLocalTimeOfInstant(startMs),
+          matterId: null, ref: { kind: 'calendar', id: instance.uid ?? String(instance.startsAt) }, meta: agendaCalendarMeta(instance),
+        }
+        if (Number.isFinite(endMs)) item.endAt = new Date(endMs).toISOString()
+        pushDay(day, item)
+      }
+    }
+  }
+  overdue.sort(agendaCompareItems)
+  const byId = (a, b) => (a.id < b.id ? -1 : a.id > b.id ? 1 : 0)
+  waiting.sort(byId)
+  unscheduled.sort(byId)
+  const daysOut = []
+  for (let offset = 0; offset < days; offset++) {
+    const date = agendaAddDays(startDay, offset)
+    const items = (dayItems.get(date) ?? []).slice().sort(agendaCompareItems)
+    daysOut.push({ date: date, weekday: agendaWeekday(date), load: items.length, items: items.slice(0, 20) })
+  }
+  const conflicts = []
+  const seenConflicts = new Set()
+  const addConflict = (date, leftId, rightId) => {
+    const pair = [leftId, rightId].sort()
+    const key = date + '|' + pair.join('|')
+    if (seenConflicts.has(key)) return
+    seenConflicts.add(key)
+    conflicts.push({ date: date, items: pair })
+  }
+  for (const day of daysOut) {
+    const calendars = day.items.filter((item) => item.kind === 'calendar' && !item.allDay && item.endAt)
+    const timedCommitments = day.items.filter((item) => item.kind === 'commitment' && !item.allDay)
+    for (let i = 0; i < calendars.length; i++) {
+      const left = calendars[i]
+      const leftStart = Date.parse(left.at)
+      const leftEnd = Date.parse(left.endAt)
+      for (let j = i + 1; j < calendars.length; j++) {
+        const right = calendars[j]
+        const rightStart = Date.parse(right.at)
+        const rightEnd = Date.parse(right.endAt)
+        if (Number.isFinite(leftStart) && Number.isFinite(leftEnd) && Number.isFinite(rightStart) && Number.isFinite(rightEnd) && leftStart < rightEnd && rightStart < leftEnd) addConflict(day.date, left.id, right.id)
+      }
+      for (const commitment of timedCommitments) {
+        const at = Date.parse(commitment.at)
+        if (Number.isFinite(at) && Number.isFinite(leftStart) && Number.isFinite(leftEnd) && at >= leftStart && at <= leftEnd) addConflict(day.date, commitment.id, left.id)
+      }
+    }
+  }
+  conflicts.sort((a, b) => (a.date === b.date ? (a.items.join(',') < b.items.join(',') ? -1 : 1) : (a.date < b.date ? -1 : 1)))
+  const perDayLoad = {}
+  for (const day of daysOut) if (day.load) perDayLoad[day.date] = day.load
+  return {
+    ok: true,
+    command: 'agenda',
+    now: new Date(nowMs).toISOString(),
+    window: { from: startDay, to: lastDay, days: days, timezone: AGENDA_TIMEZONE },
+    overdue: overdue.slice(0, 50),
+    days: daysOut,
+    waiting: waiting.slice(0, 20),
+    unscheduled: unscheduled.slice(0, 20),
+    conflicts: conflicts,
+    counts: { overdue: overdue.length, today: daysOut[0] ? daysOut[0].load : 0, days: days, waiting: waiting.length, unscheduled: unscheduled.length, conflicts: conflicts.length, perDayLoad: perDayLoad },
+    degraded: degraded,
+  }
+}
+
+function agendaUsageFail(message) {
+  console.error(JSON.stringify({ error: { code: 'E_USAGE', message: message, hint: 'advisers agenda --help' } }))
+  process.exitCode = 1
+}
+
+/** Shared --days/--from/--now parsing for agenda + morning. */
+function parseAgendaWindowFlags(flags, timelineCommand) {
+  let days = 7
+  if (flags.days !== undefined) {
+    if (flags.days === true || !/^\d+$/.test(String(flags.days))) { agendaUsageFail('--days must be an integer 1..31'); return null }
+    days = Number(flags.days)
+    if (!Number.isInteger(days) || days < 1 || days > 31) { agendaUsageFail('--days must be an integer 1..31'); return null }
+  }
+  let nowMs = Date.now()
+  if (flags.now !== undefined) {
+    const parsed = typeof flags.now === 'string' ? Date.parse(flags.now) : NaN
+    if (!Number.isFinite(parsed)) { agendaUsageFail('--now must be an ISO-8601 timestamp'); return null }
+    nowMs = parsed
+  }
+  let fromDay
+  if (flags.from !== undefined) {
+    if (typeof flags.from !== 'string' || !AGENDA_DATE_ONLY.test(flags.from)) { agendaUsageFail('--from must be YYYY-MM-DD'); return null }
+    fromDay = flags.from
+  }
+  const matterId = typeof flags.matter === 'string' ? flags.matter : undefined
+  return { days: days, nowMs: nowMs, fromDay: fromDay, matterId: matterId }
+}
+
+function loadAgendaInputs() {
+  if (mode === 'json') return { ledger: loadJson(), events: [] }
+  const store = readStoreOrExit()
+  if (!store) return { ledger: loadJson(), events: [] }
+  const snapshot = store.read(() => ({ version: 1, matters: store.loadMatters(), commitments: store.loadCommitments() }))
+  const events = store.read(() => store.listCalendarEvents())
+  return { ledger: Ledger.fromJSON(snapshot, LOCAL_PORTS), events: events }
+}
+
+function agendaMatterErrorLine(error) {
+  console.error(JSON.stringify({ error: { code: typeof error.code === 'string' ? error.code : 'E_USAGE', message: error.message } }))
+  process.exitCode = 1
+}
+
+function printAgenda(data) {
+  console.log('议程 ' + data.window.from + '（' + agendaWeekday(data.window.from) + '） → ' + data.window.to + '（' + agendaWeekday(data.window.to) + '）')
+  console.log('逾期（' + data.counts.overdue + '）')
+  if (!data.overdue.length) console.log('  （无）')
+  for (const item of data.overdue) console.log('  ' + item.id + '  ' + item.title + ' · ' + (item.localDate ?? '无日期'))
+  for (const day of data.days) {
+    console.log(day.date + ' ' + day.weekday + '（' + day.load + '）')
+    if (!day.items.length) { console.log('  （无）'); continue }
+    for (const item of day.items) {
+      const when = item.kind === 'calendar' && item.localTime ? item.localTime + (item.endAt ? '–' + agendaLocalTimeOfInstant(Date.parse(item.endAt)) : '') + ' ' : ''
+      const marker = item.kind === 'commitment' ? ' [承诺]' : item.kind === 'done' ? ' [已完成]' : ''
+      console.log('  ' + when + item.title + marker)
+    }
+  }
+  console.log('等待他人（' + data.counts.waiting + '）')
+  if (!data.waiting.length) console.log('  （无）')
+  for (const item of data.waiting) console.log('  ' + item.title + ' · ' + item.debtor)
+  console.log('未排期（' + data.counts.unscheduled + '）')
+  if (!data.unscheduled.length) console.log('  （无）')
+  for (const item of data.unscheduled) console.log('  ' + item.title)
+  if (data.conflicts.length) {
+    console.log('冲突（' + data.counts.conflicts + '）')
+    for (const conflict of data.conflicts) console.log('  ' + conflict.date + '  ' + conflict.items.join(' / '))
+  }
+  if (data.degraded.length) console.log('数据降级：' + data.degraded.length + ' 条（详见 --json）')
+}
+
+async function agendaCommand(args) {
+  const parsed = parseFlags(args)
+  const flags = parsed.flags
+  if (flags.help === true) {
+    console.log('usage: advisers agenda [--days 1..31] [--from YYYY-MM-DD] [--matter id] [--no-calendar] [--include-done] [--json] [--now ISO]')
+    return
+  }
+  const window = parseAgendaWindowFlags(flags, 'agenda')
+  if (!window) return
+  try {
+    const inputs = loadAgendaInputs()
+    if (window.matterId) {
+      try { resolveMatterForCommand(inputs.ledger, window.matterId, 'agenda') } catch (error) { agendaMatterErrorLine(error); return }
+    }
+    const data = await buildAgendaData({
+      ledger: inputs.ledger,
+      events: flags['no-calendar'] === true ? [] : inputs.events,
+      nowMs: window.nowMs,
+      days: window.days,
+      fromDay: window.fromDay,
+      includeCalendar: flags['no-calendar'] !== true,
+      includeDone: flags['include-done'] === true,
+      matterId: window.matterId,
+    })
+    if (flags.json === true) { console.log(JSON.stringify(data, null, 2)); return }
+    printAgenda(data)
+  } catch (error) { reportCommandFailure(error) }
+}
+
+function morningUpcoming(agenda) {
+  const rows = []
+  for (const day of agenda.days.slice(1)) {
+    for (const item of day.items) {
+      rows.push({ date: day.date, weekday: day.weekday, kind: item.kind, id: item.id, title: item.title, localTime: item.localTime ?? null, ref: item.ref })
+    }
+  }
+  return rows
+}
+
+async function buildMorningReport(input) {
+  const agenda = await buildAgendaData({
+    ledger: input.ledger,
+    events: input.events,
+    nowMs: input.nowMs,
+    days: input.days,
+    fromDay: input.fromDay,
+    includeCalendar: true,
+    includeDone: false,
+    matterId: input.matterId,
+  })
+  const today = agenda.days[0] ?? { date: agenda.window.from, weekday: agendaWeekday(agenda.window.from), load: 0, items: [] }
+  const mustDo = today.items.filter((item) => item.kind === 'commitment')
+  const meetings = today.items.filter((item) => item.kind === 'calendar')
+  const upcoming = morningUpcoming(agenda)
+  const risks = []
+  if (agenda.overdue.length) risks.push('逾期 ' + agenda.overdue.length + ' 条：' + agenda.overdue.slice(0, 3).map((item) => item.title).join('；'))
+  if (agenda.conflicts.length) risks.push('时间冲突 ' + agenda.conflicts.length + ' 处')
+  if (today.load >= 3) risks.push('今日负载较高（' + today.load + ' 项）')
+  if (agenda.unscheduled.length) risks.push('未排期 ' + agenda.unscheduled.length + ' 条')
+  const hashInput = {
+    localDay: agenda.window.from,
+    window: agenda.window,
+    mustDo: mustDo,
+    overdue: agenda.overdue,
+    meetings: meetings,
+    waiting: agenda.waiting,
+    upcoming: upcoming,
+    unscheduled: agenda.unscheduled,
+    conflicts: agenda.conflicts,
+    counts: {
+      mustDo: mustDo.length,
+      overdue: agenda.overdue.length,
+      meetings: meetings.length,
+      waiting: agenda.waiting.length,
+      upcoming: upcoming.length,
+      unscheduled: agenda.unscheduled.length,
+      conflicts: agenda.conflicts.length,
+    },
+  }
+  const evidence = await loadEvidence()
+  const dataSha256 = evidence.sha256Hex(evidence.stableStringify(hashInput, { space: 0 }))
+  return { agenda: agenda, today: today, risks: risks, hashInput: hashInput, dataSha256: dataSha256 }
+}
+
+function morningMarkdown(report) {
+  const agenda = report.agenda
+  const day = agenda.window.from
+  const lines = []
+  lines.push('# 晨报 ' + day + '（' + agendaWeekday(day) + '）')
+  lines.push('> 本地确定性生成 · 不含模型推理 · 数据哈希 sha256:' + report.dataSha256.slice(0, 16))
+  lines.push('')
+  lines.push('## 今天必须做')
+  if (!report.hashInput.mustDo.length) lines.push('（无）')
+  for (let index = 0; index < report.hashInput.mustDo.length; index++) {
+    const item = report.hashInput.mustDo[index]
+    lines.push((index + 1) + '. ' + item.title + (item.localTime ? '（' + item.localTime + ' 截止）' : '（今天到期）'))
+  }
+  lines.push('')
+  lines.push('## 逾期（' + agenda.overdue.length + '）')
+  if (!agenda.overdue.length) lines.push('（无）')
+  for (const item of agenda.overdue) lines.push('- ' + item.title + '（' + (item.localDate ?? '无日期') + '）')
+  lines.push('')
+  lines.push('## 今天会议（' + report.hashInput.meetings.length + '）')
+  if (!report.hashInput.meetings.length) lines.push('（无）')
+  for (const item of report.hashInput.meetings) {
+    const when = item.localTime ? item.localTime + (item.endAt ? '–' + agendaLocalTimeOfInstant(Date.parse(item.endAt)) : '') + '  ' : ''
+    lines.push('- ' + when + item.title)
+  }
+  lines.push('')
+  lines.push('## 未来 7 天（' + report.hashInput.upcoming.length + '）')
+  if (!report.hashInput.upcoming.length) lines.push('（无）')
+  for (const item of report.hashInput.upcoming.slice(0, 20)) lines.push('- ' + item.date.slice(5) + ' ' + item.weekday + '  ' + item.title)
+  lines.push('')
+  lines.push('## 等待他人（' + agenda.waiting.length + '）')
+  if (!agenda.waiting.length) lines.push('（无）')
+  for (const item of agenda.waiting) lines.push('- ' + item.title + (item.debtor ? '（' + item.debtor + '）' : ''))
+  lines.push('')
+  lines.push('## 未排期（' + agenda.unscheduled.length + '）')
+  if (!agenda.unscheduled.length) lines.push('（无）')
+  for (const item of agenda.unscheduled) lines.push('- ' + item.title + '（无截止，建议设置日期）')
+  lines.push('')
+  lines.push('## 风险（' + report.risks.length + '）')
+  if (!report.risks.length) lines.push('（无）')
+  for (const risk of report.risks) lines.push('- ' + risk)
+  lines.push('')
+  lines.push('## 数据说明')
+  lines.push('- 数据来源：本地账本 + 已导入日历；不含邮件正文或附件。')
+  lines.push('- 本文件不构成对外承诺；金额/日期以原始交付物为准。')
+  if (agenda.degraded.length) lines.push('- 数据降级 ' + agenda.degraded.length + ' 条（详见 morning --json 的 degraded 字段）。')
+  return lines.join('\n') + '\n'
+}
+
+async function morningReportCommand(args) {
+  const parsed = parseFlags(args)
+  const flags = parsed.flags
+  if (flags.help === true) {
+    console.log('usage: advisers morning [digest morning] [--days 1..31] [--matter id] [--out file] [--json] [--now ISO]')
+    return
+  }
+  const window = parseAgendaWindowFlags(flags, 'morning')
+  if (!window) return
+  try {
+    const inputs = loadAgendaInputs()
+    if (window.matterId) {
+      try { resolveMatterForCommand(inputs.ledger, window.matterId, 'morning') } catch (error) { agendaMatterErrorLine(error); return }
+    }
+    const report = await buildMorningReport({ ledger: inputs.ledger, events: inputs.events, nowMs: window.nowMs, days: window.days, fromDay: window.fromDay, matterId: window.matterId })
+    const markdown = morningMarkdown(report)
+    const payload = Object.assign({ ok: true, command: 'morning', generatedAt: new Date(window.nowMs).toISOString() }, report.hashInput, { dataSha256: report.dataSha256, degraded: report.agenda.degraded })
+    let outPath
+    if (flags.out !== undefined) {
+      if (typeof flags.out !== 'string') { agendaUsageFail('--out requires a file path'); return }
+      outPath = flags.out
+      mkdirSync(dirname(outPath), { recursive: true })
+      atomicWriteFileSync(outPath, markdown, { mode: 0o600 })
+      payload.out = outPath
+    }
+    if (flags.json === true) { console.log(JSON.stringify(payload, null, 2)); return }
+    process.stdout.write(markdown)
+    if (outPath) console.log('wrote ' + outPath + ' (mode 600)')
+  } catch (error) { reportCommandFailure(error) }
+}
+
 function risks(ledger) {
   const open = ledger.openCommitments()
   const out = []
@@ -1465,6 +2328,19 @@ async function collectSourceRows(ledger) {
   const rows = []
   for (const c of ledger.listCommitments()) {
     for (const e of c.evidence ?? []) {
+      if (e && (e.kind === 'manual' || e.type === 'manual' || (e.sessionId === 'local' && e.turnId === 'cli'))) {
+        rows.push({
+          commitmentId: c.id,
+          action: c.action,
+          type: 'manual',
+          ref: null,
+          label: 'manual:operator-entered',
+          quote: e.quote ?? '',
+          source: { sourceVersion: 2, type: 'manual', quote: e.quote ?? '', resolution: 'unverifiable', reason: 'operator_entered' },
+          unverifiable: true,
+        })
+        continue
+      }
       const source = normalizeSource(e.source)
       const type = source?.type ?? 'conversation'
       rows.push({
@@ -2699,6 +3575,8 @@ async function repl({ allowPaths = [] } = {}) {
       console.log('  /retry          rerun the last task')
       console.log('  /correct <text>  record a correction; 2nd time promotes it')
       console.log('  /who            who I owe / who owes me')
+      console.log('  /matter use <id>  set the default matter for later writes')
+      console.log('  /agenda         7-day agenda (commitments + calendar)')
       console.log('  /memory         what I remember')
       console.log('  /commit add <action> --quote <text> [--due ISO]')
       console.log('  /commit ls')
@@ -2765,6 +3643,22 @@ async function repl({ allowPaths = [] } = {}) {
       continue
     }
     if (text === '/week') { printWeek(ledger); continue }
+    if (text === '/agenda') {
+      try {
+        const inputs = loadAgendaInputs()
+        const data = await buildAgendaData({ ledger: inputs.ledger, events: inputs.events, nowMs: Date.now(), days: 7, includeCalendar: true, includeDone: false })
+        printAgenda(data)
+      } catch (error) { console.log('agenda failed: ' + (error && error.message ? error.message : error)) }
+      continue
+    }
+    if (text.startsWith('/matter use ')) {
+      const requested = text.slice('/matter use '.length).trim()
+      const matter = requested ? ledger.getMatter(requested) : undefined
+      if (!matter) console.log('用法：/matter use <matter-id>（先用 advisers matter ls 查看）')
+      else if (matter.status !== 'active') console.log('matter 已归档：' + requested)
+      else { ledger.setRoute('active-matter', requested); saveLedger(ledger); console.log('active matter: ' + requested + '  ' + matter.title) }
+      continue
+    }
     if (text === '/digest' || text === '/digest day' || text === '/digest week') {
       const store = dbStore()
       const { buildDigest } = await loadDigest()
@@ -2794,9 +3688,11 @@ async function repl({ allowPaths = [] } = {}) {
       if (positional[0] === 'add') {
         const action = positional.slice(1).join(' ')
         if (!action || !flags.quote) { console.log('用法：/commit add <action> --quote <原话> [--due ISO]'); continue }
-        const c = ledger.addCommitment({ matterId: activeMatterId(ledger), debtor: flags.debtor ?? 'user', creditor: flags.creditor ?? 'me', action, dueAt: flags.due, capability: 'todo', evidence: [{ sessionId: conversationId, turnId: 'cli', quote: String(flags.quote) }] })
-        saveLedger(ledger)
-        console.log(`${c.id} open ${c.action}`)
+        try {
+          const c = ledger.addCommitment({ matterId: resolveMatterForCommand(ledger, flags.matter, 'commit add'), debtor: flags.debtor ?? 'user', creditor: flags.creditor ?? 'me', action, dueAt: flags.due, capability: 'todo', evidence: [manualEvidence(String(flags.quote), 'repl commit add')] })
+          saveLedger(ledger)
+          console.log(`${c.id} open ${c.action}`)
+        } catch (error) { console.log(error && error.message ? error.message : String(error)) }
         continue
       }
       console.log('用法：/commit add ... 或 /commit ls'); continue
@@ -2805,7 +3701,7 @@ async function repl({ allowPaths = [] } = {}) {
       const { flags, positional } = parseFlags(text.slice(6).trim().split(/\s+/))
       const id = positional[0]
       if (!id || !flags.evidence) { console.log('用法：/done <id> --evidence <证据>'); continue }
-      ledger.completeCommitment(id, [{ sessionId: conversationId, turnId: 'cli', quote: String(flags.evidence) }])
+      ledger.completeCommitment(id, [manualEvidence(String(flags.evidence), 'repl commit done')])
       saveLedger(ledger)
       console.log(`done: ${id}`)
       continue
@@ -3286,10 +4182,658 @@ async function routine(sub, arg, arg2) {
   process.exitCode = 1
 }
 
-async function template(name, dataFile, outFile) {
+// ---------------------------------------------------------------------------
+// 0.2.3 P2: quote / proposal templates.
+//
+// Two deterministic Office builders on top of the existing office package
+// (buildDocx/buildXlsx/validateOffice), so no new dependency and no model call.
+// Money is parsed as integer cents (BigInt while multiplying, then a safe
+// Number) — never floating point. The same normalized data + totals are embedded
+// in the document so 'advisers verify --content' can re-check them.
+// ---------------------------------------------------------------------------
+const QUOTE_TEMPLATE_VERSION = '1'
+const QUOTE_CURRENCIES = { CNY: '¥', USD: '$', EUR: '€', HKD: 'HK$' }
+const QUOTE_MAX_ITEMS = 200
+const QUOTE_DEFAULT_DISCLAIMER = '本文件由本地模板确定性生成，仅供商务沟通参考；不构成任何法律或税务意见。金额、日期与条款以双方最终书面约定为准。'
+const QUOTE_DEFAULT_CHANGE_PROCESS = '范围或交付物发生变化时，双方先书面确认变更内容、费用与时间影响，再执行变更。'
+
+function templateDataError(message, path) {
+  const error = new Error(message)
+  error.code = 'E_TEMPLATE_INVALID'
+  if (path) error.details = { path: path }
+  return error
+}
+
+function templateAmountError(message, path) {
+  const error = new Error(message)
+  error.code = 'E_AMOUNT'
+  if (path) error.details = { path: path }
+  return error
+}
+
+function templateFail(error) {
+  console.error(JSON.stringify({
+    error: {
+      code: typeof error?.code === 'string' ? error.code : 'E_TEMPLATE_INVALID',
+      message: error?.message ?? String(error),
+      ...(error?.hint ? { hint: error.hint } : {}),
+      ...(error?.details ? { details: error.details } : {}),
+    },
+  }))
+  process.exitCode = 1
+}
+
+function templateRejectUnknown(object, allowed, path) {
+  if (!object || typeof object !== 'object' || Array.isArray(object)) return
+  for (const key of Object.keys(object)) {
+    if (!allowed.includes(key)) throw templateDataError('unknown field: ' + path + '.' + key, path + '.' + key)
+  }
+}
+
+function templateText(value, path, options = {}) {
+  if (value === undefined || value === null) {
+    if (options.optional) return undefined
+    throw templateDataError(path + ' is required', path)
+  }
+  if (typeof value !== 'string') throw templateDataError(path + ' must be a string', path)
+  const text = value.trim()
+  const length = Array.from(text).length
+  const min = options.min ?? 1
+  const max = options.max ?? 200
+  if (length < min) throw templateDataError(path + ' is empty or too short', path)
+  if (length > max) throw templateDataError(path + ' is longer than ' + max + ' characters', path)
+  return text
+}
+
+function templateOptionalText(value, path, options = {}) {
+  if (value === undefined || value === null) return undefined
+  return templateText(value, path, options)
+}
+
+function templateList(value, path, options = {}) {
+  if (value === undefined || value === null) {
+    if (options.optional) return []
+    throw templateDataError(path + ' is required', path)
+  }
+  if (!Array.isArray(value)) throw templateDataError(path + ' must be an array', path)
+  const maxItems = options.maxItems ?? 20
+  if (value.length > maxItems) throw templateDataError(path + ' has more than ' + maxItems + ' items', path)
+  if (options.minItems && value.length < options.minItems) throw templateDataError(path + ' needs at least ' + options.minItems + ' item(s)', path)
+  const maxLen = options.maxLen ?? 200
+  return value.map((item, index) => templateText(item, path + '[' + index + ']', { max: maxLen }))
+}
+
+function templateDate(value, path) {
+  if (typeof value !== 'string' || !/^\d{4}-\d{2}-\d{2}$/.test(value)) throw templateDataError(path + ' must be YYYY-MM-DD', path)
+  const ms = Date.parse(value + 'T00:00:00.000Z')
+  if (!Number.isFinite(ms)) throw templateDataError(path + ' is not a valid date', path)
+  return value
+}
+
+/** Parse a decimal string into integer units (BigInt) at a fixed scale. */
+function templateDecimalBig(value, path, scale, options = {}) {
+  if (typeof value !== 'string' || !/^\d+(?:\.\d+)?$/.test(value.trim())) {
+    throw templateAmountError(path + ' must be a decimal string like "8000.00"', path)
+  }
+  const text = value.trim()
+  const split = text.split('.')
+  const whole = split[0]
+  const frac = split[1] ?? ''
+  if (frac.length > scale) throw templateAmountError(path + ' has more than ' + scale + ' decimal place(s)', path)
+  if (whole.length > 15) throw templateAmountError(path + ' is too large', path)
+  let units = BigInt(whole + frac.padEnd(scale, '0'))
+  if (options.positive && units <= 0n) throw templateAmountError(path + ' must be greater than 0', path)
+  if (options.max !== undefined && units > options.max) throw templateAmountError(path + ' is out of range', path)
+  if (options.min !== undefined && units < options.min) throw templateAmountError(path + ' is out of range', path)
+  return units
+}
+
+function roundHalfUpBig(numerator, denominator) {
+  const divisor = BigInt(denominator)
+  return (BigInt(numerator) + divisor / 2n) / divisor
+}
+
+function formatCentsNumber(cents) {
+  const value = Number(cents)
+  const sign = value < 0 ? '-' : ''
+  const absolute = Math.abs(value)
+  const whole = Math.floor(absolute / 100)
+  const fraction = String(absolute % 100).padStart(2, '0')
+  return sign + String(whole).replace(/\B(?=(\d{3})+(?!\d))/g, ',') + '.' + fraction
+}
+
+function formatMoney(cents, currency) {
+  const symbol = QUOTE_CURRENCIES[currency] ?? ''
+  return symbol + formatCentsNumber(cents)
+}
+
+function formatDiscountMoney(cents, currency) {
+  return Number(cents) > 0 ? '-' + formatMoney(cents, currency) : formatMoney(0, currency)
+}
+
+function normalizeQuoteParty(value, path, extraFields) {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) throw templateDataError(path + ' must be an object', path)
+  const allowed = ['name', ...extraFields]
+  templateRejectUnknown(value, allowed, path)
+  const out = { name: templateText(value.name, path + '.name', { max: 100 }) }
+  for (const field of extraFields) {
+    const text = templateOptionalText(value[field], path + '.' + field, { max: 200 })
+    if (text !== undefined) out[field] = text
+  }
+  return out
+}
+
+function normalizeQuoteScope(value, path) {
+  if (value === undefined || value === null) return { included: [], excluded: [], assumptions: [] }
+  if (typeof value !== 'object' || Array.isArray(value)) throw templateDataError(path + ' must be an object', path)
+  templateRejectUnknown(value, ['included', 'excluded', 'assumptions'], path)
+  return {
+    included: templateList(value.included, path + '.included', { optional: true }),
+    excluded: templateList(value.excluded, path + '.excluded', { optional: true }),
+    assumptions: templateList(value.assumptions, path + '.assumptions', { optional: true }),
+  }
+}
+
+function normalizeQuoteItems(value, path, required) {
+  if (value === undefined || value === null) {
+    if (required) throw templateDataError(path + ' is required (1..' + QUOTE_MAX_ITEMS + ' rows)', path)
+    return { items: [], lines: [] }
+  }
+  if (!Array.isArray(value) || value.length < 1 || value.length > QUOTE_MAX_ITEMS) {
+    throw templateDataError(path + ' must be an array of 1..' + QUOTE_MAX_ITEMS + ' rows', path)
+  }
+  const items = []
+  const lines = []
+  const prices = []
+  for (let index = 0; index < value.length; index++) {
+    const row = value[index]
+    const rowPath = path + '[' + index + ']'
+    if (!row || typeof row !== 'object' || Array.isArray(row)) throw templateDataError(rowPath + ' must be an object', rowPath)
+    templateRejectUnknown(row, ['desc', 'qty', 'unit', 'unitPrice'], rowPath)
+    const qtyUnits = templateDecimalBig(row.qty, rowPath + '.qty', 3, { positive: true, max: 1000000000n })
+    const priceCents = templateDecimalBig(row.unitPrice, rowPath + '.unitPrice', 2, { max: 1000000000n })
+    const lineCents = roundHalfUpBig(qtyUnits * priceCents, 1000)
+    if (lineCents > 100000000000n) throw templateAmountError(rowPath + ' line amount exceeds 1e9', rowPath)
+    items.push({
+      desc: templateText(row.desc, rowPath + '.desc', { max: 200 }),
+      qty: String(row.qty).trim(),
+      unit: templateText(row.unit === undefined ? '项' : row.unit, rowPath + '.unit', { max: 10 }),
+      unitPrice: String(row.unitPrice).trim(),
+    })
+    lines.push(Number(lineCents))
+    prices.push(Number(priceCents))
+  }
+  return { items: items, lines: lines, prices: prices }
+}
+
+function normalizeQuoteDiscount(value, path) {
+  if (value === undefined || value === null) return { data: { kind: 'none', value: '0' }, units: 0n }
+  if (typeof value !== 'object' || Array.isArray(value)) throw templateDataError(path + ' must be an object', path)
+  templateRejectUnknown(value, ['kind', 'value'], path)
+  const kind = value.kind ?? 'none'
+  if (!['none', 'percent', 'amount'].includes(kind)) throw templateDataError(path + '.kind must be none|percent|amount', path + '.kind')
+  if (kind === 'none') return { data: { kind: 'none', value: '0' }, units: 0n }
+  const raw = value.value === undefined ? '0' : String(value.value).trim()
+  const units = kind === 'percent'
+    ? templateDecimalBig(raw, path + '.value', 2, { max: 10000n })
+    : templateDecimalBig(raw, path + '.value', 2, { max: 100000000000n })
+  return { data: { kind: kind, value: raw }, units: units }
+}
+
+function normalizeQuoteTax(value, path) {
+  if (value === undefined || value === null) return { data: { mode: 'none', ratePct: '0' }, units: 0n }
+  if (typeof value !== 'object' || Array.isArray(value)) throw templateDataError(path + ' must be an object', path)
+  templateRejectUnknown(value, ['mode', 'ratePct'], path)
+  const mode = value.mode ?? 'none'
+  if (!['none', 'inclusive', 'exclusive'].includes(mode)) throw templateDataError(path + '.mode must be none|inclusive|exclusive', path + '.mode')
+  const raw = value.ratePct === undefined ? '0' : String(value.ratePct).trim()
+  if (mode === 'none') return { data: { mode: 'none', ratePct: '0' }, units: 0n }
+  const units = templateDecimalBig(raw, path + '.ratePct', 2, { max: 3000n })
+  return { data: { mode: mode, ratePct: raw }, units: units }
+}
+
+function normalizeQuotePayment(value, path) {
+  if (value === undefined || value === null) return { milestones: [], terms: undefined }
+  if (typeof value !== 'object' || Array.isArray(value)) throw templateDataError(path + ' must be an object', path)
+  templateRejectUnknown(value, ['milestones', 'terms'], path)
+  const milestones = []
+  if (value.milestones !== undefined) {
+    if (!Array.isArray(value.milestones) || value.milestones.length > 20) throw templateDataError(path + '.milestones must be an array (max 20)', path + '.milestones')
+    for (let index = 0; index < value.milestones.length; index++) {
+      const row = value.milestones[index]
+      const rowPath = path + '.milestones[' + index + ']'
+      if (!row || typeof row !== 'object' || Array.isArray(row)) throw templateDataError(rowPath + ' must be an object', rowPath)
+      templateRejectUnknown(row, ['name', 'pct', 'due'], rowPath)
+      const pctUnits = templateDecimalBig(row.pct, rowPath + '.pct', 2, { max: 10000n })
+      milestones.push({ name: templateText(row.name, rowPath + '.name', { max: 100 }), pct: String(row.pct).trim(), due: row.due === undefined ? undefined : templateDate(row.due, rowPath + '.due'), pctUnits: pctUnits })
+    }
+    if (milestones.reduce((sum, row) => sum + row.pctUnits, 0n) > 10000n) throw templateDataError(path + '.milestones percentages exceed 100', path + '.milestones')
+  }
+  const terms = templateOptionalText(value.terms, path + '.terms', { max: 2000 })
+  return { milestones: milestones, terms: terms }
+}
+
+function normalizeQuoteTimeline(value, path) {
+  if (value === undefined || value === null) return []
+  if (!Array.isArray(value) || value.length > 50) throw templateDataError(path + ' must be an array (max 50)', path)
+  const rows = []
+  for (let index = 0; index < value.length; index++) {
+    const row = value[index]
+    const rowPath = path + '[' + index + ']'
+    if (!row || typeof row !== 'object' || Array.isArray(row)) throw templateDataError(rowPath + ' must be an object', rowPath)
+    templateRejectUnknown(row, ['name', 'start', 'end'], rowPath)
+    const start = templateDate(row.start, rowPath + '.start')
+    const end = templateDate(row.end, rowPath + '.end')
+    if (Date.parse(end) < Date.parse(start)) throw templateDataError(rowPath + '.end must be >= start', rowPath + '.end')
+    rows.push({ name: templateText(row.name, rowPath + '.name', { max: 100 }), start: start, end: end })
+  }
+  return rows
+}
+
+function normalizeQuoteSignature(value, path) {
+  if (value === undefined || value === null) return { issuerName: '', clientName: '' }
+  if (typeof value !== 'object' || Array.isArray(value)) throw templateDataError(path + ' must be an object', path)
+  templateRejectUnknown(value, ['issuerName', 'clientName'], path)
+  return {
+    issuerName: templateOptionalText(value.issuerName, path + '.issuerName', { max: 100 }) ?? '',
+    clientName: templateOptionalText(value.clientName, path + '.clientName', { max: 100 }) ?? '',
+  }
+}
+
+/**
+ * Validate + normalize quote/proposal input. All validation happens before any
+ * output file is created; unknown fields are rejected so a typo cannot silently
+ * produce a document that ignores user data.
+ */
+function normalizeQuoteData(raw, kind) {
+  if (!raw || typeof raw !== 'object' || Array.isArray(raw)) throw templateDataError('data must be a JSON object', '$')
+  templateRejectUnknown(raw, ['schemaVersion', 'quoteNo', 'issuedAt', 'validUntil', 'currency', 'issuer', 'client', 'project', 'scope', 'items', 'discount', 'tax', 'payment', 'timeline', 'changeProcess', 'disclaimer', 'signature'], '$')
+  if (raw.schemaVersion !== undefined && raw.schemaVersion !== 1) throw templateDataError('schemaVersion must be 1', 'schemaVersion')
+  const issuedAt = templateDate(raw.issuedAt, 'issuedAt')
+  const validUntil = templateDate(raw.validUntil, 'validUntil')
+  const issuedMs = Date.parse(issuedAt + 'T00:00:00.000Z')
+  const validMs = Date.parse(validUntil + 'T00:00:00.000Z')
+  if (validMs < issuedMs) throw templateDataError('validUntil must be >= issuedAt', 'validUntil')
+  if (validMs - issuedMs > 180 * 86400000) throw templateDataError('validUntil is more than 180 days after issuedAt', 'validUntil')
+  if (typeof raw.currency !== 'string' || !Object.prototype.hasOwnProperty.call(QUOTE_CURRENCIES, raw.currency)) {
+    throw templateDataError('currency must be one of ' + Object.keys(QUOTE_CURRENCIES).join('|'), 'currency')
+  }
+  const quoteNo = raw.quoteNo === undefined || raw.quoteNo === null
+    ? 'Q-' + issuedAt.split('-').join('') + '-001'
+    : templateText(raw.quoteNo, 'quoteNo', { max: 40 })
+  const issuer = normalizeQuoteParty(raw.issuer, 'issuer', ['contact', 'address'])
+  const client = normalizeQuoteParty(raw.client, 'client', ['company', 'contact', 'address'])
+  if (!raw.project || typeof raw.project !== 'object' || Array.isArray(raw.project)) throw templateDataError('project must be an object', 'project')
+  templateRejectUnknown(raw.project, ['name', 'summary', 'deliverables'], 'project')
+  const project = {
+    name: templateText(raw.project.name, 'project.name', { max: 100 }),
+    summary: templateOptionalText(raw.project.summary, 'project.summary', { max: 2000 }),
+    deliverables: templateList(raw.project.deliverables, 'project.deliverables', { optional: kind !== 'proposal', minItems: kind === 'proposal' ? 1 : 0 }),
+  }
+  const scope = normalizeQuoteScope(raw.scope, 'scope')
+  if (kind === 'proposal' && scope.included.length === 0) throw templateDataError('scope.included is required for a proposal', 'scope.included')
+  const itemResult = normalizeQuoteItems(raw.items, 'items', kind === 'quote')
+  if (kind === 'proposal' && itemResult.items.length > 0 && raw.tax !== undefined) {
+    // allowed: a proposal may carry a fee summary, so no rejection here
+  }
+  const discount = normalizeQuoteDiscount(raw.discount, 'discount')
+  const tax = normalizeQuoteTax(raw.tax, 'tax')
+  const payment = normalizeQuotePayment(raw.payment, 'payment')
+  const timeline = normalizeQuoteTimeline(raw.timeline, 'timeline')
+  const changeProcess = templateOptionalText(raw.changeProcess, 'changeProcess', { max: 2000 }) ?? QUOTE_DEFAULT_CHANGE_PROCESS
+  const disclaimerRaw = templateOptionalText(raw.disclaimer, 'disclaimer', { max: 2000 })
+  const disclaimer = disclaimerRaw && disclaimerRaw.length ? disclaimerRaw : QUOTE_DEFAULT_DISCLAIMER
+  const signature = normalizeQuoteSignature(raw.signature, 'signature')
+  const data = {
+    schemaVersion: 1,
+    quoteNo: quoteNo,
+    issuedAt: issuedAt,
+    validUntil: validUntil,
+    currency: raw.currency,
+    issuer: issuer,
+    client: client,
+    project: project,
+    scope: scope,
+    items: itemResult.items,
+    discount: discount.data,
+    tax: tax.data,
+    payment: { milestones: payment.milestones.map((row) => ({ name: row.name, pct: row.pct, ...(row.due ? { due: row.due } : {}) })), ...(payment.terms ? { terms: payment.terms } : {}) },
+    timeline: timeline,
+    changeProcess: changeProcess,
+    disclaimer: disclaimer,
+    signature: signature,
+  }
+  const subtotalCents = itemResult.lines.reduce((sum, cents) => sum + cents, 0)
+  let discountCents = 0
+  if (discount.data.kind === 'percent') discountCents = Number(roundHalfUpBig(BigInt(subtotalCents) * discount.units, 10000))
+  else if (discount.data.kind === 'amount') discountCents = Number(discount.units)
+  if (discountCents > subtotalCents) throw templateDataError('discount exceeds subtotal', 'discount')
+  const netCents = subtotalCents - discountCents
+  let taxCents = 0
+  let totalCents = netCents
+  if (tax.data.mode === 'exclusive') {
+    taxCents = Number(roundHalfUpBig(BigInt(netCents) * tax.units, 10000))
+    totalCents = netCents + taxCents
+  } else if (tax.data.mode === 'inclusive') {
+    const netOfTax = Number(roundHalfUpBig(BigInt(netCents) * 10000n, 10000n + tax.units))
+    taxCents = netCents - netOfTax
+    totalCents = netCents
+  }
+  const totals = { subtotalCents: subtotalCents, discountCents: discountCents, taxCents: taxCents, totalCents: totalCents }
+  return { kind: kind, data: data, lines: itemResult.lines, prices: itemResult.prices, totals: totals }
+}
+
+function quoteTotalsJson(normalized) {
+  const currency = normalized.data.currency
+  return {
+    subtotal: formatCentsNumber(normalized.totals.subtotalCents),
+    discount: formatCentsNumber(normalized.totals.discountCents),
+    tax: formatCentsNumber(normalized.totals.taxCents),
+    total: formatCentsNumber(normalized.totals.totalCents),
+    currency: currency,
+    formatted: {
+      subtotal: formatMoney(normalized.totals.subtotalCents, currency),
+      discount: formatDiscountMoney(normalized.totals.discountCents, currency),
+      tax: formatMoney(normalized.totals.taxCents, currency),
+      total: formatMoney(normalized.totals.totalCents, currency),
+    },
+  }
+}
+
+function quoteDocxSpec(normalized, dataSha256) {
+  const data = normalized.data
+  const currency = data.currency
+  const totals = normalized.totals
+  const itemRows = normalized.lines.map((lineCents, index) => {
+    const item = data.items[index]
+    return [
+      String(index + 1),
+      item.desc,
+      item.qty,
+      item.unit,
+      formatCentsNumber(normalized.prices[index]),
+      formatCentsNumber(lineCents),
+    ]
+  })
+  const scopeBullets = []
+  for (const line of data.scope.included) scopeBullets.push('包含：' + line)
+  for (const line of data.scope.excluded) scopeBullets.push('不包含：' + line)
+  for (const line of data.scope.assumptions) scopeBullets.push('假设：' + line)
+  const milestoneRows = data.timeline.map((row) => [row.name, row.start, row.end])
+  const paymentBullets = data.payment.milestones.map((row) => row.name + ' ' + row.pct + '%' + (row.due ? '，' + row.due : ''))
+  if (data.payment.terms) paymentBullets.push('付款条件：' + data.payment.terms)
+  const taxLabel = data.tax.mode === 'inclusive' ? '税额（含税价内）' : data.tax.mode === 'exclusive' ? '税额（未税价外加）' : '税额（未计）'
+  const totalsRows = [
+    ['小计', formatMoney(totals.subtotalCents, currency)],
+    ['折扣', formatDiscountMoney(totals.discountCents, currency)],
+    [taxLabel, formatMoney(totals.taxCents, currency)],
+    ['合计', formatMoney(totals.totalCents, currency)],
+  ]
+  const sections = [
+    {
+      heading: '双方信息',
+      table: {
+        headers: ['角色', '名称', '联系人', '地址'],
+        rows: [
+          ['报价方', data.issuer.name, data.issuer.contact ?? '', data.issuer.address ?? ''],
+          ['客户', data.client.name + (data.client.company ? '（' + data.client.company + '）' : ''), data.client.contact ?? '', data.client.address ?? ''],
+        ],
+      },
+    },
+    { heading: '需求理解', paragraphs: [data.project.name + (data.project.summary && data.project.summary.length ? ' — ' + data.project.summary : '（详见范围与交付物）')] },
+    { heading: '范围与假设', bullets: scopeBullets.length ? scopeBullets : ['待双方书面确认'] },
+    { heading: '交付物与里程碑', bullets: data.project.deliverables.length ? data.project.deliverables : ['以双方书面确认的交付物为准'], ...(milestoneRows.length ? { table: { headers: ['阶段', '开始', '结束'], rows: milestoneRows } } : {}) },
+    { heading: '报价明细', table: { headers: ['序号', '项目', '数量', '单位', '单价', '小计'], rows: itemRows.length ? itemRows : [['1', '（见范围）', '1', '项', formatMoney(0, currency), formatMoney(0, currency)]] } },
+    { heading: '金额汇总', table: { headers: ['项目', '金额'], rows: totalsRows } },
+    { heading: '付款条件', bullets: paymentBullets.length ? paymentBullets : ['以双方书面确认的付款条件为准'] },
+    { heading: '变更流程', paragraphs: [data.changeProcess] },
+    { heading: '签章', paragraphs: ['报价方（签章）：' + (data.signature.issuerName ? ' ' + data.signature.issuerName : ''), '客户（签章）：' + (data.signature.clientName ? ' ' + data.signature.clientName : '')] },
+    { heading: '免责声明', paragraphs: [data.disclaimer] },
+    { heading: '校验', paragraphs: ['模板版本：' + QUOTE_TEMPLATE_VERSION, '数据哈希（SHA-256）：' + dataSha256] },
+  ]
+  return { title: '报价单', subtitle: data.quoteNo + ' · 日期 ' + data.issuedAt + ' · 有效期至 ' + data.validUntil, sections: sections }
+}
+
+function proposalDocxSpec(normalized, dataSha256) {
+  const data = normalized.data
+  const currency = data.currency
+  const sections = [
+    { heading: '背景与目标', paragraphs: [data.project.summary && data.project.summary.length ? data.project.summary : data.project.name] },
+    { heading: '范围（包含）', bullets: data.scope.included.length ? data.scope.included : ['以双方书面确认的范围为准'] },
+    { heading: '范围（不包含）', bullets: data.scope.excluded.length ? data.scope.excluded : ['（未特别列出的工作不包含在本提案内）'] },
+    { heading: '交付物', bullets: data.project.deliverables },
+    {
+      heading: '里程碑与验收标准',
+      ...(data.timeline.length ? { table: { headers: ['阶段', '开始', '结束'], rows: data.timeline.map((row) => [row.name, row.start, row.end]) } } : { paragraphs: ['里程碑以双方书面确认的时间表为准。'] }),
+      bullets: ['验收标准：各阶段以书面确认的交付物为验收依据。'],
+    },
+    { heading: '假设与依赖', bullets: data.scope.assumptions.length ? data.scope.assumptions : ['（无特别假设）'] },
+    { heading: '双方职责', bullets: ['报价方：按约定完成交付物，并主动同步进度与风险。', '客户：按约定提供资料、反馈与验收确认。'] },
+    {
+      heading: '费用概要',
+      ...(data.items.length
+        ? { table: { headers: ['项目', '金额'], rows: [['小计', formatMoney(normalized.totals.subtotalCents, currency)], ['折扣', formatDiscountMoney(normalized.totals.discountCents, currency)], ['税额', formatMoney(normalized.totals.taxCents, currency)], ['合计', formatMoney(normalized.totals.totalCents, currency)]] } }
+        : { paragraphs: ['费用另行书面确认（本提案不构成报价）。'] }),
+    },
+    { heading: '风险与变更', paragraphs: [data.changeProcess] },
+    { heading: '有效期与免责声明', paragraphs: ['有效期至 ' + data.validUntil + '。', data.disclaimer] },
+    { heading: '签章', paragraphs: ['报价方（签章）：' + (data.signature.issuerName ? ' ' + data.signature.issuerName : ''), '客户（签章）：' + (data.signature.clientName ? ' ' + data.signature.clientName : '')] },
+    { heading: '校验', paragraphs: ['模板版本：' + QUOTE_TEMPLATE_VERSION, '数据哈希（SHA-256）：' + dataSha256] },
+  ]
+  return { title: '项目提案', subtitle: data.client.name + ' · ' + data.project.name + ' · ' + data.quoteNo + ' · 日期 ' + data.issuedAt + ' · 有效期至 ' + data.validUntil, sections: sections }
+}
+
+function quoteXlsxSpec(normalized, dataSha256) {
+  const data = normalized.data
+  const currency = data.currency
+  const rows = normalized.lines.map((lineCents, index) => {
+    const item = data.items[index]
+    return {
+      index: String(index + 1),
+      desc: item.desc,
+      qty: item.qty,
+      unit: item.unit,
+      unitPrice: formatCentsNumber(normalized.prices[index]),
+      subtotal: formatCentsNumber(lineCents),
+    }
+  })
+  const summary = [
+    { index: '', desc: '小计', qty: '', unit: '', unitPrice: '', subtotal: formatMoney(normalized.totals.subtotalCents, currency) },
+    { index: '', desc: '折扣', qty: '', unit: '', unitPrice: '', subtotal: formatDiscountMoney(normalized.totals.discountCents, currency) },
+    { index: '', desc: '税额', qty: '', unit: '', unitPrice: '', subtotal: formatMoney(normalized.totals.taxCents, currency) },
+    { index: '', desc: '合计', qty: '', unit: '', unitPrice: '', subtotal: formatMoney(normalized.totals.totalCents, currency) },
+  ]
+  // Header metadata + verification block travel inside the sheet so
+  // `verify --content --template quote --data <json>` can re-check identity,
+  // totals and data hash on XLSX exactly like on DOCX.
+  const metaRow = (label) => ({ index: '', desc: label, qty: '', unit: '', unitPrice: '', subtotal: '' })
+  const meta = [
+    metaRow('报价单：' + data.quoteNo),
+    metaRow('客户：' + data.client.name + (data.client.company ? '（' + data.client.company + '）' : '')),
+    metaRow('项目：' + data.project.name),
+    metaRow('日期：' + data.issuedAt),
+    metaRow('有效期至：' + data.validUntil),
+    metaRow('数据哈希（SHA-256）：' + dataSha256),
+    metaRow('本文件由本地模板确定性生成，仅供商务沟通参考'),
+    metaRow(''),
+  ]
+  return {
+    sheet: '报价明细',
+    columns: [
+      { header: '序号', key: 'index', width: 8 },
+      { header: '项目', key: 'desc', width: 32 },
+      { header: '数量', key: 'qty', width: 10 },
+      { header: '单位', key: 'unit', width: 10 },
+      { header: '单价', key: 'unitPrice', width: 16 },
+      { header: '小计', key: 'subtotal', width: 16 },
+    ],
+    rows: meta.concat(rows).concat(summary),
+    formulas: [],
+  }
+}
+
+async function loadOfficeBarrel() {
+  if (process.env.ADVISERS_OFFICE_LOCAL === '1') return import('../../office/dist/index.js')
+  try {
+    return await import('advisers-office')
+  } catch {
+    try { return await import('../../office/dist/index.js') } catch { return null }
+  }
+}
+
+async function readOfficeText(file, ext) {
+  const readModule = await importOfficeSubmodule('read')
+  const readOffice = readModule?.readOffice
+  const officeToText = readModule?.officeToText
+  if (typeof readOffice !== 'function' || typeof officeToText !== 'function') return null
+  try {
+    const doc = await readOffice(readFileSync(file), ext)
+    return officeToText(doc, 200000)
+  } catch { return null }
+}
+
+function quoteTemplateChecks(kind, normalized, dataSha256, text) {
+  const data = normalized.data
+  const currency = data.currency
+  const totals = normalized.totals
+  const checks = []
+  const check = (id, ok, detail) => checks.push({ id: id, ok: Boolean(ok), ...(detail ? { detail: detail } : {}) })
+  const expected = [
+    data.client.name,
+    data.project.name,
+    data.quoteNo,
+    data.issuedAt,
+    data.validUntil,
+  ]
+  const prefix = kind === 'proposal' ? 'proposal' : 'quote'
+  const hasFeeItems = normalized.data.items.length > 0
+  if (hasFeeItems) expected.push(formatMoney(totals.totalCents, currency))
+  if (kind === 'proposal') expected.push(data.project.deliverables[0] ?? '', data.scope.included[0] ?? '', '项目提案')
+  check(prefix + '.required', expected.every((value) => !value || text.includes(value)), 'missing required document text')
+  if (hasFeeItems) check(prefix + '.totals', [formatMoney(totals.subtotalCents, currency), formatDiscountMoney(totals.discountCents, currency), formatMoney(totals.taxCents, currency), formatMoney(totals.totalCents, currency)].every((value) => text.includes(value)), 'totals in the document do not match the input data')
+  else check(prefix + '.totals', true, 'no fee items in this input; totals not applicable')
+  check(prefix + '.data_hash', text.includes(dataSha256), 'dataSha256 not found in the document')
+  const placeholder = /\{\{|T[O]DO|TBD|F[I]XME|占位|待填写|undefined|NaN/.test(text)
+  check(prefix + '.no_placeholders', !placeholder, 'placeholder text found')
+  return checks
+}
+
+/** 'advisers template quote|proposal <data.json> <out>' — new deterministic templates. */
+async function templateQuoteOrProposal(name, dataFile, outFile, flags) {
+  try {
+    if (!dataFile || !outFile) throw templateDataError('usage: advisers template ' + name + ' <data.json> <out.docx|out.xlsx>', '$')
+    const ext = outFile.split('.').pop()?.toLowerCase()
+    const expected = name === 'quote' ? ['docx', 'xlsx'] : ['docx']
+    if (!expected.includes(ext)) {
+      const error = new Error('template ' + name + ' writes ' + expected.join('/') + '; got .' + ext)
+      error.code = 'E_TEMPLATE_OUTPUT'
+      throw error
+    }
+    let raw
+    try {
+      raw = JSON.parse(readFileSync(dataFile, 'utf8'))
+    } catch (error) {
+      const wrapped = new Error('cannot read template data JSON: ' + error.message)
+      wrapped.code = 'E_TEMPLATE_INVALID'
+      throw wrapped
+    }
+    const normalized = normalizeQuoteData(raw, name)
+    const evidence = await loadEvidence()
+    const dataSha256 = evidence.sha256Hex(evidence.stableStringify(normalized.data, { space: 0 }))
+    // Import only the dist submodules the chosen format needs (build +
+    // validate + deterministic content checks), never the office barrel: the
+    // barrel also pulls exceljs/pptxgenjs and costs seconds per CLI start.
+    const builderModule = ext === 'docx' ? await importOfficeSubmodule('docx') : await importOfficeSubmodule('xlsx')
+    const validateModule = await importOfficeSubmodule('validate')
+    const checkModule = await importOfficeSubmodule('check')
+    let buffer
+    let structure
+    let content
+    if (ext === 'docx') {
+      const spec = name === 'quote' ? quoteDocxSpec(normalized, dataSha256) : proposalDocxSpec(normalized, dataSha256)
+      if (typeof builderModule?.buildDocx === 'function') buffer = await builderModule.buildDocx(spec)
+      else {
+        const mod = await loadOfficeBarrel()
+        if (!mod || typeof mod.buildDocx !== 'function') throw Object.assign(new Error('advisers-office is not installed; run: npm i -g advisers-office@next'), { code: 'E_TEMPLATE_INVALID' })
+        buffer = await mod.buildDocx(spec)
+      }
+    } else {
+      if (typeof builderModule?.buildXlsx === 'function') buffer = await builderModule.buildXlsx(quoteXlsxSpec(normalized, dataSha256))
+      else {
+        const mod = await loadOfficeBarrel()
+        if (!mod || typeof mod.buildXlsx !== 'function') throw Object.assign(new Error('advisers-office is not installed; run: npm i -g advisers-office@next'), { code: 'E_TEMPLATE_INVALID' })
+        buffer = await mod.buildXlsx(quoteXlsxSpec(normalized, dataSha256))
+      }
+    }
+    if (typeof validateModule?.validateOffice === 'function') structure = await validateModule.validateOffice(buffer, ext)
+    else {
+      const mod = await loadOfficeBarrel()
+      if (!mod || typeof mod.validateOffice !== 'function') throw Object.assign(new Error('advisers-office is not installed; run: npm i -g advisers-office@next'), { code: 'E_TEMPLATE_INVALID' })
+      structure = await mod.validateOffice(buffer, ext)
+    }
+    if (typeof checkModule?.checkOffice === 'function') content = await checkModule.checkOffice(buffer, ext)
+    if (!structure || structure.ok !== true) {
+      const error = new Error('generated ' + ext + ' failed structural validation' + (structure && structure.missing && structure.missing.length ? ': ' + structure.missing.join('; ') : ''))
+      error.code = 'E_VERIFY_FAILED'
+      throw error
+    }
+    mkdirSync(dirname(outFile), { recursive: true })
+    await backupCliFile(outFile)
+    writeFileSync(outFile, buffer)
+    dbStore()?.appendAudit({ actor: 'local', action: 'office.template', allowed: true, reason: name })
+    let deliveryId
+    if (flags['record-delivery'] === true) {
+      recordDeliveryWithAudit({
+        files: [outFile],
+        tool: 'template:' + name,
+        title: typeof flags.title === 'string' ? flags.title : (name === 'quote' ? '报价单' : '项目提案'),
+        validation: ext + ((content && content.ok === false) ? ':content-warn' : ':ok'),
+        audit: { actor: 'local', action: 'template.record', allowed: true, reason: name },
+        matterId: typeof flags.matter === 'string' ? flags.matter : undefined,
+      })
+      try { deliveryId = dbStore()?.listDeliveries(1)?.[0]?.id } catch {}
+    }
+    if (flags.json === true) {
+      console.log(JSON.stringify({
+        ok: true,
+        command: 'template',
+        template: name,
+        format: ext,
+        out: outFile,
+        bytes: buffer.length,
+        templateVersion: QUOTE_TEMPLATE_VERSION,
+        dataSha256: dataSha256,
+        quoteNo: normalized.data.quoteNo,
+        totals: quoteTotalsJson(normalized),
+        verify: { structure: structure, content: content ?? null },
+        ...(deliveryId ? { deliveryId: deliveryId } : {}),
+      }, null, 2))
+      return
+    }
+    console.log('wrote ' + outFile + ' (' + buffer.length + ' bytes)')
+    console.log('合计：' + formatMoney(normalized.totals.totalCents, normalized.data.currency))
+  } catch (error) {
+    templateFail(error)
+  }
+}
+
+/**
+ * 'advisers template ...' dispatcher.
+ * quote/proposal are the 0.2.3 product templates (deterministic Office builders,
+ * no model); every pre-0.2.3 template name keeps the exact legacy behaviour.
+ */
+async function template(rawArgs) {
+  const parsed = parseFlags(rawArgs)
+  const positional = parsed.positional
+  const name = positional[0]
+  if (name === 'quote' || name === 'proposal') return templateQuoteOrProposal(name, positional[1], positional[2], parsed.flags)
+  return legacyTemplate(name, positional[1], positional[2])
+}
+
+async function legacyTemplate(name, dataFile, outFile) {
   const names = ['weekly', 'budget', 'presentation', 'flow', 'mindmap', 'minutes', 'notice']
   if (!names.includes(name) || !dataFile || !outFile) {
-    console.error('usage: advisers template <weekly|budget|presentation|flow|mindmap|minutes|notice> <data.json> <out>')
+    console.error('usage: advisers template quote|proposal <data.json> <out.docx>   or   advisers template <weekly|budget|presentation|flow|mindmap|minutes|notice> <data.json> <out>')
     process.exitCode = 1
     return
   }
@@ -3469,7 +5013,8 @@ async function capture(args) {
   const store = dbStore()
   if (!store) { console.error('capture requires SQLite store'); process.exitCode = 1; return }
   const ledger = loadLedger()
-  const matterId = activeMatterId(ledger, flags.matter)
+  let matterId
+  try { matterId = resolveMatterForCommand(ledger, flags.matter, 'capture') } catch (error) { console.error(error.message); process.exitCode = 1; return }
   const denied = egressDeniedReason(ledger.getMatter(matterId), 'capture')
   if (denied) { console.error(denied); process.exitCode = 1; return }
   saveLedger(ledger)
@@ -3496,7 +5041,8 @@ async function captureFromMail(flags) {
   ensureHome()
   const store = dbStore()
   const ledger = loadLedger()
-  const matterId = activeMatterId(ledger, flags.matter)
+  let matterId
+  try { matterId = resolveMatterForCommand(ledger, flags.matter, 'capture') } catch (error) { console.error(error.message); process.exitCode = 1; return }
   const denied = egressDeniedReason(ledger.getMatter(matterId), 'mail')
   if (denied) { console.error(denied); process.exitCode = 1; return }
   saveLedger(ledger)
@@ -3547,7 +5093,8 @@ async function captureFromTranscript(flags) {
   ensureHome()
   const store = dbStore()
   const ledger = loadLedger()
-  const matterId = activeMatterId(ledger, flags.matter)
+  let matterId
+  try { matterId = resolveMatterForCommand(ledger, flags.matter, 'capture') } catch (error) { console.error(error.message); process.exitCode = 1; return }
   const denied = egressDeniedReason(ledger.getMatter(matterId), 'transcript')
   if (denied) { console.error(denied); process.exitCode = 1; return }
   saveLedger(ledger)
@@ -3584,7 +5131,8 @@ async function captureFromImap(flags) {
   ensureHome()
   const store = dbStore()
   const ledger = loadLedger()
-  const matterId = activeMatterId(ledger, flags.matter)
+  let matterId
+  try { matterId = resolveMatterForCommand(ledger, flags.matter, 'capture') } catch (error) { console.error(error.message); process.exitCode = 1; return }
   const denied = egressDeniedReason(ledger.getMatter(matterId), 'imap')
   if (denied) { console.error(denied); process.exitCode = 1; return }
   saveLedger(ledger)
@@ -4585,12 +6133,22 @@ async function printEvidence(args) {
   } catch (error) { console.error(error.message); process.exitCode = 1; return }
   if (!result || (!result.commitment && !result.fact && !result.preference)) { console.error(`not found: ${id}`); process.exitCode = 1; return }
   await normalizeEvidenceSources(result)
-  if (flags.json) { console.log(JSON.stringify(result, null, 2)); return }
+  const unverifiable = Array.isArray(result.unverifiable) ? result.unverifiable : []
+  const manualSources = unverifiable.filter((item) => item && (item.kind === 'manual' || item.type === 'manual'))
+  const summary = {
+    byKind: { observed: result.sources.length, manual: manualSources.length },
+    missing: result.missing.length,
+    unverifiable: unverifiable.length,
+    operatorEntered: manualSources.length,
+  }
+  if (flags.json) { console.log(JSON.stringify(Object.assign({}, result, { summary: summary }), null, 2)); return }
   const label = result.commitment ? `${result.commitment.action}` : result.fact ? `${result.fact.subject} ${result.fact.predicate}` : result.preference?.statement
   console.log(`${id}  ${label ?? ''}`)
-  if (!result.sources.length) console.log('  （没有可回溯来源）')
+  if (!result.sources.length && !unverifiable.length) console.log('  （没有可回溯来源）')
   for (const s of result.sources) console.log(`  ${s.sessionId}#${s.turnId}  「${(s.quote ?? '').slice(0, 120)}」`)
   for (const m of result.missing) console.log(`  MISSING ${m.reason}${m.ref ? ` ${m.ref}` : ''}`)
+  for (const item of unverifiable) console.log(`  MANUAL 操作者录入（未外部核验，不是缺失）  「${(item.quote ?? '').slice(0, 120)}」  sha256:${String(item.quoteSha256 ?? '').slice(0, 16)}`)
+  if (unverifiable.length) console.log('  说明：manual/operator-entered 证据由用户手工录入；本地无法外部核验，不计入 missing。')
 }
 
 async function evidencePack(args) {
@@ -5363,6 +6921,7 @@ const KNOWN_COMMANDS = new Set([
   'who', 'memory', 'digest', 'week', 'prefs', 'privacy', 'audit', 'purge', 'decay', 'correct', 'ls', 'why',
   'forget', 'sync', 'vault', 'export', 'import', 'backup', 'brief', 'review', 'research', 'capture', 'policy',
   'office-edit', 'office-read', 'verify', 'office', 'routine', 'template', 'link', 'bridge', 'soul', 'tos',
+  'matter', 'agenda', 'morning',
 ])
 
 /** Append a TOS audit row; audit is best-effort (JSON store has no audit chain). */
@@ -5712,22 +7271,23 @@ if (!command) {
       try { reminderOffsets = await parseReminderOffsetsFlag(flags) } catch (error) { offsetsError = error }
       if (offsetsError) { console.error(offsetsError.message); process.exitCode = 1 }
       else if (mode === 'json') {
-        const ledger = loadJson()
-        const c = ledger.addCommitment({
-          matterId: activeMatterId(ledger, flags.matter),
-          debtor: flags.debtor ?? 'user',
-          creditor: flags.creditor ?? /(?:发给|给|向|对)([\u4e00-\u9fa5A-Za-z0-9_]{1,12})/.exec(action)?.[1] ?? 'someone',
-          action,
-          dueAt: flags.due,
-          timezone: flags.tz ?? 'Asia/Shanghai',
-          capability: flags.capability ?? 'todo',
-          evidence: [{ sessionId: latestConversationId(), turnId: 'cli', quote: String(flags.quote) }],
-          ...(reminderOffsets !== undefined ? { reminderOffsets } : {}),
-        })
-        saveJson(ledger)
-        printCommitAdded(c, reminderOffsets)
+        try {
+          const ledger = loadJson()
+          const c = ledger.addCommitment({
+            matterId: resolveMatterForCommand(ledger, flags.matter, 'commit add'),
+            debtor: flags.debtor ?? 'user',
+            creditor: flags.creditor ?? /(?:发给|给|向|对)([\u4e00-\u9fa5A-Za-z0-9_]{1,12})/.exec(action)?.[1] ?? 'someone',
+            action,
+            dueAt: flags.due,
+            timezone: flags.tz ?? 'Asia/Shanghai',
+            capability: flags.capability ?? 'todo',
+            evidence: [manualEvidence(String(flags.quote), 'commit add')],
+            ...(reminderOffsets !== undefined ? { reminderOffsets } : {}),
+          })
+          saveJson(ledger)
+          printCommitAdded(c, reminderOffsets)
+        } catch (error) { reportCommandFailure(error) }
       } else {
-        const conversationId = latestConversationId()
         const audit = { actor: 'local', action: 'commit.add', allowed: true, reason: '' }
         try {
           const { result: c } = mutateWithAudit((store) => {
@@ -5739,7 +7299,7 @@ if (!command) {
               dueAt: flags.due,
               timezone: flags.tz ?? 'Asia/Shanghai',
               capability: flags.capability ?? 'todo',
-              evidence: [{ sessionId: conversationId, turnId: 'cli', quote: String(flags.quote) }],
+              evidence: [manualEvidence(String(flags.quote), 'commit add')],
               ...(reminderOffsets !== undefined ? { reminderOffsets } : {}),
             })
             store.insertCommitment(commitment)
@@ -5752,7 +7312,7 @@ if (!command) {
     }
   } else if (sub === 'edit' || sub === 'update') {
     const id = positional[0]
-    const usage = 'usage: advisers commit edit <id> [--action text] [--due ISO] [--remind-offsets "<list>" | --no-remind]'
+    const usage = 'usage: advisers commit edit <id> [--action text] [--due ISO] [--matter id] [--remind-offsets "<list>" | --no-remind]'
     if (!id) { console.error(usage); process.exitCode = 1 }
     else {
       const patch = {}
@@ -5760,6 +7320,7 @@ if (!command) {
       if (typeof flags.due === 'string') patch.dueAt = flags.due
       if (typeof flags.tz === 'string') patch.timezone = flags.tz
       if (typeof flags.capability === 'string') patch.capability = flags.capability
+      if (typeof flags.matter === 'string') patch.matterId = flags.matter
       let offsetsError
       try {
         if (flags['no-remind'] === true) patch.reminderOffsets = null
@@ -5773,17 +7334,30 @@ if (!command) {
       else {
         try {
           if (mode === 'json') {
-            const ledger = loadJson()
-            const c = ledger.updateCommitment(id, patch)
-            saveJson(ledger)
-            printCommitUpdated(c, patch)
+            try {
+              const ledger = loadJson()
+              if (typeof patch.matterId === 'string') {
+                const matter = ledger.getMatter(patch.matterId)
+                if (!matter) throw matterCommandError('E_MATTER_NOT_FOUND', 'unknown matter: ' + patch.matterId, 'advisers matter ls')
+                if (matter.status !== 'active') throw matterCommandError('E_MATTER_ARCHIVED', 'matter is archived: ' + patch.matterId, 'advisers matter ls')
+                const current = ledger.listCommitments().find((row) => row.id === id)
+                if (!current) throw new Error('unknown commitment: ' + id)
+                current.matterId = patch.matterId
+              }
+              const c = ledger.updateCommitment(id, patch)
+              saveJson(ledger)
+              printCommitUpdated(c, patch)
+            } catch (error) { reportCommandFailure(error) }
           } else {
             const audit = { actor: 'local', action: 'commit.update', allowed: true, reason: id }
             const { result: c } = mutateWithAudit((store) => {
               const current = store.getCommitment(id)
               if (!current) throw new Error(`unknown commitment: ${id}`)
-              const next = core.updateCommitmentFields(current, patch)
-              store.updateCommitment(id, patch)
+              const effectivePatch = { ...patch }
+              if (typeof effectivePatch.matterId === 'string') effectivePatch.matterId = resolveWriteMatterId(store, effectivePatch.matterId)
+              const next = core.updateCommitmentFields(current, effectivePatch)
+              if (effectivePatch.matterId) next.matterId = effectivePatch.matterId
+              store.updateCommitment(id, effectivePatch)
               return next
             }, audit)
             printCommitUpdated(c, patch)
@@ -5827,18 +7401,17 @@ if (!command) {
     } else if (mode === 'json') {
       const ledger = loadJson()
       try {
-        ledger.completeCommitment(id, [{ sessionId: latestConversationId(), turnId: 'cli', quote: String(evidence) }])
+        ledger.completeCommitment(id, [manualEvidence(String(evidence), 'commit done')])
         saveJson(ledger)
         console.log(`done: ${id}`)
       } catch (error) { console.error(error.message); process.exitCode = 1 }
     } else {
-      const conversationId = latestConversationId()
       const audit = { actor: 'local', action: 'commit.done', allowed: true, reason: id }
       try {
         mutateWithAudit((store) => {
           const current = store.getCommitment(id)
           if (!current) throw new Error(`unknown commitment: ${id}`)
-          const next = core.completeCommitment(current, [{ sessionId: conversationId, turnId: 'cli', quote: String(evidence) }], now())
+          const next = core.completeCommitment(current, [manualEvidence(String(evidence), 'commit done')], now())
           store.updateCommitment(id, { status: next.status, doneAt: next.doneAt, evidence: next.evidence })
         }, audit)
         console.log(`done: ${id}`)
@@ -6014,7 +7587,15 @@ if (!command) {
     }
   } else if (mode === 'json') printMemory(loadJson())
   else printMemory(loadReadLedger({ preferences: {}, commitments: {}, routines: {} }))
+} else if (command === 'matter') {
+  await matterCommand(args)
+} else if (command === 'agenda') {
+  await agendaCommand(args)
+} else if (command === 'morning') {
+  await morningReportCommand(args)
 } else if (command === 'digest') {
+  if (args[0] === 'morning') await morningReportCommand(args.slice(1))
+  else {
   const period = args[0] === 'week' ? 'week' : 'day'
   const store = readStoreOrExit()
   const { buildDigest } = await loadDigest()
@@ -6024,6 +7605,7 @@ if (!command) {
     ? store.read(() => ({ turns: store.listTurns(conversationId, 200), deliveries: store.listDeliveries(100) }))
     : { turns: [], deliveries: [] }
   console.log(buildDigest({ period, turns, commitments: ledger.listCommitments(), deliveries }))
+  }
 } else if (command === 'week') {
   if (mode === 'json') printWeek(loadJson())
   else printWeek(loadReadLedger({ commitments: {} }))
@@ -6184,6 +7766,20 @@ if (!command) {
         if (flags.content === true) {
           const checkOffice = await loadOfficeOperation('check', 'checkOffice')
           const content = await checkOffice(readFileSync(file), ext)
+          if (typeof flags.template === 'string') {
+            const templateName = flags.template
+            if (templateName !== 'quote' && templateName !== 'proposal') throw new Error('E_TEMPLATE_UNKNOWN: unknown template ' + templateName)
+            if (typeof flags.data !== 'string') throw new Error('E_TEMPLATE_INVALID: --template requires --data <data.json>')
+            const raw = JSON.parse(readFileSync(flags.data, 'utf8'))
+            const normalized = normalizeQuoteData(raw, templateName)
+            const evidence = await loadEvidence()
+            const dataSha256 = evidence.sha256Hex(evidence.stableStringify(normalized.data, { space: 0 }))
+            const text = (await readOfficeText(file, ext)) ?? ''
+            const extraChecks = quoteTemplateChecks(templateName, normalized, dataSha256, text)
+            content.checks = Array.isArray(content.checks) ? content.checks.concat(extraChecks) : extraChecks
+            content.template = { name: templateName, version: QUOTE_TEMPLATE_VERSION, dataSha256: dataSha256, totals: quoteTotalsJson(normalized) }
+            if (!extraChecks.every((check) => check.ok)) content.ok = false
+          }
           console.log(JSON.stringify({ structure: result, content }, null, 2))
           if (!content.ok) process.exitCode = 1
         } else console.log(JSON.stringify(result, null, 2))
@@ -6200,7 +7796,7 @@ if (!command) {
 } else if (command === 'routine') {
   await routine(args[0], args[1], args[2])
 } else if (command === 'template') {
-  await template(args[0], args[1], args[2])
+  await template(args)
   process.exit(process.exitCode || 0)
 } else if (command === 'link') {
   link(args[0], args[1], args[2], args[3])

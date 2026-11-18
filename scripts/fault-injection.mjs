@@ -518,7 +518,13 @@ async function walInvalidHeader() {
   const backups = files(home).filter((name) => name.includes('-wal.corrupt-'))
   check(backups.length === 1, 'expected exactly one preserved WAL copy, found ' + backups.length)
   check(readFileSync(join(home, backups[0])).equals(corrupt), 'the preserved WAL copy differs from the corrupt input bytes')
-  check(!existsSync(walPath), 'the unusable WAL was not moved aside by the writable maintenance command')
+  // Depending on the bundled SQLite version, opening the recovered database can
+  // immediately create a fresh empty WAL. Accept absent OR a new small valid
+  // sidecar, but never the original invalid bytes.
+  if (existsSync(walPath)) {
+    check(statSync(walPath).size < corrupt.length, 'the unusable WAL was left in place by the writable maintenance command')
+    check(!readFileSync(walPath).equals(corrupt), 'the invalid WAL bytes were left in place')
+  }
   check(commitmentRows(home).length === 1, 'the main database lost its commitment row')
   checkDoctorOk(home, 'after quarantining an invalid WAL')
   auditCount(home)

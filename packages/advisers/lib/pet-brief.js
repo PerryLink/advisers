@@ -204,6 +204,18 @@ export function buildPetBrief(ledger, options = {}) {
 
   // Public open commitments: matter must be active with secrecy < 2.
   const publicOpen = openCommitments.filter((commitment) => publicMatterIds.has(commitment.matterId))
+  // 0.2.3 P1a/B3: never drop a commitment silently. A public active matter (in
+  // particular a NON-default matter created with `matter add`) is projected by
+  // the arrays below; anything that cannot be projected is counted and disclosed
+  // in `redactions` instead of making counts quietly smaller.
+  const excludedOpen = { secrecy: 0, inactive: 0, dangling: 0 }
+  for (const commitment of openCommitments) {
+    if (publicMatterIds.has(commitment.matterId)) continue
+    const matter = matterById.get(commitment.matterId)
+    if (!matter) excludedOpen.dangling += 1
+    else if (matterSecrecy(matter) >= 2) excludedOpen.secrecy += 1
+    else excludedOpen.inactive += 1
+  }
   const dueMsOf = (commitment) => {
     if (!commitment.dueAt) return null
     const ms = Date.parse(commitment.dueAt)
@@ -356,6 +368,9 @@ export function buildPetBrief(ledger, options = {}) {
   redactions.push('不含模型推理、系统提示或原始提示词')
   const excludedSecrecy = allMatters.filter((matter) => matterSecrecy(matter) >= 2).length
   if (excludedSecrecy > 0) redactions.push(clip(`已排除保密等级≥2 的事项（${excludedSecrecy} 个）`, 80))
+  if (excludedOpen.secrecy > 0) redactions.push(clip(`已排除保密事项下的承诺（${excludedOpen.secrecy} 条）`, 80))
+  if (excludedOpen.inactive > 0) redactions.push(clip(`已排除已归档/暂停事项的承诺（${excludedOpen.inactive} 条）`, 80))
+  if (excludedOpen.dangling > 0) redactions.push(clip(`已排除无法归属的承诺（${excludedOpen.dangling} 条，matter 不存在）`, 80))
   const droppedTotal = dropped.risks + dropped.lines
   if (droppedTotal > 0) redactions.push(clip(`已丢弃 ${droppedTotal} 条不安全内容（不展示原文）`, 80))
   if (!redactions.some((note) => note.startsWith('联系人')) && !redactions.some((note) => note.includes('客户名'))) {

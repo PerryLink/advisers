@@ -127,7 +127,7 @@ jobs:
           }
 
           $versionOutput = Invoke-Advisers 'version' @('--version')
-          if ($versionOutput.Trim() -notmatch '^[0-9]+\.[0-9]+\.[0-9]+') {
+          if ($versionOutput -notmatch '(?m)^\d+\.\d+\.\d+') {
             Write-Host '::error::advisers --version did not print a semantic version'
             Show-Diagnostics
             exit 1
