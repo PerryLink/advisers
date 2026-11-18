@@ -8,7 +8,7 @@
  * silently treated as empty/valid text.
  */
 import { spawn } from 'node:child_process'
-import { statSync } from 'node:fs'
+import { realpathSync, statSync } from 'node:fs'
 import { resolve, isAbsolute, relative } from 'node:path'
 
 /**
@@ -43,16 +43,36 @@ export function ocrConfigured() {
   return Boolean(process.env.ADVISERS_OCR_CMD)
 }
 
-export function assertOcrPath(file, cwd = process.cwd()) {
-  const abs = resolve(cwd, file)
-  const rel = relative(resolve(cwd), abs)
-  if (rel.startsWith('..') || isAbsolute(rel)) throw new Error(`OCR file escapes workspace: ${file}`)
-  const info = statSync(abs)
-  if (!info.isFile()) throw new Error(`not a file: ${file}`)
-  if (info.size > 10 * 1024 * 1024) throw new Error('OCR file is larger than 10 MB')
-  return abs
+function resolveContainedFile(file, cwd, label) {
+  if (typeof file !== 'string' || !file) throw new Error(label + ' path is required')
+  const rootLexical = resolve(cwd)
+  let root
+  try {
+    root = realpathSync(rootLexical)
+  } catch {
+    throw new Error(label + ' workspace does not exist: ' + cwd)
+  }
+  const abs = resolve(rootLexical, file)
+  const lexicalRel = relative(rootLexical, abs)
+  if (lexicalRel.startsWith('..') || isAbsolute(lexicalRel)) throw new Error(label + ' file escapes workspace: ' + file)
+  let real
+  try {
+    real = realpathSync(abs)
+  } catch (error) {
+    if (error && error.code === 'ENOENT') throw new Error(label + ' file not found: ' + file)
+    throw error
+  }
+  const realRel = relative(root, real)
+  if (realRel.startsWith('..') || isAbsolute(realRel)) throw new Error(label + ' file escapes workspace through a symlink: ' + file)
+  const info = statSync(real)
+  if (!info.isFile()) throw new Error('not a file: ' + file)
+  if (info.size > 10 * 1024 * 1024) throw new Error(label + ' file is larger than 10 MB')
+  return real
 }
 
+export function assertOcrPath(file, cwd = process.cwd()) {
+  return resolveContainedFile(file, cwd, 'OCR')
+}
 export async function runLocalOcr(file, { cmd = process.env.ADVISERS_OCR_CMD, timeoutMs = MAX_OCR_MS, cwd = process.cwd() } = {}) {
   if (!cmd) throw new Error('OCR is not configured; set ADVISERS_OCR_CMD to a local OCR executable (no cloud OCR is used)')
   const abs = assertOcrPath(file, cwd)

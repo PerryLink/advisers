@@ -10,6 +10,7 @@ import {
   safetyErrorFrom,
   buildAuditReason,
 } from './safety/index.js'
+import { redact } from './safety/redact.js'
 
 const RETRY_STATUS = new Set([429, 500, 502, 503, 504])
 const EFFORTS = new Set(['low', 'high', 'max'])
@@ -50,6 +51,71 @@ const TASK_EFFORT = {
 // docs/CONTENT-SAFETY.md section 8.
 // ---------------------------------------------------------------------------
 const SAFETY_SURFACE = 'model.output'
+/** Coarse severity for a warning aggregate (inspectMessages keeps action only). */
+function warningSeverityForAction(action) {
+  if (action === 'block' || action === 'confirm') return 'high'
+  if (action === 'warn' || action === 'redact') return 'medium'
+  return 'none'
+}
+
+/**
+ * Outbound secret/PII redaction (security audit SEC3-03, 2026-11-18).
+ *
+ * `redact`-classified strings (single-value PII and credentials) must never
+ * leave the machine verbatim. When the pre-flight classification found at
+ * least one redact-level hit, the request body is built from a redacted deep
+ * copy of the messages; the caller's array and the local ledger originals stay
+ * untouched. Redaction is one-way and text-only (no raw value is kept).
+ */
+function redactEgressMessages(messages) {
+  const state = { messages, changed: false, count: 0 }
+  const kinds = new Set()
+  const clean = (value) => {
+    const result = redact(value)
+    if (!result.redacted) return value
+    state.changed = true
+    state.count += result.count
+    for (const kind of result.kinds) kinds.add(kind)
+    return result.text
+  }
+  if (!messages.some((message) => message && typeof message === 'object' && hasRedactableText(message))) return null
+  const next = messages.map((message) => {
+    if (!message || typeof message !== 'object') return message
+    const copy = { ...message }
+    if (typeof message.content === 'string') copy.content = clean(message.content)
+    else if (Array.isArray(message.content)) {
+      copy.content = message.content.map((part) => (part && typeof part === 'object' && typeof part.text === 'string' ? { ...part, text: clean(part.text) } : part))
+    }
+    if (Array.isArray(message.tool_calls)) {
+      copy.tool_calls = message.tool_calls.map((call) => {
+        if (!call || typeof call !== 'object' || !call.function || typeof call.function.arguments !== 'string') return call
+        return { ...call, function: { ...call.function, arguments: clean(call.function.arguments) } }
+      })
+    }
+    return copy
+  })
+  if (!state.changed) return null
+  return { messages: next, count: state.count, kinds: [...kinds] }
+}
+
+function hasRedactableText(message) {
+  if (typeof message.content === 'string' && message.content) return true
+  if (Array.isArray(message.content) && message.content.some((part) => part && typeof part === 'object' && typeof part.text === 'string' && part.text)) return true
+  if (Array.isArray(message.tool_calls) && message.tool_calls.some((call) => call && call.function && typeof call.function.arguments === 'string' && call.function.arguments)) return true
+  return false
+}
+
+/**
+ * A redact-level hit can be outranked by an unrelated warn/confirm hit in the
+ * same payload (action ordering), so never rely on the aggregate action alone:
+ * scan for redaction whenever the request is not a clean allow. Blocking
+ * requests throw before this point and never reach the network anyway.
+ */
+function requestNeedsEgressRedaction(requestSafety) {
+  if (!requestSafety) return false
+  return requestSafety.action !== 'allow'
+}
+
 /** Disable the optional DeepSeek safety_check network-side gate with '0'. */
 const SAFETY_CLOUD_ENV = 'ADVISERS_SAFETY_CLOUD'
 
@@ -75,6 +141,9 @@ function safetyWarningOf(result, direction) {
     rulesetVersion: result.rulesetVersion,
     evidenceHash: result.evidenceHash || null,
     crisis: Boolean(result.crisis),
+    severity: result.severity || warningSeverityForAction(result.action),
+    confidence: typeof result.confidence === 'number' ? result.confidence : 0,
+    reason: result.reason || result.code,
     auditReason,
   }
 }
@@ -190,6 +259,7 @@ export async function chatCompletion({
   signal,
   safetyKey,
   safetyCheck,
+  redactEgress = true,
 }) {
   if (!apiKey) throw new ModelError('missing API key', { code: 'MISSING_API_KEY' })
   const policy = thinking === false ? { enabled: false } : { enabled: true, ...resolveThinking({ task, explicit: effort }) }
@@ -201,7 +271,8 @@ export async function chatCompletion({
   throwIfBlocked(requestSafety, provider, 'input')
   const safetyWarnings = safetyWarningsOf(requestSafety, 'input')
 
-  const body = { model, messages, max_tokens: maxTokens }
+  const egress = redactEgress === false || !requestNeedsEgressRedaction(requestSafety) ? null : redactEgressMessages(messages)
+  const body = { model, messages: egress ? egress.messages : messages, max_tokens: maxTokens }
   if (tools?.length) body.tools = tools
   if (provider === 'deepseek') {
     // Optional network-side second net (DeepSeek supports safety_check on the
@@ -278,6 +349,7 @@ export async function chatCompletion({
           thinking: policy,
           model,
           ...(safetyWarnings.length ? { safetyWarnings } : {}),
+          ...(egress ? { egressRedaction: { count: egress.count, kinds: egress.kinds } } : {}),
         }
       }
     } catch (error) {

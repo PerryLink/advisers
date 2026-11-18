@@ -24,6 +24,34 @@ export const RULESET_VERSION = 'advisers-content-1'
 /** Actions a rule/result may carry. `allow` is only ever a classifier result. */
 export const ACTIONS = Object.freeze(['allow', 'warn', 'confirm', 'redact', 'block'])
 export const SEVERITIES = Object.freeze(['low', 'medium', 'high', 'critical'])
+/**
+ * Structured prompt-injection metadata (engineering risk, never block).
+ *
+ * The injection category is a local engineering warning, not a legal
+ * violation: classify() keeps action=warn for it and callers decide how to
+ * contain the content (see lib/agent.js, which blocks/confirms a model call
+ * when untrusted data contains a high-confidence instruction override).
+ * The reason strings are safe to print: they never contain the matched text.
+ */
+export const INJECTION_REASONS = Object.freeze({
+  instruction_override: '内容试图忽略或覆盖系统/安全指令',
+  instruction_override_en: 'content tries to override system instructions',
+  prompt_leak: '内容试图获取系统提示或隐藏指令',
+  jailbreak_role: '内容试图切换为越狱/无限制角色',
+  secret_exfiltration: '内容试图诱导输出密钥或凭据',
+  tool_output_injection: '内容声称工具输出/检索结果应被当作指令',
+  safety_bypass: '内容试图关闭或绕过安全规则',
+  privileged_command: '内容试图诱导越权命令或删除审计/系统数据',
+  unrestricted_persona: '内容试图塑造不受限制的人设',
+  default: '内容包含提示注入或越权指令特征',
+})
+
+/**
+ * Hit confidence at or above this is "high confidence" instruction
+ * injection for the agent's pre-model gate (block/confirm). Deliberately a
+ * named constant so the policy is auditable and testable.
+ */
+export const INJECTION_HIGH_CONFIDENCE = 0.8
 
 /**
  * Categories that are allowed to carry a block rule at all. Inside these

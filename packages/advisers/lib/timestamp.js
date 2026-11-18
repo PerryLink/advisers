@@ -7,7 +7,7 @@
  * Without it the feature fails closed; no network is used by Advisers.
  */
 import { spawn } from 'node:child_process'
-import { statSync } from 'node:fs'
+import { realpathSync, statSync } from 'node:fs'
 import { isAbsolute, relative, resolve } from 'node:path'
 
 /**
@@ -41,16 +41,36 @@ export function timestampConfigured() {
   return Boolean(process.env.ADVISERS_TIMESTAMP_CMD)
 }
 
-export function assertProofFile(file, cwd = process.cwd()) {
-  const abs = resolve(cwd, file)
-  const rel = relative(resolve(cwd), abs)
-  if (rel.startsWith('..') || isAbsolute(rel)) throw new Error(`timestamp file escapes workspace: ${file}`)
-  const info = statSync(abs)
-  if (!info.isFile()) throw new Error(`not a file: ${file}`)
-  if (info.size > 10 * 1024 * 1024) throw new Error('timestamp file is larger than 10 MB')
-  return abs
+function resolveContainedFile(file, cwd, label) {
+  if (typeof file !== 'string' || !file) throw new Error(label + ' path is required')
+  const rootLexical = resolve(cwd)
+  let root
+  try {
+    root = realpathSync(rootLexical)
+  } catch {
+    throw new Error(label + ' workspace does not exist: ' + cwd)
+  }
+  const abs = resolve(rootLexical, file)
+  const lexicalRel = relative(rootLexical, abs)
+  if (lexicalRel.startsWith('..') || isAbsolute(lexicalRel)) throw new Error(label + ' file escapes workspace: ' + file)
+  let real
+  try {
+    real = realpathSync(abs)
+  } catch (error) {
+    if (error && error.code === 'ENOENT') throw new Error(label + ' file not found: ' + file)
+    throw error
+  }
+  const realRel = relative(root, real)
+  if (realRel.startsWith('..') || isAbsolute(realRel)) throw new Error(label + ' file escapes workspace through a symlink: ' + file)
+  const info = statSync(real)
+  if (!info.isFile()) throw new Error('not a file: ' + file)
+  if (info.size > 10 * 1024 * 1024) throw new Error(label + ' file is larger than 10 MB')
+  return real
 }
 
+export function assertProofFile(file, cwd = process.cwd()) {
+  return resolveContainedFile(file, cwd, 'timestamp')
+}
 export async function runLocalTimestamp(file, { cmd = process.env.ADVISERS_TIMESTAMP_CMD, timeoutMs = 30_000, cwd = process.cwd() } = {}) {
   if (!cmd) throw new Error('timestamp is not configured; set ADVISERS_TIMESTAMP_CMD to a local timestamp/signing executable')
   const abs = assertProofFile(file, cwd)

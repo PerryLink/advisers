@@ -29,6 +29,29 @@ export interface VerifyCheck {
 }
 
 export const RECALC_ENV = 'ADVISERS_VERIFY_RECALC_CMD'
+/**
+ * Environment for the recalculation subprocess: an explicit OS-basics
+ * allowlist (security audit SEC3-04, 2026-11-18). The recalc command is a
+ * local third-party program (LibreOffice/soffice/internal tool); inheriting
+ * process.env would hand it ADVISERS_API_KEY, ADVISERS_AUDIT_KEY and the
+ * vault/export/sync/IMAP passphrases. Keep this list identical to the OCR,
+ * timestamp and notification adapters in packages/advisers/lib/*.js.
+ */
+export const RECALC_ENV_KEYS = Object.freeze([
+  'PATH', 'Path', 'PATHEXT', 'COMSPEC', 'SYSTEMROOT', 'SystemRoot', 'windir',
+  'HOME', 'USERPROFILE', 'HOMEDRIVE', 'HOMEPATH', 'APPDATA', 'LOCALAPPDATA',
+  'TEMP', 'TMP', 'TMPDIR', 'LANG', 'LC_ALL', 'LC_CTYPE', 'LC_MESSAGES', 'TZ',
+  'PSModulePath',
+])
+
+export function recalcEnv(source: Record<string, string | undefined> = process.env): Record<string, string> {
+  const env: Record<string, string> = {}
+  for (const key of RECALC_ENV_KEYS) {
+    const value = source[key]
+    if (typeof value === 'string' && value) env[key] = value
+  }
+  return env
+}
 const DEFAULT_RECALC_TIMEOUT_MS = 60_000
 const MAX_DETAIL_ITEMS = 10
 
@@ -157,7 +180,7 @@ async function runRecalcCheck(buffer: Buffer, options: VerifyOptions): Promise<V
   const file = path.join(dir, 'recalc.xlsx')
   try {
     writeFileSync(file, buffer)
-    execFileSync(argv[0], [...argv.slice(1), file], { stdio: 'pipe', timeout: options.recalcTimeoutMs ?? DEFAULT_RECALC_TIMEOUT_MS })
+    execFileSync(argv[0], [...argv.slice(1), file], { stdio: 'pipe', timeout: options.recalcTimeoutMs ?? DEFAULT_RECALC_TIMEOUT_MS, env: recalcEnv() })
     return check('xlsx.recalc', true, 'info', 'external recalculation command exited 0 (' + argv[0] + ')')
   } catch (error) {
     return check('xlsx.recalc', false, 'blocker', 'external recalculation command failed: ' + commandFailureDetail(error))

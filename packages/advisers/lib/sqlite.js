@@ -1,7 +1,8 @@
 import { DatabaseSync } from 'node:sqlite'
-import { chmodSync, closeSync, copyFileSync, fsyncSync, mkdirSync, openSync, readFileSync, rmSync, statSync, unlinkSync, utimesSync, writeSync } from 'node:fs'
+import { chmodSync, closeSync, copyFileSync, existsSync, fsyncSync, mkdirSync, openSync, readFileSync, readSync, rmSync, statSync, unlinkSync, utimesSync, writeSync } from 'node:fs'
 import { createHash, createHmac, randomUUID } from 'node:crypto'
 import { dirname, join } from 'node:path'
+import { copyFileWithRetrySync, fsyncFileSync, rmWithRetrySync } from './fs-safe.js'
 
 /**
  * Open + write hardening (2026-11-17 robustness audit P0-1/P0-3/P1-2):
@@ -667,6 +668,174 @@ const LEDGER_TABLE_LOADERS = {
   routes: { table: 'routes', routes: true },
 }
 
+// ---------------------------------------------------------------------------
+// WAL status / recovery (robustness audit 2026-11-17 P1-6).
+//
+// SQLite's documented recovery semantics: a WAL whose header is invalid, whose
+// last frame is torn, or whose checksums do not verify is treated as if it
+// contained no transactions. The database still opens (that is safe for the
+// main file) but every transaction committed since the last checkpoint that
+// only lived in the WAL is silently lost, and `quick_check` still says ok.
+//
+// This pre-open check classifies the sidecar BEFORE SQLite can ignore it:
+//   - invalid (bad magic/version/page-size/header checksum, or a stale first
+//     frame): preserve the bytes as state.db-wal.corrupt-<ts>, move the unusable
+//     WAL aside (and the rebuildable -shm cache), then warn loudly and record a
+//     quick_check of the surviving database;
+//   - truncated (valid header, size not a whole number of frames): keep the WAL
+//     so SQLite recovers its valid prefix, copy it aside as evidence, and warn
+//     that frames after the tear may be lost;
+//   - ok / absent / empty: no warning (the common case has no extra I/O cost).
+// No database bytes are ever deleted: the preserved copy is the recovery path.
+// `inspectWalStatus()` is also exported so bin/doctor can report the sidecar
+// without opening the store (Wave 1 `doctor --check-db` / `audit --check-db`).
+// ---------------------------------------------------------------------------
+const WAL_HEADER_SIZE = 32
+const WAL_FRAME_HEADER_SIZE = 24
+const WAL_VERSION = 3007000
+const WAL_MAGIC_LE = 0x377f0682
+const WAL_MAGIC_BE = 0x377f0683
+/** Suffix of a preserved copy of a WAL file SQLite cannot use (0600). */
+export const WAL_CORRUPT_SUFFIX = '-wal.corrupt-'
+
+/** SQLite WAL checksum: cumulative s1/s2 over 32-bit words (big- or little-endian). */
+function walChecksum(bytes, bigEndian, start1 = 0, start2 = 0) {
+  let s1 = start1 >>> 0
+  let s2 = start2 >>> 0
+  for (let offset = 0; offset + 8 <= bytes.length; offset += 8) {
+    const first = bigEndian ? bytes.readUInt32BE(offset) : bytes.readUInt32LE(offset)
+    const second = bigEndian ? bytes.readUInt32BE(offset + 4) : bytes.readUInt32LE(offset + 4)
+    s1 = (s1 + first + s2) >>> 0
+    s2 = (s2 + second + s1) >>> 0
+  }
+  return [s1 >>> 0, s2 >>> 0]
+}
+
+function readAtSync(file, position, length) {
+  const fd = openSync(file, 'r')
+  try {
+    const buffer = Buffer.alloc(length)
+    const bytesRead = readSync(fd, buffer, 0, length, position)
+    return buffer.subarray(0, bytesRead)
+  } finally {
+    try { closeSync(fd) } catch {}
+  }
+}
+
+function corruptStamp(now) {
+  return new Date(now).toISOString().replace(/[-:]/g, '').replace(/\.\d{3}Z$/, 'Z')
+}
+
+/** Report the state of <db>-wal without opening SQLite or modifying anything. */
+export function inspectWalStatus(dbPath) {
+  const path = `${dbPath}-wal`
+  const report = { path, present: false, bytes: 0, status: 'absent', frames: 0, pageSize: null, header: null, reason: null, warning: null }
+  if (!dbPath || dbPath === ':memory:') { report.status = 'memory'; return report }
+  let stat
+  try { stat = statSync(path) } catch (error) {
+    if (error?.code !== 'ENOENT') { report.status = 'unreadable'; report.reason = String(error?.message ?? error); report.warning = `E_WAL_UNREADABLE: cannot inspect ${path} (${report.reason}); if the database is open elsewhere, close it and retry` }
+    return report
+  }
+  report.present = true
+  report.bytes = stat.size
+  if (!stat.isFile()) { report.status = 'invalid'; report.reason = 'not-a-regular-file'; return report }
+  if (stat.size === 0) { report.status = 'empty'; return report }
+  if (stat.size < WAL_HEADER_SIZE) { report.status = 'invalid'; report.reason = `truncated header (${stat.size} of ${WAL_HEADER_SIZE} bytes)`; return report }
+  let header
+  try { header = readAtSync(path, 0, WAL_HEADER_SIZE) } catch (error) { report.status = 'unreadable'; report.reason = String(error?.message ?? error); return report }
+  if (header.length < WAL_HEADER_SIZE) { report.status = 'invalid'; report.reason = 'truncated header'; return report }
+  const magic = header.readUInt32BE(0)
+  const version = header.readUInt32BE(4)
+  const pageSize = header.readUInt32BE(8)
+  if (magic !== WAL_MAGIC_LE && magic !== WAL_MAGIC_BE) { report.status = 'invalid'; report.reason = `bad WAL magic 0x${magic.toString(16)} (header was overwritten or truncated)`; return report }
+  if (version !== WAL_VERSION) { report.status = 'invalid'; report.reason = `unsupported WAL format version ${version}`; return report }
+  if (!Number.isInteger(pageSize) || pageSize < 512 || pageSize > 65536 || (pageSize & (pageSize - 1)) !== 0) { report.status = 'invalid'; report.reason = `invalid WAL page size ${pageSize}`; return report }
+  const bigEndian = magic === WAL_MAGIC_BE
+  const [checksum1, checksum2] = walChecksum(header.subarray(0, 24), bigEndian)
+  if (checksum1 !== header.readUInt32BE(24) || checksum2 !== header.readUInt32BE(28)) { report.status = 'invalid'; report.reason = 'WAL header checksum mismatch'; return report }
+  report.pageSize = pageSize
+  report.header = { magic: bigEndian ? 'be' : 'le', version, pageSize }
+  // A writer may be appending right now (direct library use has no instance
+  // lock). Only classify a size-based tear when the size is stable; otherwise
+  // report 'changing' and stay quiet instead of warning about a false tear.
+  let stable
+  try { stable = statSync(path) } catch (error) { report.status = 'unreadable'; report.reason = String(error?.message ?? error); return report }
+  if (stable.size !== stat.size) { report.status = 'changing'; return report }
+  const frameSize = WAL_FRAME_HEADER_SIZE + pageSize
+  const payloadBytes = stat.size - WAL_HEADER_SIZE
+  report.frames = Math.floor(payloadBytes / frameSize)
+  if (payloadBytes % frameSize !== 0) {
+    report.status = 'truncated'
+    report.reason = 'torn-frame'
+    report.warning = `E_WAL_TRUNCATED: ${path} ends with a torn/partial frame (${payloadBytes % frameSize} of ${frameSize} bytes); SQLite recovers only the complete frames before the tear, so the most recently committed transactions may be lost`
+    return report
+  }
+  if (report.frames > 0) {
+    try {
+      const firstFrame = readAtSync(path, WAL_HEADER_SIZE, WAL_FRAME_HEADER_SIZE)
+      if (firstFrame.length === WAL_FRAME_HEADER_SIZE) {
+        const salt1 = firstFrame.readUInt32BE(8)
+        const salt2 = firstFrame.readUInt32BE(12)
+        if (salt1 !== header.readUInt32BE(16) || salt2 !== header.readUInt32BE(20)) {
+          report.status = 'invalid'
+          report.reason = 'stale first frame (WAL salt mismatch)'
+          return report
+        }
+      }
+    } catch {}
+  }
+  report.status = 'ok'
+  return report
+}
+
+/** Copy a WAL sidecar next to the database as evidence (0600, fsynced). */
+function preserveWalCopy(dbPath, report, { now = Date.now() } = {}) {
+  const backup = `${dbPath}${WAL_CORRUPT_SUFFIX}${corruptStamp(now)}`
+  try {
+    copyFileWithRetrySync(report.path, backup, { mode: 0o600 })
+    fsyncFileSync(backup)
+    return { backup, error: null }
+  } catch (error) {
+    return { backup: null, error }
+  }
+}
+
+/**
+ * Inspect (and, for a writable open, quarantine) a WAL before SQLite sees it.
+ * Returns the inspection report plus `backup` / `quarantined` / `warning`.
+ * For readOnly opens nothing is written: the DB is only reported on.
+ */
+export function prepareWalForOpen(dbPath, { readOnly = false, now = Date.now() } = {}) {
+  const report = inspectWalStatus(dbPath)
+  if (report.status !== 'invalid' && report.status !== 'truncated') return report
+  if (readOnly) {
+    report.note = 'read-only open: the WAL was inspected but not preserved; run a writable command to quarantine it'
+    return report
+  }
+  const preserved = preserveWalCopy(dbPath, report, { now })
+  report.backup = preserved.backup
+  report.preserveError = preserved.error ? String(preserved.error?.message ?? preserved.error) : null
+  if (report.status === 'invalid' && preserved.backup) {
+    try {
+      rmWithRetrySync(report.path)
+      try { if (existsSync(`${dbPath}-shm`)) rmWithRetrySync(`${dbPath}-shm`) } catch {}
+      report.quarantined = true
+    } catch (error) {
+      report.quarantined = false
+      report.preserveError = String(error?.message ?? error)
+    }
+  }
+  const preservedText = report.backup
+    ? ` the file was preserved as ${report.backup}.`
+    : ` the file could not be preserved (${report.preserveError ?? 'unknown error'}).`
+  if (report.status === 'invalid') {
+    report.warning = `E_WAL_CORRUPT: the WAL file ${report.path} cannot be used by SQLite (${report.reason}); SQLite ignores an invalid WAL, so transactions committed after the last checkpoint may be lost.${preservedText} Run 'advisers doctor' and take a fresh 'advisers backup'; for forensic recovery open the preserved copy with the sqlite3 CLI.`
+  } else {
+    report.warning = `${report.warning}.${preservedText} Run 'advisers doctor' before relying on the most recent writes.`
+  }
+  return report
+}
+
 export class SqliteStore {
   constructor(path, { readOnly = false, checkIntegrity = false, busyTimeoutMs = Number(process.env.ADVISERS_SQLITE_BUSY_TIMEOUT_MS) || DEFAULT_BUSY_TIMEOUT_MS } = {}) {
     this.path = path
@@ -680,16 +849,44 @@ export class SqliteStore {
     this.ftsTokenizer = null
     this.ftsWarning = null
     this._ftsTables = new Set()
+    // P1-5: searchTurns()/searchSummaries() set these when FTS and LIKE
+    // disagree; verifyFtsIntegrity() fills ftsIntegrityReport for doctor.
+    this._ftsBroken = false
+    this._ftsWarned = false
+    this.ftsIntegrityWarning = null
+    this.ftsIntegrityReport = null
     // P2-2 (0.2.1): an existing 0-byte file is treated as corrupt instead of a
     // brand-new database. Before this, SQLite turned it into an empty schema and
     // every command reported "no data" while silently rebuilding the ledger.
     assertDatabaseFileUsable(path)
+    // P1-6: classify (and, for writable opens, quarantine) an unusable WAL
+    // before SQLite opens the file and treats it as empty. `walStatus` is kept
+    // on the store so doctor/audit can report it (see walReport()).
+    this.walStatus = null
     try {
+      this.walStatus = prepareWalForOpen(path, { readOnly })
+      if (this.walStatus.warning) {
+        try { console.warn(`advisers: warning: ${this.walStatus.warning}`) } catch {}
+      }
       this.db = readOnly ? new DatabaseSync(path, { readOnly: true }) : new DatabaseSync(path)
       // P0-1: sqlite only applies busy_timeout to statements that run after the
       // pragma is set; concurrent first-opens used to fail on journal_mode=WAL
       // because busy_timeout was set afterwards.
       this.db.exec(`PRAGMA busy_timeout = ${Math.max(0, Math.floor(Number(busyTimeoutMs) || 0))}`)
+      if (this.walStatus.quarantined) {
+        // The pre-check moved an unusable WAL aside; verify that the surviving
+        // main database is structurally sound (this is the one open where the
+        // O(db) quick_check cost is justified).
+        try {
+          const recovered = this.db.prepare('PRAGMA quick_check').get()
+          this.walStatus.recovery = { quickCheck: String(recovered?.quick_check ?? 'unknown') }
+          if (this.walStatus.recovery.quickCheck !== 'ok') {
+            try { console.warn(`advisers: warning: quick_check after WAL recovery reported '${this.walStatus.recovery.quickCheck}'`) } catch {}
+          }
+        } catch (error) {
+          this.walStatus.recovery = { error: String(error?.message ?? error) }
+        }
+      }
       if (readOnly) {
         this._initFtsState()
         if (checkIntegrity) this.assertIntegrity()
@@ -717,6 +914,34 @@ export class SqliteStore {
     return verdict
   }
 
+  /**
+   * Aggregate integrity report for `doctor --check-db` / `audit --check-db`
+   * (Wave 1 contract). quick_check is O(db) and the FTS check is O(index), so
+   * both are opt-in; the WAL report is cheap and always included.
+   */
+  integrityReport({ quickCheck = true, fts = false } = {}) {
+    const report = { ok: true, path: this.path, schemaVersion: null, quickCheck: null, wal: null, fts: null, errors: [] }
+    try { report.schemaVersion = this.getMeta('schema_version') } catch (error) { report.errors.push(`cannot read schema_version: ${String(error?.message ?? error).slice(0, 160)}`) }
+    if (quickCheck) {
+      try {
+        const verdict = String(this.db.prepare('PRAGMA quick_check').get()?.quick_check ?? 'unknown')
+        report.quickCheck = { ok: verdict === 'ok', verdict }
+        if (verdict !== 'ok') { report.ok = false; report.errors.push(`PRAGMA quick_check: ${verdict}`) }
+      } catch (error) {
+        report.quickCheck = { ok: false, error: String(error?.message ?? error).slice(0, 200) }
+        report.ok = false
+        report.errors.push(`PRAGMA quick_check failed: ${report.quickCheck.error}`)
+      }
+    }
+    report.wal = this.walReport()
+    if (!report.wal.ok) { report.ok = false; if (report.wal.initial?.warning) report.errors.push(report.wal.initial.warning) }
+    if (fts) {
+      report.fts = this.verifyFtsIntegrity()
+      if (!report.fts.ok) { report.ok = false; if (report.fts.warning) report.errors.push(report.fts.warning) }
+    }
+    return report
+  }
+
   /** WAL is persistent; skip the switch when already enabled and retry on busy. */
   enableWal() {
     if (!this.path || this.path === ':memory:') return 'memory'
@@ -739,6 +964,11 @@ export class SqliteStore {
   }
 
   initializeSchema() {
+    // P2-9: migration backups must be taken OUTSIDE the write transaction --
+    // a 'wal_checkpoint(TRUNCATE)' inside BEGIN IMMEDIATE fails with 'database
+    // table is locked', and copying the main file without folding the WAL can
+    // silently omit committed rows. Read the old version and back up first.
+    this._migrationBackup = this._prepareMigrationBackup()
     this._transaction('IMMEDIATE', () => {
       this.db.exec(SCHEMA)
       this.migrate()
@@ -831,6 +1061,171 @@ export class SqliteStore {
   }
 
   /**
+   * Report the WAL/shm state and whether this connection can checkpoint.
+   * `initial` is the pre-open inspection (see inspectWalStatus above); a fresh
+   * `current` read lets a long-lived store (mcp/ui) be diagnosed too.
+   */
+  walReport() {
+    const report = {
+      path: this.path,
+      initial: this.walStatus ?? { status: 'absent', present: false },
+      current: inspectWalStatus(this.path),
+    }
+    try { report.journalMode = String(this.db.prepare('PRAGMA journal_mode').get()?.journal_mode ?? '') } catch (error) { report.journalModeError = String(error?.message ?? error) }
+    try {
+      const checkpoint = this.db.prepare('PRAGMA wal_checkpoint(PASSIVE)').get()
+      report.checkpoint = { busy: Number(checkpoint?.busy ?? 0) !== 0, log: Number(checkpoint?.log ?? 0), checkpointed: Number(checkpoint?.checkpointed ?? 0) }
+    } catch (error) { report.checkpoint = { error: String(error?.message ?? error) } }
+    const bad = (status) => ['invalid', 'truncated', 'unreadable'].includes(String(status))
+    report.ok = !bad(report.initial.status) && !bad(report.current.status) && report.initial.preserveError == null
+    return report
+  }
+
+  /**
+   * Verify the two FTS5 indexes against their source tables (robustness audit
+   * 2026-11-17 P1-5). A desynchronised index makes search silently return
+   * fewer rows than a LIKE scan; this is the explicit check that doctor and
+   * audit --check-db should surface (O(index), so never run on every open).
+   *
+   * Checks per index: table present, the three sync triggers present, FTS5
+   * 'integrity-check' (catches malformed/desynced segments), source vs index
+   * (shadow docsize) row counts, and a deterministic rowid sample in both
+   * directions. On a non-ok result the store also marks its FTS path unusable
+   * (`searchTurns`/`searchSummaries` then use LIKE until a rebuild).
+   */
+  verifyFtsIntegrity({ sampleSize = 100 } = {}) {
+    this._initFtsState()
+    const report = {
+      ok: true,
+      state: 'ok',
+      tokenizer: this.ftsTokenizer,
+      tables: {},
+      triggers: { expected: FTS_TRIGGER_NAMES.slice(), missing: [] },
+      checkedAt: new Date().toISOString(),
+      errors: [],
+      warning: null,
+      repair: 'advisers audit --rebuild-fts',
+    }
+    let existingTriggers = new Set()
+    try {
+      existingTriggers = new Set(this.db.prepare("SELECT name FROM sqlite_master WHERE type = 'trigger'").all().map((row) => row.name))
+    } catch (error) {
+      report.errors.push(`cannot list triggers: ${String(error?.message ?? error).slice(0, 200)}`)
+    }
+    const triggerMap = {
+      turns_fts: ['turns_ai', 'turns_ad', 'turns_au'],
+      summaries_fts: ['summaries_ai', 'summaries_ad', 'summaries_au'],
+    }
+    const sourceMap = {
+      turns_fts: { table: 'turns' },
+      summaries_fts: { table: 'session_summaries' },
+    }
+    let anyTable = false
+    let inconsistent = false
+    let missingTable = false
+    for (const table of FTS_TABLE_NAMES) {
+      const source = sourceMap[table]
+      const info = {
+        table,
+        sourceTable: source.table,
+        exists: false,
+        triggers: { expected: triggerMap[table].slice(), missing: [] },
+        integrityCheck: 'skipped',
+        sourceCount: null,
+        indexCount: null,
+        countMismatch: false,
+        sample: { checked: 0, missingFromIndex: [], extraInIndex: [] },
+      }
+      try { info.exists = Boolean(this.db.prepare("SELECT name FROM sqlite_master WHERE type = 'table' AND name = ?").get(table)) } catch (error) { report.errors.push(`${table}: cannot inspect sqlite_master: ${String(error?.message ?? error).slice(0, 200)}`) }
+      report.tables[table] = info
+      if (!info.exists) {
+        missingTable = true
+        info.triggers.missing = triggerMap[table].slice()
+        report.errors.push(`${table}: the FTS index table is missing although schema v19 expects it`)
+        continue
+      }
+      anyTable = true
+      info.triggers.missing = triggerMap[table].filter((name) => !existingTriggers.has(name))
+      if (info.triggers.missing.length) {
+        inconsistent = true
+        report.errors.push(`${table}: missing FTS sync trigger(s) ${info.triggers.missing.join(', ')}; rows written without them are not indexed`)
+      }
+      try {
+        this.db.prepare(`INSERT INTO ${table}(${table}, rank) VALUES('integrity-check', 1)`).run()
+        info.integrityCheck = 'ok'
+      } catch (error) {
+        info.integrityCheck = 'malformed'
+        inconsistent = true
+        report.errors.push(`${table}: FTS5 integrity-check failed: ${String(error?.message ?? error).slice(0, 200)}`)
+      }
+      try { info.sourceCount = Number(this.db.prepare(`SELECT COUNT(*) AS n FROM ${source.table}`).get()?.n ?? 0) } catch (error) { report.errors.push(`${table}: cannot count ${source.table}: ${String(error?.message ?? error).slice(0, 120)}`) }
+      try { info.indexCount = Number(this.db.prepare(`SELECT COUNT(*) AS n FROM ${table}_docsize`).get()?.n ?? 0) } catch (error) { info.indexCount = null }
+      if (info.sourceCount != null && info.indexCount != null && info.sourceCount !== info.indexCount) {
+        info.countMismatch = true
+        inconsistent = true
+        report.errors.push(`${table}: index has ${info.indexCount} row(s) for ${info.sourceCount} source row(s)`)
+      }
+      if (info.sourceCount && info.sourceCount > 0) {
+        try {
+          const limitN = Math.max(1, Math.min(Number(sampleSize) || 0, 1000))
+          const sampleIds = this.db.prepare(`SELECT rowid AS id FROM ${source.table} ORDER BY rowid LIMIT ?`).all(limitN).map((row) => row.id)
+          if (sampleIds.length) {
+            const indexed = new Set(this.db.prepare(`SELECT id FROM ${table}_docsize WHERE id IN (${sampleIds.map(() => '?').join(',')})`).all(...sampleIds).map((row) => row.id))
+            info.sample.checked = sampleIds.length
+            info.sample.missingFromIndex = sampleIds.filter((id) => !indexed.has(id))
+            if (info.sample.missingFromIndex.length) {
+              inconsistent = true
+              report.errors.push(`${table}: sample rowid(s) ${info.sample.missingFromIndex.slice(0, 10).join(', ')} are in the source table but not in the index`)
+            }
+            const indexIds = this.db.prepare(`SELECT id FROM ${table}_docsize ORDER BY id LIMIT ?`).all(limitN).map((row) => row.id)
+            if (indexIds.length) {
+              const sourceIds = new Set(this.db.prepare(`SELECT rowid AS id FROM ${source.table} WHERE rowid IN (${indexIds.map(() => '?').join(',')})`).all(...indexIds).map((row) => row.id))
+              info.sample.extraInIndex = indexIds.filter((id) => !sourceIds.has(id))
+              if (info.sample.extraInIndex.length) {
+                inconsistent = true
+                report.errors.push(`${table}: sample rowid(s) ${info.sample.extraInIndex.slice(0, 10).join(', ')} are in the index but not in the source table`)
+              }
+            }
+          }
+        } catch (error) {
+          report.errors.push(`${table}: sample comparison failed: ${String(error?.message ?? error).slice(0, 160)}`)
+        }
+      }
+    }
+    report.triggers.missing = FTS_TRIGGER_NAMES.filter((name) => !existingTriggers.has(name))
+    if (!anyTable) {
+      if (this.ftsWarning) {
+        report.state = 'degraded'
+        report.warning = `FTS5 is unavailable/degraded (${this.ftsWarning}); search uses LIKE only`
+      } else {
+        report.state = 'missing'
+        report.ok = false
+        report.errors.push('no FTS index tables exist although schema v19 expects them')
+      }
+    } else if (inconsistent || missingTable) {
+      report.state = 'inconsistent'
+      report.ok = false
+    }
+    if (!report.ok) {
+      if (!report.warning) report.warning = `FTS index is inconsistent (${report.errors[0] ?? 'unknown reason'}); search falls back to LIKE so results stay complete; run '${report.repair}' to rebuild the index`
+      this._ftsBroken = true
+      this.ftsIntegrityWarning = report.warning
+    }
+    this.ftsIntegrityReport = report
+    return report
+  }
+
+  /** Record a detected FTS/LIKE result mismatch and warn once per store. */
+  _markFtsInconsistent(table, ftsCount, likeCount) {
+    this._ftsBroken = true
+    const message = `FTS index ${table} is inconsistent (MATCH returned ${ftsCount} row(s) but LIKE returned ${likeCount}); search fell back to LIKE so results stay complete. Run 'advisers doctor --check-db' and 'advisers audit --rebuild-fts' to rebuild the index`
+    this.ftsIntegrityWarning = message
+    if (this._ftsWarned) return
+    this._ftsWarned = true
+    try { console.warn(`advisers: warning: ${message}`) } catch {}
+  }
+
+  /**
    * Run fn() in a write transaction with bounded SQLITE_BUSY retries.
    * Nested calls join the outer transaction (no nested BEGIN).
    */
@@ -882,14 +1277,78 @@ export class SqliteStore {
     return { busy: Number(last?.busy ?? 1) !== 0, log: Number(last?.log ?? 0), checkpointed: Number(last?.checkpointed ?? 0) }
   }
 
-  backupBeforeMigrate(current) {
-    if (!this.path || this.path === ':memory:') return
-    const target = `${this.path}.before-migrate-v${current}-${Date.now()}`
+  /** Read the on-disk schema version before SCHEMA/migrate run (0 = new/empty). */
+  _readSchemaVersionForBackup() {
     try {
-      copyFileSync(this.path, target)
-      try { chmodSync(target, 0o600) } catch {}
+      const row = this.db.prepare('SELECT value FROM meta WHERE key = ?').get('schema_version')
+      return row ? Number(row.value) : 0
     } catch (error) {
-      throw new Error(`refusing to migrate without a backup of ${this.path}: ${error.message}`)
+      if (/no such table/i.test(String(error?.message ?? error))) return 0
+      throw error
+    }
+  }
+
+  /** Take the pre-migration backup while no write transaction is open. */
+  _prepareMigrationBackup() {
+    if (!this.path || this.path === ':memory:') return null
+    const current = this._readSchemaVersionForBackup()
+    if (!Number.isFinite(current) || current <= 0 || current >= SCHEMA_VERSION) return null
+    return this.backupBeforeMigrate(current)
+  }
+
+  /**
+   * Same-directory backup of the database before a schema migration.
+   *
+   * P2-9 (2026-11-17 robustness audit): the old implementation copied only the
+   * main database file. Committed transactions that still lived in the WAL
+   * were missing from the backup (measured: backup 300 rows vs main DB 301),
+   * so rolling back to it silently dropped data. Now the WAL is folded into
+   * the main file with 'PRAGMA wal_checkpoint(TRUNCATE)' before the copy; if
+   * another connection prevents the checkpoint the migration is refused
+   * rather than proceeding with an incomplete backup.
+   *
+   * The copy is verified with a read-only DatabaseSync quick_check and the
+   * schema_version it was taken at; a failed verification removes the partial
+   * backup and throws (fail-closed). Returns the backup path.
+   */
+  backupBeforeMigrate(current) {
+    if (!this.path || this.path === ':memory:') return null
+    const checkpoint = this.checkpoint({ mode: 'TRUNCATE' })
+    if (checkpoint.busy) {
+      const error = new Error(`refusing to migrate without a consistent backup of ${this.path}: could not checkpoint the WAL (another connection is busy); close other advisers processes and retry`)
+      // Wave-2 Persistence v2 contract (03-design-persistence-v2.md §5.4): stable
+      // code so bin/ can map it to an actionable message.
+      error.code = 'E_MIGRATE_BUSY'
+      throw error
+    }
+    const target = `${this.path}.before-migrate-v${current}-${Date.now()}`
+    let backupDb = null
+    try {
+      copyFileWithRetrySync(this.path, target, { mode: 0o600 })
+      fsyncFileSync(target)
+      backupDb = new DatabaseSync(target, { readOnly: true })
+      const verdict = String(backupDb.prepare('PRAGMA quick_check').get()?.quick_check ?? 'unknown')
+      if (verdict !== 'ok') throw new Error(`quick_check on the backup reported '${verdict}'`)
+      const meta = backupDb.prepare('SELECT value FROM meta WHERE key = ?').get('schema_version')
+      if (meta && Number(meta.value) !== Number(current)) {
+        throw new Error(`backup contains schema_version ${meta.value}, expected ${current}`)
+      }
+      try { chmodSync(target, 0o600) } catch {}
+      return target
+    } catch (error) {
+      try { backupDb?.close() } catch {}
+      backupDb = null
+      try { rmWithRetrySync(target) } catch {}
+      const wrapped = new Error(`refusing to migrate without a verified backup of ${this.path}: ${String(error?.message ?? error).slice(0, 300)}`)
+      wrapped.code = 'E_MIGRATION_BACKUP'
+      throw wrapped
+    } finally {
+      try { backupDb?.close() } catch {}
+      // Opening a WAL-mode backup read-only makes SQLite create <backup>-wal/-shm;
+      // they are verification artifacts, not part of the backup, so remove them.
+      for (const suffix of ['-wal', '-shm']) {
+        try { if (existsSync(target + suffix)) rmSync(target + suffix, { force: true }) } catch {}
+      }
     }
   }
 
@@ -904,7 +1363,10 @@ export class SqliteStore {
     if (!Number.isFinite(current) || current < 0) throw new Error(`invalid schema_version in ${this.path}: ${row?.value}`)
     if (current > SCHEMA_VERSION) throw new Error(`database schema v${current} is newer than this CLI (v${SCHEMA_VERSION}); upgrade advisers before opening ${this.path}`)
     if (current >= SCHEMA_VERSION) return
-    if (current > 0) this.backupBeforeMigrate(current)
+    // initializeSchema() already took the verified backup before opening its
+    // write transaction (a WAL checkpoint cannot run inside one); only direct
+    // callers of migrate() fall back to taking it here.
+    if (current > 0 && !this._migrationBackup) this._migrationBackup = this.backupBeforeMigrate(current)
     try {
       this.db.exec(`CREATE TABLE IF NOT EXISTS seen_events (
         link_id TEXT NOT NULL, account_id TEXT NOT NULL, dedupe_key TEXT NOT NULL,
@@ -1352,16 +1814,39 @@ CREATE TABLE IF NOT EXISTS task_runs (
     const join = matterId ? ' JOIN sessions s ON s.conversation_id = t.conversation_id' : ''
     const where = clauses.length ? ` AND ${clauses.join(' AND ')}` : ''
     const map = (r) => ({ id: r.id, conversationId: r.conversation_id, seq: r.seq, role: r.role, content: r.content, createdAt: r.created_at })
-    if (this.ftsTokenizer && this._ftsTables.has('turns_fts') && q.length >= FTS_TRIGRAM_MIN_QUERY) {
+    const likeRows = () => {
+      const rows = this.db.prepare(`SELECT t.* FROM turns t${join} WHERE t.content LIKE ?${where} ORDER BY t.seq DESC LIMIT ?`).all(`%${q}%`, ...filterArgs, limit)
+      return rows.reverse().map(map)
+    }
+    let ftsRows = null
+    if (this.ftsTokenizer && this._ftsTables.has('turns_fts') && !this._ftsBroken && q.length >= FTS_TRIGRAM_MIN_QUERY) {
       try {
-        const rows = this.db.prepare(`SELECT t.* FROM turns_fts f JOIN turns t ON t.rowid = f.rowid${join} WHERE turns_fts MATCH ?${where} ORDER BY rank LIMIT ?`).all(q, ...filterArgs, limit)
-        if (rows.length) return rows.map(map)
+        ftsRows = this.db.prepare(`SELECT t.* FROM turns_fts f JOIN turns t ON t.rowid = f.rowid${join} WHERE turns_fts MATCH ?${where} ORDER BY rank LIMIT ?`).all(q, ...filterArgs, limit)
       } catch {
         // Malformed or special FTS query: use the LIKE scan below.
+        ftsRows = null
       }
     }
-    const rows = this.db.prepare(`SELECT t.* FROM turns t${join} WHERE t.content LIKE ?${where} ORDER BY t.seq DESC LIMIT ?`).all(`%${q}%`, ...filterArgs, limit)
-    return rows.reverse().map(map)
+    // P1-5: a full FTS page is returned ranked, as before. A short page is
+    // cross-checked with a LIKE scan; if LIKE finds more rows the index is
+    // incomplete (or the MATCH query was narrower) and the complete, seq-ordered
+    // LIKE rows are returned with one warning instead of silently losing hits.
+    if (ftsRows && ftsRows.length >= limit) return ftsRows.map(map)
+    const rows = likeRows()
+    if (ftsRows && ftsRows.length) {
+      if (rows.length > ftsRows.length) {
+        this._markFtsInconsistent('turns_fts', ftsRows.length, rows.length)
+        return rows
+      }
+      return ftsRows.map(map)
+    }
+    if (ftsRows && ftsRows.length === 0 && rows.length > 0 && this.ftsTokenizer === 'trigram') {
+      // Trigram indexes every 3+ character substring, so a 0-hit MATCH that a
+      // LIKE scan contradicts means the index is missing rows (not a tokenizer
+      // limitation); warn instead of quietly returning the LIKE rows.
+      this._markFtsInconsistent('turns_fts', 0, rows.length)
+    }
+    return rows
   }
 
   /**
@@ -1375,16 +1860,29 @@ CREATE TABLE IF NOT EXISTS task_runs (
     const where = conversationId ? ' AND s.conversation_id = ?' : ''
     const filterArgs = conversationId ? [conversationId] : []
     const map = (r) => ({ conversationId: r.conversation_id, summary: r.summary, throughSeq: r.through_seq, updatedAt: r.updated_at })
-    if (this.ftsTokenizer && this._ftsTables.has('summaries_fts') && q.length >= FTS_TRIGRAM_MIN_QUERY) {
+    const likeRows = () => this.db.prepare(`SELECT s.* FROM session_summaries s WHERE s.summary LIKE ?${where} ORDER BY s.updated_at DESC LIMIT ?`).all(`%${q}%`, ...filterArgs, limit).map(map)
+    let ftsRows = null
+    if (this.ftsTokenizer && this._ftsTables.has('summaries_fts') && !this._ftsBroken && q.length >= FTS_TRIGRAM_MIN_QUERY) {
       try {
-        const rows = this.db.prepare(`SELECT s.* FROM summaries_fts f JOIN session_summaries s ON s.rowid = f.rowid WHERE summaries_fts MATCH ?${where} ORDER BY rank LIMIT ?`).all(q, ...filterArgs, limit)
-        if (rows.length) return rows.map(map)
+        ftsRows = this.db.prepare(`SELECT s.* FROM summaries_fts f JOIN session_summaries s ON s.rowid = f.rowid WHERE summaries_fts MATCH ?${where} ORDER BY rank LIMIT ?`).all(q, ...filterArgs, limit)
       } catch {
         // Malformed or special FTS query: use the LIKE scan below.
+        ftsRows = null
       }
     }
-    const rows = this.db.prepare(`SELECT s.* FROM session_summaries s WHERE s.summary LIKE ?${where} ORDER BY s.updated_at DESC LIMIT ?`).all(`%${q}%`, ...filterArgs, limit)
-    return rows.map(map)
+    if (ftsRows && ftsRows.length >= limit) return ftsRows.map(map)
+    const rows = likeRows()
+    if (ftsRows && ftsRows.length) {
+      if (rows.length > ftsRows.length) {
+        this._markFtsInconsistent('summaries_fts', ftsRows.length, rows.length)
+        return rows
+      }
+      return ftsRows.map(map)
+    }
+    if (ftsRows && ftsRows.length === 0 && rows.length > 0 && this.ftsTokenizer === 'trigram') {
+      this._markFtsInconsistent('summaries_fts', 0, rows.length)
+    }
+    return rows
   }
 
   getSessionSummary(conversationId) {

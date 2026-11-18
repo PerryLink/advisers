@@ -22,6 +22,10 @@
  *     crisis: boolean,               // self-harm: show crisis hint, never block
  *     downgraded: boolean,
  *     truncated: boolean,            // true when only the first maxChars were scanned
+ *     injection?: {                   // additive prompt-injection view (warn only)
+ *       detected, highConfidence, severity, code, reason, subtype, confidence,
+ *       ruleIds, action, surface
+ *     }
  *     hits: [{ ruleId, category, subtype, code, severity, action, confidence,
  *              hardBlock, crisis, downgraded }]
  *   }
@@ -38,7 +42,7 @@
  */
 
 import { createHmac } from 'node:crypto'
-import { DEFAULT_RULESET, actionRank, resolveRuleset } from './rules.js'
+import { DEFAULT_RULESET, INJECTION_HIGH_CONFIDENCE, INJECTION_REASONS, actionRank, resolveRuleset } from './rules.js'
 import { detectPiiInternal } from './redact.js'
 
 export const DEFAULT_SURFACE = 'chat.input'
@@ -220,6 +224,7 @@ function buildHit(rule, snippet, actionOverride) {
     blockable: Boolean(rule.blockable),
     downgraded: null,
     snippet: snippet || rule.id,
+    reason: rule.category === 'injection' ? (INJECTION_REASONS[rule.subtype] || INJECTION_REASONS.default) : null,
   }
 }
 
@@ -384,9 +389,28 @@ function runClassify(ruleset, text, options = {}) {
       hardBlock: hit.hardBlock,
       crisis: hit.crisis,
       downgraded: hit.downgraded,
+      ...(hit.reason ? { reason: hit.reason } : {}),
     })),
   }
-  return applyTruncationFailClosed(result, policy)
+  const final = applyTruncationFailClosed(result, policy)
+  const injectionHits = ordered.filter((hit) => hit.category === 'injection')
+  if (injectionHits.length) {
+    const maxConfidence = Math.max(...injectionHits.map((hit) => hit.confidence))
+    const primary = injectionHits[0]
+    final.injection = {
+      detected: true,
+      highConfidence: maxConfidence >= INJECTION_HIGH_CONFIDENCE,
+      severity: primary.severity,
+      code: primary.code,
+      reason: primary.reason || INJECTION_REASONS.default,
+      subtype: primary.subtype,
+      confidence: Math.round(maxConfidence * 100) / 100,
+      ruleIds: [...new Set(injectionHits.map((hit) => hit.ruleId))],
+      action: final.action,
+      surface,
+    }
+  }
+  return final
 }
 
 /**
@@ -425,6 +449,35 @@ export function classify(text, options = {}) {
   }
 }
 
+/**
+ * Structured injection view of any classify() result (allow results included).
+ * The rule action stays warn; this view is what policy callers (lib/agent.js)
+ * use to block/confirm a model call that would carry untrusted instructions.
+ * It never contains the matched text.
+ */
+export function injectionAssessment(result) {
+  const injection = result && result.injection && result.injection.detected ? result.injection : null
+  return {
+    detected: Boolean(injection),
+    highConfidence: Boolean(injection && injection.highConfidence),
+    severity: injection ? injection.severity : 'none',
+    code: injection ? injection.code : 'NONE',
+    reason: injection ? injection.reason : null,
+    subtype: injection ? injection.subtype : null,
+    confidence: injection ? injection.confidence : 0,
+    ruleIds: injection && Array.isArray(injection.ruleIds) ? [...injection.ruleIds] : [],
+    action: result ? result.action : 'allow',
+    surface: result ? result.surface : 'unknown',
+    truncated: Boolean(result && result.truncated),
+  }
+}
+
+/** classify() + injectionAssessment() in one call. */
+export function inspectInjection(text, options = {}) {
+  return injectionAssessment(classify(text, options))
+}
+
+export { INJECTION_HIGH_CONFIDENCE }
 /** Bind a ruleset (and default options such as hmacKey) to a classify function. */
 export function createClassifier(config = {}) {
   let ruleset = DEFAULT_RULESET
