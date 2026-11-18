@@ -4,7 +4,7 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import test from 'node:test'
 import { DatabaseSync } from 'node:sqlite'
-import { inspectWalStatus, SqliteStore } from '../lib/sqlite.js'
+import { inspectWalStatus, SCHEMA_VERSION, SqliteStore } from '../lib/sqlite.js'
 
 // 0.2.3 robustness Phase 0 (robustness audit 2026-11-17 P2-9): the pre-migration
 // backup used to copy only the main database file. Committed rows that still
@@ -48,7 +48,7 @@ test('backupBeforeMigrate checkpoints the WAL first, so the backup contains rows
 
     const store = new SqliteStore(dbPath)
     try {
-      assert.equal(store.getMeta('schema_version'), '19')
+      assert.equal(store.getMeta('schema_version'), String(SCHEMA_VERSION))
       const count = store.db.prepare('SELECT COUNT(*) AS n FROM commitments').get().n
       assert.equal(count, 1)
     } finally { store.close() }

@@ -7,7 +7,7 @@ import test from 'node:test'
 import { SCHEMA_VERSION, SqliteStore } from '../lib/sqlite.js'
 
 /**
- * Chinese full-text search (schema v19, 2026-11-17 performance audit round 2 P2-6).
+ * Chinese full-text search (schema v19 tokenizer, v20 in 0.2.3; 2026-11-17 perf audit P2-6).
  *
  * v18 built turns_fts with the default unicode61 tokenizer, which never matched
  * a Chinese query, so every Chinese search silently fell back to a LIKE table
@@ -95,13 +95,13 @@ function triggerNames(db) {
   return db.prepare("SELECT name FROM sqlite_master WHERE type = 'trigger' AND name IN ('turns_ai','turns_ad','turns_au','summaries_ai','summaries_ad','summaries_au') ORDER BY name").all().map((row) => row.name)
 }
 
-test('fresh databases install the schema v19 trigram FTS5 indexes', () => {
+test('fresh v20 databases install the v19 trigram FTS5 indexes', () => {
   const { root, db } = setup()
   try {
     const store = new SqliteStore(db)
     try {
-      assert.equal(SCHEMA_VERSION, 19)
-      assert.equal(store.getMeta('schema_version'), '19')
+      assert.equal(SCHEMA_VERSION, 20)
+      assert.equal(store.getMeta('schema_version'), '20')
       assert.equal(store.ftsTokenizer, 'trigram', 'trigram tokenizer is the default')
       assert.equal(store.ftsWarning, null)
       const ddl = (name) => store.db.prepare('SELECT sql FROM sqlite_master WHERE name = ?').get(name)?.sql ?? ''
@@ -306,14 +306,14 @@ test('FTS triggers keep turns and summaries in sync on add/update/delete/purge',
   }
 })
 
-test('a v18 database migrates to v19: old rows stay searchable and a backup is kept', () => {
+test('a v18 database migrates to v20: old rows stay searchable and a backup is kept', () => {
   const { root, db } = setup()
   try {
     createV18Database(db)
     const beforeBytes = statSync(db).size
     const store = new SqliteStore(db)
     try {
-      assert.equal(store.getMeta('schema_version'), '19')
+      assert.equal(store.getMeta('schema_version'), String(SCHEMA_VERSION))
       assert.equal(store.ftsTokenizer, 'trigram')
       assert.match(store.db.prepare("SELECT sql FROM sqlite_master WHERE name = 'turns_fts'").get().sql, /tokenize='trigram'/i)
       // Rows written before the migration are re-indexed from the source table.
@@ -361,7 +361,7 @@ test('reopening a migrated (and a fresh) database is idempotent', () => {
 
     const second = new SqliteStore(db)
     try {
-      assert.equal(second.getMeta('schema_version'), '19')
+      assert.equal(second.getMeta('schema_version'), String(SCHEMA_VERSION))
       assert.equal(second.ftsTokenizer, 'trigram')
       assert.deepEqual(second.searchTurns('报价单').map((row) => row.id), firstHits, 'same result after reopen')
       assert.equal(countFtsMatches(second, 'turns_fts', '报价单'), firstMatchCount, 'no duplicated FTS rows')
@@ -373,7 +373,7 @@ test('reopening a migrated (and a fresh) database is idempotent', () => {
     // No migration means no new backup: the second open was a plain reopen.
     assert.equal(readdirSync(root).filter((name) => name.includes('before-migrate')).length, backupsAfterFirstOpen)
 
-    // A fresh v19 database reopens idempotently too: no migration, no backup,
+    // A fresh v20 database reopens idempotently too: no migration, no backup,
     // one FTS table per source, six triggers, same search result.
     const fresh = setup()
     try {
@@ -382,7 +382,7 @@ test('reopening a migrated (and a fresh) database is idempotent', () => {
       created.close()
       const reopened = new SqliteStore(fresh.db)
       try {
-        assert.equal(reopened.getMeta('schema_version'), '19')
+        assert.equal(reopened.getMeta('schema_version'), String(SCHEMA_VERSION))
         assert.equal(reopened.ftsTokenizer, 'trigram')
         assert.equal(reopened.searchTurns('报价单').length, 1)
         assert.equal(reopened.db.prepare("SELECT COUNT(*) AS n FROM sqlite_master WHERE name IN ('turns_fts','summaries_fts')").get().n, 2)
@@ -398,7 +398,7 @@ test('reopening a migrated (and a fresh) database is idempotent', () => {
   }
 })
 
-test('a failed v19 migration rolls back and leaves the v18 database intact', () => {
+test('a failed v18->v20 migration rolls back and leaves the v18 database intact', () => {
   const { root, db } = setup()
   try {
     createV18Database(db)
@@ -423,7 +423,7 @@ test('a failed v19 migration rolls back and leaves the v18 database intact', () 
     // A later open (without the injected failure) migrates normally.
     const store = new SqliteStore(db)
     try {
-      assert.equal(store.getMeta('schema_version'), '19')
+      assert.equal(store.getMeta('schema_version'), String(SCHEMA_VERSION))
       assert.equal(store.searchTurns('报价单').length, 1)
     } finally {
       store.close()
@@ -439,7 +439,7 @@ test('future schema versions are still refused', () => {
     const store = new SqliteStore(db)
     store.close()
     const raw = new DatabaseSync(db)
-    raw.prepare("INSERT OR REPLACE INTO meta(key,value) VALUES('schema_version','20')").run()
+    raw.prepare("INSERT OR REPLACE INTO meta(key,value) VALUES('schema_version','21')").run()
     raw.close()
     assert.throws(() => new SqliteStore(db), /newer than this CLI/)
   } finally {

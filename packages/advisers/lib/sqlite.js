@@ -2,7 +2,7 @@ import { DatabaseSync } from 'node:sqlite'
 import { chmodSync, closeSync, copyFileSync, existsSync, fsyncSync, mkdirSync, openSync, readFileSync, readSync, rmSync, statSync, unlinkSync, utimesSync, writeSync } from 'node:fs'
 import { createHash, createHmac, randomUUID } from 'node:crypto'
 import { dirname, join } from 'node:path'
-import { copyFileWithRetrySync, fsyncFileSync, rmWithRetrySync } from './fs-safe.js'
+import { copyFileWithRetrySync, fsyncDirSync, fsyncFileSync, rmWithRetrySync } from './fs-safe.js'
 
 /**
  * Open + write hardening (2026-11-17 robustness audit P0-1/P0-3/P1-2):
@@ -19,7 +19,17 @@ import { copyFileWithRetrySync, fsyncFileSync, rmWithRetrySync } from './fs-safe
  * - Migrations are refused for a schema newer than this CLI and are preceded
  *   by a same-directory backup of the old database.
  */
-export const SCHEMA_VERSION = 19
+/**
+ * Physical database schema version (meta.schema_version).
+ *
+ * v20 (0.2.3 persistence v2): adds the schema_migrations ledger, the
+ * idx_turns_seq / idx_facts_identity / idx_memory_candidates_status indexes,
+ * and turns migrate() into a per-version step table. This is NOT the wire
+ * format: LedgerSnapshot.version stays 1 (see core/src/ledger.ts).
+ */
+export const SCHEMA_VERSION = 20
+/** The last schema built by the single-block legacy migration (0.2.2). */
+const LEGACY_SCHEMA_VERSION = 19
 const DEFAULT_BUSY_TIMEOUT_MS = 5000
 const OPEN_RETRIES = 6
 const BUSY_ERRCODES = new Set([5, 6]) // SQLITE_BUSY, SQLITE_LOCKED
@@ -103,6 +113,44 @@ export class DatabaseLockedError extends Error {
     this.holder = holder
     this.waitedMs = waitedMs
   }
+}
+
+/**
+ * Version of this CLI, recorded in meta.schema_migrated_app for support. Read
+ * from the package manifest so it cannot drift from the released version.
+ */
+const APP_VERSION = (() => {
+  try {
+    const pkg = JSON.parse(readFileSync(new URL('../package.json', import.meta.url), 'utf8'))
+    return typeof pkg?.version === 'string' ? pkg.version : '0.0.0'
+  } catch {
+    return '0.0.0'
+  }
+})()
+
+/** E_SCHEMA_STALE: the on-disk schema is older than this CLI (read path). */
+function schemaStaleError(path, version) {
+  const found = version === null || version === undefined ? 'unknown' : `v${version}`
+  const error = new Error(
+    `E_SCHEMA_STALE: database schema at ${path} is ${found} but this CLI expects v${SCHEMA_VERSION}; ` +
+      'if another advisers process is upgrading it, retry in a moment; otherwise run a writable ' +
+      'command (for example `advisers doctor`) to migrate it first.',
+  )
+  error.name = 'SchemaStaleError'
+  error.code = 'E_SCHEMA_STALE'
+  error.schemaVersion = version ?? null
+  error.expected = SCHEMA_VERSION
+  return error
+}
+
+/** E_SCHEMA_NEWER: the on-disk schema is newer than this CLI (fail closed). */
+function schemaNewerError(path, version) {
+  const error = new Error(`database schema v${version} is newer than this CLI (v${SCHEMA_VERSION}); upgrade advisers before opening ${path}`)
+  error.name = 'SchemaNewerError'
+  error.code = 'E_SCHEMA_NEWER'
+  error.schemaVersion = Number(version)
+  error.expected = SCHEMA_VERSION
+  return error
 }
 
 function readEnvMs(name, fallback, max) {
@@ -372,6 +420,21 @@ function idsFor(snapshot) {
   return ids
 }
 
+// ---------------------------------------------------------------------------
+// Schema v20 (0.2.3 persistence v2): the migration ledger plus the per-version
+// step table. The three indexes are new persisted objects too, but the reason
+// this is a schema bump is the new table + the step framework (not the indexes
+// alone: secondary indexes are normally layout-only, see INDEXES).
+// ---------------------------------------------------------------------------
+const SCHEMA_MIGRATIONS_DDL = `CREATE TABLE IF NOT EXISTS schema_migrations (
+  version INTEGER PRIMARY KEY,
+  name TEXT NOT NULL,
+  applied_at TEXT NOT NULL,
+  duration_ms INTEGER NOT NULL,
+  backup_path TEXT
+);
+`
+
 const SCHEMA = `
 CREATE TABLE IF NOT EXISTS matters (
   id TEXT PRIMARY KEY, title TEXT NOT NULL, status TEXT NOT NULL, domain TEXT NOT NULL,
@@ -479,7 +542,7 @@ CREATE TABLE IF NOT EXISTS calendar_events (
   source TEXT, imported_at TEXT NOT NULL
 );
 CREATE TABLE IF NOT EXISTS meta (key TEXT PRIMARY KEY, value TEXT NOT NULL);
-`
+${SCHEMA_MIGRATIONS_DDL}`
 
 // ---------------------------------------------------------------------------
 // Full-text search (schema v19; 2026-11-17 performance audit round 2, P2-6).
@@ -557,6 +620,13 @@ function ftsDdl(tokenizer) {
  * the 2026-11-17 performance audit (nudges/facts/deliveries/calendar_events/
  * task_runs/sessions/model_calls/preferences/commitments).
  */
+/** v20 indexes: FTS seq early-stop, fact identity lookup, candidate status. */
+const V20_INDEXES = `
+CREATE INDEX IF NOT EXISTS idx_turns_seq ON turns(seq);
+CREATE INDEX IF NOT EXISTS idx_facts_identity ON facts(subject, predicate, matter_id);
+CREATE INDEX IF NOT EXISTS idx_memory_candidates_status ON memory_candidates(status);
+`
+
 const INDEXES = `
 CREATE INDEX IF NOT EXISTS idx_nudges_commitment_at ON nudges(commitment_id, at);
 CREATE INDEX IF NOT EXISTS idx_nudges_local_day_level ON nudges(local_day, level);
@@ -570,8 +640,26 @@ CREATE INDEX IF NOT EXISTS idx_deliveries_created ON deliveries(created_at);
 CREATE INDEX IF NOT EXISTS idx_task_runs_created ON task_runs(created_at);
 CREATE INDEX IF NOT EXISTS idx_sessions_updated ON sessions(updated_at);
 CREATE INDEX IF NOT EXISTS idx_model_calls_created ON model_calls(created_at);
-`
+${V20_INDEXES}`
 
+
+/**
+ * Per-version migration steps (schema v20+). Each step must be idempotent
+ * (IF NOT EXISTS / INSERT OR REPLACE) because it can be retried after a crash
+ * that rolled the transaction back. migrate() runs every step with
+ * version > current inside one BEGIN IMMEDIATE, records name/duration/backup
+ * in schema_migrations, and only then bumps meta.schema_version.
+ */
+const MIGRATIONS = [
+  {
+    version: 20,
+    name: 'incremental-writes-readonly-reads',
+    up(store) {
+      store.db.exec(SCHEMA_MIGRATIONS_DDL)
+      store.db.exec(V20_INDEXES)
+    },
+  },
+]
 const json = (v) => JSON.stringify(v ?? [])
 const parse = (v, fallback = []) => {
   if (v == null) return fallback
@@ -668,6 +756,93 @@ const LEDGER_TABLE_LOADERS = {
   routes: { table: 'routes', routes: true },
 }
 
+
+// ---------------------------------------------------------------------------
+// Incremental-write row codecs (0.2.3 persistence v2 phase 2).
+//
+// _saveRows() below is the historical full-snapshot writer and stays the
+// import/seed path. The targeted insert*/update* methods must produce exactly
+// the same column bytes as _saveRows(), so one ENTITY_SPECS table per entity
+// lists the column + codec of every persisted field. Both paths therefore
+// cannot drift silently: test/incremental-write.test.js compares the old
+// load+save result with the targeted-write result row by row.
+//
+// Only the four ledger entities touched by the 0.2.3 write commands are
+// covered; 0.3 replaces this with core's ENTITY_SPECS single source of truth.
+// ---------------------------------------------------------------------------
+const encodeText = (v) => (v === undefined || v === null ? null : String(v))
+const encodeInt = (v) => Math.trunc(Number(v))
+const encodeReal = (v) => Number(v)
+const encodeJson = (v) => json(v)
+const encodeJsonNullable = (v) => (v === undefined || v === null ? null : json(v))
+const encodeReminderOffsets = (v) => (v === undefined || v === null ? null : JSON.stringify(v))
+const CODECS = {
+  text: encodeText,
+  int: encodeInt,
+  real: encodeReal,
+  json: encodeJson,
+  'json-nullable': encodeJsonNullable,
+  reminder: encodeReminderOffsets,
+}
+
+const ENTITY_SPECS = {
+  matters: {
+    table: 'matters',
+    key: 'id',
+    map: mapMatterRow,
+    columns: {
+      id: ['id', 'text'], title: ['title', 'text'], status: ['status', 'text'], domain: ['domain', 'text'],
+      secrecy: ['secrecy', 'int'], summary: ['summary', 'text'], participants: ['participants', 'json'],
+      deadlines: ['deadlines', 'json'], openQuestions: ['open_questions', 'json'],
+      createdAt: ['created_at', 'text'], updatedAt: ['updated_at', 'text'],
+    },
+  },
+  facts: {
+    table: 'facts',
+    key: 'id',
+    map: mapFactRow,
+    columns: {
+      id: ['id', 'text'], matterId: ['matter_id', 'text'], subject: ['subject', 'text'],
+      predicate: ['predicate', 'text'], object: ['object', 'text'], recordedAt: ['recorded_at', 'text'],
+      expiredAt: ['expired_at', 'text'], authority: ['authority', 'text'], confidence: ['confidence', 'real'],
+      source: ['source', 'json-nullable'], evidence: ['evidence', 'json-nullable'], status: ['status', 'text'],
+      validFrom: ['valid_from', 'text'], validTo: ['valid_to', 'text'], supersedes: ['supersedes', 'text'],
+      supersededBy: ['superseded_by', 'text'], shadowedBy: ['shadowed_by', 'text'],
+      lastSeenAt: ['last_seen_at', 'text'], deletedAt: ['deleted_at', 'text'], deletedReason: ['deleted_reason', 'text'],
+    },
+  },
+  commitments: {
+    table: 'commitments',
+    key: 'id',
+    map: mapCommitmentRow,
+    columns: {
+      id: ['id', 'text'], matterId: ['matter_id', 'text'], debtor: ['debtor', 'text'], creditor: ['creditor', 'text'],
+      action: ['action', 'text'], dueAt: ['due_at', 'text'], timezone: ['timezone', 'text'], status: ['status', 'text'],
+      evidence: ['evidence', 'json'], capability: ['capability', 'text'], doneAt: ['done_at', 'text'],
+      reminderOffsets: ['reminder_offsets', 'reminder'],
+    },
+  },
+  preferences: {
+    table: 'preferences',
+    key: 'id',
+    map: mapPreferenceRow,
+    columns: {
+      id: ['id', 'text'], kind: ['kind', 'text'], statement: ['statement', 'text'], scope: ['scope', 'json'],
+      source: ['source', 'json'], evidence: ['evidence', 'json'], confidence: ['confidence', 'real'],
+      status: ['status', 'text'], validFrom: ['valid_from', 'text'], lastConfirmed: ['last_confirmed', 'text'],
+      expiresAt: ['expires_at', 'text'], priority: ['priority', 'text'],
+    },
+  },
+}
+
+function encodeEntityValue(codec, value) {
+  const encode = CODECS[codec]
+  if (!encode) throw new Error(`unknown entity column codec: ${codec}`)
+  return encode(value)
+}
+
+/** Tables whose row counts are sampled to verify a pre-migration backup. */
+const BACKUP_SAMPLE_TABLES = ['matters', 'facts', 'commitments', 'preferences', 'audit']
 // ---------------------------------------------------------------------------
 // WAL status / recovery (robustness audit 2026-11-17 P1-6).
 //
@@ -840,7 +1015,11 @@ export class SqliteStore {
   constructor(path, { readOnly = false, checkIntegrity = false, busyTimeoutMs = Number(process.env.ADVISERS_SQLITE_BUSY_TIMEOUT_MS) || DEFAULT_BUSY_TIMEOUT_MS } = {}) {
     this.path = path
     this.busyTimeoutMs = busyTimeoutMs
+    // 0.2.3 read path: a read-only store never runs DDL/migrate/journal-mode
+    // pragmas and refuses every write method with E_READ_ONLY (see read()).
+    this.readOnly = Boolean(readOnly)
     this._transactionDepth = 0
+    this._readDepth = 0
     this._baselineIds = null
     this._fullLoad = false
     // FTS5 state (schema v19): which indexes exist and which tokenizer built
@@ -906,6 +1085,75 @@ export class SqliteStore {
     }
   }
 
+  // -------------------------------------------------------------------------
+  // Read-only access (0.2.3 read path; 03-design-persistence-v2.md §4).
+  //
+  // A read-only store never enables WAL, never runs DDL/migrate and never
+  // takes the HOME instance lock (that lock lives in bin/ and only protects
+  // writers), so pure-read commands work while another process holds the write
+  // lock. The connection reads a committed WAL snapshot: an uncommitted writer
+  // transaction is invisible and does not block the reader.
+  // -------------------------------------------------------------------------
+
+  /** meta.schema_version, or null when the meta table/row does not exist. */
+  schemaVersion() {
+    try {
+      const row = this.db.prepare('SELECT value FROM meta WHERE key = ?').get('schema_version')
+      return row ? Number(row.value) : null
+    } catch {
+      return null
+    }
+  }
+
+  /** Throw E_SCHEMA_STALE / E_SCHEMA_NEWER unless this database is current. */
+  assertSchemaCurrent() {
+    const version = this.schemaVersion()
+    if (version === SCHEMA_VERSION) return version
+    if (version !== null && version > SCHEMA_VERSION) throw schemaNewerError(this.path, version)
+    throw schemaStaleError(this.path, version)
+  }
+
+  /** Throw E_READ_ONLY for any write attempted on a read-only store. */
+  _assertWritable(operation = 'write') {
+    if (!this.readOnly) return
+    const error = new Error(`E_READ_ONLY: ${operation} is not available on a read-only SqliteStore (${this.path}); open a writable store to change the ledger`)
+    error.name = 'ReadOnlyStoreError'
+    error.code = 'E_READ_ONLY'
+    error.operation = operation
+    throw error
+  }
+
+  /** Directed row writes are only valid inside mutate()/transaction(). */
+  _assertInWriteTransaction(operation) {
+    this._assertWritable(operation)
+    if (this._transactionDepth > 0) return
+    const error = new Error(`E_TX_REQUIRED: ${operation} must run inside SqliteStore.mutate() or transaction() (${this.path})`)
+    error.name = 'TransactionRequiredError'
+    error.code = 'E_TX_REQUIRED'
+    throw error
+  }
+
+  /**
+   * Run fn inside one read transaction so several SELECTs see the same WAL
+   * snapshot (multi-query commands: status/receipt/deliveries/doctor/export).
+   * A read() nested inside a write transaction joins that transaction.
+   */
+  read(fn) {
+    if (typeof fn !== 'function') throw new TypeError('read requires a function')
+    if (this._transactionDepth > 0 || this._readDepth > 0) return fn(this)
+    this.db.exec('BEGIN DEFERRED')
+    this._readDepth++
+    try {
+      const result = fn(this)
+      this.db.exec('COMMIT')
+      return result
+    } catch (error) {
+      try { this.db.exec('ROLLBACK') } catch {}
+      throw error
+    } finally {
+      this._readDepth--
+    }
+  }
   /** Full-database integrity check; explicit because it is O(database size). */
   assertIntegrity() {
     const row = this.db.prepare('PRAGMA quick_check').get()
@@ -944,6 +1192,7 @@ export class SqliteStore {
 
   /** WAL is persistent; skip the switch when already enabled and retry on busy. */
   enableWal() {
+    this._assertWritable('enableWal')
     if (!this.path || this.path === ':memory:') return 'memory'
     const current = String(this.db.prepare('PRAGMA journal_mode').get()?.journal_mode ?? '').toLowerCase()
     if (current === 'wal' || current === 'memory') return current
@@ -964,6 +1213,7 @@ export class SqliteStore {
   }
 
   initializeSchema() {
+    this._assertWritable('initializeSchema')
     // P2-9: migration backups must be taken OUTSIDE the write transaction --
     // a 'wal_checkpoint(TRUNCATE)' inside BEGIN IMMEDIATE fails with 'database
     // table is locked', and copying the main file without folding the WAL can
@@ -1230,6 +1480,7 @@ export class SqliteStore {
    * Nested calls join the outer transaction (no nested BEGIN).
    */
   _transaction(mode, fn, { retries = OPEN_RETRIES } = {}) {
+    if (String(mode).toUpperCase() === 'IMMEDIATE') this._assertWritable('transaction')
     if (this._transactionDepth > 0) return fn()
     let lastError
     for (let attempt = 0; attempt <= retries; attempt++) {
@@ -1262,10 +1513,28 @@ export class SqliteStore {
   }
 
   /**
+   * One BEGIN IMMEDIATE for a directed write: fn() runs inside, then (when
+   * provided) the audit row is appended to the same transaction. Any throw —
+   * business error or audit failure — rolls every row back, so a ledger write
+   * never commits without its audit row and an audit row never claims a write
+   * that rolled back (invariant I1). Returns { result, audit }.
+   */
+  mutate(fn, audit) {
+    this._assertWritable('mutate')
+    if (typeof fn !== 'function') throw new TypeError('mutate requires a function')
+    return this._transaction('IMMEDIATE', () => {
+      const result = fn(this)
+      const auditRow = audit === undefined || audit === null ? null : this._appendAuditRow(audit)
+      return { result, audit: auditRow }
+    })
+  }
+
+  /**
    * Checkpoint the WAL so a copied/sealed database file is self-contained.
    * Returns busy=true when another connection prevented a full checkpoint.
    */
   checkpoint({ mode = 'TRUNCATE', retries = OPEN_RETRIES } = {}) {
+    this._assertWritable('checkpoint')
     let last = null
     for (let attempt = 0; attempt <= retries; attempt++) {
       last = this.db.prepare(`PRAGMA wal_checkpoint(${mode})`).get()
@@ -1307,11 +1576,15 @@ export class SqliteStore {
    * another connection prevents the checkpoint the migration is refused
    * rather than proceeding with an incomplete backup.
    *
-   * The copy is verified with a read-only DatabaseSync quick_check and the
-   * schema_version it was taken at; a failed verification removes the partial
-   * backup and throws (fail-closed). Returns the backup path.
+   * The copy is verified with a read-only DatabaseSync quick_check, the
+   * schema_version it was taken at, and a row-count sample of the five tables
+   * whose loss matters most (matters/facts/commitments/preferences/audit). A
+   * failed verification removes the partial backup and throws (fail-closed).
+   * The directory entry is fsynced after the copy so a crash cannot leave a
+   * visible-but-empty backup. Returns the backup path.
    */
   backupBeforeMigrate(current) {
+    this._assertWritable('backupBeforeMigrate')
     if (!this.path || this.path === ':memory:') return null
     const checkpoint = this.checkpoint({ mode: 'TRUNCATE' })
     if (checkpoint.busy) {
@@ -1321,11 +1594,18 @@ export class SqliteStore {
       error.code = 'E_MIGRATE_BUSY'
       throw error
     }
+    // Sample the main database AFTER the checkpoint (so WAL-only commits are
+    // included) and compare it with the copy: a backup that silently dropped
+    // committed rows must never be used as the rollback path.
+    const expectedCounts = this._sampleTableCounts(this.db)
     const target = `${this.path}.before-migrate-v${current}-${Date.now()}`
     let backupDb = null
     try {
       copyFileWithRetrySync(this.path, target, { mode: 0o600 })
       fsyncFileSync(target)
+      // Make the directory entry durable too: without this a crash can leave a
+      // correctly-sized backup that is not recoverable after reboot.
+      try { fsyncDirSync(dirname(this.path)) } catch {}
       backupDb = new DatabaseSync(target, { readOnly: true })
       const verdict = String(backupDb.prepare('PRAGMA quick_check').get()?.quick_check ?? 'unknown')
       if (verdict !== 'ok') throw new Error(`quick_check on the backup reported '${verdict}'`)
@@ -1333,6 +1613,7 @@ export class SqliteStore {
       if (meta && Number(meta.value) !== Number(current)) {
         throw new Error(`backup contains schema_version ${meta.value}, expected ${current}`)
       }
+      this._verifyBackupCounts(backupDb, expectedCounts)
       try { chmodSync(target, 0o600) } catch {}
       return target
     } catch (error) {
@@ -1353,21 +1634,15 @@ export class SqliteStore {
   }
 
   /**
-   * Bring an older database up to SCHEMA_VERSION. Runs inside the caller's
-   * write transaction (initializeSchema). Refuses futures schemas and keeps
-   * a same-directory backup before altering an existing database.
+   * Pre-v20 single-block idempotent migration (0.2.2 and earlier).
+   *
+   * Kept apart from the version-step table below: it builds every base table,
+   * adds the columns older releases lacked, installs the v19 trigram FTS and
+   * stamps meta.schema_version=19. The v20 step then adds the migration ledger
+   * and the new indexes in the same outer transaction.
    */
-  migrate() {
-    const row = this.db.prepare('SELECT value FROM meta WHERE key = ?').get('schema_version')
-    const current = row ? Number(row.value) : 0
-    if (!Number.isFinite(current) || current < 0) throw new Error(`invalid schema_version in ${this.path}: ${row?.value}`)
-    if (current > SCHEMA_VERSION) throw new Error(`database schema v${current} is newer than this CLI (v${SCHEMA_VERSION}); upgrade advisers before opening ${this.path}`)
-    if (current >= SCHEMA_VERSION) return
-    // initializeSchema() already took the verified backup before opening its
-    // write transaction (a WAL checkpoint cannot run inside one); only direct
-    // callers of migrate() fall back to taking it here.
-    if (current > 0 && !this._migrationBackup) this._migrationBackup = this.backupBeforeMigrate(current)
-    try {
+  _legacyMigrateThrough19() {
+    {
       this.db.exec(`CREATE TABLE IF NOT EXISTS seen_events (
         link_id TEXT NOT NULL, account_id TEXT NOT NULL, dedupe_key TEXT NOT NULL,
         seen_at TEXT NOT NULL, PRIMARY KEY(link_id, account_id, dedupe_key)
@@ -1448,13 +1723,86 @@ CREATE TABLE IF NOT EXISTS task_runs (
       // instead of falling back to a LIKE table scan. Runs last so the source
       // tables (turns, session_summaries) exist for the 'rebuild' backfill.
       this._setupFts()
-      this.db.prepare('INSERT OR REPLACE INTO meta(key,value) VALUES(?,?)').run('schema_version', String(SCHEMA_VERSION))
-    } catch (error) {
-      throw error
+      this.db.prepare('INSERT OR REPLACE INTO meta(key,value) VALUES(?,?)').run('schema_version', String(LEGACY_SCHEMA_VERSION))
+    }
+  }
+
+  /**
+   * Bring an older database up to SCHEMA_VERSION.
+   *
+   * Runs inside the caller's write transaction (initializeSchema). Order:
+   *   1. read the on-disk version (0 = fresh database whose meta table was just
+   *      created by SCHEMA);
+   *   2. refuse a future schema (E_SCHEMA_NEWER, fail closed);
+   *   3. legacy block for < v19 (idempotent base tables + FTS);
+   *   4. every MIGRATIONS step with version > current, recording
+   *      schema_migrations(version, name, applied_at, duration_ms, backup_path);
+   *   5. stamp meta.schema_version = SCHEMA_VERSION and the diagnostics keys.
+   *
+   * A failure anywhere rolls back every DDL write and the version stamp, so a
+   * failed migration leaves the old database intact and retryable.
+   */
+  migrate() {
+    this._assertWritable('migrate')
+    const row = this.db.prepare('SELECT value FROM meta WHERE key = ?').get('schema_version')
+    const current = row ? Number(row.value) : 0
+    if (!Number.isFinite(current) || current < 0) throw new Error(`invalid schema_version in ${this.path}: ${row?.value}`)
+    if (current > SCHEMA_VERSION) throw schemaNewerError(this.path, current)
+    if (current >= SCHEMA_VERSION) return
+    // initializeSchema() already took the verified backup before opening its
+    // write transaction (a WAL checkpoint cannot run inside one); only direct
+    // callers of migrate() fall back to taking it here.
+    if (current > 0 && !this._migrationBackup) this._migrationBackup = this.backupBeforeMigrate(current)
+    if (current < LEGACY_SCHEMA_VERSION) this._legacyMigrateThrough19()
+    // A direct migrate() caller may not have run SCHEMA first; the steps assume
+    // the migration ledger exists.
+    this.db.exec(SCHEMA_MIGRATIONS_DDL)
+    const from = current
+    for (const step of MIGRATIONS) {
+      if (step.version <= current) continue
+      const startedAt = Date.now()
+      this._runMigrationStep(step)
+      this.db.prepare('INSERT OR REPLACE INTO schema_migrations(version,name,applied_at,duration_ms,backup_path) VALUES(?,?,?,?,?)')
+        .run(step.version, step.name, new Date().toISOString(), Date.now() - startedAt, this._migrationBackup ?? null)
+    }
+    const migratedAt = new Date().toISOString()
+    const setMeta = this.db.prepare('INSERT OR REPLACE INTO meta(key,value) VALUES(?,?)')
+    setMeta.run('schema_version', String(SCHEMA_VERSION))
+    setMeta.run('schema_migrated_from', String(from))
+    setMeta.run('schema_migrated_at', migratedAt)
+    setMeta.run('schema_migrated_app', APP_VERSION)
+    if (this._migrationBackup) setMeta.run('schema_migration_backup', this._migrationBackup)
+  }
+
+  /** Run one migration step (separate method so tests can inject a failure). */
+  _runMigrationStep(step) {
+    step.up(this)
+  }
+
+  /** Row counts for the verify-after-copy step of the migration backup. */
+  _sampleTableCounts(db) {
+    const tables = new Set(db.prepare("SELECT name FROM sqlite_master WHERE type = 'table'").all().map((row) => row.name))
+    const counts = {}
+    for (const table of BACKUP_SAMPLE_TABLES) {
+      if (!tables.has(table)) continue
+      counts[table] = Number(db.prepare(`SELECT COUNT(*) AS n FROM ${table}`).get()?.n ?? 0)
+    }
+    return counts
+  }
+
+  /** Fail-closed comparison of the backup row counts with the main database. */
+  _verifyBackupCounts(backupDb, expected) {
+    const actual = this._sampleTableCounts(backupDb)
+    for (const [table, expectedCount] of Object.entries(expected)) {
+      const actualCount = actual[table]
+      if (actualCount !== expectedCount) {
+        throw new Error(`backup row count mismatch for ${table}: backup has ${actualCount ?? 'no table'}, main database has ${expectedCount}`)
+      }
     }
   }
 
   upsertSession({ conversationId, matterId, title }) {
+    this._assertWritable('upsertSession')
     const now = new Date().toISOString()
     this.db.prepare(`INSERT INTO sessions(conversation_id,matter_id,title,created_at,updated_at)
       VALUES(?,?,?,?,?)
@@ -1473,6 +1821,7 @@ CREATE TABLE IF NOT EXISTS task_runs (
   }
 
   addDelivery({ matterId, conversationId, files, tool, title, validation }) {
+    this._assertWritable('addDelivery')
     const id = `del_${randomUUID().replace(/-/g, '').slice(0, 16)}`
     this.db.prepare('INSERT INTO deliveries(id,matter_id,conversation_id,files,tool,title,validation,created_at) VALUES(?,?,?,?,?,?,?,?)')
       .run(id, matterId, conversationId, JSON.stringify(files ?? []), tool ?? null, title ?? null, validation ?? null, new Date().toISOString())
@@ -1489,14 +1838,17 @@ CREATE TABLE IF NOT EXISTS task_runs (
   }
 
   setMeta(key, value) {
+    this._assertWritable('setMeta')
     this.db.prepare('INSERT OR REPLACE INTO meta(key,value) VALUES(?,?)').run(key, String(value))
   }
 
   deleteMeta(key) {
+    this._assertWritable('deleteMeta')
     this.db.prepare('DELETE FROM meta WHERE key = ?').run(key)
   }
 
   addTaskRun({ conversationId, matterId, task, tools, artifacts, outcome }) {
+    this._assertWritable('addTaskRun')
     const id = `run_${randomUUID().replace(/-/g, '').slice(0, 16)}`
     this.db.prepare('INSERT INTO task_runs(id,conversation_id,matter_id,task,tools,artifacts,outcome,created_at) VALUES(?,?,?,?,?,?,?,?)')
       .run(id, conversationId, matterId ?? null, task, json(tools), json(artifacts), outcome, new Date().toISOString())
@@ -1509,6 +1861,7 @@ CREATE TABLE IF NOT EXISTS task_runs (
   }
 
   addNudge({ localDay, level, commitmentId, body }) {
+    this._assertWritable('addNudge')
     const key = `${localDay}:${level}:${commitmentId}`
     const id = `nudge_${randomUUID().replace(/-/g, '').slice(0, 16)}`
     try {
@@ -1521,6 +1874,7 @@ CREATE TABLE IF NOT EXISTS task_runs (
   }
 
   setNudgeOutcome(id, outcome) {
+    this._assertWritable('setNudgeOutcome')
     return Number(this.db.prepare('UPDATE nudges SET outcome = ?, outcome_at = ? WHERE id = ?').run(outcome, new Date().toISOString(), id).changes) > 0
   }
 
@@ -1540,6 +1894,7 @@ CREATE TABLE IF NOT EXISTS task_runs (
    * rows actually inserted (existing rows are left untouched).
    */
   addNudges(rows) {
+    this._assertWritable('addNudges')
     if (!rows?.length) return 0
     return this._transaction('IMMEDIATE', () => {
       const statement = this.db.prepare('INSERT OR IGNORE INTO nudges(id,at,local_day,level,commitment_id,dedupe_key,body) VALUES(?,?,?,?,?,?,?)')
@@ -1611,6 +1966,7 @@ CREATE TABLE IF NOT EXISTS task_runs (
 
   /** P0-2: delete a batch of meta keys in one transaction. */
   deleteMetaKeys(keys) {
+    this._assertWritable('deleteMetaKeys')
     if (!keys?.length) return 0
     return this._transaction('IMMEDIATE', () => {
       const statement = this.db.prepare('DELETE FROM meta WHERE key = ?')
@@ -1624,7 +1980,16 @@ CREATE TABLE IF NOT EXISTS task_runs (
     return this.db.prepare('SELECT * FROM nudges ORDER BY at DESC LIMIT ?').all(limit)
   }
 
-  purgeMatterData(matterId) {
+  /**
+   * Delete the non-ledger rows of one matter (sessions/turns/summaries/runs/
+   * nudges/candidates/deliveries). The VACUUM is a maintenance operation: it
+   * cannot run inside a transaction, so when this is called from inside
+   * mutate()/transaction() it is skipped and the caller runs it after COMMIT
+   * (pass { vacuum: false } explicitly to force that). Standalone calls keep
+   * the historical checkpoint+VACUUM behaviour.
+   */
+  purgeMatterData(matterId, { vacuum = true } = {}) {
+    this._assertWritable('purgeMatterData')
     const conversations = this.db.prepare('SELECT conversation_id FROM sessions WHERE matter_id = ?').all(matterId).map((r) => r.conversation_id)
     let turns = 0
     let summaries = 0
@@ -1644,11 +2009,14 @@ CREATE TABLE IF NOT EXISTS task_runs (
     this.db.prepare('DELETE FROM research_runs WHERE matter_id = ?').run(matterId)
     const sessions = this.db.prepare('DELETE FROM sessions WHERE matter_id = ?').run(matterId).changes
     const deliveries = this.db.prepare('DELETE FROM deliveries WHERE matter_id = ?').run(matterId).changes
-    try { this.db.exec('PRAGMA wal_checkpoint(TRUNCATE)'); this.db.exec('VACUUM') } catch {}
+    if (vacuum && this._transactionDepth === 0) {
+      try { this.db.exec('PRAGMA wal_checkpoint(TRUNCATE)'); this.db.exec('VACUUM') } catch {}
+    }
     return { sessions: Number(sessions), deliveries: Number(deliveries), turns, summaries, runs, nudges, candidates }
   }
 
   addTurn({ conversationId, role, content }) {
+    this._assertWritable('addTurn')
     const seq = (this.db.prepare('SELECT MAX(seq) AS n FROM turns WHERE conversation_id = ?').get(conversationId)?.n ?? 0) + 1
     const id = `turn_${randomUUID().replace(/-/g, '').slice(0, 16)}`
     this.db.prepare('INSERT INTO turns(id,conversation_id,seq,role,content,created_at) VALUES(?,?,?,?,?,?)')
@@ -1662,6 +2030,7 @@ CREATE TABLE IF NOT EXISTS task_runs (
   }
 
   upsertCalendarEvent({ uid, summary, startsAt, endsAt, allDay = false, tzid, location, rrule, source }) {
+    this._assertWritable('upsertCalendarEvent')
     this.db.prepare(`INSERT INTO calendar_events(uid,summary,starts_at,ends_at,all_day,tzid,location,rrule,source,imported_at)
       VALUES(?,?,?,?,?,?,?,?,?,?)
       ON CONFLICT(uid) DO UPDATE SET summary=excluded.summary, starts_at=excluded.starts_at, ends_at=excluded.ends_at,
@@ -1683,6 +2052,7 @@ CREATE TABLE IF NOT EXISTS task_runs (
   }
 
   permitReplayStore() {
+    this._assertWritable('permitReplayStore')
     return {
       has: (permitId) => Boolean(this.db.prepare('SELECT 1 FROM permit_consumed WHERE permit_id = ?').get(permitId)),
       claim: (permitId, expiresAt) => Number(this.db.prepare('INSERT OR IGNORE INTO permit_consumed(permit_id,expires_at,consumed_at) VALUES(?,?,?)').run(permitId, expiresAt, new Date().toISOString()).changes) === 1,
@@ -1691,6 +2061,7 @@ CREATE TABLE IF NOT EXISTS task_runs (
   }
 
   addResearchRun({ matterId, query, answer, sources, usage, stopReason }) {
+    this._assertWritable('addResearchRun')
     const id = `rr_${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 8)}`
     this.db.prepare('INSERT INTO research_runs(id,matter_id,query,answer,sources,usage,stop_reason,created_at) VALUES(?,?,?,?,?,?,?,?)')
       .run(id, matterId ?? null, query, answer, JSON.stringify(sources ?? []), usage ? JSON.stringify(usage) : null, stopReason ?? null, new Date().toISOString())
@@ -1702,6 +2073,7 @@ CREATE TABLE IF NOT EXISTS task_runs (
   }
 
   addModelCall({ conversationId, matterId, turnId, task, model, effort, thinking, usage, durationMs, finishReason, status = 'ok', code, attempts = 1 }) {
+    this._assertWritable('addModelCall')
     const id = `mc_${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 8)}`
     this.db.prepare(`INSERT INTO model_calls(id,conversation_id,matter_id,turn_id,task,model,effort,thinking,status,code,attempts,prompt_tokens,completion_tokens,reasoning_tokens,cached_tokens,total_tokens,duration_ms,finish_reason,created_at)
       VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`).run(
@@ -1744,6 +2116,7 @@ CREATE TABLE IF NOT EXISTS task_runs (
   }
 
   proposeCandidate({ kind, payload, evidence }) {
+    this._assertWritable('proposeCandidate')
     const id = `cand_${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 8)}`
     const now = new Date().toISOString()
     this.db.prepare('INSERT INTO memory_candidates(id,kind,payload,evidence,status,created_at) VALUES(?,?,?,?,?,?)')
@@ -1762,6 +2135,7 @@ CREATE TABLE IF NOT EXISTS task_runs (
   }
 
   reviewCandidate(id, status, reason) {
+    this._assertWritable('reviewCandidate')
     this.db.prepare('UPDATE memory_candidates SET status = ?, reviewed_at = ?, reject_reason = ? WHERE id = ?')
       .run(status, new Date().toISOString(), reason ?? null, id)
     return this.getCandidate(id)
@@ -1891,6 +2265,7 @@ CREATE TABLE IF NOT EXISTS task_runs (
   }
 
   upsertSessionSummary({ conversationId, summary, throughSeq, pins }) {
+    this._assertWritable('upsertSessionSummary')
     const max = this.db.prepare('SELECT MAX(version) AS v FROM summary_versions WHERE conversation_id = ?').get(conversationId)?.v ?? 0
     const version = max + 1
     const at = new Date().toISOString()
@@ -1917,10 +2292,12 @@ CREATE TABLE IF NOT EXISTS task_runs (
    * can never both chain onto the same predecessor (audit fork, P0-3).
    */
   appendAudit({ actor, action, allowed, reason }) {
+    this._assertWritable('appendAudit')
     return this._transaction('IMMEDIATE', () => this._appendAuditRow({ actor, action, allowed, reason }))
   }
 
   _appendAuditRow({ actor, action, allowed, reason }) {
+    this._assertWritable('appendAudit')
     const last = this.db.prepare('SELECT hash FROM audit ORDER BY seq DESC LIMIT 1').get()
     const prev = last?.hash ?? ''
     const at = new Date().toISOString()
@@ -1959,11 +2336,13 @@ CREATE TABLE IF NOT EXISTS task_runs (
   }
 
   markSeen(linkId, accountId, dedupeKey) {
+    this._assertWritable('markSeen')
     this.db.prepare('INSERT OR REPLACE INTO seen_events VALUES(?,?,?,?)')
       .run(linkId, accountId, dedupeKey, new Date().toISOString())
   }
 
   pruneSeen(ttlDays = 7) {
+    this._assertWritable('pruneSeen')
     const cutoff = new Date(Date.now() - ttlDays * 86_400_000).toISOString()
     this.db.prepare('DELETE FROM seen_events WHERE seen_at < ?').run(cutoff)
   }
@@ -1981,6 +2360,132 @@ CREATE TABLE IF NOT EXISTS task_runs (
     }
   }
 
+  // -------------------------------------------------------------------------
+  // Directed entity reads/writes (0.2.3 incremental write path).
+  //
+  // Every insert*/update* must run inside mutate()/transaction() (otherwise
+  // E_TX_REQUIRED: a ledger row must never commit outside the transaction that
+  // carries its audit row), and produces exactly the bytes _saveRows() would
+  // (shared ENTITY_SPECS codecs). update* writes only the columns a patch
+  // explicitly names; an unknown field is an error so a typo cannot silently
+  // write nothing. get*/find* are read methods usable on read-only stores.
+  // -------------------------------------------------------------------------
+
+  _getEntity(kind, id) {
+    const spec = ENTITY_SPECS[kind]
+    if (!spec) throw new Error(`unknown entity: ${kind}`)
+    const row = this.db.prepare(`SELECT * FROM ${spec.table} WHERE ${spec.key} = ?`).get(id)
+    return row ? spec.map(row) : undefined
+  }
+
+  getMatter(id) { return this._getEntity('matters', id) }
+  getFact(id) { return this._getEntity('facts', id) }
+  getCommitment(id) { return this._getEntity('commitments', id) }
+  getPreference(id) { return this._getEntity('preferences', id) }
+
+  _insertEntity(operation, kind, entity) {
+    this._assertInWriteTransaction(operation)
+    const spec = ENTITY_SPECS[kind]
+    if (!spec) throw new Error(`unknown entity: ${kind}`)
+    const fields = Object.keys(spec.columns)
+    const columns = fields.map((field) => spec.columns[field][0])
+    const values = fields.map((field) => encodeEntityValue(spec.columns[field][1], entity?.[field]))
+    this.db.prepare(`INSERT INTO ${spec.table}(${columns.join(',')}) VALUES(${fields.map(() => '?').join(',')})`).run(...values)
+    return entity
+  }
+
+  insertMatter(row) { return this._insertEntity('insertMatter', 'matters', row) }
+  insertFact(row) { return this._insertEntity('insertFact', 'facts', row) }
+  insertCommitment(row) { return this._insertEntity('insertCommitment', 'commitments', row) }
+  insertPreference(row) { return this._insertEntity('insertPreference', 'preferences', row) }
+
+  _updateEntity(operation, kind, id, patch) {
+    this._assertInWriteTransaction(operation)
+    const spec = ENTITY_SPECS[kind]
+    if (!spec) throw new Error(`unknown entity: ${kind}`)
+    const assignments = []
+    const values = []
+    for (const field of Object.keys(patch ?? {})) {
+      const column = spec.columns[field]
+      if (!column) throw new Error(`unknown ${kind} field: ${field}`)
+      const value = patch[field]
+      if (value === undefined) continue
+      assignments.push(`${column[0]} = ?`)
+      values.push(encodeEntityValue(column[1], value))
+    }
+    if (assignments.length) {
+      this.db.prepare(`UPDATE ${spec.table} SET ${assignments.join(', ')} WHERE ${spec.key} = ?`).run(...values, id)
+    }
+    return this._getEntity(kind, id)
+  }
+
+  updateMatter(id, patch) { return this._updateEntity('updateMatter', 'matters', id, patch) }
+  updateFact(id, patch) { return this._updateEntity('updateFact', 'facts', id, patch) }
+  updateCommitment(id, patch) { return this._updateEntity('updateCommitment', 'commitments', id, patch) }
+  updatePreference(id, patch) { return this._updateEntity('updatePreference', 'preferences', id, patch) }
+
+  /**
+   * The confirmed, unexpired fact for one identity (remember/supersede path).
+   * predicate 'said' never matches: conversation echoes do not supersede each
+   * other (same rule as core Ledger.remember). Uses idx_facts_identity. The
+   * `IS ?` comparison treats a missing matterId like SQLite's IS NULL.
+   */
+  findFactCurrent({ subject, predicate, matterId } = {}) {
+    if (predicate === 'said') return undefined
+    const row = this.db.prepare(`
+      SELECT * FROM facts
+      WHERE status = 'confirmed' AND expired_at IS NULL AND subject = ? AND predicate = ? AND (matter_id IS ?)
+      ORDER BY rowid LIMIT 1
+    `).get(subject, predicate, matterId ?? null)
+    return row ? mapFactRow(row) : undefined
+  }
+
+  /** First non-deprecated preference with this exact statement (correct/learn). */
+  findPreferenceByStatement(statement) {
+    const row = this.db.prepare("SELECT * FROM preferences WHERE statement = ? AND status <> 'deprecated' ORDER BY rowid LIMIT 1").get(statement)
+    return row ? mapPreferenceRow(row) : undefined
+  }
+
+  /** First active matter by insertion order (commit add / memory accept default). */
+  firstActiveMatter() {
+    const row = this.db.prepare("SELECT * FROM matters WHERE status = 'active' ORDER BY rowid LIMIT 1").get()
+    return row ? mapMatterRow(row) : undefined
+  }
+
+  /**
+   * Persist one tick() batch atomically (no audit row, matching the historical
+   * tick behaviour): nudge inserts, snooze wake-ups and the snooze meta
+   * cleanup either all commit or all roll back, so a nudge can never be
+   * recorded while its wake-up is lost. The conditional UPDATE keeps a
+   * concurrent state change (e.g. the commitment was completed meanwhile)
+   * authoritative. Returns { nudges, woke, metaDeleted }.
+   */
+  applyTick({ nudgeRows = [], wakeIds = [], snoozeKeys = [] } = {}) {
+    this._assertWritable('applyTick')
+    return this._transaction('IMMEDIATE', () => {
+      const now = new Date().toISOString()
+      let nudges = 0
+      if (nudgeRows.length) {
+        const insert = this.db.prepare('INSERT OR IGNORE INTO nudges(id,at,local_day,level,commitment_id,dedupe_key,body) VALUES(?,?,?,?,?,?,?)')
+        for (const row of nudgeRows) {
+          const dedupeKey = `${row.localDay}:${row.level}:${row.commitmentId}`
+          const id = `nudge_${randomUUID().replace(/-/g, '').slice(0, 16)}`
+          nudges += Number(insert.run(id, row.at ?? now, row.localDay, row.level, row.commitmentId, dedupeKey, row.body).changes)
+        }
+      }
+      let woke = 0
+      if (wakeIds.length) {
+        const wake = this.db.prepare("UPDATE commitments SET status = 'open' WHERE id = ? AND status = 'snoozed'")
+        for (const id of wakeIds) woke += Number(wake.run(id).changes)
+      }
+      let metaDeleted = 0
+      if (snoozeKeys.length) {
+        const del = this.db.prepare('DELETE FROM meta WHERE key = ?')
+        for (const key of snoozeKeys) metaDeleted += Number(del.run(key).changes)
+      }
+      return { nudges, woke, metaDeleted }
+    })
+  }
   // -------------------------------------------------------------------------
   // Partial loading (P1-2, 0.2.2)
   //
@@ -2198,6 +2703,7 @@ CREATE TABLE IF NOT EXISTS task_runs (
   }
 
   save(snapshot) {
+    this._assertWritable('save')
     return this._transaction('IMMEDIATE', () => this._saveRows(snapshot))
   }
 
@@ -2207,6 +2713,7 @@ CREATE TABLE IF NOT EXISTS task_runs (
    * committed). `inside` runs inside the same transaction before the audit row.
    */
   saveWithAudit(snapshot, audit, inside) {
+    this._assertWritable('saveWithAudit')
     return this._transaction('IMMEDIATE', () => {
       this._saveRows(snapshot)
       if (typeof inside === 'function') inside(this)
@@ -2215,6 +2722,7 @@ CREATE TABLE IF NOT EXISTS task_runs (
   }
 
   _saveRows(snapshot) {
+    this._assertWritable('save')
     const db = this.db
     const newIds = idsFor(snapshot)
     const baseline = this._baselineIds
@@ -2280,5 +2788,30 @@ CREATE TABLE IF NOT EXISTS task_runs (
 
   close() {
     this.db.close()
+  }
+}
+
+/**
+ * Open an existing database for lock-free reads (0.2.3 read path).
+ *
+ * The store is read-only (DatabaseSync readOnly): no DDL, no migration, no
+ * journal-mode pragmas, no HOME instance lock — so it works while a long-lived
+ * writer holds the lock, reading the last committed WAL snapshot. The schema is
+ * asserted up front: a stale database throws E_SCHEMA_STALE (a writable command
+ * has to migrate it first) and a future one throws E_SCHEMA_NEWER. The caller
+ * decides whether to fall back to the writable path (bin's openReadStore).
+ *
+ * @param {string} path database file
+ * @param {{ checkIntegrity?: boolean, busyTimeoutMs?: number }} [options]
+ * @returns {SqliteStore}
+ */
+export function openReadStore(path, { checkIntegrity = false, busyTimeoutMs } = {}) {
+  const store = new SqliteStore(path, { readOnly: true, checkIntegrity, busyTimeoutMs })
+  try {
+    store.assertSchemaCurrent()
+    return store
+  } catch (error) {
+    try { store.close() } catch {}
+    throw error
   }
 }

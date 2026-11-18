@@ -335,9 +335,11 @@ test('opening a database adds the secondary indexes without a schema bump from t
       assert.match(plan('SELECT * FROM nudges WHERE commitment_id = ? ORDER BY at DESC LIMIT 3', 'cm_1'), /USING INDEX idx_nudges_commitment_at/)
       assert.match(plan('SELECT * FROM deliveries ORDER BY created_at DESC LIMIT 20'), /idx_deliveries_created/)
       assert.equal(reopened.getMeta('schema_version'), String(SCHEMA_VERSION))
-      // v19 is the FTS5 trigram migration (see test/fts-cjk.test.js); the
-      // secondary indexes are still layout only, not the reason for the bump.
-      assert.equal(SCHEMA_VERSION, 19, 'indexes are not a schema-version change')
+      // v20 is the persistence-v2 migration (schema_migrations ledger + the
+      // three new indexes, see test/migration-v20.test.js); the pre-existing
+      // secondary indexes are still layout only and are not the reason for the
+      // bump -- recreating them without a version change stays supported.
+      assert.equal(SCHEMA_VERSION, 20, 'the v20 bump is the migration ledger, not the indexes')
       assert.ok(matter.id)
     } finally {
       reopened.close()

@@ -1,5 +1,6 @@
 import type { HostPorts } from './ports.ts'
 import { systemPorts } from './ports.ts'
+import { applyRemember, authorityRank, completeCommitment, createCommitment, createPreference, updateCommitmentFields } from './ops.ts'
 import type {
   Commitment,
   CommitmentEvidence,
@@ -79,8 +80,28 @@ export interface CommitmentUpdate {
 }
 
 /**
+ * Apply a pure-operation result back onto the object `addLookup` returned from
+ * the ledger's own Map, so callers that hold a reference to an entity observe
+ * the update (the historical mutation semantics of Ledger.updateCommitment /
+ * completeCommitment / remember(merge)).
+ */
+function applyEntityInPlace<T extends object>(target: T, source: T): T {
+  const targetRecord = target as Record<string, unknown>
+  const sourceRecord = source as Record<string, unknown>
+  for (const key of Object.keys(targetRecord)) {
+    if (!(key in sourceRecord)) delete targetRecord[key]
+  }
+  for (const key of Object.keys(sourceRecord)) targetRecord[key] = sourceRecord[key]
+  return target
+}
+
+/**
  * In-memory ledger used by the skeleton and tests.
  * Production storage will be SQLite + FTS5, with this interface.
+ *
+ * The business rules for the three ledgers live in ./ops.ts as pure functions;
+ * this class only keeps the entity Maps and applies those results in place, so
+ * the SQLite incremental-write path can reuse the exact same rules.
  */
 export class Ledger {
   private readonly clock: HostPorts['clock']
@@ -128,7 +149,7 @@ export class Ledger {
   }
 
   private authorityRank(authority: Fact['authority']): number {
-    return authority === 'user' ? 100 : authority === 'import' ? 60 : authority === 'tool' ? 60 : 40
+    return authorityRank(authority)
   }
 
   remember(input: FactInput): Fact {
@@ -141,41 +162,17 @@ export class Ledger {
     // Conversation echoes must not supersede each other; otherwise only the
     // latest user message remains searchable.
     const current = input.predicate === 'said' ? undefined : [...this.facts.values()].find(key)
-    const incomingRank = this.authorityRank(input.authority ?? 'user')
-    const now = this.clock.now()
-    if (current && current.object === input.object) {
-      current.evidence = [...(current.evidence ?? []), ...(input.evidence ?? (input.source ? [input.source] : []))]
-      if (!current.source && input.source) current.source = input.source
-      if (incomingRank > this.authorityRank(current.authority)) current.authority = input.authority ?? current.authority
-      current.lastSeenAt = now
-      return current
+    const outcome = applyRemember(current, input, { clock: this.clock, ids: this.ids })
+    if (outcome.op === 'update') {
+      const existing = this.facts.get(outcome.row.id)
+      return existing ? applyEntityInPlace(existing, outcome.row) : (this.facts.set(outcome.row.id, outcome.row), outcome.row)
     }
-    if (current && incomingRank < this.authorityRank(current.authority)) {
-      const shadow: Fact = {
-        id: this.ids.next('fact'), matterId: input.matterId, subject: input.subject, predicate: input.predicate,
-        object: input.object, recordedAt: now, authority: input.authority ?? 'inferred',
-        confidence: input.confidence ?? 0.6, source: input.source, evidence: input.evidence,
-        status: 'candidate', shadowedBy: current.id, validFrom: input.validFrom, validTo: input.validTo,
-      }
-      this.facts.set(shadow.id, shadow)
-      return shadow
+    if (outcome.op === 'supersede') {
+      const existing = this.facts.get(outcome.old.id)
+      if (existing) applyEntityInPlace(existing, outcome.old)
     }
-    if (current) {
-      current.status = 'superseded'
-      current.validTo = input.validFrom ?? now
-      current.expiredAt = now
-    }
-    const fact: Fact = {
-      id: this.ids.next('fact'), matterId: input.matterId, subject: input.subject, predicate: input.predicate,
-      object: input.object, recordedAt: now, authority: input.authority ?? 'user',
-      confidence: input.confidence ?? 0.9, source: input.source, evidence: input.evidence ?? (input.source ? [input.source] : []),
-      status: (input.authority ?? 'user') === 'user' ? 'confirmed' : 'candidate',
-      validFrom: input.validFrom ?? now, validTo: input.validTo,
-      supersedes: current?.id,
-    }
-    if (current) current.supersededBy = fact.id
-    this.facts.set(fact.id, fact)
-    return fact
+    this.facts.set(outcome.row.id, outcome.row)
+    return outcome.row
   }
 
   searchMemory(query: string, options: { limit?: number; matterId?: Id } = {}): Array<{ kind: 'fact' | 'preference'; id: Id; text: string; detail?: string; matterId?: Id; evidence?: string; score: number }> {
@@ -220,19 +217,7 @@ export class Ledger {
   }
 
   addPreference(input: PreferenceInput): UserPreference {
-    const pref: UserPreference = {
-      id: this.ids.next('pref'),
-      kind: input.kind,
-      statement: input.statement,
-      scope: input.scope ?? { level: 'global' },
-      source: input.source ?? { type: 'user_explicit' },
-      evidence: input.evidence ?? [],
-      confidence: input.confidence ?? 0.9,
-      status: input.status ?? 'confirmed',
-      validFrom: this.clock.now(),
-      expiresAt: input.expiresAt,
-      priority: input.priority ?? (input.kind === 'taboo' ? 'hard' : 'soft'),
-    }
+    const pref = createPreference({ clock: this.clock, ids: this.ids }, input)
     this.preferences.set(pref.id, pref)
     return pref
   }
@@ -250,25 +235,7 @@ export class Ledger {
   }
 
   addCommitment(input: CommitmentInput): Commitment {
-    if (input.evidence.length === 0) {
-      throw new Error('a commitment requires at least one evidence item')
-    }
-    const reminderOffsets = this.copyReminderOffsets(input.reminderOffsets)
-    const commitment: Commitment = {
-      id: this.ids.next('cm'),
-      matterId: input.matterId,
-      debtor: input.debtor,
-      creditor: input.creditor,
-      action: input.action,
-      dueAt: input.dueAt,
-      timezone: input.timezone ?? 'Asia/Shanghai',
-      status: 'open',
-      evidence: input.evidence,
-      capability: input.capability ?? 'none',
-      // Never invent the field for old callers: a missing key keeps snapshots
-      // byte-compatible with pre-0.2.0 data.
-      ...(reminderOffsets === undefined ? {} : { reminderOffsets }),
-    }
+    const commitment = createCommitment({ clock: this.clock, ids: this.ids }, input)
     this.commitments.set(commitment.id, commitment)
     return commitment
   }
@@ -280,25 +247,7 @@ export class Ledger {
   updateCommitment(id: Id, patch: CommitmentUpdate): Commitment {
     const commitment = this.commitments.get(id)
     if (!commitment) throw new Error(`unknown commitment: ${id}`)
-    if (patch.action !== undefined) commitment.action = patch.action
-    if (patch.dueAt !== undefined) commitment.dueAt = patch.dueAt
-    if (patch.timezone !== undefined) commitment.timezone = patch.timezone
-    if (patch.capability !== undefined) commitment.capability = patch.capability
-    if (patch.reminderOffsets !== undefined) {
-      const reminderOffsets = this.copyReminderOffsets(patch.reminderOffsets)
-      if (reminderOffsets === undefined) delete commitment.reminderOffsets
-      else commitment.reminderOffsets = reminderOffsets
-    }
-    return commitment
-  }
-
-  private copyReminderOffsets(value: string[] | null | undefined): string[] | undefined {
-    if (value === undefined || value === null) return undefined
-    if (!Array.isArray(value)) throw new TypeError('reminderOffsets must be an array of strings')
-    return value.map((entry) => {
-      if (typeof entry !== 'string') throw new TypeError('reminderOffsets must be an array of strings')
-      return entry
-    })
+    return applyEntityInPlace(commitment, updateCommitmentFields(commitment, patch))
   }
 
   openCommitments(matterId?: Id): Commitment[] {
@@ -315,10 +264,7 @@ export class Ledger {
     if (evidence.length === 0) throw new Error('done requires external evidence; model self-report is not evidence')
     const commitment = this.commitments.get(id)
     if (!commitment) throw new Error(`unknown commitment: ${id}`)
-    commitment.status = 'done'
-    commitment.doneAt = this.clock.now()
-    commitment.evidence.push(...evidence)
-    return commitment
+    return applyEntityInPlace(commitment, completeCommitment(commitment, evidence, this.clock.now()))
   }
 
   /** Soft delete with a tombstone; never hard-delete user data. */
@@ -652,3 +598,28 @@ export interface LedgerSnapshot {
   routines: Routine[]
   routinePatches: RoutinePatch[]
 }
+
+/**
+ * The nine ledger tables of a {@link LedgerSnapshot} (wire v1). Kept in one
+ * place so the SQLite adapter and tests can assert table coverage without
+ * hand-maintaining a second list (0.2.3 persistence contract; 0.3 expands this
+ * into ENTITY_SPECS).
+ */
+export const LEDGER_SNAPSHOT_TABLES = [
+  'matters',
+  'facts',
+  'commitments',
+  'preferences',
+  'links',
+  'updates',
+  'routines',
+  'routinePatches',
+  'routes',
+] as const
+
+export type LedgerSnapshotTable = (typeof LEDGER_SNAPSHOT_TABLES)[number]
+
+// Pure ledger operations (0.2.3): re-exported here because index.ts (not part
+// of the persistence wave's file scope) only knows this module; `export *`
+// keeps the core public surface additive.
+export * from './ops.ts'
