@@ -1,14 +1,15 @@
 #!/usr/bin/env node
 import { spawnSync } from 'node:child_process'
-import { chmodSync, closeSync, copyFileSync, existsSync, fsyncSync, mkdirSync, openSync, readdirSync, readFileSync, renameSync, rmSync, statSync, writeFileSync, writeSync } from 'node:fs'
+import { chmodSync, existsSync, mkdirSync, readdirSync, readFileSync, renameSync, rmSync, statSync, writeFileSync } from 'node:fs'
 import { homedir, hostname } from 'node:os'
 import { createHash, randomBytes, randomUUID } from 'node:crypto'
-import { basename, dirname, extname, isAbsolute, join } from 'node:path'
+import { delimiter as PATH_DELIMITER, basename, dirname, extname, isAbsolute, join } from 'node:path'
 let SqliteStore
 let acquireInstanceLock
 let instanceLockPath
+let inspectWalStatus
 try {
-  ({ SqliteStore, acquireInstanceLock, instanceLockPath } = await import('../lib/sqlite.js'))
+  ({ SqliteStore, acquireInstanceLock, instanceLockPath, inspectWalStatus } = await import('../lib/sqlite.js'))
 } catch (error) {
   if (String(error?.message || error).includes('node:sqlite')) {
     console.error(`Advisers needs Node >= 22.16 (node:sqlite). You have ${process.version}. Install Node 24 or use nvm-windows.`)
@@ -17,6 +18,19 @@ try {
   throw error
 }
 import { egressDeniedReason } from '../lib/egress.js'
+// 0.2.3 Wave 1: every durable bin/ output goes through the crash-safe helpers
+// (short-write loop, fsync, atomic rename, bounded Windows retry) instead of a
+// one-shot writeFileSync that ENOSPC can truncate.
+import {
+  atomicWriteFileSync,
+  commitTempFileSync,
+  copyFileWithRetrySync,
+  describeFsError,
+  fsyncDirSync,
+  fsyncFileSync,
+  rmWithRetrySync,
+  writeAllToTempSync,
+} from '../lib/fs-safe.js'
 
 /**
  * P1-1: lazy-load the heavy / rarely used libraries.
@@ -54,6 +68,7 @@ const loadSafety = lazyModule(() => import('../lib/safety/index.js'))
 // IMAP client and review helpers (~63-75ms of compiled JS). They are only
 // needed by a subset of commands, so each one is a memoized dynamic import.
 const loadAgent = lazyModule(() => import('../lib/agent.js'))
+const loadUntrusted = lazyModule(() => import('../lib/untrusted.js'))
 const loadModel = lazyModule(() => import('../lib/model.js'))
 const loadLearning = lazyModule(() => import('../lib/learning.js'))
 const loadRoutine = lazyModule(() => import('../lib/routine.js'))
@@ -212,6 +227,88 @@ function ensureHome() {
   mkdirSync(HOME, { recursive: true, mode: 0o700 })
   try { chmodSync(HOME, 0o700) } catch {}
   ensureAuditKey()
+}
+
+// ---------------------------------------------------------------------------
+// 0.2.3 Wave 1: agent workspace boundary (security audit SEC3-02 / P1-B)
+//
+// Agent file tools used to default to process.cwd(), i.e. whatever directory
+// the user happened to start the CLI in (often $HOME or a client project). They
+// now default to a dedicated 0700 workspace under ADVISERS_HOME. Widening the
+// boundary is explicit only: --allow-path <dir> (repeatable, chat/repl) or
+// ADVISERS_ALLOW_PATHS (path-list). Sensitive/persistence paths stay denied by
+// lib/agent.js regardless of the allow list.
+// ---------------------------------------------------------------------------
+const AGENT_WORKSPACE = join(HOME, 'workspace')
+
+/** Create (0700) and return the default agent workspace root. */
+function ensureAgentWorkspace() {
+  mkdirSync(AGENT_WORKSPACE, { recursive: true, mode: 0o700 })
+  try { chmodSync(AGENT_WORKSPACE, 0o700) } catch {}
+  return AGENT_WORKSPACE
+}
+
+/** Merge explicit --allow-path values with ADVISERS_ALLOW_PATHS (explicit only). */
+function resolveAllowPaths(cliAllowPaths = []) {
+  const list = Array.isArray(cliAllowPaths) ? cliAllowPaths.slice() : []
+  const envValue = process.env.ADVISERS_ALLOW_PATHS
+  if (envValue) list.push(...String(envValue).split(PATH_DELIMITER))
+  const seen = new Set()
+  const result = []
+  for (const entry of list) {
+    const value = String(entry == null ? '' : entry).trim()
+    if (!value || seen.has(value)) continue
+    seen.add(value)
+    result.push(value)
+  }
+  return result
+}
+
+/** Short audit-safe hash used when a value must not be stored verbatim. */
+function auditHash(value) {
+  try { return createHash('sha256').update(String(value)).digest('hex').slice(0, 16) } catch { return 'unhashable' }
+}
+
+/**
+ * Reason text for the tool audit chain: control characters removed and any
+ * absolute path (POSIX or Windows) replaced with a short hash, so an audit row
+ * never stores a home/workspace path or a model-supplied absolute path.
+ */
+function auditSafeReason(value) {
+  let text = String(value == null ? '' : value).replace(/[\u0000-\u001f\u007f]/g, ' ')
+  text = text.replace(/(?:[A-Za-z]:[\\/]|\/)[^\s;,'")]+/g, (match) => 'sha256:' + auditHash(match))
+  return text.replace(/\s+/g, ' ').trim().slice(0, 160)
+}
+
+/**
+ * onToolAction sink for runAgent: one audit row per allowed/denied tool call.
+ * action is tool.read / tool.write / tool.call; the row keeps the tool name,
+ * decision, code and a workspace-relative path (or a hash of the raw input).
+ * File contents and absolute paths are never written.
+ */
+function auditToolAction(entry) {
+  try {
+    const store = dbStore()
+    if (!store) return
+    const spec = entry && typeof entry === 'object' ? entry : {}
+    const allowed = spec.allowed !== false
+    const action = spec.action === 'write' ? 'tool.write' : spec.action === 'read' ? 'tool.read' : 'tool.call'
+    const parts = ['tool=' + safeAuditToken(spec.tool, 'unknown'), 'allowed=' + (allowed ? 1 : 0), 'code=' + safeAuditToken(spec.code, allowed ? 'OK' : 'DENIED')]
+    if (typeof spec.relativePath === 'string' && spec.relativePath) parts.push('path=' + safeAuditToken(spec.relativePath, '?'))
+    else if (spec.input != null) parts.push('pathHash=' + auditHash(spec.input))
+    if (spec.turnId != null) parts.push('turn=' + safeAuditToken(spec.turnId, '-'))
+    if (!allowed) {
+      const reason = auditSafeReason(spec.reason)
+      if (reason) parts.push('reason=' + reason)
+    }
+    store.appendAudit({ actor: 'agent', action, allowed, reason: parts.join(';') })
+  } catch {}
+}
+
+/** Sanitize one audit token (no separators/control characters); bounded length. */
+function safeAuditToken(value, fallback) {
+  const text = String(value == null ? '' : value).replace(/[\u0000-\u001f\u007f;=\s]+/g, '_').trim()
+  return text ? text.slice(0, 80) : fallback
 }
 
 /**
@@ -448,42 +545,6 @@ function saveSoul(doc) {
   writeFileSync(SOUL_META, JSON.stringify({ version: doc.version, updatedAt: doc.updatedAt }, null, 2) + '\n', { mode: 0o600 })
 }
 
-/** Write bytes to an already-created same-directory temp file and fsync it. */
-function writeDurableTemp(target, bytes, { mode = 0o600 } = {}) {
-  const fd = openSync(target, 'wx', mode)
-  try {
-    writeSync(fd, bytes)
-    fsyncSync(fd)
-  } finally {
-    closeSync(fd)
-  }
-  return target
-}
-
-/** fsync a directory entry so a rename survives a crash. */
-function fsyncDir(path) {
-  try {
-    const fd = openSync(path, 'r')
-    try { fsyncSync(fd) } finally { closeSync(fd) }
-  } catch {}
-}
-
-/** Atomic write: same-directory temp + fsync + rename + directory fsync. */
-function atomicWriteFileSync(path, bytes, { mode = 0o600 } = {}) {
-  mkdirSync(dirname(path), { recursive: true })
-  const tmp = join(dirname(path), `.${basename(path)}.tmp-${process.pid}-${randomBytes(4).toString('hex')}`)
-  try {
-    writeDurableTemp(tmp, bytes, { mode })
-    renameSync(tmp, path)
-  } catch (error) {
-    try { if (existsSync(tmp)) rmSync(tmp) } catch {}
-    throw error
-  }
-  try { chmodSync(path, mode) } catch {}
-  fsyncDir(dirname(path))
-  return path
-}
-
 const soulStore = { load: loadSoul, save: saveSoul }
 
 function runtimeFor(ledger) {
@@ -633,10 +694,12 @@ function help() {
 
 Usage:
   advisers                    start the local conversation (TTY)
-  advisers chat [--file <path>] [text]
+  advisers chat [--file <path>] [--allow-path <dir>]... [text]
                               one-shot task, or start the local conversation
   advisers init               initialize home + soul
-  advisers doctor             check Node/SQLite/Office/policy/model
+  advisers doctor [--check-db]
+                              check Node/SQLite/Office/policy/model; --check-db adds
+                              quick_check + FTS integrity + WAL + backup + plaintext/temp checks
   advisers status             home/store/model/counts
   advisers history            recent conversations
   advisers search <text>       full-text search old turns
@@ -752,11 +815,20 @@ Environment:
                   enable the model call in chat
   ADVISERS_YES=1  skip the plan confirmation
   ADVISERS_FORCE=1 overwrite existing files without asking
+  ADVISERS_ALLOW_PATHS    explicit path-list (OS path separator) widening the
+                  agent file-tool boundary, same as repeated --allow-path
   ADVISERS_PROGRESS=0 hide [tool] progress lines
   ADVISERS_ACCEPT_TOS=1  record TOS consent without a TTY (same as --accept-tos)
   ADVISERS_NOTIFY_WEBHOOK  optional outbound webhook for remind --deliver --notify
   ADVISERS_LOCK_TIMEOUT_MS  wait for another advisers process to release the
                   instance lock (milliseconds; default 10000, 0 = fail immediately)
+
+Agent workspace:
+  chat/repl file tools (file_read/file_write/office_*) are confined to
+  ADVISERS_HOME/workspace (created 0700). They do not default to the current
+  directory. Pass --allow-path <dir> (repeatable) or set ADVISERS_ALLOW_PATHS to
+  widen the boundary explicitly; credential stores, persistence targets and
+  other sensitive paths stay denied even then.
 
 Concurrency:
   One advisers process per ADVISERS_HOME uses the SQLite ledger at a time. The
@@ -1420,7 +1492,16 @@ function printPreferences() {
   }
 }
 
-async function doctor() {
+/**
+ * `advisers doctor [--check-db]` — local diagnostics.
+ *
+ * Default is intentionally lightweight (0.2.3 Wave 1 / robustness P1-4):
+ * opening the store validates the file header, instance lock and WAL; the O(db)
+ * PRAGMA quick_check and O(index) FTS verification only run with --check-db,
+ * together with WAL/backup/plaintext/temp-file checks. Any FAIL exits non-zero.
+ */
+async function doctor(args = []) {
+  const checkDb = Array.isArray(args) && args.includes('--check-db')
   const rows = []
   const check = (name, ok, detail = '') => rows.push({ name, ok, detail })
   const [nodeMajor, nodeMinor] = process.versions.node.split('.').map(Number)
@@ -1445,11 +1526,32 @@ async function doctor() {
       let dbBytes = 0
       try { dbBytes = statSync(DB).size } catch {}
       check('database', dbBytes > 0, dbBytes > 0 ? `${DB} (${dbBytes} bytes)` : `E_DB_CORRUPT: ${DB} is 0 bytes; back it up and restore`)
-      const integrity = store.assertIntegrity()
-      check('sqlite', integrity === 'ok', `${DB} (${integrity})`)
+      // The open already inspected/quarantined a broken WAL; surface it here
+      // (cheap) even without --check-db.
+      const wal = store.walStatus ?? inspectWalStatus(DB)
+      const walBad = ['invalid', 'truncated', 'unreadable'].includes(String(wal?.status))
+      check('wal', !walBad, `${wal?.status ?? 'unknown'}${wal?.bytes ? ` bytes=${wal.bytes}` : ''}${wal?.reason ? ` (${wal.reason})` : ''}${checkDb ? '' : '; run --check-db for quick_check + FTS'}`)
+      // 0.2.3 Wave 1: quick_check/FTS moved behind --check-db so the default
+      // doctor stays sub-200ms on a large ledger.
+      check('sqlite', true, `${DB} (opened; run --check-db for quick_check + FTS integrity)`)
       const audit = store.verifyAudit()
       check('audit', audit.ok, audit.ok ? `${audit.count} entries` : `BROKEN at seq ${audit.seq}`)
       check('schema', true, String(store.db.prepare("SELECT value FROM meta WHERE key='schema_version'").get()?.value ?? '?'))
+      if (checkDb) {
+        // One aggregate report reuses the Wave 0 lib contracts:
+        // store.integrityReport() (quick_check + walReport + verifyFtsIntegrity).
+        const report = store.integrityReport({ quickCheck: true, fts: true })
+        const quick = report.quickCheck
+        check('db-quick-check', quick?.ok === true, quick ? (quick.ok ? 'ok' : String(quick.verdict ?? quick.error ?? 'failed')) : 'skipped')
+        const fts = report.fts
+        const ftsOk = Boolean(fts && fts.ok)
+        check('db-fts', ftsOk, !fts
+          ? 'skipped'
+          : `state=${fts.state} tokenizer=${fts.tokenizer ?? '-'}${ftsOk ? '' : ` errors=${(fts.errors ?? []).slice(0, 2).join(' | ')}`}`)
+        const walReport = report.wal ?? store.walReport()
+        check('db-wal', walReport.ok === true, `journal=${walReport.journalMode ?? '?'} initial=${walReport.initial?.status ?? '?'} current=${walReport.current?.status ?? '?'}${walReport.ok ? '' : `; ${(report.errors ?? []).slice(0, 1).join('')}`}`)
+        checkBackupReadable(check)
+      }
     } catch (error) {
       if (error?.code === 'E_DB_LOCKED') {
         // Another live process holds the store; this is a real FAIL, not a
@@ -1467,6 +1569,24 @@ async function doctor() {
         check('sqlite', false, error.message)
       }
     }
+  }
+  if (checkDb) {
+    // Crash residue from an interrupted sync pull: only stale temp files whose
+    // pid is gone are removed (a concurrent pull is never disturbed).
+    try {
+      const { cleanupStalePullTemps } = await loadSync()
+      const swept = cleanupStalePullTemps(HOME)
+      check('pull-temps', swept.errors.length === 0, `${swept.removed.length} stale temp(s) removed, ${swept.kept.length} kept${swept.errors.length ? `; errors: ${swept.errors.slice(0, 2).join(' | ')}` : ''}`)
+    } catch (error) {
+      check('pull-temps', false, String(error?.message ?? error))
+    }
+    const copies = plaintextDbCopies()
+    const detail = copies.length
+      ? `${copies.length} plaintext cop(ies)${sealed ? ' after seal' : ' (documented DB copies; purge with \`advisers vault seal --remove\`)'}: ${copies.slice(0, 6).map((file) => basename(file)).join(', ')}`
+      : 'none'
+    // A sealed vault plus leftover plaintext copies is a leak (FAIL); with a
+    // live plaintext DB these copies are documented backups (informational).
+    check('plaintext', sealed ? copies.length === 0 : true, detail)
   }
   // P2-3 (0.2.1): probe resolvability instead of importing the office barrel
   // (222-573ms, and only needed to answer "is the peer installed?").
@@ -1645,6 +1765,49 @@ function safetyReasonFor(result, fallbackSurface = 'model.output') {
 }
 
 /**
+ * Print runAgent safety warnings to stderr (0.2.3 Wave 1: bin must consume
+ * result.safetyWarnings; design §3.10 / security audit SEC3-03) and record one
+ * actor=safety audit row per warning. External text is never printed/persisted.
+ */
+async function reportAgentSafetyWarnings(warnings) {
+  if (!Array.isArray(warnings) || !warnings.length) return
+  const { sanitizeLabel } = await loadUntrusted()
+  for (const warning of warnings) {
+    const ruleIds = Array.isArray(warning?.ruleIds) ? warning.ruleIds.join(',') : ''
+    const source = sanitizeLabel(warning?.source ?? 'unknown')
+    const direction = String(warning?.direction ?? '-')
+    const action = String(warning?.action ?? 'warn')
+    const code = String(warning?.code ?? 'SAFETY_WARNING')
+    const redacted = Number(warning?.redactedCount) > 0 ? ` redacted=${warning.redactedCount}` : ''
+    console.error(`[safety] ${direction}/${action} ${code}${ruleIds ? ` rules=${ruleIds}` : ''} source=${source}${redacted}`)
+    try {
+      dbStore()?.appendAudit({
+        actor: 'safety',
+        action: 'safety.warning',
+        allowed: action !== 'block',
+        reason: auditSafeReason(`direction=${direction};action=${action};code=${code};severity=${warning?.severity ?? '-'};rules=${ruleIds || '-'};source=${source}`),
+      })
+    } catch {}
+  }
+  console.error(`[safety] ${warnings.length} 条安全提醒：外部内容按数据处理，未作为指令执行。`)
+}
+
+/** Audit reason for a blocked agent turn (code/rules/source only, no content). */
+function agentBlockAuditReason(blockReason) {
+  const code = safeAuditToken(blockReason?.code, 'UNTRUSTED_INJECTION')
+  const rules = Array.isArray(blockReason?.ruleIds) && blockReason.ruleIds.length ? blockReason.ruleIds.join(',') : '-'
+  return `code=${code};rules=${rules};source=${safeAuditToken(blockReason?.source, '-')}`
+}
+
+/** Explain a blocked agent turn: it is never rendered as a successful reply. */
+async function reportAgentBlock(blockReason) {
+  const ruleIds = Array.isArray(blockReason?.ruleIds) && blockReason.ruleIds.length
+    ? blockReason.ruleIds.join(',')
+    : (blockReason?.code ?? 'UNTRUSTED_INJECTION')
+  console.error(`[safety] 已阻止：外部内容包含高风险提示注入（${ruleIds}），该内容没有发送给模型。`)
+  console.error('[safety] 这不是成功交付：没有写入回复、没有生成文件或回执。请先核实来源；如确需把该内容当数据分析，可显式设置 ADVISERS_INJECTION_POLICY=warn 后重试。')
+}
+/**
  * Report a local content-safety block without echoing or persisting the original
  * text (privacy audit P2 / security audit SEC2-04): user-facing rejection plus a
  * keyed `actor: 'safety'` audit row so the block is explainable later.
@@ -1693,7 +1856,7 @@ async function runTurn(options) {
   }
 }
 
-async function runTurnInner({ runtime, ledger, text, conversationId, debug = false, confirm, attachments = [] }) {
+async function runTurnInner({ runtime, ledger, text, conversationId, debug = false, confirm, attachments = [], allowPaths = [] }) {
   const result = await runtime.ingest({
     linkId: 'cli',
     accountId: 'local',
@@ -1728,21 +1891,25 @@ async function runTurnInner({ runtime, ledger, text, conversationId, debug = fal
     return
   }
   const intent = context.intent
-  let agentText = text
+  // 0.2.3 Wave 1 (security audit SEC3-02 / design §3.10): attachment text is
+  // external data, never part of the typed user message. It is handed to
+  // runAgent as untrusted[] so lib/agent.js classifies and wraps it in the
+  // <untrusted-data> boundary; the old "<file>" concatenation is no longer
+  // emitted by bin (lib keeps a compatibility parser only).
+  const untrusted = []
   const extracted = []
   const attachmentLib = attachments.length ? await loadAttachments() : null
   for (const file of attachments) {
     try {
       const attachment = await attachmentLib.extractAttachment(file, { cwd: process.cwd() })
       extracted.push(attachment)
+      if (attachment?.text) untrusted.push({ label: 'attachment:' + attachment.name, text: attachment.text })
       console.log(`[attach] ${attachment.name} (${attachment.text.length} chars${attachment.truncated ? ', truncated' : ''})`)
     } catch (error) {
       console.log(`[attach] ${file}: ${error.message}`)
     }
   }
-  if (extracted.length) {
-    agentText = `${text}\n\n[attachments]\n` + extracted.map((a) => `<file name="${a.name}">\n${a.text}\n</file>`).join('\n\n')
-  }
+  const agentText = text
   try {
     dbStore()?.upsertSession({ conversationId, matterId: context.matter.id, title: text.slice(0, 80) })
   } catch {}
@@ -1776,7 +1943,14 @@ async function runTurnInner({ runtime, ledger, text, conversationId, debug = fal
   const fitted = fitHistory({ system: prompt, summary: history.summary, history: history.turns, current: agentText, maxTokens: Number(process.env.ADVISERS_CONTEXT_TOKENS || 12000) })
   if (fitted.trimmed) console.log(`[compact] 裁剪 ${fitted.trimmed} 轮旧历史`)
   const { runAgent } = await loadAgent()
-  const { reply, artifacts, toolLog } = await runAgent({
+  // 0.2.3 Wave 1 default workspace: agent file tools are confined to a 0700
+  // directory under ADVISERS_HOME, not to whatever directory the CLI was
+  // started from. --allow-path / ADVISERS_ALLOW_PATHS are the explicit escape.
+  const workspaceRoot = ensureAgentWorkspace()
+  const effectiveAllowPaths = resolveAllowPaths(allowPaths)
+  if (effectiveAllowPaths.length) console.error(`[workspace] explicit allow-path: ${effectiveAllowPaths.join(', ')}`)
+  const turnId = `cli_${Date.now()}_${cliSeq}`
+  const agentResult = await runAgent({
     runtime,
     text: agentText,
     context: { ...context, prompt },
@@ -1784,18 +1958,35 @@ async function runTurnInner({ runtime, ledger, text, conversationId, debug = fal
     summary: history.summary,
     ledger,
     matterId: context.matter.id,
-    turnId: `cli_${Date.now()}_${cliSeq}`,
+    turnId,
     backupDir: join(HOME, 'undo'),
     store: dbStore(),
     apiKey,
     baseUrl: process.env.ADVISERS_BASE_URL || 'https://api.deepseek.com',
     model: process.env.ADVISERS_MODEL || 'deepseek-flash',
-    cwd: process.cwd(),
+    cwd: workspaceRoot,
+    workspaceRoot,
+    allowPaths: effectiveAllowPaths,
+    untrusted,
+    safetyKey: process.env.ADVISERS_AUDIT_KEY,
     force: process.env.ADVISERS_FORCE === '1',
     confirm,
     effort: process.env.ADVISERS_THINKING_EFFORT,
     onTool: (name) => { if (debug || process.env.ADVISERS_PROGRESS !== '0') console.log(`[tool] ${name}`) },
+    onToolAction: auditToolAction,
   })
+  // 0.2.3 Wave 1: consume the structured warnings (they used to be discarded)
+  // and treat a blocked turn as a failure, never as a successful reply.
+  const { reply, artifacts, toolLog } = agentResult
+  const safetyWarnings = Array.isArray(agentResult.safetyWarnings) ? agentResult.safetyWarnings : []
+  if (safetyWarnings.length) await reportAgentSafetyWarnings(safetyWarnings)
+  if (agentResult.blocked) {
+    lastTurnSafetyBlock = agentResult.blockReason ?? { code: 'UNTRUSTED_INJECTION', ruleIds: [], source: null }
+    await reportAgentBlock(agentResult.blockReason)
+    recordTurn(conversationId, 'user', text)
+    try { dbStore()?.appendAudit({ actor: 'safety', action: 'policy.agent.block', allowed: false, reason: agentBlockAuditReason(agentResult.blockReason) }) } catch {}
+    return
+  }
   lastRun = { artifacts: [...new Set(artifacts)], toolLog }
   recordTurn(conversationId, 'user', text)
   recordTurn(conversationId, 'assistant', reply || '')
@@ -1868,33 +2059,38 @@ async function runTurnInner({ runtime, ledger, text, conversationId, debug = fal
 
 function parseChatArgs(args) {
   const files = []
+  const allowPaths = []
   const words = []
   for (let i = 0; i < args.length; i++) {
     if (args[i] === '--file' || args[i] === '-f') {
       if (args[i + 1]) files.push(args[++i])
+    } else if (args[i] === '--allow-path') {
+      // Repeatable explicit workspace escape; ADVISERS_ALLOW_PATHS is the env
+      // equivalent. Sensitive paths stay denied by the lib policy.
+      if (args[i + 1]) allowPaths.push(args[++i])
     } else {
       words.push(args[i])
     }
   }
-  return { text: words.join(' ').trim(), files }
+  return { text: words.join(' ').trim(), files, allowPaths }
 }
 
 async function chat(args) {
-  const { text, files } = parseChatArgs(args)
+  const { text, files, allowPaths } = parseChatArgs(args)
   if (!text) {
-    if (process.stdin.isTTY) { await repl(); return }
-    console.error('usage: advisers chat [--file <path>] <text>')
+    if (process.stdin.isTTY) { await repl({ allowPaths }); return }
+    console.error('usage: advisers chat [--file <path>] [--allow-path <dir>]... <text>')
     process.exitCode = 1
     return
   }
   const ledger = loadLedger()
   const runtime = runtimeFor(ledger)
-  await runTurn({ runtime, ledger, text, conversationId: latestConversationId(), attachments: files })
+  await runTurn({ runtime, ledger, text, conversationId: latestConversationId(), attachments: files, allowPaths })
   if (lastTurnSafetyBlock) process.exitCode = 1
   saveLedger(ledger)
 }
 
-async function repl() {
+async function repl({ allowPaths = [] } = {}) {
   const readline = await import('node:readline/promises')
   const rl = readline.createInterface({ input: process.stdin, output: process.stdout, historySize: 100 })
   const ledger = loadLedger()
@@ -1927,7 +2123,7 @@ async function repl() {
     }
     lastTask = { text: taskText, files: [...files] }
     try {
-      const question = await runTurn({ runtime, ledger, text: taskText, conversationId, debug, confirm, attachments: files })
+      const question = await runTurn({ runtime, ledger, text: taskText, conversationId, debug, confirm, attachments: files, allowPaths })
       saveLedger(ledger)
       pendingFiles = []
       if (question) {
@@ -1938,7 +2134,7 @@ async function repl() {
           return
         }
         if (answer.trim()) {
-          await runTurn({ runtime, ledger, text: `${taskText}\n补充：${answer.trim()}`, conversationId, debug, confirm, attachments: files })
+          await runTurn({ runtime, ledger, text: `${taskText}\n补充：${answer.trim()}`, conversationId, debug, confirm, attachments: files, allowPaths })
           saveLedger(ledger)
         }
       }
@@ -2221,7 +2417,15 @@ async function exportLedger(all = false, options = {}) {
   }
   if (options.out) {
     ensureHome()
-    writeFileSync(options.out, text + '\n', { mode: 0o600 })
+    // 0.2.3 Wave 1: staged durable write (short-write loop + fsync + atomic
+    // rename) so an ENOSPC export can never leave a truncated ledger file.
+    try {
+      atomicWriteFileSync(options.out, text + '\n', { mode: 0o600 })
+    } catch (error) {
+      console.error(`export failed: ${describeFsError(error, { action: 'writing the export to', target: options.out })}`)
+      process.exitCode = 1
+      return
+    }
     dbStore()?.appendAudit({ actor: 'local', action: options.encrypted ? 'export.encrypted' : 'export', allowed: true, reason: basename(options.out) })
     console.log(`wrote ${options.out}${options.encrypted ? ' (AES-256-GCM)' : ''}`)
   } else console.log(text)
@@ -2249,8 +2453,19 @@ async function importLedger(file, { replace = false } = {}) {
   ensureInstanceLock()
   try {
     const store = dbStore()
-    if (store) copyFileSync(DB, join(HOME, `import-backup-${Date.now()}.db`))
-  } catch {}
+    if (store) {
+      // 0.2.3 Wave 1: the pre-import backup is plaintext data. Copy with retry
+      // and fsync it; if the backup cannot be made, refuse to replace the ledger
+      // (never proceed without a recovery copy).
+      const backupFile = join(HOME, `import-backup-${Date.now()}.db`)
+      copyFileWithRetrySync(DB, backupFile)
+      fsyncFileSync(backupFile)
+    }
+  } catch (error) {
+    console.error(`import failed: cannot back up the current database before replacing it (${describeFsError(error, { action: 'copying', target: DB })})`)
+    process.exitCode = 1
+    return
+  }
   try {
     const ledger = Ledger.fromJSON(data, LOCAL_PORTS)
     saveLedgerWithAudit(ledger, { actor: 'local', action: 'import.ledger', allowed: true, reason: basename(file) })
@@ -2271,9 +2486,22 @@ function backup(file) {
   const store = openStore()
   const checkpoint = store.checkpoint()
   if (checkpoint.busy) { console.error('backup failed: database is busy (another advisers process is writing); close it and retry'); process.exitCode = 1; return }
-  mkdirSync(dirname(file), { recursive: true })
-  copyFileSync(DB, file)
-  chmodSync(file, 0o600)
+  mkdirSync(dirname(file), { recursive: true, mode: 0o700 })
+  // 0.2.3 Wave 1: retry transient Windows locks and fsync the copy before
+  // reporting success (a crash right after a plain copy can lose the backup).
+  const existed = existsSync(file)
+  try {
+    copyFileWithRetrySync(DB, file)
+    fsyncFileSync(file)
+    chmodSync(file, 0o600)
+  } catch (error) {
+    // Only remove the target when this command created it: a pre-existing
+    // backup must never be destroyed just because a new copy failed.
+    if (!existed) { try { rmWithRetrySync(file) } catch {} }
+    console.error(`backup failed: ${describeFsError(error, { action: 'copying the database to', target: file })}`)
+    process.exitCode = 1
+    return
+  }
   console.log(`backup: ${file}`)
 }
 
@@ -3259,12 +3487,17 @@ function vaultPass() {
 }
 
 /**
- * Plaintext database copies left behind by unseal/migrate/import/sync and by an
- * interrupted unseal (robustness audit P1-2). `vault seal --remove` must delete
- * these too, otherwise the CLI says "plaintext removed" while a readable SQLite
- * copy (including the before-unseal backup) is still in HOME.
+ * Plaintext database copies and crash residue left in HOME (robustness audit
+ * P1-2/P1-3). `vault seal --remove`, `vault status` and `doctor --check-db`
+ * must see all of these, otherwise the CLI says "plaintext removed" while a
+ * readable SQLite image is still on disk:
+ *   - before-unseal/migrate/sync backups and import backups (0.2.2);
+ *   - interrupted sync-pull staging files `.advisers-pull-verify-*` (0.2.3);
+ *   - quarantined WAL files `state.db-wal.corrupt-*` (WAL frames are plaintext);
+ *   - crash-safe temp files from lib/fs-safe (`.<name>.tmp-*`) and the legacy
+ *     pet-brief writer (`.<name>.<pid>.<ts>.tmp`).
  */
-const PLAINTEXT_DB_COPY_RE = /^(?:state\.db\.before-(?:unseal|migrate|sync)-|\.state\.db\.unseal-|import-backup-)/
+const PLAINTEXT_DB_COPY_RE = /^(?:state\.db\.before-(?:unseal|migrate|sync)-|\.state\.db\.unseal-|import-backup-|\.advisers-pull-verify-|state\.db-wal\.corrupt-|\..*\.tmp-|\..*\.tmp$)/
 function plaintextDbCopies() {
   try {
     return readdirSync(HOME).filter((name) => PLAINTEXT_DB_COPY_RE.test(name)).map((name) => join(HOME, name))
@@ -3273,9 +3506,49 @@ function plaintextDbCopies() {
   }
 }
 
+/** DB-shaped backup files that doctor --check-db verifies are readable. */
+const BACKUP_FILE_RE = /^(?:state\.db\.before-(?:unseal|migrate|sync)-|import-backup-.*\.db$)/
+function newestPlaintextBackup() {
+  try {
+    let newest = null
+    let newestMs = -1
+    for (const name of readdirSync(HOME)) {
+      if (!BACKUP_FILE_RE.test(name)) continue
+      const file = join(HOME, name)
+      try {
+        const info = statSync(file)
+        if (!info.isFile() || info.size === 0) continue
+        if (info.mtimeMs > newestMs) { newest = file; newestMs = info.mtimeMs }
+      } catch {}
+    }
+    return newest
+  } catch {
+    return null
+  }
+}
+
+/** `doctor --check-db`: the newest pre-migrate/sync/unseal/import backup must open. */
+function checkBackupReadable(check) {
+  const backup = newestPlaintextBackup()
+  if (!backup) {
+    check('db-backup', true, 'none found (create one with `advisers backup <path.db>`)')
+    return
+  }
+  let store = null
+  try {
+    store = new SqliteStore(backup, { readOnly: true, checkIntegrity: true })
+    check('db-backup', true, `${basename(backup)} (readable, quick_check ok)`)
+  } catch (error) {
+    check('db-backup', false, `${basename(backup)}: ${String(error?.message ?? error).slice(0, 200)}`)
+  } finally {
+    try { store?.close() } catch {}
+  }
+}
+
 /**
  * Remove the live plaintext database and every plaintext copy. Failures are
  * collected (never swallowed) so the caller can report them and exit non-zero.
+ * Removal uses the bounded retry helper (Windows AV/OneDrive can hold a file).
  */
 function removePlaintextDatabase() {
   const removed = []
@@ -3283,13 +3556,13 @@ function removePlaintextDatabase() {
   for (const file of [DB, `${DB}-wal`, `${DB}-shm`, ...plaintextDbCopies()]) {
     try {
       if (!existsSync(file)) continue
-      rmSync(file)
+      rmWithRetrySync(file)
       removed.push(file)
     } catch (error) {
       failures.push(`${file}: ${error.message}`)
     }
   }
-  fsyncDir(HOME)
+  fsyncDirSync(HOME)
   return { removed, failures }
 }
 
@@ -3345,15 +3618,31 @@ async function vaultSeal(args) {
     const sha = createHash('sha256').update(bytes).digest('hex')
     const envelope = encryptJson({ kind: 'advisers-db', version: VERSION, sha256: sha, db: bytes.toString('base64') }, pass)
     const out = typeof flags.out === 'string' ? flags.out : `${DB}.vault`
-    atomicWriteFileSync(out, JSON.stringify(envelope) + '\n', { mode: 0o600 })
-    const check = decryptJson(JSON.parse(readFileSync(out, 'utf8')), pass)
-    if (check.sha256 !== sha) throw new Error('sealed file verification failed')
+    // 0.2.3 Wave 1 (robustness audit P1-2): stage the envelope in a temp file
+    // (short-write loop + fsync + size verification), verify it decrypts back to
+    // the same bytes, and only then commit it with an atomic rename. A short
+    // write/ENOSPC can no longer install a truncated .vault, and any failure
+    // after staging removes the temp file instead of leaving plaintext behind.
+    let tmp = null
+    try {
+      tmp = writeAllToTempSync(out, JSON.stringify(envelope) + '\n', { mode: 0o600 })
+      const check = decryptJson(JSON.parse(readFileSync(tmp, 'utf8')), pass)
+      if (check.sha256 !== sha) throw new Error('sealed file verification failed (the staged copy does not decrypt to the database)')
+      commitTempFileSync(tmp, out, { mode: 0o600 })
+      tmp = null
+    } catch (error) {
+      if (tmp) { try { rmWithRetrySync(tmp) } catch {} }
+      throw error
+    }
     if (removePlaintext) {
       if (!reportPlaintextCleanup(removePlaintextDatabase(), out)) return
       return
     }
     console.log(`sealed ${DB} -> ${out} (plaintext kept; pass --remove)`)
-  } catch (error) { console.error(`vault seal failed: ${error.message}`); process.exitCode = 1 }
+  } catch (error) {
+    console.error(`vault seal failed: ${describeFsError(error, { action: 'sealing the database to', target: typeof flags.out === 'string' ? flags.out : DB + '.vault' })}`)
+    process.exitCode = 1
+  }
 }
 
 async function vaultUnseal(args) {
@@ -3383,7 +3672,9 @@ async function vaultUnseal(args) {
   // database (and its WAL) as a backup, then rename atomically.
   const tmp = join(HOME, `.state.db.unseal-${process.pid}-${randomBytes(4).toString('hex')}`)
   try {
-    writeDurableTemp(tmp, bytes)
+    // 0.2.3 Wave 1: durable staged write (short-write loop + fsync + size check)
+    // instead of a one-shot writeSync that ENOSPC can truncate.
+    writeAllToTempSync(DB, bytes, { mode: 0o600, tempPath: tmp })
     let check
     try {
       check = new SqliteStore(tmp, { readOnly: true, checkIntegrity: true })
@@ -3395,20 +3686,26 @@ async function vaultUnseal(args) {
     let backup
     if (existsSync(DB)) {
       backup = `${DB}.before-unseal-${Date.now()}`
-      copyFileSync(DB, backup)
+      // The pre-unseal copy is plaintext data: copy with retry, then fsync it so
+      // a crash right after the rename cannot leave a zero-length backup.
+      copyFileWithRetrySync(DB, backup)
+      fsyncFileSync(backup)
       for (const suffix of ['-wal', '-shm']) {
-        try { if (existsSync(DB + suffix)) copyFileSync(DB + suffix, backup + suffix) } catch {}
+        try {
+          if (existsSync(DB + suffix)) {
+            copyFileWithRetrySync(DB + suffix, backup + suffix)
+            fsyncFileSync(backup + suffix)
+          }
+        } catch {}
       }
     }
     // A WAL from the old database must never be replayed onto the new file.
-    for (const suffix of ['-wal', '-shm']) { try { if (existsSync(DB + suffix)) rmSync(DB + suffix) } catch {} }
-    renameSync(tmp, DB)
-    try { chmodSync(DB, 0o600) } catch {}
-    fsyncDir(HOME)
+    for (const suffix of ['-wal', '-shm']) { try { if (existsSync(DB + suffix)) rmWithRetrySync(DB + suffix) } catch {} }
+    commitTempFileSync(tmp, DB, { mode: 0o600 })
     console.log(`unsealed ${file} -> ${DB} (${bytes.length} bytes, integrity ok${backup ? `; previous database kept at ${backup}` : ''})`)
   } catch (error) {
-    try { if (existsSync(tmp)) rmSync(tmp) } catch {}
-    console.error(`vault unseal failed: ${error.message}`)
+    try { rmWithRetrySync(tmp) } catch {}
+    console.error(`vault unseal failed: ${describeFsError(error, { action: 'installing the unsealed database', target: DB })}`)
     console.error(`The sealed file ${file} is intact (${bytes.length} bytes of plaintext); the existing database was not replaced.`)
     console.error('Fix the disk/permissions problem and retry `advisers vault unseal`.')
     process.exitCode = 1
@@ -3422,7 +3719,10 @@ function vaultStatus() {
   console.log(`sealed:   ${existsSync(sealed) ? sealed : 'none'}`)
   console.log(`state:    ${existsSync(DB) ? 'plaintext at rest' : existsSync(sealed) ? 'encrypted at rest (run vault unseal)' : 'empty'}`)
   const copies = plaintextDbCopies()
-  if (copies.length) console.log(`plaintext copies: ${copies.length} (run \`advisers vault seal --remove\` to purge them)`)
+  if (copies.length) {
+    console.log(`plaintext copies: ${copies.length} (run \`advisers vault seal --remove\` to purge them)`)
+    for (const copy of copies) console.log(`  ${copy}`)
+  }
 }
 
 async function timestampCommand(args) {
@@ -3530,6 +3830,33 @@ function checkpointLocalDatabase() {
   }
 }
 
+/**
+ * 0.2.3 Wave 1 (robustness audit P1-1): explain exactly which sync-pull decision
+ * the library made. The old output only said "pulled", so a new-device bootstrap
+ * and a --force overwrite of a newer local ledger looked identical.
+ */
+function reportSyncPullResult(result) {
+  const snapshotLabel = `${result.file}${result.createdAt ? ` (created ${result.createdAt}${result.device ? `, device ${result.device}` : ''})` : ''}`
+  const backupNote = result.backup ? `; previous database backed up to ${result.backup}` : ''
+  if (!result.changed || result.status === 'unchanged') {
+    console.log(`unchanged: the local database already matches the selected snapshot ${result.file}`)
+    return
+  }
+  if (result.status === 'bootstrapped') {
+    console.log(`pulled (bootstrapped): this device had no local ledger data; installed snapshot ${snapshotLabel}${result.replacedLocalEmpty ? ' over an empty schema-only database (no user rows were lost)' : ''}${result.sameDevice ? '; the snapshot was pushed from this device' : ''}${backupNote}`)
+    return
+  }
+  if (result.status === 'forced') {
+    console.log(`pulled (forced): --force replaced the local database with snapshot ${snapshotLabel}${backupNote}`)
+    if (result.snapshotOlder) {
+      console.error('warning: the installed snapshot is OLDER than the local database; local writes after the snapshot exist only in the backup (export them before continuing if they matter)')
+    }
+    return
+  }
+  console.log(`pulled: installed snapshot ${snapshotLabel}${result.sameDevice ? '; pushed from this device' : ''}${backupNote}`)
+  if (result.snapshotOlder) console.error('warning: the installed snapshot is older than the local database; the previous database is in the backup')
+}
+
 async function syncCommand(args) {
   const { flags, positional } = parseFlags(args)
   const sub = positional[0]
@@ -3572,6 +3899,7 @@ async function syncCommand(args) {
     } catch (error) { console.error(`sync push failed: ${error.message}`); process.exitCode = 1 }
   } else if (sub === 'pull') {
     const force = Boolean(flags.force)
+    const { pullSnapshot, cleanupStalePullTemps } = await loadSync()
     try {
       // Capture the local write time before checkpointing (checkpoint touches mtime).
       const localMtimeMs = latestLocalDbMtime()
@@ -3580,7 +3908,6 @@ async function syncCommand(args) {
         if (checkpoint.busy && !force) throw new Error('local database is busy (another advisers process is writing); close it and retry sync pull, or re-run with --force (a backup is kept)')
         if (!checkpoint.busy && checkpoint.error) console.error(`note: local database could not be checkpointed (${checkpoint.error.message}); the snapshot replaces it and a backup is kept.`)
       }
-      const { pullSnapshot } = await loadSync()
       const result = pullSnapshot({
         dir,
         dbPath: DB,
@@ -3590,13 +3917,24 @@ async function syncCommand(args) {
         localMtimeMs,
         localDevice: await readSyncDevice(),
       })
-      if (!result.changed) console.log('local database already matches the latest snapshot')
-      else console.log(`pulled ${result.file} (${result.sha256})${result.backup ? `; backup ${result.backup}` : ''}`)
+      // 0.2.3 Wave 1: distinguish bootstrapped / forced / plain pull / unchanged.
+      reportSyncPullResult(result)
       if (result.changed) {
         try { dbStore()?.appendAudit({ actor: 'local', action: 'sync.pull', allowed: true, reason: result.file }) }
         catch (error) { console.error(`warning: database replaced but the sync.pull audit row failed: ${error.message}`); process.exitCode = 1 }
       }
-    } catch (error) { console.error(`sync pull failed: ${error.message}`); process.exitCode = 1 }
+    } catch (error) {
+      // Failure cleanup: the library removes its own staged temp file, but a
+      // previously crashed pull may have left stale plaintext staging files.
+      // Only stale files whose pid is gone are removed (never a live pull).
+      try {
+        const swept = cleanupStalePullTemps(HOME)
+        if (swept.removed.length) console.error(`note: removed ${swept.removed.length} stale sync-pull temp file(s)`)
+        if (swept.errors.length) console.error(`warning: could not clean sync-pull temp file(s): ${swept.errors.slice(0, 2).join(' | ')}`)
+      } catch {}
+      console.error(`sync pull failed: ${error.message}`)
+      process.exitCode = 1
+    }
   } else { console.error('usage: advisers sync push|pull|status --dir <sync-dir>'); process.exitCode = 1 }
 }
 
@@ -4697,7 +5035,7 @@ if (!command) {
 } else if (command === 'status') {
   printStatus(args.includes('--json'))
 } else if (command === 'doctor') {
-  await doctor()
+  await doctor(args)
 } else if (command === 'init') {
   init()
 } else if (command === 'history') {

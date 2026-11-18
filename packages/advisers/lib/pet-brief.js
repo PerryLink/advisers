@@ -14,9 +14,8 @@
  * - `displayPolicy` states who may see the brief (public/private/none); it
  *   defaults to `private` and is never `public` unless explicitly requested.
  */
-import { chmodSync, closeSync, fsyncSync, mkdirSync, openSync, renameSync, unlinkSync, writeSync } from 'node:fs'
-import { basename, dirname, join } from 'node:path'
 import { localDay } from './remind.js'
+import { atomicWriteFileSync } from './fs-safe.js'
 import { classify } from './safety/index.js'
 
 export const PET_BRIEF_SCHEMA_VERSION = 2
@@ -611,8 +610,12 @@ function parseIsoWithZone(value, path, errors) {
 }
 
 /**
- * Atomically write a brief: temp file in the same directory, fsync, rename,
- * then chmod 600. Atomic rename means a reader never sees a half-written file.
+ * Atomically write a brief.
+ *
+ * 0.2.3 Wave 1: delegates to lib/fs-safe.js so the write uses the short-write
+ * loop, fsync, size verification and an atomic same-directory rename. A short
+ * write/ENOSPC can no longer install a truncated brief (robustness audit P1-2),
+ * and a failed write removes its temp file instead of leaving it behind.
  *
  * @param {string} filePath destination path
  * @param {object} brief brief object
@@ -620,25 +623,6 @@ function parseIsoWithZone(value, path, errors) {
  */
 export function writePetBriefAtomic(filePath, brief) {
   const target = String(filePath)
-  const dir = dirname(target)
-  mkdirSync(dir, { recursive: true, mode: 0o700 })
-  const data = `${JSON.stringify(brief, null, 2)}\n`
-  const tmp = join(dir, `.${basename(target)}.${process.pid}.${Date.now().toString(36)}.tmp`)
-  let fd
-  try {
-    fd = openSync(tmp, 'wx', 0o600)
-    writeSync(fd, data)
-    fsyncSync(fd)
-    closeSync(fd)
-    fd = undefined
-    renameSync(tmp, target)
-    chmodSync(target, 0o600)
-    return target
-  } catch (error) {
-    if (fd !== undefined) {
-      try { closeSync(fd) } catch {}
-    }
-    try { unlinkSync(tmp) } catch {}
-    throw error
-  }
+  atomicWriteFileSync(target, `${JSON.stringify(brief, null, 2)}\n`, { mode: 0o600 })
+  return target
 }
