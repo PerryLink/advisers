@@ -1,7 +1,7 @@
 # Performance
 
-> Status: measured for the `0.2.1` release (2026-11-17). The `0.2.0` tree is the "before"
-> baseline in the comparison below.
+> Status: measured for the `0.2.2` release candidate (2026-11-18). The `0.2.1` and
+> `0.2.0` trees are the "before" baselines where a comparison says so below.
 
 How Advisers performs on the hot paths, how to reproduce the numbers, and which
 behaviour the regression tests pin. This is a developer/operator reference, not
@@ -62,7 +62,33 @@ invocation. The wall-clock improvement is what the columns compare. A direct
 `--version` A/B (25 interleaved spawns per build, no loader) measured a
 130.2 ms → 85.3 ms median with the same RSS drop.
 
-## What changed and why
+## 0.2.2 vs the 0.2.1 baseline
+
+The performance change in this release is **partial ledger loading**: read-only commands
+that only need part of the ledger no longer call the full 9-table `store.load()`. The
+round-2 audit measured the old path at 488 ms for a 50k-row `load()`; `status` paid
+664 ms with a 352 MB peak even though it needed only four counts.
+
+Recorded medians on synthetic ledgers (one machine, ±10–20% run-to-run, same caveats as
+above):
+
+| Scenario | 50k rows before (0.2.1) | 50k rows after (0.2.2) | 100k rows after (0.2.2) |
+|---|---:|---:|---:|
+| `status` | 664 ms | 75 ms | 91 ms |
+| `today` | 729 ms | 353 ms | 495 ms |
+
+`status` reads indexed counts instead of materialising rows; `today` still loads the
+commitment-related tables but skips the larger turn/summary/model-call tables. The
+regression tests (`test/partial-load.test.js`, `test/perf-partial-load.test.js`) pin the
+*behaviour* — loaders that must not run are replaced with throwing stubs and the SQL is
+checked with `EXPLAIN` — rather than wall-clock thresholds, so CI stays stable.
+
+Full-text search was rebuilt on FTS5 trigram indexes in the same release; index sizes,
+migration cost and query medians are recorded in
+[docs/ARCHITECTURE.md](ARCHITECTURE.md) §11 (Chinese queries of 3+ characters now go
+through `MATCH` instead of a `LIKE` scan; the database grows ~2.8 MB at 50k turns).
+
+## What changed in 0.2.1 and why
 
 ### CLI startup: lazy imports for command-specific modules
 
@@ -134,6 +160,6 @@ given generation time beyond those two info entries.
 - Timing medians move with host load (the recorded runs varied by roughly
   ±10–20% on a shared machine). Compare two builds on the same host, in the same
   session, one at a time.
-- The full-loaded store paths (`status`, `today`, `receipt`, `deliver`) still
-  read the whole ledger; that is a separate, larger redesign and is not covered
-  by this release's optimisations.
+- Partial loading covers the read commands (`status`, `today`, `who`, `week`,
+  `receipt`, `deliveries`); paths that genuinely need the whole ledger (`tick`,
+  `export`/`import`, delivery packs) still load all of it.

@@ -26,12 +26,12 @@ Advisers 不是聊天框，也不是情感陪伴。它维护三本账：
 
 ## 状态
 
-`0.2.1` 是 2026-11-17 的**当前发布版本**：8 个 workspace 包统一为 `0.2.1`。其中 6 个发布包为 `advisers`、`advisers-core`、`advisers-office`、`advisers-policy-strict`、`advisers-bridge-hermes`、`dsh-advisers`；两个私有 `advisers-link-*` 包保持同版本但不发布。六包已发布到 npm **`latest` = `0.2.1`**（账号所有者 OTP 已于 2026-11-17 批准）；`0.2.0` 仍可按版本号安装。registry tarball、许可文件、全新 prefix 安装与逐包 import 冒烟由 `scripts/verify-release.mjs` 校验。
+`0.2.2` 是 2026-11-18 的**发布候选（release candidate）**：8 个 workspace 包统一为 `0.2.2`。其中 6 个发布包为 `advisers`、`advisers-core`、`advisers-office`、`advisers-policy-strict`、`advisers-bridge-hermes`、`dsh-advisers`；两个私有 `advisers-link-*` 包保持同版本但不发布。候选版本**已 staged 到 npm `latest`，待账号所有者 OTP 批准**；批准前 npm `latest` 仍为 `0.2.1`（2026-11-17 已发布），`0.2.0` 仍可按版本号安装。registry tarball、许可文件、全新 prefix 安装与逐包 import 冒烟由 `scripts/verify-release.mjs` 在批准后校验。
 
 > 需要 **Node >= 22.16**；Windows/PowerShell/BOM 说明见 [docs/QUICKSTART.md](docs/QUICKSTART.md)。
 
 - SQLite 账本 `~/.advisers/state.db`；
-- turns + 会话摘要 + FTS 检索；开场协议；
+- turns + 会话摘要 + 中文可用 FTS 检索（FTS5 trigram 索引，schema v19；不足 3 字仍走 LIKE 回退）；开场协议；
 - 承诺账 + `commit add/ls/done`、`tick`、`snooze`、nudge outcome；
 - `/memory`、`/week`、`/digest`、`/diff`、`/undo`、`/learn review`；
 - routine draft/approve/patch/curator + active routine index；
@@ -49,8 +49,8 @@ Advisers 不是聊天框，也不是情感陪伴。它维护三本账：
 - Pet Brief（只读脱敏投影，契约 v0.2：`schemaVersion: 2` + `displayPolicy`，默认 `private`；v0.1 brief 按 legacy 可读）：`pet-brief --json|--out|--check [--strict]|--print-schema|--display-policy public|private|none`；`secrecy >= 2` 全排除、confidence < 0.7 丢弃、5 分钟 TTL、每节 10 项上限；不调模型、不联网、不改账本；桌宠 UI/传输尚未接通。见 `docs/PET-BRIEF-PRODUCER.md`。
 
 ```sh
-# 0.2.1 已发布到 npm @latest；也可从 checkout 运行：
-# 从 checkout 跑：
+# 0.2.2 是已 staged 到 npm @latest 的发布候选，待账号所有者 OTP 批准；
+# 0.2.1 是当前已发布的 @latest。也可从 checkout 运行：
 #   corepack pnpm install && corepack pnpm -r build
 #   ADVISERS_OFFICE_LOCAL=1 node packages/advisers/bin/advisers.js status
 # 从 npm 安装（稳定渠道 = 默认 `latest`，当前为 0.2.1）：
@@ -66,7 +66,7 @@ advisers office docx spec.json out.docx
 advisers verify out.docx
 ```
 
-npm 标签：**`latest`** 是稳定渠道（现为 `0.2.0`；`0.2.1` 正在 staged，待账号所有者 OTP 批准）；**`next`** 是预发布/候选渠道。需要可复现安装时请固定版本（当前 `advisers@0.2.0`，批准后 `advisers@0.2.1`），并直接查询官方 registry（`npm view advisers dist-tags --registry=https://registry.npmjs.org/`）——镜像可能滞后。
+npm 标签：**`latest`** 是稳定渠道（当前为 `0.2.1`，2026-11-17 已发布；`0.2.2` 是已 staged 的发布候选，待账号所有者 OTP 批准后才可安装）；**`next`** 是预发布/候选渠道。需要可复现安装时请固定版本（当前 `advisers@0.2.1`），并直接查询官方 registry（`npm view advisers dist-tags --registry=https://registry.npmjs.org/`）——镜像可能滞后。
 
 ## 许可
 

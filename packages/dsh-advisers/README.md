@@ -71,7 +71,7 @@ turn store in this adapter; it never fabricates a turn body.
 If the runtime exposes an audit sink (`runtime.audit(event)`), each read call
 reports `{ actor: 'dsh', action: 'tool.read', allowed, reason }`. A missing or
 failing sink is a no-op and never turns a read into an error. The in-memory
-runtime in `advisers-core@0.2.1` ships no audit sink, so by default
+runtime in `advisers-core@0.2.2` ships no audit sink, so by default
 these tools are strictly read-only.
 
 ## Examples
@@ -146,11 +146,11 @@ dsh plugin --profile smoke add /path/to/advisers/packages/core /path/to/advisers
 - runtime dependencies: `advisers` (content-safety rule layer), `advisers-core`, `advisers-office`
 - peer deps: `@deepseek-ai/cordis`, `@deepseek-ai/dsh-tools`
 
-## Content-safety dependency (0.2.1 packaging)
+## Content-safety dependency (0.2.1+ packaging)
 
 The bundle imports `classify` from `advisers/lib/safety/index.js`. That specifier
 is a **published export subpath** of the `advisers` package, declared as an
-explicit dependency (`"advisers": "0.2.1"` in `package.json` and
+explicit dependency (`"advisers": "0.2.2"` in `package.json` and
 `"./lib/safety/index.js": "./lib/safety/index.js"` in `advisers`' `exports`).
 A clean `npm install`/`pnpm add` of the `dsh-advisers` tarball therefore resolves
 the rule layer from the nested `advisers` dependency instead of relying on a

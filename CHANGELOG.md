@@ -1,5 +1,99 @@
 # Changelog
 
+## 0.2.2 (release candidate, 2026-11-18)
+
+Release candidate on the 0.2.x stable line: the eight workspace packages are lockstep at
+`0.2.2`, internal pins/version constants/`pnpm-lock.yaml` follow, and the six published
+packages are staged to npm `latest` and await the account owner's OTP approval (`latest`
+still resolves to 0.2.1 until then). The legal texts are unchanged from 0.2.0
+(TOS v2026.11.2).
+
+### Added
+
+- **Chinese / substring full-text search (FTS5 trigram, schema v19)**: `turns_fts` and
+  `summaries_fts` are rebuilt with `tokenize='trigram'`, so Chinese substring and phrase
+  search work instead of silently falling back to `LIKE`. Queries of 3+ characters go
+  through `MATCH`; shorter queries and malformed FTS syntax keep the v18 `LIKE` path as
+  the correctness backstop. The v18→v19 migration drops/recreates the indexes, backfills
+  with FTS5 `'rebuild'` and runs inside the same write transaction, after the existing
+  `state.db.before-migrate-v18-*` backup; a failed migration rolls the DDL back and
+  leaves the v18 database usable. If the SQLite build lacks the trigram tokenizer the
+  store rebuilds the legacy unicode61 index, warns once on stderr and answers Chinese
+  search through `LIKE` (`ADVISERS_FTS_TOKENIZER=unicode61` forces that path). Measured
+  cost: a 3-character Chinese query on a 50k-turn synthetic ledger returned 0→5,032 hits
+  and dropped from 12.8 ms (`LIKE`) to ~5.5 ms (FTS); the database grows 2.8 MB at 50k
+  turns (trigram index 4.0 MB vs 1.5 MB). Limits: 2-character CJK queries still scan and
+  ranking is substring-frequency, not semantic.
+- **Partial ledger loading for read commands**: `status`, `today`, `who`, `week`,
+  `receipt` and `deliveries` no longer call the full 9-table `store.load()`; `status`
+  reads indexed counts and `today` skips the turn/summary/model-call tables. At 50k
+  synthetic rows `status` went 664 → 75 ms and `today` 729 → 353 ms; at 100k rows
+  `status` is 91 ms and `today` 495 ms. Regression tests pin the behaviour (throwing
+  stub loaders plus `EXPLAIN` checks), not wall-clock thresholds.
+- **Supply-chain / release security**: `scripts/release.mjs` gained a provenance/OIDC
+  path (`--provenance` / `ADVISERS_PROVENANCE`, requiring an OIDC-capable CI runner and
+  npm CLI >= 11.15.0) that fails early instead of silently staging unsigned builds;
+  `.github/workflows/publish.yml` has an opt-in `trusted-publish-draft` job that
+  exercises the OIDC/provenance path without publishing or staging; GitHub Actions are
+  pinned to full commit SHAs; `scripts/check-deps.mjs` adds a dependency-audit gate
+  (high/critical advisories must be covered by a reviewed, dated whitelist; WARN-only in
+  CI by default, `--strict` to fail); `docs/SECURITY.md` documents the supply-chain and
+  release-integrity model.
+- **Derived-project licensing (policy A)**: `LICENSING.md`, `docs/DERIVED-PROJECTS.md`
+  and `templates/DERIVED-PROJECT-LICENSING.md` define which projects are direct
+  derivatives of Advisers and must adopt the same two-license model; independent DSH
+  plugin compositions keep their own licences.
+
+### Changed
+
+- **Lockstep 0.2.2**: all eight workspace packages (`advisers`, `advisers-core`,
+  `advisers-office`, `advisers-policy-strict`, `advisers-bridge-hermes`, `dsh-advisers`,
+  private `advisers-link-email`, `advisers-link-feishu`) are `0.2.2`; the eight
+  internal workspace pins (including `dsh-advisers` → `advisers`), the three version
+  constants and `pnpm-lock.yaml` follow.
+- **Version references**: user-facing READMEs/QUICKSTART/PERFORMANCE advertise `0.2.2`
+  as a release candidate staged to npm `latest` and pending the owner's OTP approval;
+  `0.2.1` stays the installable `latest` and is kept in historical narrative.
+- **Generated third-party notices**: the six per-package `THIRD-PARTY-NOTICES.md` files
+  were regenerated (`node scripts/check-licenses.mjs --write`) so their embedded package
+  version says `0.2.2`; the dependency list itself is unchanged (203 third-party
+  packages).
+
+### Fixed / Verified
+
+- **All 0.2.1 fixes are inherited**: dsh-advisers packaging/import, Node >= 22.16 floor,
+  single-writer lock, bridge egress, research error redaction, hints secrecy, safety
+  block not persisted, subprocess secret isolation, receipt anchors unverified, vault
+  cleanup, sync-pull integrity, TOS revoke data rights, UI Host header, MCP EPIPE,
+  `privacy --prove` scope, `deliveries --pack --all`, PDF determinism, lazy imports,
+  bounded `tick`, office submodule loading (see the 0.2.1 section).
+- **Windows second-round smoke: PASS-with-notes (28 PASS / 0 FAIL / 1 SKIP)**: run on
+  the published 0.2.1 packages whose fixes are inherited here; Node 22.16 (declared
+  floor) verified with `node:sqlite` + FTS5 and `doctor` 10/10 PASS;
+  PowerShell 7.6.6 first full pass; four published packages installed and `import`
+  verified (bridge-hermes and dsh-advisers load) plus a temporary DSH profile mounting
+  `dsh-advisers`; interactive TTY consent identical on PowerShell 5.1 and 7.6.6
+  (accept / Enter / `n` / `--accept-tos`, env-var bypass refusal); WPS opened the DOCX
+  (1 page A4, Chinese intact) and exported a PDF with an embedded YaHei subset.
+- **`chcp 936` console evidence: SKIP** — capturing Chinese under a 936 console is not
+  judgeable with the tooling used (the stdout-to-CONOUT path forces UTF-8 bytes and
+  conhost re-interprets them); a real Windows Terminal manual check remains open. It is
+  not counted as a pass.
+- **WPS compatibility layer is not MS Office**: the smoke machine has no
+  `WINWORD.EXE`; the `Word.Application` COM server is WPS 12.1.0.29680. The Office
+  rendering result describes WPS only, not Microsoft Word.
+
+### Known issues
+
+- **No npm provenance attestations for 0.2.x yet**: the current local staged publishing
+  path cannot attach provenance. It needs the account owner to configure an npm Trusted
+  Publisher for each of the six packages; the draft CI job exists but does not publish.
+- **Old staged backlog (50 entries) does not affect functionality**: pre-existing staged
+  npm builds from earlier rounds remain unapproved; they are inert and are not part of
+  this release.
+- **No legal-text change**: TOS v2026.11.2, PRIVACY, DISCLAIMER and SAFETY are unchanged
+  from 0.2.0; no new consent version is required for the 0.2.2 upgrade.
+
 ## 0.2.1 (published, 2026-11-17)
 
 Hardening release on the 0.2.0 stable line. `0.2.1` is the current release: the eight

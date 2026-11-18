@@ -1,6 +1,6 @@
 # Advisers architecture
 
-> Status: 0.2.1 (published on npm `latest` on 2026-11-17). This document fixes the
+> Status: 0.2.2 release candidate (staged for npm `latest`, pending the account owner OTP; 0.2.1 is what `latest` serves until approval). This document fixes the
 > vocabulary and the invariants; the implementation is allowed to be smaller than the
 > document.
 
@@ -26,7 +26,7 @@
   (how this kind of work is done here).
 - **Two loops**: foreground (listen → answer/act → receipt → ledger) and
   background (nightly reconcile → diff → next-day confirmation) as a **design target**
-  only. 0.2.1 has **no daemon**; the only scheduled thing is the opt-in
+  only. 0.2.2 has **no daemon**; the only scheduled thing is the opt-in
   `remind install --apply` user-level scheduler entry (cron on Linux, Task Scheduler on
   Windows) that emits reminders.
 - **Matter is a dimension, not a fourth ledger.** Commitments, facts, and
@@ -127,7 +127,7 @@ adding a `MatterLink` table after the fact is a migration, adding it now is free
 The earlier plan put routines at 1.0; that makes the product a commitment
 tracker for a year. Routines must appear by 0.2 to keep the "intern" promise.
 
-## 9. Current limits (0.2.1)
+## 9. Current limits (0.2.2)
 
 - Ledger is persisted in SQLite (`advisers/lib/sqlite.js`); JSON mode is a fallback but loses turns/search/audit.
 - CLI calls the model only when `ADVISERS_API_KEY` is set; without a key it records/search/builds but does not create promises or artifacts from natural language.

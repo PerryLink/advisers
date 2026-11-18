@@ -43,14 +43,15 @@ on any link package; adapters load one only when configured.
 
 ## Status
 
-`0.2.1` is the **current release** (2026-11-17): the eight workspace packages are lockstep
-at `0.2.1`. The six published packages are `advisers`, `advisers-core`,
+`0.2.2` is the **release candidate** (2026-11-18): the eight workspace packages are
+lockstep at `0.2.2`. The six published packages are `advisers`, `advisers-core`,
 `advisers-office`, `advisers-policy-strict`, `advisers-bridge-hermes` and `dsh-advisers`;
 the two private `advisers-link-*` packages are held at the same version but are not
-published. The six packages are published on npm **`latest` = `0.2.1`** (account owner OTP
-approved on 2026-11-17); `0.2.0` remains installable by pinning it. Registry tarballs,
-license files, a fresh-prefix install and per-package `import()` smoke are checked by
-`scripts/verify-release.mjs`.
+published. The candidate is **staged to npm `latest` and awaits the account owner's OTP
+approval**; until that approval npm `latest` still resolves to `0.2.1` (published
+2026-11-17), and `0.2.0` remains installable by pinning it. Registry tarballs, license
+files, a fresh-prefix install and per-package `import()` smoke are checked by
+`scripts/verify-release.mjs` after the staged release is approved.
 
 > Requires **Node >= 22.16**. See [docs/QUICKSTART.md](docs/QUICKSTART.md) for Windows/PowerShell and BOM notes.
 
@@ -60,7 +61,7 @@ license files, a fresh-prefix install and per-package `import()` smoke are check
 - `advisers-office`: DOCX/XLSX/PPTX/Mermaid/draw.io/XMind + 7 templates; read/edit/verify;
 - routine v0 (draft/approve/archive + patch/diff/apply);
 - local agent loop with tools (`office_build`, `office_template`, `file_read/write/list`, `commitment_add`, `routine_view`, `search_turns`); attachments (txt/md/docx/xlsx/pptx/pdf); optional model with `ADVISERS_API_KEY`;
-- turns + summaries + FTS search, `/memory`, `/week`, `/digest`, `/tick`, `/today`, `/undo`, `/diff`, `/learn review`;
+- turns + summaries + CJK-capable FTS search (FTS5 trigram index, schema v19; <3-character queries keep the LIKE fallback), `/memory`, `/week`, `/digest`, `/tick`, `/today`, `/undo`, `/diff`, `/learn review`;
 - `advisers capture` extracts candidate commitments from Chinese work text with verbatim quotes. Candidates stay pending until you explicitly accept one; no command auto-accepts.
 - `advisers research --web` / `--url` does cited research through DeepSeek server web tools. This is an explicit **web** egress path; web citations are provider output, not local file evidence.
 - `advisers remind` + `.ics`/VALARM export + opt-in scheduler scripts; `calendar import --ics`; `capture --from-mail`/`--from-transcript` (read-only, deduped, pending candidates only);
@@ -76,7 +77,8 @@ license files, a fresh-prefix install and per-package `import()` smoke are check
 - real-account/WS/Office-L3 validation still pending.
 
 ```sh
-# 0.2.1 is published on npm @latest; or run from the checkout:
+# 0.2.2 is the release candidate staged to npm @latest (owner OTP pending);
+# 0.2.1 is the published @latest. Or run from the checkout:
 git clone https://github.com/PerryLink/advisers.git
 cd advisers && corepack pnpm install && corepack pnpm -r build
 ADVISERS_OFFICE_LOCAL=1 node packages/advisers/bin/advisers.js status
@@ -95,11 +97,11 @@ advisers bridge --dir "$BRIDGE_DIR"   # Hermes gateway bridge
 
 Local interaction: `advisers` starts a REPL; `/help`, `/status`, `/new`, `/brief`, `/debug`, `/quit`. With an API key the model can call local Office/file tools and report the generated paths. File writes are confined to the working directory, overwrites require confirmation unless `ADVISERS_FORCE=1`, and local tools do not send file contents to the model unless you attach/read them.
 
-npm tags: **`latest`** is the stable channel (currently `0.2.0`; `0.2.1` is staged and
-awaits the account owner's OTP approval), **`next`** is the pre-release channel where
-preview/RC builds land. Pin an exact version (`advisers@0.2.0` today, `advisers@0.2.1`
-after approval) when you need a reproducible install, and query
-the official registry directly
+npm tags: **`latest`** is the stable channel (currently `0.2.1`, published 2026-11-17;
+`0.2.2` is the staged release candidate and awaits the account owner's OTP approval before
+it becomes installable), **`next`** is the pre-release channel where preview/RC builds
+land. Pin an exact version (`advisers@0.2.1` today) when you need a reproducible install,
+and query the official registry directly
 (`npm view advisers dist-tags --registry=https://registry.npmjs.org/`) — mirrors can lag behind.
 
 ## Security boundary

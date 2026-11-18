@@ -1,6 +1,6 @@
 # 内容安全：本地规则层
 
-> 状态：0.2.1 已发布（2026-11-17，npm latest）。模块位置 `packages/advisers/lib/safety/`，纯 ESM、零第三方依赖、无网络。
+> 状态：0.2.2 发布候选（staged 到 npm latest，待 owner OTP；0.2.1 是当前 latest）。模块位置 `packages/advisers/lib/safety/`，纯 ESM、零第三方依赖、无网络。
 > 规则层已完成 **lib 级 7 条路径的接入**：model / research / capture / pet-brief / attachments / MCP server / DSH 工具（见 §8）；`bin/` 级 CLI 的审计写入、首启 TOS 与 `advisers safety` 子命令仍由后续任务接线（本轮不改 `bin/`，边界见 §8.2）。
 >
 > 规则集版本：`advisers-content-1`。测试：`packages/advisers/test/safety.test.js`（21 个规则/语料测试）+ `packages/advisers/test/safety-integration.test.js`（13 个接入路径测试）+ `packages/dsh-advisers/test/safety.test.js`（5 个 DSH 结构化错误测试）。
@@ -165,11 +165,11 @@ const classifySite = createClassifier({ ruleset, hmacKey: auditKey })
 
 另有**引用/新闻/法律/学术语境降级**：命中非硬拦 block 规则时，若上下文含「新闻/报道/判决/刑法/普法/案例/论文/教材/……」，且不含第一人称求取（「教我/告诉我/帮我/我要/我想/……」，则 block→confirm（`downgraded=true`）。这是误报闸，也是清楚的绕过面：把「教我制作炸药」包装成新闻可以降级为 confirm，因此高危词表与硬拦不公开、CSAM 永不降级。
 
-## 8. 接入点清单与已接入路径（0.2.1 本轮）
+## 8. 接入点清单与已接入路径（0.2.2 本轮）
 
 下表是完整接入面；「本轮状态」只描述 0.2.0 稳定版实际落地的内容，**未接线项不假装已实现**。
 
-| 接入点 | 位置 | 检查对象 | 默认动作 | 本轮状态（0.2.1） |
+| 接入点 | 位置 | 检查对象 | 默认动作 | 本轮状态（0.2.2） |
 |---|---|---|---|---|
 | chat/agent 输入输出 | `lib/model.js` 的 `chatCompletion()`（`lib/agent.js` 等所有模型调用都经过它） | messages 全文（含 `tool_calls.arguments`）、模型返回文本 | block/warn | **已接入**：发请求前 `inspectMessages`（surface `model.output`）；block 抛 `ContentSafetyError` 且**不建网络请求**；warn/confirm 继续并在返回中新增可选 `safetyWarnings`；模型输出同样后置分类；DeepSeek 通道默认附 `safety_check:{level:'high'}`，`ADVISERS_SAFETY_CLOUD=0` 关闭 |
 | capture（邮件/转写/文件） | `lib/capture.js` `captureCandidates()`；`lib/mcp-server.js` 的写候选路径复用同一门 | 输入文本 surface `capture.input`、候选 payload | warn + 不落候选；block 仅高危 | **已接入**：输入 block 抛错且**不调用模型**；候选 payload 的 `action/creditor/uncertainty` 做 PII 脱敏（`quote` 保持逐字原文用于校验）；不自动 accept |
@@ -214,7 +214,7 @@ const classifySite = createClassifier({ ruleset, hmacKey: auditKey })
 - `ADVISERS_SAFETY_CLOUD=0` 只关闭 DeepSeek 的 `safety_check` 网络侧参数，**不关闭本地规则**；CSAM 硬拦不可通过配置关闭。
 - 误报规则可通过 `resolveRuleset()` 的 JSON 覆盖禁用（CSAM/block 白名单不可放宽）；`advisers safety report`（误报反馈 CLI）仍为 0.2.1 计划。
 - **上游 `safety_check` 兼容性 TODO**：参数按 DeepSeek 官方文档（2026-11-17）添加，仅用于 DeepSeek 通道；尚未做活体灰度验证（研究报告 §10-R1）。若上游发现不兼容，用 `ADVISERS_SAFETY_CLOUD=0` 关闭即可，本地规则不受影响；不要删除或改写请求其余字段。
-- **dsh-advisers 打包（0.2.1 已修）**：`packages/dsh-advisers/index.js` 改为从发布包 `advisers` 的公开子路径 `advisers/lib/safety/index.js` 引用本模块；`dsh-advisers/package.json` 显式声明 `"advisers": "0.2.1"` 依赖，`advisers/package.json` 增加 `"./lib/safety/index.js"` export 子路径（0.2.0 的 `../advisers/lib/safety/index.js` 相对引用在干净安装后 `ERR_MODULE_NOT_FOUND`）。`pack-smoke` 不再放行跨包相对 import，`verify-release` 对每包做 `import()` 冒烟（含 `dsh-advisers`）。
+- **dsh-advisers 打包（0.2.1 已修）**：`packages/dsh-advisers/index.js` 改为从发布包 `advisers` 的公开子路径 `advisers/lib/safety/index.js` 引用本模块；`dsh-advisers/package.json` 显式声明 `"advisers": "0.2.2"` 依赖，`advisers/package.json` 增加 `"./lib/safety/index.js"` export 子路径（0.2.0 的 `../advisers/lib/safety/index.js` 相对引用在干净安装后 `ERR_MODULE_NOT_FOUND`）。`pack-smoke` 不再放行跨包相对 import，`verify-release` 对每包做 `import()` 冒烟（含 `dsh-advisers`）。
 
 ## 9. 审计与可解释
 
