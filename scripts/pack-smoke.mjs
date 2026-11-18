@@ -25,8 +25,11 @@
 import { execFileSync } from 'node:child_process'
 import { existsSync, readFileSync, readdirSync, statSync } from 'node:fs'
 import { dirname, join, relative, resolve, sep } from 'node:path'
+import { fileURLToPath } from 'node:url'
 
-const root = resolve(new URL('..', import.meta.url).pathname)
+// fileURLToPath, not URL.pathname: on Windows `.pathname` keeps the leading
+// slash ('/D:/a/...'), which path.resolve turns into an unusable '\D:\a\...'.
+const root = resolve(fileURLToPath(new URL('..', import.meta.url)))
 const workspaceDir = resolve(root, 'packages')
 
 // License migration (0.2.0): every tarball must carry the software license, the
@@ -151,7 +154,15 @@ const records = new Map()
 for (const { dir, name, entries } of packages) {
   try {
     const pkgDir = resolve(root, dir)
-    const raw = execFileSync('npm', ['pack', '--dry-run', '--json'], { cwd: pkgDir, encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'] })
+    // Windows ships npm as npm.cmd; a .cmd file cannot be launched by
+    // execFile without a shell (Node child_process docs), so let cmd.exe resolve
+    // it there. The arguments are fixed literals with no user input.
+    const raw = execFileSync('npm', ['pack', '--dry-run', '--json'], {
+      cwd: pkgDir,
+      encoding: 'utf8',
+      stdio: ['ignore', 'pipe', 'pipe'],
+      shell: process.platform === 'win32',
+    })
     const info = JSON.parse(raw)[0]
     const packed = new Set(info.files.map((f) => f.path))
     if (!packed.has('package.json')) throw new Error('missing package.json in tarball')

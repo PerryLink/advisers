@@ -37,6 +37,29 @@ email is published yet.
 
 ## CI tests that must stay green
 
+The current suite is smaller than the target matrix below. These are the gates
+that run today and must stay green:
+
+| Suite line | What actually runs today |
+|---|---|
+| T1 association hints never inject other matter bodies | `packages/core/test/security.test.ts` |
+| T2 permit replay/expiry | `packages/core/test/permit.test.ts` |
+| T3 companion/roleplay denial | `packages/policy-strict/test/policy.test.ts` |
+| T4 audit hash chain tamper | `packages/advisers/test/sqlite.test.js` |
+| T5 purge cascade tombstones | `packages/core/test/security.test.ts` |
+
+Also blocking in CI: `scripts/check-js.mjs` (production-JS syntax, forbidden
+dynamic/shell execution, hardcoded secret material), `scripts/fault-injection.mjs`
+(process-crash, WAL, FTS, migration-rollback and ENOSPC invariants; see
+`docs/FAULT-INJECTION.md`), and the `windows-smoke` job (frozen install,
+build, packaging smoke, minimal CLI flow on a temporary home).
+
+### Target definitions (0.3, not implemented)
+
+The T1-T7 definitions below are the target: they require dynamic attack-corpus,
+permit, deletion-cascade, evidence and TOS suites that do not all exist yet.
+The T1-T5 labels in the current suite must not be read as this matrix.
+
 - **T1 injection regression** — MINJA/SpAIware-style corpus: zero instruction
   writes, zero side-effect tools, zero egress.
 - **T2 cross-matter / existence leak** — prompt, logs, drafts, and notifications
@@ -47,6 +70,10 @@ email is published yet.
   rejects without a permit; replay/edit invalidates a permit.
 - **T5 supply-chain gate** — unpinned, unsigned, script-bearing, or `!!js`
   dependencies fail.
+- **T6 evidence integrity** — source resolution, quote verification, receipt
+  three-state semantics, no fabricated evidence.
+- **T7 TOS/consent across surfaces** — no silent acceptance in non-interactive
+  contexts; version changes and revocation are enforced on every surface.
 
 ## Scope
 
@@ -71,7 +98,9 @@ This policy is the target; status below is code-level, not an external audit.
 | 9 fail closed | **partial**: policy resolver failure is fail-closed in runtime; package-missing fallback is fail-open |
 | 10 supply-chain gate | **partial**: CI and `scripts/security-suite.mjs` are green (5/5); full T1–T5 corpus/permit/supply-chain gates are not all implemented |
 
-`scripts/security-suite.mjs` runs five static checks in CI (permit, injection
-patterns, egress, supply chain, secrets). It is not a full T1–T5 dynamic test
-suite: do not describe the project as "secure" until the remaining gates are
-implemented and green.
+`scripts/security-suite.mjs` executes the five test files in the table above
+and prints their historical T1-T5 labels. It is not the T1-T7 dynamic target
+matrix (permit, deletion-cascade, evidence-integrity and TOS-surface suites are
+not all implemented). CI also runs the static checks and the fault-injection
+suite listed above. Do not describe the project as "secure" until the target
+gates exist and are green.

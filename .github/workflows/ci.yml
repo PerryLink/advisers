@@ -33,7 +33,18 @@ jobs:
       - run: pnpm install --frozen-lockfile
       - run: pnpm -r --if-present run build
       - run: pnpm -r --if-present run typecheck
+      # Static checks for the production JS under packages/* (syntax via
+      # node --check, forbidden eval/Function and shell exec, hardcoded secret
+      # material). Fast and dependency-free; see scripts/check-js.mjs.
+      - run: node scripts/check-js.mjs
       - run: pnpm -r --if-present run test
+      # Fault-injection suite: SIGKILL mid-transaction, WAL corruption, FTS
+      # desync, migration rollback, ENOSPC. Linux-only cases SKIP cleanly on
+      # other platforms (see docs/FAULT-INJECTION.md). Runs once, on the
+      # minimum supported Node, to keep the matrix fast.
+      - name: Fault-injection suite
+        if: matrix.node == '22.16'
+        run: node scripts/fault-injection.mjs
       - run: node scripts/pack-smoke.mjs
       - run: node scripts/check-docs.mjs
       - run: node scripts/check-licenses.mjs
@@ -48,3 +59,95 @@ jobs:
       # passing --strict once the tracked advisories are fixed or re-waived.
       - run: node scripts/check-deps.mjs
         continue-on-error: true
+
+  windows-smoke:
+    # 0.2.3 Wave 4a: the product is Windows-first (README/QUICKSTART) but CI
+    # only ran Linux, so Windows path/rename/lock/CRLF behaviour was never
+    # observed by a gate. This job is a smoke job, not the full suite: frozen
+    # install + build + the packaging smoke + a minimal CLI flow on a fresh
+    # temporary ADVISERS_HOME. It deliberately does not need Office/Word (no
+    # verify-office step and no office commands below). Failures print the
+    # failing command, its output, the tool versions and the temporary home
+    # contents so a Windows-only failure is diagnosable from the job log alone.
+    runs-on: windows-latest
+    timeout-minutes: 25
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+      - uses: pnpm/action-setup@fc06bc1257f339d1d5d8b3a19a8cae5388b55320 # v4.4.0
+        with:
+          version: 12.16.1
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
+        with:
+          node-version: '22.16'
+          cache: pnpm
+      - run: pnpm install --frozen-lockfile
+      - run: pnpm -r --if-present run build
+      - name: Pack dry-run smoke
+        run: node scripts/pack-smoke.mjs
+      - name: Minimal CLI smoke on a temporary ADVISERS_HOME
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          # Keep native exit codes as data; we check them explicitly below.
+          $PSNativeCommandUseErrorActionPreference = $false
+          $smokeRoot = Join-Path $env:RUNNER_TEMP ("advisers-smoke-" + [guid]::NewGuid().ToString('N'))
+          New-Item -ItemType Directory -Path $smokeRoot -Force | Out-Null
+          $env:ADVISERS_HOME = Join-Path $smokeRoot 'home'
+          $env:ADVISERS_STORE = 'sqlite'
+          $env:ADVISERS_ACCEPT_TOS = '1'
+          $env:ADVISERS_NO_MODEL = '1'
+          $env:ADVISERS_CORE_LOCAL = '1'
+          $env:ADVISERS_OFFICE_LOCAL = '1'
+          $bin = Join-Path (Get-Location) 'packages/advisers/bin/advisers.js'
+
+          function Show-Diagnostics {
+            Write-Host '--- windows-smoke diagnostics ---'
+            Write-Host ("node: " + (& node --version))
+            Write-Host ("pnpm: " + (& pnpm --version))
+            Write-Host ("cwd: " + (Get-Location))
+            Write-Host ("ADVISERS_HOME: " + $env:ADVISERS_HOME)
+            if ($env:ADVISERS_HOME -and (Test-Path -LiteralPath $env:ADVISERS_HOME)) {
+              Get-ChildItem -LiteralPath $env:ADVISERS_HOME -Force |
+                ForEach-Object { Write-Host ("home/" + $_.Name + " bytes=" + $_.Length) }
+            }
+          }
+
+          function Invoke-Advisers {
+            param([string]$Label, [string[]]$Arguments)
+            Write-Host ("=== advisers " + ($Arguments -join ' ') + "  [" + $Label + "]")
+            $output = (& node $bin @Arguments 2>&1 | Out-String)
+            $code = $LASTEXITCODE
+            Write-Host $output.TrimEnd()
+            if ($code -ne 0) {
+              Write-Host ("::error::" + $Label + " failed with exit code " + $code)
+              Show-Diagnostics
+              exit 1
+            }
+            return $output
+          }
+
+          $versionOutput = Invoke-Advisers 'version' @('--version')
+          if ($versionOutput.Trim() -notmatch '^[0-9]+\.[0-9]+\.[0-9]+') {
+            Write-Host '::error::advisers --version did not print a semantic version'
+            Show-Diagnostics
+            exit 1
+          }
+          $null = Invoke-Advisers 'init' @('init')
+          $null = Invoke-Advisers 'status' @('status')
+          $message = 'Windows smoke commitment'
+          $null = Invoke-Advisers 'commit-add' @('commit', 'add', $message, '--quote', $message)
+          $commitList = Invoke-Advisers 'commit-ls' @('commit', 'ls')
+          if ($commitList -notmatch [regex]::Escape($message)) {
+            Write-Host '::error::commit ls does not show the commitment that was just added'
+            Show-Diagnostics
+            exit 1
+          }
+          $doctor = Invoke-Advisers 'doctor' @('doctor')
+          if ($doctor -match '(?m)^FAIL\s') {
+            Write-Host '::error::advisers doctor reported FAIL checks'
+            Show-Diagnostics
+            exit 1
+          }
+          $null = Invoke-Advisers 'doctor-check-db' @('doctor', '--check-db')
+          Write-Host 'windows smoke: PASS (--version, init, status, commit add, commit ls, doctor, doctor --check-db)'
+          Remove-Item -LiteralPath $smokeRoot -Recurse -Force -ErrorAction SilentlyContinue

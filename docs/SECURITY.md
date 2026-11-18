@@ -56,10 +56,12 @@ advisers-bridge-hermes, and dsh-advisers.
 - No npm token is committed to the repository. CI workflows default to
   read-only repository permissions, and no workflow publishes automatically:
   publishing is always a manual, owner-approved action.
-- A release is expected to pass the full gate first: the test suite on Node
-  22.16 and 24, packaging smoke, docs/version consistency, license and
-  terms-of-service checks, Office verification, the security suite, release
-  lockstep, and the dependency audit described below.
+- A release is expected to be cut only from a commit that passed the full
+  gate: the test suite on Node 22.16 and 24, the production-JS static checks,
+  the Windows smoke job, packaging smoke, docs/version consistency, license and
+  terms-of-service checks, Office verification, the security suite, the
+  fault-injection suite, release lockstep, and the dependency audit described
+  below.
 
 ## 4. Provenance and trusted publishing (current status)
 
@@ -89,7 +91,72 @@ A **draft, not enabled** trusted-publishing job exists in the publish workflow:
   Until that verification exists, releases must not be described as
   provenance-signed.
 
-## 5. Dependency and supply-chain controls
+## 5. Automated gates in CI
+
+This is what actually runs on every push and pull request. It is a description
+of the current gates, not a security certification: the 0.3 target test matrix
+(evidence discipline, egress permits, TOS surfaces) is not implemented yet.
+
+| Job | Runner | What runs |
+|---|---|---|
+| `test` | ubuntu-latest, Node 22.16 and 24 | frozen install, build, typecheck, `scripts/check-js.mjs`, the full `pnpm -r test` suite, `scripts/pack-smoke.mjs`, docs/version consistency, license, TOS and release-lockstep checks, Office verification, `scripts/security-suite.mjs`, and a WARN-only dependency audit. On Node 22.16 only: `scripts/fault-injection.mjs`. |
+| `windows-smoke` | windows-latest, Node 22.16 | frozen install, build, `scripts/pack-smoke.mjs`, and a minimal CLI smoke on a fresh temporary `ADVISERS_HOME`: `advisers --version`, `init`, `status`, `commit add`, `commit ls`, `doctor`, `doctor --check-db`. It does not require Office/Word and does not run the full suite. |
+
+### 5.1 Static checks (`scripts/check-js.mjs`)
+
+Every production JavaScript file under `packages/*` (excluding `dist/`,
+`node_modules/`, and test code/fixtures) is checked on every CI run:
+
+- syntax: `node --check` on every file;
+- no `eval()`, `new Function()`, or bare `Function()` dynamic code;
+- no `child_process.exec`/`execSync` and no `shell: true` (argument-array
+  APIs only), so a shell string cannot be built from untrusted data;
+- no obvious hardcoded credential material (AWS/GitHub/npm/OpenAI/Slack/Google
+  token formats, JWT-shaped strings, PEM private-key headers);
+- TODO/FIXME/XXX/HACK markers are counted and printed (informational, not a
+  failure).
+
+Reviewed exceptions live in an explicit allowlist in the script, with a reason
+per entry; there are none today. The gate checks syntax and specific API
+patterns, not full static typing - `tsc --checkJs` for the JS packages remains
+an open 0.3 item.
+
+### 5.2 Fault injection (`scripts/fault-injection.mjs`)
+
+A standalone suite runs the real CLI against temporary homes and injects
+SIGKILL mid-transaction (before and after commit), an interrupted or failed
+schema migration, corrupt and truncated WAL files, a desynchronised FTS index,
+and ENOSPC on vault/backup writes; where unprivileged user namespaces are
+available it also fills a real 2 MiB tmpfs. Each case asserts quick_check,
+audit-chain verification, row/audit consistency, absence of half-installed
+files, and recovery. Full coverage, flags, exit codes and limitations are in
+[FAULT-INJECTION.md](FAULT-INJECTION.md).
+
+### 5.3 Security suite names vs. 0.3 targets
+
+`scripts/security-suite.mjs` prints five lines labelled T1-T5. Those labels
+are the historical suite names and are narrower than the T1-T7 target matrix in
+the 0.3 design. The table below shows what each line actually executes today;
+none of the 0.3 target definitions should be read into it.
+
+| Suite line | Test file executed today | 0.3 target direction (not implemented) |
+|---|---|---|
+| T1 association hints never inject other matter bodies | `packages/core/test/security.test.ts` | injection regression corpus (attachments/mail/web/tool output) |
+| T2 permit replay/expiry | `packages/core/test/permit.test.ts` | cross-matter / existence leaks in prompt, logs, notifications, Pet Brief, MCP, DSH |
+| T3 companion/roleplay denial | `packages/policy-strict/test/policy.test.ts` | deletion cascade + zombie probe across all stores |
+| T4 audit hash chain tamper | `packages/advisers/test/sqlite.test.js` | egress permit matrix for every outbound surface |
+| T5 purge cascade tombstones | `packages/core/test/security.test.ts` | supply-chain gate (allowed build scripts, provenance, audit) |
+
+The 0.3 target matrix adds T6 (evidence integrity) and T7 (TOS/consent across
+surfaces), neither of which the current suite covers. The root
+[SECURITY.md](../SECURITY.md) section "CI tests that must stay green" is
+written against the target and must not be read as a description of the current
+suite.
+
+Dependency audit remains WARN-only (see the next section); the fault-injection
+and check-js gates are blocking.
+
+## 6. Dependency and supply-chain controls
 
 - The workspace lockfile is committed and CI installs with
   --frozen-lockfile; the production dependency audit queries the official npm
@@ -121,7 +188,7 @@ A **draft, not enabled** trusted-publishing job exists in the publish workflow:
   read-only; the only job with id-token: write is the manual trusted-publishing
   draft described above.
 
-## 6. Verifying an installation
+## 7. Verifying an installation
 
 1. Check that the version you installed exists as a tag/release on the public
    GitHub repository and matches the package version.
@@ -138,7 +205,7 @@ A **draft, not enabled** trusted-publishing job exists in the publish workflow:
 4. Treat any mismatch between the registry tarball, the repository tag, and the
    documented license files as a security issue and report it per section 1.
 
-## 7. Scope and limitations
+## 8. Scope and limitations
 
 - **In scope:** the six published packages, their release pipeline, and the
   repository workflows.
@@ -151,8 +218,13 @@ A **draft, not enabled** trusted-publishing job exists in the publish workflow:
   software is provided without warranty under the [LICENSE](../LICENSE); the
   [Terms of Service](TOS.md) govern use.
 
-## 8. Change log
+## 9. Change log
 
 - 2026-11-17: first public supply-chain annex. Records the no-provenance status
   of 0.2.x, the opt-in OIDC trusted-publishing draft, SHA-pinned GitHub Actions,
   and the WARN-only production dependency audit gate with dated exceptions.
+- 2026-11-18: added the Windows smoke job, production-JS static checks
+  (`scripts/check-js.mjs`), and the standalone fault-injection suite
+  (`scripts/fault-injection.mjs`, see [FAULT-INJECTION.md](FAULT-INJECTION.md));
+  aligned the T1-T5 labels with the test files the security suite actually runs
+  and recorded the 0.3 target matrix explicitly as not implemented.
