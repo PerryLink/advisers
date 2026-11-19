@@ -124,12 +124,22 @@ jobs:
         if: ${{ inputs.confirm == 'yes' && inputs.stage == 'yes' }}
         env:
           RELEASE_TAG: ${{ inputs.release_tag }}
+          NPM_CONFIG_LOGLEVEL: verbose
         run: |
           if [ -n "$NPM_TOKEN" ]; then
             echo "::error::NPM_TOKEN must not be set for Trusted Publishing; OIDC supplies the short-lived token"
             exit 1
           fi
+          set +e
           node scripts/release.mjs --provenance
+          code=$?
+          if [ "$code" -ne 0 ]; then
+            echo '--- npm debug log (tail; tokens are not printed by npm) ---'
+            for f in "$HOME"/.npm/_logs/*-debug-0.log; do
+              [ -f "$f" ] && tail -250 "$f"
+            done
+          fi
+          exit "$code"
 
       - name: Trusted Publisher setup and owner decision
         run: |
