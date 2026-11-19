@@ -1,5 +1,84 @@
 # Changelog
 
+## 0.2.4 (release candidate, 2026-11-19)
+
+Provenance/tooling patch on the 0.2.x stable line. The eight workspace packages are
+lockstep at `0.2.4`, the eight internal workspace pins, the three version constants and
+`pnpm-lock.yaml` follow, and the six per-package `THIRD-PARTY-NOTICES.md` files were
+regenerated (version line only; the dependency list is unchanged). There is **no
+user-facing functional or behavioural change**: the runtime, CLI/JSON surfaces, schema
+v20 and the legal texts (TOS v2026.11.2) are unchanged from 0.2.3.
+
+Status: **release candidate**. CI stages the six packages through npm Trusted Publishing
+(GitHub Actions OIDC) with `--provenance`; they become installable only after the npm
+account owner approves each staged build with their own OTP. Until then npm
+`latest`/`next` remain `0.2.3`.
+
+### Fixed
+
+- **Windows path handling in the release scripts**: `scripts/release.mjs`,
+  `scripts/set-version.mjs`, `scripts/check-docs.mjs` and `scripts/check-release.mjs`
+  derived the repository root as `new URL('..', import.meta.url).pathname`. On Windows a
+  `.pathname` keeps the leading slash (`/D:/...`), so the joined paths were unusable
+  (`\D:\...`). All four now use `fileURLToPath(new URL('..', import.meta.url))` (the
+  same pattern `scripts/pack-smoke.mjs` already used), so the release and docs gates run
+  on Windows runners as well as POSIX ones. The `windows-smoke` CI job now runs
+  `check-docs`/`check-release` so the fix is exercised on a real Windows runner.
+
+### Engineering
+
+- **Owner-authorized CI staging with Trusted Publishing and provenance**:
+  `.github/workflows/publish.yml` gains a `stage` input and an owner-authorized
+  "Stage with Trusted Publishing + provenance" step. With `confirm=yes` and `stage=yes`
+  the job runs `node scripts/release.mjs --provenance` under an OIDC-capable job
+  (`permissions: id-token: write`), and it fails if `NPM_TOKEN` is set, so a long-lived
+  token cannot silently replace OIDC authentication. Staging is still not publishing:
+  every staged build needs the owner's explicit approval. The npm account owner
+  configured a Trusted Publisher for each of the six packages on npmjs.com.
+- **Release verification (0.2.4 candidate)**: `node scripts/set-version.mjs --version
+  0.2.4` updated the eight package manifests, the eight internal workspace pins, the
+  three version constants and `pnpm-lock.yaml`; `pnpm install --lockfile-only`
+  followed by `pnpm install --frozen-lockfile` passes; `check-docs`, `check-release`,
+  `check-licenses`, `check-tos --release` and `pack-smoke` pass on the candidate tree.
+  `pnpm -r test`, build, typecheck and the CI Windows smoke job remain the release gate
+  and are run by CI for the release commit.
+
+### Provenance
+
+- **npm provenance attestations start with 0.2.4**: the CI Trusted-Publishing path
+  stages the six packages with `--provenance`, so the staged builds are expected to carry
+  build-provenance attestations generated from the GitHub Actions OIDC identity. After
+  the owner approves a stage, verify with
+  `npm view <package>@0.2.4 dist.attestations --json`; a non-empty result confirms the
+  attestation, and an empty result means the publish did not use OIDC/Trusted Publishing
+  and must not be described as provenance-signed.
+- **0.2.3 and earlier have no provenance and cannot be retroactively attested**: they
+  were staged from a maintainer's local terminal with owner OTP. Their registry
+  integrity and signature metadata are unchanged, but no build-provenance statement
+  exists for them.
+
+### Known issues and limits
+
+- **0.2.4 is a release candidate, not a published release**: npm `latest`/`next` remain
+  `0.2.3` until the owner approves each staged build. Do not describe 0.2.4 as released
+  or as provenance-signed before `dist.attestations` is non-empty.
+- **DSH adapter is still a preview** (unchanged): `dsh-advisers` does not open
+  `~/.advisers/state.db`; its ledger reads are explicit empty previews. Real read-only
+  ledger wiring is 0.3 work.
+- **Some 0.2.3 performance targets are still missed at 200k rows** (unchanged from
+  0.2.3): `today` (317 ms vs ≤150 ms) and the full-ledger reads
+  `remind`/`digest`/`tui`/`pet-brief` (972/641/814/1,809 ms vs ≤400 ms); see
+  [docs/PERFORMANCE.md](docs/PERFORMANCE.md). Do not read the 0.2.3 plan as fully
+  delivered.
+- **Audit tail anchoring is not implemented**: audit is a local hash chain; deleting the
+  tail of the chain is not yet detectable, and the 0.3 target audit-tail anchor remains
+  open. Audit is not a third-party attestation.
+- **Old staged backlog remains inert**: pre-existing staged npm builds from earlier
+  rounds are unapproved and are not part of this release; they do not affect
+  functionality.
+- **No legal-text change**: TOS v2026.11.2, PRIVACY, DISCLAIMER and SAFETY are unchanged
+  from 0.2.0; no new consent version is required for the 0.2.4 upgrade.
+
 ## 0.2.3 (published, 2026-11-18)
 
 Published release on the 0.2.x stable line: the eight workspace packages are lockstep at

@@ -1,8 +1,11 @@
 # Quickstart (Windows + PowerShell)
 
-> Current status: `0.2.3` is the **current release**, published on npm `@latest` on
-> 2026-11-18 after the account owner's OTP approval. All six published packages are
-> lockstep at `0.2.3`; install with
+> Current status: `0.2.4` is a **release candidate** (2026-11-19) with no user-facing
+> functional or behavioural change; it will be staged from CI through npm Trusted
+> Publishing with provenance attestations and becomes installable only after the account
+> owner's OTP approval. Until then npm `latest` is still `0.2.3` (published 2026-11-18
+> after OTP approval) and `next` also points at `0.2.3`; all six published packages are
+> lockstep at `0.2.4` in the repository. Install with
 > `npm i -g --registry=https://registry.npmjs.org advisers@latest advisers-office@latest`. The checkout instructions below remain valid
 > for development builds.
 
@@ -92,14 +95,15 @@ node $A memory candidates
 node $A chat "做一份 Q4 汇报 PPT，放到 out\q4.pptx"
 ```
 
-## B. Installed CLI (stable channel = 0.2.3)
+## B. Installed CLI (stable channel = 0.2.3; 0.2.4 pending approval)
 
 ```powershell
-# Stable channel: npm @latest currently resolves to 0.2.3 (published 2026-11-18).
+# Stable channel: npm @latest currently resolves to 0.2.3 (published 2026-11-18);
+# 0.2.4 is a release candidate pending the owner's approval of the CI-staged build.
 npm i -g --registry=https://registry.npmjs.org advisers@latest advisers-office@latest
 # Pre-release channel (preview/RC builds land on `next` before promotion):
 # npm i -g --registry=https://registry.npmjs.org advisers@next advisers-office@next
-advisers --version    # expect 0.2.2 until the owner approves the staged 0.2.3
+advisers --version    # expect 0.2.3 (0.2.4 after the owner approves the staged build)
 advisers status
 advisers soul init
 advisers template weekly weekly.json out\weekly.docx

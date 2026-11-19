@@ -10,7 +10,8 @@ versions, how a release is built and published, what provenance exists today,
 and how to verify what you install. It describes the current state; "not yet
 implemented" is written as such.
 
-Status: 2026-11-18, covering the 0.2.x stable line (npm `latest`: 0.2.3).
+Status: 2026-11-19, covering the 0.2.x stable line (npm `latest`: 0.2.3; 0.2.4 is a
+release candidate staged via Trusted Publishing, pending owner approval).
 
 ## 1. Reporting a vulnerability
 
@@ -49,13 +50,15 @@ advisers-bridge-hermes, and dsh-advisers.
 - Tarball contents are restricted by an explicit files allowlist. Every package
   ships its LICENSE, NOTICE, and THIRD-PARTY-NOTICES.md, and those license files
   are kept byte-identical to the repository copies.
-- The current publishing path is **staged publishing with human approval**:
-  the maintainer uploads a staged build, and the npm account owner approves it
-  with their own OTP in their own terminal. A version does not become
-  installable until that approval happens.
+- Publishing is **staged publishing with human approval**: a build is uploaded
+  as a stage, and the npm account owner approves it with their own OTP in their
+  own terminal. A version does not become installable until that approval
+  happens. Releases up to 0.2.3 were staged from a maintainer's local terminal;
+  from 0.2.4 the stage is produced by CI through npm **Trusted Publishing**
+  (GitHub Actions OIDC) with provenance attestations, see section 4.
 - No npm token is committed to the repository. CI workflows default to
   read-only repository permissions, and no workflow publishes automatically:
-  publishing is always a manual, owner-approved action.
+  staging and approval are separate, manual, owner-authorized actions.
 - A release is expected to be cut only from a commit that passed the full
   gate: the test suite on Node 22.16 and 24, the production-JS static checks,
   the Windows smoke job, packaging smoke, docs/version consistency, license and
@@ -63,33 +66,39 @@ advisers-bridge-hermes, and dsh-advisers.
   fault-injection suite, release lockstep, and the dependency audit described
   below.
 
-## 4. Provenance and trusted publishing (current status)
+## 4. Provenance and trusted publishing (0.2.4 status)
 
-**Today, published tarballs do not carry npm provenance attestations.** They
-have registry integrity and signature metadata (dist.integrity, dist.signatures)
-but no build-provenance statement (dist.attestations is absent). The staged
-human-approval flow proves that a maintainer approved the upload; it does not
-prove which commit or CI run produced the tarball.
+**Releases up to and including 0.2.3 carry no npm provenance attestations.**
+They have registry integrity and signature metadata (dist.integrity,
+dist.signatures) but no build-provenance statement (dist.attestations is
+absent). They were staged from a maintainer's local terminal; the staged
+human-approval flow proves that the account owner approved the upload, but it
+does not prove which commit or CI run produced the tarball. Provenance cannot be
+added retroactively to those versions.
 
-A **draft, not enabled** trusted-publishing job exists in the publish workflow:
+**From 0.2.4 the release path is CI Trusted Publishing with provenance:**
 
-- It uses GitHub Actions OIDC with the id-token: write permission, and is
-  available only through an explicit manual dispatch with confirm=yes.
-- In its current draft form it exercises the OIDC/provenance path but does not
-  publish or stage anything. It exists so the plumbing can be validated without
-  a release decision.
-- Real CI publishing requires all of the following, and remains an explicit
-  owner decision:
-  1. an npm **Trusted Publisher** configured for each package on npmjs.com
-     (GitHub repository, workflow filename publish.yml, optional protected
-     environment; a stage-only permission is recommended);
-  2. an owner-approved workflow change that turns the commented staging step
-     into a real one;
-  3. npm CLI 11.15.0 or newer on the runner for staged publishing with OIDC.
-- Planned after that: stage from CI with provenance, verify that every published
-  version has non-empty dist.attestations, and say so in the release notes.
-  Until that verification exists, releases must not be described as
+- The npm account owner has configured a **Trusted Publisher** for each of the
+  six packages on npmjs.com (GitHub repository, workflow file `publish.yml`,
+  stage-only permission). That configuration is an owner decision on npmjs.com
+  and is not stored in this repository.
+- `.github/workflows/publish.yml` has an owner-authorized `stage=yes` dispatch
+  path. With `confirm=yes` and `stage=yes` it runs
+  `node scripts/release.mjs --provenance` in a job with
+  `permissions: id-token: write`; npm exchanges the GitHub OIDC token for a
+  short-lived credential and attaches provenance attestations to the staged
+  build. The job refuses to run if `NPM_TOKEN` is set, so a long-lived token
+  cannot silently replace OIDC authentication.
+- Staging is **not publishing**. Every staged build still needs the account
+  owner's explicit approval before it becomes installable, so 0.2.4 remains a
+  release candidate until that approval happens.
+- After approval, confirm the attestations with
+  `npm view <package>@0.2.4 dist.attestations --json`; an empty result means the
+  publish did not use OIDC/Trusted Publishing and must not be described as
   provenance-signed.
+- 0.2.4 is a provenance/tooling patch: it changes the release scripts and the
+  publish workflow, not the runtime. The legal texts are unchanged (TOS
+  v2026.11.2).
 
 ## 5. Automated gates in CI
 
@@ -100,7 +109,7 @@ of the current gates, not a security certification: the 0.3 target test matrix
 | Job | Runner | What runs |
 |---|---|---|
 | `test` | ubuntu-latest, Node 22.16 and 24 | frozen install, build, typecheck, `scripts/check-js.mjs`, the full `pnpm -r test` suite, `scripts/pack-smoke.mjs`, docs/version consistency, license, TOS and release-lockstep checks, Office verification, `scripts/security-suite.mjs`, and a WARN-only dependency audit. On Node 22.16 only: `scripts/fault-injection.mjs`. |
-| `windows-smoke` | windows-latest, Node 22.16 | frozen install, build, `scripts/pack-smoke.mjs`, and a minimal CLI smoke on a fresh temporary `ADVISERS_HOME`: `advisers --version`, `init`, `status`, `commit add`, `commit ls`, `doctor`, `doctor --check-db`. It does not require Office/Word and does not run the full suite. |
+| `windows-smoke` | windows-latest, Node 22.16 | frozen install, build, `scripts/pack-smoke.mjs`, the docs/version and release-lockstep gates (`check-docs`, `check-release`, which exercises the `fileURLToPath` Windows fix), and a minimal CLI smoke on a fresh temporary `ADVISERS_HOME`: `advisers --version`, `init`, `status`, `commit add`, `commit ls`, `doctor`, `doctor --check-db`. It does not require Office/Word and does not run the full suite. |
 
 ### 5.1 Static checks (`scripts/check-js.mjs`)
 
@@ -185,8 +194,8 @@ and check-js gates are blocking.
   lockfile changes.
 - GitHub Actions used by the workflows are pinned to full commit SHAs, with the
   upstream release tag recorded in a comment. Workflow permissions default to
-  read-only; the only job with id-token: write is the manual trusted-publishing
-  draft described above.
+  read-only; the only job with id-token: write is the manual, owner-authorized
+  staging job described in section 4.
 
 ## 7. Verifying an installation
 
@@ -196,8 +205,10 @@ and check-js gates are blocking.
 
        npm view advisers dist.integrity dist.signatures dist.attestations --json
 
-   dist.integrity should match the lockfile entry. dist.attestations being empty
-   means the version has no provenance attestation (see section 4).
+   dist.integrity should match the lockfile entry. From 0.2.4 (once the owner
+   approves the stage) the six packages are expected to have non-empty
+   dist.attestations; 0.2.3 and earlier have none and cannot be retro-signed
+   (see section 4).
 3. Verify registry signatures for the installed dependency tree:
 
        npm audit signatures
@@ -233,3 +244,13 @@ and check-js gates are blocking.
   candidate gate. Provenance status is unchanged (no attestations; draft OIDC
   job only), the audit tail anchor is still unimplemented, and the legal texts
   are unchanged from 0.2.0 (TOS v2026.11.2).
+- 2026-11-19 (0.2.4 release candidate): `release.mjs`, `set-version.mjs`,
+  `check-docs.mjs` and `check-release.mjs` now use `fileURLToPath` instead of
+  `new URL(...).pathname` (Windows portability); the publish workflow gained the
+  owner-authorized `stage=yes` path that stages the six packages through
+  GitHub OIDC Trusted Publishing with `--provenance` and rejects `NPM_TOKEN`;
+  the owner configured the six Trusted Publishers on npmjs.com. 0.2.4 is not
+  published yet: it becomes installable only after the owner approves the staged
+  builds, and then `npm view <pkg>@0.2.4 dist.attestations` must be non-empty
+  before the release is described as provenance-signed. No runtime or legal-text
+  change.

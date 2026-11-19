@@ -7,7 +7,7 @@ routines.
 ## Install
 
 ```sh
-# 0.2.3 is published on npm @latest:
+# 0.2.4 is a release candidate; npm @latest is still 0.2.3:
 #   npm i -g --registry=https://registry.npmjs.org advisers@latest advisers-office@latest
 # From checkout:
 #   corepack pnpm install && corepack pnpm -r build
@@ -43,7 +43,10 @@ turn natural language into commitments or artifacts.
 
 ## Status
 
-`0.2.3` is the current release (published on npm `latest` on 2026-11-18):
+`0.2.4` is a release candidate (2026-11-19; npm `latest` is still `0.2.3`, published
+2026-11-18). 0.2.4 is a provenance/tooling patch with no user-facing functional or
+behavioural change; it becomes installable only after the account owner approves the
+CI-staged Trusted-Publishing build:
 
 - SQLite ledger at `~/.advisers/state.db` (JSON fallback with `ADVISERS_STORE=json`; schema v20, lock-free read snapshot, incremental writes);
 - soul at `~/.advisers/soul.md`, human-owned;

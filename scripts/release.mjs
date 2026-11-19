@@ -32,7 +32,9 @@ import { mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 
-const root = new URL('..', import.meta.url).pathname
+import { fileURLToPath } from 'node:url'
+
+const root = fileURLToPath(new URL('..', import.meta.url))
 const registry = process.env.ADVISERS_REGISTRY || 'https://registry.npmjs.org/'
 const dryRun = process.argv.includes('--dry-run')
 const packages = [

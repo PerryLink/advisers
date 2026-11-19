@@ -5,12 +5,12 @@
 ## 安装
 
 ```sh
-# 0.2.3 已发布到 npm @latest（稳定渠道 = 默认 `latest`）：
+# 0.2.4 是 release candidate；npm @latest 仍为 0.2.3（稳定渠道 = 默认 `latest`）：
 #   npm i -g --registry=https://registry.npmjs.org advisers@latest advisers-office@latest
 # 从 checkout 运行：
 #   corepack pnpm install && corepack pnpm -r build
 #   ADVISERS_OFFICE_LOCAL=1 node packages/advisers/bin/advisers.js status
-# preview/RC 构建使用 `next` 渠道（当前 `next` 也指向 0.2.2）：
+# preview/RC 构建使用 `next` 渠道（当前 `next` 也指向 0.2.3）：
 #   npm i -g --registry=https://registry.npmjs.org advisers@next advisers-office@next
 advisers soul init
 advisers brief "做一份 Q4 预算 Excel，周五前给老板"
@@ -36,7 +36,8 @@ CLI 是**本地秘书运行时**：一个 REPL、用户账/承诺账/流程账�
 
 ## 状态
 
-`0.2.3` 是当前发布版本（已发布到 npm `latest`，2026-11-18）：
+`0.2.4` 是 release candidate（2026-11-19；npm `latest` 仍为 `0.2.3`，2026-11-18 发布）。
+0.2.4 为 provenance/工具链补丁，无用户功能或行为变更；须待账号所有者 OTP 批准 CI staged 构建后才可安装：
 
 - SQLite 账本 `~/.advisers/state.db`（JSON fallback；schema v20、无锁只读快照、增量写）；
 - soul 位于 `~/.advisers/soul.md`，人类独占；

@@ -84,6 +84,10 @@ jobs:
       - run: pnpm -r --if-present run build
       - name: Pack dry-run smoke
         run: node scripts/pack-smoke.mjs
+      - name: Docs/release gates (Windows fileURLToPath portability)
+        run: |
+          node scripts/check-docs.mjs
+          node scripts/check-release.mjs
       - name: Minimal CLI smoke on a temporary ADVISERS_HOME
         shell: pwsh
         run: |

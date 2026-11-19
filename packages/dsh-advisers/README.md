@@ -9,7 +9,9 @@ DSH bundle for **Advisers**. It registers:
 - `advisers_who` — read-only **preview** of who owes whom (what I owe vs what I am waiting on);
 - `advisers_evidence` — read-only **preview** evidence lookup (quotes/refs/sources) for a `cm_…`, `fact_…`, or `pref_…` id.
 
-`0.2.3` is the current release (published on npm `latest` on 2026-11-18); `0.2.2`/`0.2.1`/`0.2.0` remain installable by pinning.
+`0.2.4` is a release candidate (2026-11-19; npm `latest` is still `0.2.3`, published
+2026-11-18). 0.2.4 is a provenance/tooling patch with no runtime change; `0.2.2`/`0.2.1`/`0.2.0`
+remain installable by pinning.
 
 It does **not** send messages or write the ledger. The three ledger read tools only
 read `runtime.ledger` — an in-memory **preview** ledger: this bundle does not open
@@ -107,7 +109,7 @@ rulesetVersion } }` and does not write a file; benign input is unchanged.
 If the runtime exposes an audit sink (`runtime.audit(event)`), each read call
 reports `{ actor: 'dsh', action: 'tool.read', allowed, reason }`. A missing or
 failing sink is a no-op and never turns a read into an error. The in-memory
-runtime in `advisers-core@0.2.3` ships no audit sink, so by default these tools
+runtime in `advisers-core@0.2.4` ships no audit sink, so by default these tools
 are strictly read-only.
 
 `advisers_evidence` reports the refs stored on the ledger row (`verified: false`)
@@ -197,7 +199,7 @@ dsh plugin --profile smoke add /path/to/advisers/packages/core /path/to/advisers
 
 The bundle imports `classify` from `advisers/lib/safety/index.js`. That specifier
 is a **published export subpath** of the `advisers` package, declared as an
-explicit dependency (`"advisers": "0.2.3"` in `package.json` and
+explicit dependency (`"advisers": "0.2.4"` in `package.json` and
 `"./lib/safety/index.js": "./lib/safety/index.js"` in `advisers`' `exports`).
 A clean `npm install`/`pnpm add` of the `dsh-advisers` tarball therefore resolves
 the rule layer from the nested `advisers` dependency instead of relying on a

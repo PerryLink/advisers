@@ -11,7 +11,9 @@ import { readFileSync, existsSync } from 'node:fs'
 import { createHash } from 'node:crypto'
 import { join } from 'node:path'
 
-const root = new URL('..', import.meta.url).pathname
+import { fileURLToPath } from 'node:url'
+
+const root = fileURLToPath(new URL('..', import.meta.url))
 const read = (file) => readFileSync(join(root, file), 'utf8')
 const readIfExists = (file) => (existsSync(join(root, file)) ? read(file) : '')
 const json = (file) => JSON.parse(read(file))

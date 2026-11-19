@@ -13,7 +13,9 @@ import { execFileSync } from 'node:child_process'
 import { existsSync, readFileSync } from 'node:fs'
 import { join } from 'node:path'
 
-const root = new URL('..', import.meta.url).pathname
+import { fileURLToPath } from 'node:url'
+
+const root = fileURLToPath(new URL('..', import.meta.url))
 const argv = process.argv.slice(2)
 const read = (file) => readFileSync(join(root, file), 'utf8')
 const json = (file) => JSON.parse(read(file))

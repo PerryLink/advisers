@@ -1,7 +1,9 @@
 # Performance
 
-> Status: measured for the published `0.2.3` release (2026-11-18). The `0.2.2`,
-> `0.2.1` and `0.2.0` trees are the "before" baselines where a comparison says so below.
+> Status: measured for the published `0.2.3` release (2026-11-18), which is still npm
+> `latest`. `0.2.4` is a release candidate with no runtime or behavioural change, so
+> these numbers describe it too. The `0.2.2`, `0.2.1` and `0.2.0` trees are the "before"
+> baselines where a comparison says so below.
 
 How Advisers performs on the hot paths, how to reproduce the numbers, and which
 behaviour the regression tests pin. This is a developer/operator reference, not

@@ -1,6 +1,8 @@
 # Advisers architecture
 
-> Status: 0.2.3 (published on npm `latest` on 2026-11-18).
+> Status: 0.2.4 release candidate (2026-11-19; npm `latest` is still 0.2.3 until the owner
+> approves the staged build). 0.2.4 changes release tooling and provenance only; the runtime
+> and persistence behaviour described below are unchanged from 0.2.3.
 > This document fixes the vocabulary and the invariants; the implementation is allowed to
 > be smaller than the document.
 
@@ -127,7 +129,7 @@ adding a `MatterLink` table after the fact is a migration, adding it now is free
 The earlier plan put routines at 1.0; that makes the product a commitment
 tracker for a year. Routines must appear by 0.2 to keep the "intern" promise.
 
-## 9. Current limits (0.2.3)
+## 9. Current limits (0.2.4; runtime unchanged from 0.2.3)
 
 - Ledger is persisted in SQLite (`advisers/lib/sqlite.js`); JSON mode is a fallback but loses turns/search/audit.
 - CLI calls the model only when `ADVISERS_API_KEY` is set; without a key it records/search/builds but does not create promises or artifacts from natural language.
@@ -139,7 +141,7 @@ tracker for a year. Routines must appear by 0.2 to keep the "intern" promise.
 - No real IM account and no 5-user dogfood validation yet.
 - **Audit tail anchoring is not implemented**: the local hash chain detects edits to its own rows, but deleting the tail of the chain is not detectable yet (0.3 target; see docs/SECURITY.md).
 - **Some 0.2.3 performance targets are still missed at 200k rows**: `today` (317 ms vs ≤150 ms) and the remaining full-ledger reads `remind`/`digest`/`tui`/`pet-brief` (972/641/814/1,809 ms vs ≤400 ms). See §12.3. Do not read the 0.2.3 plan as fully delivered.
-- **No npm provenance attestations**: publish is staged with owner OTP; the OIDC/Trusted-Publishing CI job is a draft that does not publish (docs/SECURITY.md §4).
+- **Provenance attestations start with 0.2.4 (pending approval)**: 0.2.3 and earlier were staged locally with owner OTP and have no npm provenance; 0.2.4 is staged from CI through Trusted Publishing (`release.mjs --provenance`) and becomes verifiable with `npm view <pkg>@0.2.4 dist.attestations` only after the owner approves each stage (docs/SECURITY.md §4).
 
 ## 10. Intent, Office, and Affect policy
 
