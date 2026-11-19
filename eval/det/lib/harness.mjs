@@ -93,6 +93,9 @@ export function buildEnv(workdir, { acceptTos = true, extra = {}, networkLog = n
   env.ADVISERS_OFFICE_LOCAL = '1'
   env.ADVISERS_STORE = 'sqlite'
   env.ADVISERS_NO_MODEL = '1'
+  // node:sqlite is still marked experimental on Node 22; its one-time warning is
+  // not part of the CLI contract and must not make the JSON-purity gates flaky.
+  env.NODE_NO_WARNINGS = '1'
   if (acceptTos) env.ADVISERS_ACCEPT_TOS = '1'
   if (blockNetwork) {
     const existing = env.NODE_OPTIONS ? env.NODE_OPTIONS.trim() : ''
