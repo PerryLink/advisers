@@ -27,7 +27,13 @@
 import { lstatSync, readFileSync, readdirSync, statSync } from 'node:fs'
 import { join, resolve } from 'node:path'
 import { StringDecoder } from 'node:string_decoder'
-import { evidenceForCommitment, evidenceForFact, evidenceForPreference, verifyPack } from './evidence.js'
+import {
+  evidenceForCommitment,
+  evidenceForFact,
+  evidenceForPreference,
+  isEvidenceRecordAboveClearance,
+  verifyPack,
+} from './evidence.js'
 import { buildReminders } from './remind.js'
 import { inspectCaptureText } from './capture.js'
 import { classify, redact, safetyErrorFrom } from './safety/index.js'
@@ -68,7 +74,7 @@ const RESOURCE_DEFINITIONS = Object.freeze([
   {
     uri: 'advisers://today',
     name: 'today',
-    description: 'Open commitments and their count (same shape as advisers_today).',
+    description: 'Open commitments and their count (same shape as advisers_today; protected matters excluded at the server clearance).',
     mimeType: 'application/json',
   },
   {
@@ -366,10 +372,18 @@ export function readReceiptDirectory(dir) {
  * @param {Function} [options.audit] Audit sink: ({actor, action, allowed, reason}) => unknown.
  * @param {Function} [options.readPack] Injectable receipt-directory reader returns {files, receiptPresent, extraFileCount}; defaults to readReceiptDirectory.
  * @param {Function|Date} [options.now] Clock used by reminders (defaults to new Date()).
+ * @param {number} [options.clearance=0] Read clearance of this MCP surface
+ *        (0.2.5 A-2). Every read model excludes records whose matter secrecy is
+ *        above it and reports `protectedExcluded`; 0 (fail closed) is the
+ *        default and a client cannot raise it through a tool argument.
  * @returns {{protocolVersion: string, handle: Function, handleLine: Function, serve: Function, tools: Function, resources: Function}}
  */
-export function createMcpServer({ store, ledger, loadLedger, loadStore, version = '0.0.0', audit, readPack, now = () => new Date() } = {}) {
+export function createMcpServer({ store, ledger, loadLedger, loadStore, version = '0.0.0', audit, readPack, now = () => new Date(), clearance = 0 } = {}) {
   const serverVersion = String(version ?? '0.0.0')
+  // 0.2.5 A-2: clearance is process configuration, never a tool argument. An
+  // invalid/negative value falls back to the most restrictive level (0).
+  const requestedClearance = Number(clearance)
+  const clearanceLevel = Number.isFinite(requestedClearance) && requestedClearance >= 0 ? requestedClearance : 0
   // 0.2.3 P0-2: the CLI wires lazy loaders instead of a preloaded ledger/store so
   // `initialize` stays protocol-only (200k-row ledgers used to cost ~2s before the
   // first response). Anything that needs data resolves it on first use; an
@@ -410,46 +424,126 @@ export function createMcpServer({ store, ledger, loadLedger, loadStore, version 
     return storeApi
   }
 
+  // 0.2.5 A-2 (MCP clearance): commitments/facts/preferences are judged by the
+  // secrecy of their OWN matter. The 'commitments' read path does not need the
+  // matters table for anything else, so resolve the small matters table too; with
+  // an embedder-provided ledger that has no getMatter we fail closed instead of
+  // returning unfiltered data.
+  let matterLedger
+  function matterSource() {
+    if (matterLedger !== undefined) return matterLedger
+    const primary = ledgerFor('commitments')
+    if (primary && typeof primary.getMatter === 'function') {
+      matterLedger = primary
+    } else {
+      const matters = ledgerFor('matters')
+      matterLedger = matters && typeof matters.getMatter === 'function' ? matters : primary ?? matters ?? {}
+    }
+    return matterLedger
+  }
+
+  /** True when the record's matter secrecy is above this server's clearance. */
+  function isHidden(kind, record) {
+    if (!record || typeof record !== 'object') return false
+    return isEvidenceRecordAboveClearance(matterSource(), kind, record, clearanceLevel)
+  }
+
+  /** Split a list into visible rows and the withheld count (never a row). */
+  function splitByClearance(kind, rows) {
+    const visible = []
+    let protectedExcluded = 0
+    for (const row of rows) {
+      if (isHidden(kind, row)) protectedExcluded += 1
+      else visible.push(row)
+    }
+    return { visible, protectedExcluded }
+  }
+
   /* ------------------------------ read models ------------------------------ */
 
   function todayData() {
     const open = requireLedger('commitments').openCommitments()
+    const view = splitByClearance('commitment', open)
     return {
-      open: open.length,
-      commitments: open.map((c) => ({ id: c.id, debtor: c.debtor, creditor: c.creditor, action: c.action, dueAt: c.dueAt })),
+      open: view.visible.length,
+      commitments: view.visible.map((c) => ({ id: c.id, debtor: c.debtor, creditor: c.creditor, action: c.action, dueAt: c.dueAt })),
+      clearance: clearanceLevel,
+      protectedExcluded: view.protectedExcluded,
     }
   }
 
-  function commitRows(all) {
-    return requireLedger('commitments')
+  function commitListData(all) {
+    const rows = requireLedger('commitments')
       .listCommitments()
       .filter((c) => all || c.status === 'open')
-      .map((c) => ({ id: c.id, status: c.status, action: c.action, dueAt: c.dueAt, creditor: c.creditor }))
+    const view = splitByClearance('commitment', rows)
+    return {
+      commitments: view.visible.map((c) => ({ id: c.id, status: c.status, action: c.action, dueAt: c.dueAt, creditor: c.creditor })),
+      clearance: clearanceLevel,
+      protectedExcluded: view.protectedExcluded,
+    }
   }
 
   function whoData() {
     const open = requireLedger('commitments').openCommitments()
+    const view = splitByClearance('commitment', open)
     return {
-      mine: open.filter((c) => c.debtor === 'user' || c.debtor === 'agent'),
-      waiting: open.filter((c) => c.debtor === 'third' || String(c.debtor).startsWith('third:')),
+      mine: view.visible.filter((c) => c.debtor === 'user' || c.debtor === 'agent'),
+      waiting: view.visible.filter((c) => c.debtor === 'third' || String(c.debtor).startsWith('third:')),
+      clearance: clearanceLevel,
+      protectedExcluded: view.protectedExcluded,
     }
   }
 
   function remindData() {
+    const ledgerApi = requireLedger('commitments')
+    let reminders
     try {
-      return buildReminders(requireLedger('commitments'), { now: nowDate() })
+      reminders = buildReminders(ledgerApi, { now: nowDate() })
     } catch {
       throw new ToolError('reminder planning failed')
     }
+    let rows
+    try {
+      rows = ledgerApi.listCommitments()
+    } catch {
+      rows = []
+    }
+    const hiddenIds = new Set()
+    for (const row of rows) if (isHidden('commitment', row)) hiddenIds.add(row.id)
+    const visible = []
+    let protectedExcluded = 0
+    for (const reminder of reminders) {
+      if (hiddenIds.has(reminder.commitmentId)) protectedExcluded += 1
+      else visible.push(reminder)
+    }
+    return { reminders: visible, clearance: clearanceLevel, protectedExcluded }
   }
 
   function evidenceData(id) {
     const ledgerApi = requireLedger('full')
     const storeApi = storeFor()
-    if (id.startsWith('cm_')) return evidenceForCommitment(storeApi, ledgerApi, id)
-    if (id.startsWith('fact_')) return evidenceForFact(storeApi, ledgerApi, id)
-    if (id.startsWith('pref_')) return evidenceForPreference(storeApi, ledgerApi, id)
-    throw new ToolError('unknown evidence id prefix (want cm_/fact_/pref_)')
+    const kind = id.startsWith('cm_') ? 'commitment' : id.startsWith('fact_') ? 'fact' : id.startsWith('pref_') ? 'preference' : null
+    if (!kind) throw new ToolError('unknown evidence id prefix (want cm_/fact_/pref_)')
+    const result =
+      kind === 'commitment'
+        ? evidenceForCommitment(storeApi, ledgerApi, id)
+        : kind === 'fact'
+          ? evidenceForFact(storeApi, ledgerApi, id)
+          : evidenceForPreference(storeApi, ledgerApi, id)
+    if (result?.[kind] && isHidden(kind, result[kind])) {
+      // Excluded, never partially returned: no creditor/action/quote/missing
+      // rows from a protected record may reach the client.
+      return {
+        schemaVersion: 2,
+        clearance: clearanceLevel,
+        protectedExcluded: 1,
+        sources: [],
+        missing: [],
+        note: 'record belongs to a protected matter (secrecy above MCP clearance); content withheld',
+      }
+    }
+    return { ...result, clearance: clearanceLevel, protectedExcluded: 0 }
   }
 
   function evidenceIndex() {
@@ -463,17 +557,29 @@ export function createMcpServer({ store, ledger, loadLedger, loadStore, version 
       sources: Array.isArray(result?.sources) ? result.sources.length : 0,
       missing: Array.isArray(result?.missing) ? result.missing.length : 0,
     })
-    const commitments = ledgerApi
-      .listCommitments()
-      .slice(0, limit)
-      .map((c) => summarize('commitment', c.id, evidenceForCommitment(storeApi, ledgerApi, c.id)))
-    const facts = (typeof ledgerApi.listFacts === 'function' ? ledgerApi.listFacts() : [])
-      .slice(0, limit)
-      .map((f) => summarize('fact', f.id, evidenceForFact(storeApi, ledgerApi, f.id)))
-    const preferences = (typeof ledgerApi.listPreferences === 'function' ? ledgerApi.listPreferences({ includeCandidates: false }) : [])
-      .slice(0, limit)
-      .map((p) => summarize('preference', p.id, evidenceForPreference(storeApi, ledgerApi, p.id)))
-    return { limits: { perKind: limit }, commitments, facts, preferences }
+    const commitments = splitByClearance('commitment', ledgerApi.listCommitments())
+    const facts = splitByClearance(
+      'fact',
+      typeof ledgerApi.listFacts === 'function' ? ledgerApi.listFacts() : [],
+    )
+    const preferences = splitByClearance(
+      'preference',
+      typeof ledgerApi.listPreferences === 'function' ? ledgerApi.listPreferences({ includeCandidates: false }) : [],
+    )
+    return {
+      limits: { perKind: limit },
+      clearance: clearanceLevel,
+      protectedExcluded: commitments.protectedExcluded + facts.protectedExcluded + preferences.protectedExcluded,
+      commitments: commitments.visible
+        .slice(0, limit)
+        .map((c) => summarize('commitment', c.id, evidenceForCommitment(storeApi, ledgerApi, c.id))),
+      facts: facts.visible
+        .slice(0, limit)
+        .map((f) => summarize('fact', f.id, evidenceForFact(storeApi, ledgerApi, f.id))),
+      preferences: preferences.visible
+        .slice(0, limit)
+        .map((p) => summarize('preference', p.id, evidenceForPreference(storeApi, ledgerApi, p.id))),
+    }
   }
 
   /* ------------------------------ write tools ------------------------------ */
@@ -556,31 +662,37 @@ export function createMcpServer({ store, ledger, loadLedger, loadStore, version 
 
   /* -------------------------------- tools --------------------------------- */
 
+  const CLEARANCE_NOTE =
+    'Records belonging to protected matters (matter secrecy above this server clearance, default 0) are excluded and only counted in protectedExcluded.'
   const tools = [
     {
       name: 'advisers_today',
-      description: 'Read the open-commitment count and the open commitments (read-only).',
+      description: 'Read the open-commitment count and the open commitments (read-only). ' + CLEARANCE_NOTE,
       inputSchema: { type: 'object', properties: {} },
       annotations: READ_ONLY_ANNOTATIONS,
       run: () => todayData(),
     },
     {
       name: 'advisers_commit_ls',
-      description: 'List commitments (open by default; pass all=true for every status). Read-only.',
+      description:
+        'List commitments (open by default; pass all=true for every status). Returns {commitments, clearance, protectedExcluded}. Read-only. ' +
+        CLEARANCE_NOTE,
       inputSchema: { type: 'object', properties: { all: { type: 'boolean', description: 'Include done/snoozed/dropped commitments.' } } },
       annotations: READ_ONLY_ANNOTATIONS,
-      run: (args) => commitRows(optionalBoolean(args, 'all')),
+      run: (args) => commitListData(optionalBoolean(args, 'all')),
     },
     {
       name: 'advisers_who',
-      description: 'Who owes whom: mine (user/agent) versus waiting (third parties). Read-only.',
+      description: 'Who owes whom: mine (user/agent) versus waiting (third parties). Read-only. ' + CLEARANCE_NOTE,
       inputSchema: { type: 'object', properties: {} },
       annotations: READ_ONLY_ANNOTATIONS,
       run: () => whoData(),
     },
     {
       name: 'advisers_evidence',
-      description: 'Read the source turns for a commitment/fact/preference id. Read-only.',
+      description:
+        'Read the source turns for a commitment/fact/preference id. Read-only. ' +
+        'Evidence of a protected record is withheld (no id content) and reported as protectedExcluded.',
       inputSchema: {
         type: 'object',
         properties: { id: { type: 'string', description: 'cm_* commitment, fact_* fact, or pref_* preference id.' } },
@@ -591,7 +703,9 @@ export function createMcpServer({ store, ledger, loadLedger, loadStore, version 
     },
     {
       name: 'advisers_remind',
-      description: 'Read due reminders (no delivery, no network). Read-only.',
+      description:
+        'Read due reminders (no delivery, no network). Returns {reminders, clearance, protectedExcluded}. Read-only. ' +
+        CLEARANCE_NOTE,
       inputSchema: { type: 'object', properties: {} },
       annotations: READ_ONLY_ANNOTATIONS,
       run: () => remindData(),
@@ -737,8 +851,9 @@ export function createMcpServer({ store, ledger, loadLedger, loadStore, version 
     if (typeof uri !== 'string' || !uri.trim()) throw invalidParams('uri must be a non-empty string')
     if (!RESOURCE_URIS.includes(uri)) return rpcError(id, -32002, 'resource not found')
     let data
+    // 0.2.5 A-2: resources read the same clearance-filtered models as the tools.
     if (uri === 'advisers://today') data = todayData()
-    else if (uri === 'advisers://commitments') data = { commitments: commitRows(true) }
+    else if (uri === 'advisers://commitments') data = commitListData(true)
     else if (uri === 'advisers://who') data = whoData()
     else data = evidenceIndex()
     await recordAudit({ actor: 'mcp', action: 'mcp.call', allowed: true, reason: 'resource:' + uri })

@@ -156,11 +156,17 @@ test('mcp: read-only tools return ledger data without writing', async () => {
 
     const commitLs = await f.callTool('advisers_commit_ls', { all: true })
     assert.equal(commitLs.isError, false)
-    assert.equal(commitLs.data.length, 1)
-    assert.equal(commitLs.data[0].action, '发报价')
+    // 0.2.5 A-2: array-shaped results became {commitments, clearance,
+    // protectedExcluded} so a filtered read can never look like a complete one.
+    assert.equal(commitLs.data.commitments.length, 1)
+    assert.equal(commitLs.data.commitments[0].action, '发报价')
+    assert.equal(commitLs.data.clearance, 0)
+    assert.equal(commitLs.data.protectedExcluded, 0)
 
     const who = await f.callTool('advisers_who', {})
     assert.equal(who.data.mine.length, 1)
+    assert.equal(who.data.clearance, 0)
+    assert.equal(who.data.protectedExcluded, 0)
 
     const evidence = await f.callTool('advisers_evidence', { id: f.commitment.id })
     assert.equal(evidence.isError, false)
@@ -175,7 +181,8 @@ test('mcp: read-only tools return ledger data without writing', async () => {
 
     const remind = await f.callTool('advisers_remind', {})
     assert.equal(remind.isError, false)
-    assert.ok(Array.isArray(remind.data))
+    assert.ok(Array.isArray(remind.data.reminders))
+    assert.equal(remind.data.clearance, 0)
 
     const badPrefix = await f.callTool('advisers_evidence', { id: 'xx_123' })
     assert.equal(badPrefix.isError, true)
@@ -394,7 +401,7 @@ test('mcp: scripts/mcp-dev.mjs serves the library over real stdio', () => {
     const capture = byId.get(5)
     assert.equal(capture.result.isError, false)
     assert.equal(JSON.parse(capture.result.content[0].text).candidate.status, 'pending')
-    assert.deepEqual(JSON.parse(byId.get(6).result.content[0].text), [])
+    assert.deepEqual(JSON.parse(byId.get(6).result.content[0].text), { commitments: [], clearance: 0, protectedExcluded: 0 })
 
     const store = new SqliteStore(join(home, 'state.db'))
     try {

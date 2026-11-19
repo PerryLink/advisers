@@ -161,18 +161,17 @@ test('evidenceForCommitment sends mismatches and unknown turns to missing', () =
       ],
     })
     const result = evidenceForCommitment(f.store, f.ledger, commitment.id)
-    assert.equal(result.sources.length, 1)
-    assert.equal(result.sources[0].turn.id, f.turn.id)
+    // 0.2.5: a quote that is not a substring of the resolved turn is no longer
+    // shown as a source (A-3); it becomes a missing row with quote_mismatch.
+    assert.deepEqual(result.sources, [])
     assert.deepEqual(result.missing.map((item) => item.reason), [
+      'quote_mismatch',
       'session_mismatch',
       'turn_not_found',
       'invalid_evidence',
     ])
-    // never fabricate a source out of a missing one
-    assert.equal(
-      result.sources.some((source) => source.sessionId !== 'conv-1'),
-      false,
-    )
+    assert.equal(result.missing[0].quote, 'good')
+    assert.equal(result.missing[0].turnId, f.turn.id)
 
     const ghost = evidenceForCommitment(f.store, f.ledger, 'cm_ghost')
     assert.equal(ghost.commitment, undefined)
@@ -219,7 +218,9 @@ test('evidenceForFact parses session#turn refs and reports unparseable ones', ()
     assert.deepEqual(badResult.missing.map((item) => item.reason), [
       'unparseable_ref',
       'turn_not_found',
-      'session_mismatch',
+      // 'legacy#<turnId>' now resolves by turn id (0.2.5 pointer normalization),
+      // but its quote 'legacy' is not in the turn body, so it stays out of sources.
+      'quote_mismatch',
       'no_ref',
     ])
 
@@ -230,7 +231,7 @@ test('evidenceForFact parses session#turn refs and reports unparseable ones', ()
       object: 'y',
       matterId: f.matter.id,
       evidence: [],
-      source: { quote: 'q', ref: `conv-1#${f.turn.id}` },
+      source: { quote: GOOD_QUOTE, ref: `conv-1#${f.turn.id}` },
     })
     const viaSourceResult = evidenceForFact(f.store, f.ledger, viaSource.id)
     assert.equal(viaSourceResult.sources.length, 1)
@@ -410,12 +411,13 @@ test('verifyPack accepts Buffer contents as well as strings', () => {
 test('pack keeps only references, capped quotes and hashes', () => {
   usingFixture((f) => {
     const secretBody = '客户正文全文标记：这段内容绝不能出现在证据包里。'
+    const longQuote = `原话：${'张'.repeat(700)}`
+    // The packed quote must be a verbatim substring of the turn (0.2.5 A-3).
     const longTurn = f.store.addTurn({
       conversationId: 'conv-2',
       role: 'user',
-      content: `${secretBody}${'长'.repeat(900)}`,
+      content: `${secretBody}${longQuote}${'长'.repeat(900)}`,
     })
-    const longQuote = `原话：${'张'.repeat(700)}`
     const commitment = f.ledger.addCommitment({
       matterId: f.matter.id,
       debtor: 'user',
@@ -512,7 +514,8 @@ test('buildEvidencePack accepts flexible id inputs and reports not-found records
 
 test('toDocxRows flattens evidence into office table rows', () => {
   usingFixture((f) => {
-    const longTurn = f.store.addTurn({ conversationId: 'conv-2', role: 'user', content: 'x'.repeat(900) })
+    // The quote must belong to the turn body (0.2.5 A-3) to count as resolved.
+    const longTurn = f.store.addTurn({ conversationId: 'conv-2', role: 'user', content: `x${'y'.repeat(900)}` })
     const commitment = f.ledger.addCommitment({
       matterId: f.matter.id,
       debtor: 'user',

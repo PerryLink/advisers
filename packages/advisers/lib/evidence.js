@@ -19,8 +19,9 @@
  * directory offline.
  *
  * Constraints baked into the design:
- * - Offline: no network calls; imports only node:crypto/node:fs/node:path (plus
- *   an optional in-process `advisers-office` build for the receipt DOCX).
+ * - Offline: no network calls; imports only node:crypto/node:fs/node:path, the
+ *   pure sibling `./egress.js` secrecy scale, and an optional in-process
+ *   `advisers-office` build for the receipt DOCX.
  * - No fabrication: an unknown turn, a session mismatch or an unparseable
  *   `session#turn` ref goes to `missing`; nothing is guessed.
  * - No leaks: no absolute filesystem paths, no full turn/transcript bodies and
@@ -48,6 +49,8 @@ import {
   writeFileSync,
 } from 'node:fs'
 import { dirname, join, resolve } from 'node:path'
+
+import { secrecyLevel } from './egress.js'
 
 /** Quotes are verbatim evidence but capped, so a pack never carries a full body. */
 export const MAX_QUOTE_CHARS = 500
@@ -77,6 +80,23 @@ export class EvidencePackLimitError extends Error {
     this.count = count
     this.limit = limit
     this.hint = 'Use --ids cm_...,fact_...,pref_... to narrow the pack, or --all to lift the limit.'
+  }
+}
+
+/**
+ * Raised (instead of silently omitting or leaking) when the caller explicitly
+ * selected evidence that belongs to a protected matter (matter.secrecy above the
+ * requested clearance). The message/count never contain a title, creditor,
+ * action or quote; only the number of blocked ids.
+ */
+export class ProtectedEvidenceError extends Error {
+  constructor(count, clearance = 0) {
+    super(`refusing to export ${count} evidence item(s): their matter secrecy is above the clearance ${clearance}`)
+    this.name = 'ProtectedEvidenceError'
+    this.code = 'E_SECRECY_BLOCKED'
+    this.count = count
+    this.clearance = clearance
+    this.hint = 'Remove the protected ids from --ids, or lower the matter secrecy with a local command. Protected matters are excluded from packs by default.'
   }
 }
 
@@ -247,6 +267,70 @@ function lookupTurn(store, sessionId, turnId) {
 }
 
 // ---------------------------------------------------------------------------
+// per-item secrecy (A-1 fix): a pack/read model may span many matters, so the
+// clearance decision is made for every included record, never only for the
+// active matter.
+// ---------------------------------------------------------------------------
+
+/**
+ * Matter id an evidence record belongs to.
+ *
+ * A commitment always carries `matterId`; a fact may (otherwise it is a global
+ * fact); a preference is matter-scoped only through
+ * `scope: { level: 'matter', value: <matterId> }`.
+ *
+ * @returns {string|undefined}
+ */
+export function evidenceRecordMatterId(record, kind) {
+  if (!record || typeof record !== 'object' || Array.isArray(record)) return undefined
+  if (kind === 'preference') {
+    const scope = record.scope
+    if (!scope || typeof scope !== 'object' || Array.isArray(scope)) return undefined
+    if (scope.level !== 'matter') return undefined
+    return typeof scope.value === 'string' && scope.value ? scope.value : undefined
+  }
+  return typeof record.matterId === 'string' && record.matterId ? record.matterId : undefined
+}
+
+/**
+ * Secrecy level (0–3, same scale as `lib/egress.js`) of the matter a record
+ * belongs to.
+ *
+ * - no matter association -> 0 (a global record is not matter-protected);
+ * - a matter id the ledger cannot resolve -> Infinity, i.e. treated as
+ *   protected. A clearance gate must fail closed; it never guesses a level for
+ *   a row it cannot see.
+ *
+ * @returns {number} 0..3 or Infinity
+ */
+export function evidenceRecordSecrecy(ledger, kind, record) {
+  const matterId = evidenceRecordMatterId(record, kind)
+  if (!matterId) return 0
+  let matter
+  try {
+    if (typeof ledger?.getMatter === 'function') matter = ledger.getMatter(matterId)
+  } catch {
+    matter = undefined
+  }
+  if (matter === undefined) {
+    try {
+      if (typeof ledger?.listMatters === 'function') matter = ledger.listMatters().find((row) => row?.id === matterId)
+    } catch {
+      matter = undefined
+    }
+  }
+  if (!matter) return Number.POSITIVE_INFINITY
+  return secrecyLevel(matter)
+}
+
+/** True when a record must stay out of an export/projection at `clearance`. */
+export function isEvidenceRecordAboveClearance(ledger, kind, record, clearance = 0) {
+  const limit = Number(clearance)
+  if (!Number.isFinite(limit) || limit < 0) return true
+  return evidenceRecordSecrecy(ledger, kind, record) > limit
+}
+
+// ---------------------------------------------------------------------------
 // ledger lookups
 // ---------------------------------------------------------------------------
 
@@ -399,6 +483,56 @@ function collectSourceRefs(...lists) {
   return out
 }
 
+/** Writer sentinel for "this record came from a turn without a session id". */
+const LEGACY_SESSION_ID = 'legacy'
+
+/**
+ * A quote is verbatim evidence: it must occur in the turn body it claims to
+ * come from. NFC normalization only removes encoding differences; it never
+ * repairs, rewrites or fuzzy-matches a quote (no case/whitespace folding).
+ * An empty quote is the pre-0.2.3 "pointer only" shape and keeps its old
+ * semantics (the turn is still verified, the blank quote is not).
+ */
+function quoteMatchesTurn(turn, quote) {
+  if (typeof quote !== 'string' || quote === '') return true
+  const content = typeof turn?.content === 'string' ? turn.content : ''
+  return content.normalize('NFC').includes(quote.normalize('NFC'))
+}
+
+/**
+ * Normalize the two known-bad pointer shapes writers produced before 0.2.5:
+ * - `sessionId === 'legacy'` (memory accept for a candidate with no session);
+ * - `sessionId === turnId` (lib/agent.js commitment_add passed the turn id as
+ *   the session id).
+ * The turn store is authoritative for conversationId, so these resolve instead
+ * of reporting session_mismatch forever. Any other mismatch stays a mismatch:
+ * a real evidence pointer must name its own conversation.
+ *
+ * @returns {string|null} normalized session id, or null on a real mismatch
+ */
+function normalizePointerSession(sessionId, turnId, turn) {
+  if (!turn || typeof turn.conversationId !== 'string') return sessionId
+  if (turn.conversationId === sessionId) return sessionId
+  const knownBadShape = sessionId === LEGACY_SESSION_ID || sessionId === turnId
+  return knownBadShape ? turn.conversationId : null
+}
+
+/** Resolve one pointer after the turn/quote checks; shared by both resolvers. */
+function resolvePointerTurn(store, sessionId, turnId, quote) {
+  const lookup = lookupTurn(store, sessionId, turnId)
+  if (!lookup.turn) {
+    return { missing: { sessionId, turnId, quote, reason: lookup.failed ? 'lookup_failed' : 'turn_not_found' } }
+  }
+  const normalizedSessionId = normalizePointerSession(sessionId, turnId, lookup.turn)
+  if (normalizedSessionId === null) {
+    return { missing: { sessionId, turnId, quote, reason: 'session_mismatch' } }
+  }
+  if (!quoteMatchesTurn(lookup.turn, quote)) {
+    return { missing: { sessionId: normalizedSessionId, turnId, quote, reason: 'quote_mismatch' } }
+  }
+  return { source: { sessionId: normalizedSessionId, turnId, quote, turn: lookup.turn } }
+}
+
 function resolveSourceRefs(store, items) {
   const sources = []
   const missing = []
@@ -423,22 +557,12 @@ function resolveSourceRefs(store, items) {
       missing.push({ ref, quote, reason: 'unparseable_ref' })
       continue
     }
-    const lookup = lookupTurn(store, parsed.sessionId, parsed.turnId)
-    if (!lookup.turn) {
-      missing.push({
-        ref,
-        quote,
-        sessionId: parsed.sessionId,
-        turnId: parsed.turnId,
-        reason: lookup.failed ? 'lookup_failed' : 'turn_not_found',
-      })
+    const resolved = resolvePointerTurn(store, parsed.sessionId, parsed.turnId, quote)
+    if (resolved.missing) {
+      missing.push({ ref, ...resolved.missing })
       continue
     }
-    if (lookup.turn.conversationId !== parsed.sessionId) {
-      missing.push({ ref, quote, sessionId: parsed.sessionId, turnId: parsed.turnId, reason: 'session_mismatch' })
-      continue
-    }
-    sources.push({ sessionId: parsed.sessionId, turnId: parsed.turnId, quote, turn: lookup.turn })
+    sources.push(resolved.source)
   }
   return { sources, missing, unverifiable }
 }
@@ -476,16 +600,12 @@ export function evidenceForCommitment(store, ledger, commitmentId, index) {
       })
       continue
     }
-    const lookup = lookupTurn(store, sessionId, turnId)
-    if (!lookup.turn) {
-      missing.push({ sessionId, turnId, quote, reason: lookup.failed ? 'lookup_failed' : 'turn_not_found' })
+    const resolved = resolvePointerTurn(store, sessionId, turnId, quote)
+    if (resolved.missing) {
+      missing.push(resolved.missing)
       continue
     }
-    if (lookup.turn.conversationId !== sessionId) {
-      missing.push({ sessionId, turnId, quote, reason: 'session_mismatch' })
-      continue
-    }
-    sources.push({ sessionId, turnId, quote, turn: lookup.turn })
+    sources.push(resolved.source)
   }
   return { schemaVersion: 2, commitment, sources, missing, unverifiable }
 }
@@ -776,6 +896,14 @@ function buildReadme({ createdAt, entries, manifestDigest }) {
  * @param {number} [options.limit=DEFAULT_MAX_EVIDENCE_ENTRIES] max entries before
  *        `EvidencePackLimitError` (Infinity disables the cap).
  * @param {boolean} [options.all=false] explicit "build the whole pack" opt-in.
+ * @param {number|null} [options.clearance=null] per-item secrecy gate: when a
+ *        number, every requested record is checked against its OWN matter's
+ *        secrecy (0–3, see lib/egress.js). `null` keeps the pre-0.2.5 library
+ *        behavior (no filtering); CLI pack/receipt pass 0.
+ * @param {'exclude'|'error'} [options.protectedPolicy='exclude'] what to do with
+ *        a record above `clearance`: omit it and count it (`exclude`, the bulk
+ *        default), or throw `ProtectedEvidenceError` (`error`, used when the
+ *        caller named the ids explicitly and must not get a silent partial pack).
  * @returns {{ files: Record<string, string>, summary: object }}
  *          files: `{ 'manifest.json': string, 'README.txt': string, 'SHA256SUMS': string }`
  */
@@ -786,6 +914,8 @@ export function buildEvidencePack({
   now = new Date(),
   limit = DEFAULT_MAX_EVIDENCE_ENTRIES,
   all = false,
+  clearance = null,
+  protectedPolicy = 'exclude',
 } = {}) {
   if (!ledger || typeof ledger !== 'object') throw new TypeError('buildEvidencePack requires a ledger')
   if (!store || typeof store !== 'object') throw new TypeError('buildEvidencePack requires a store')
@@ -794,18 +924,45 @@ export function buildEvidencePack({
   if (!(effectiveLimit === Infinity || (Number.isInteger(effectiveLimit) && effectiveLimit >= 0))) {
     throw new TypeError('buildEvidencePack limit must be a non-negative integer or Infinity')
   }
+  const clearanceValue = clearance === undefined || clearance === null ? null : Number(clearance)
+  if (clearanceValue !== null && (!Number.isFinite(clearanceValue) || clearanceValue < 0)) {
+    throw new TypeError('buildEvidencePack clearance must be a non-negative number or null')
+  }
+  if (protectedPolicy !== 'exclude' && protectedPolicy !== 'error') {
+    throw new TypeError("buildEvidencePack protectedPolicy must be 'exclude' or 'error'")
+  }
   const requestedAny = ids !== undefined && ids !== null && !(Array.isArray(ids) && ids.length === 0)
   // Build the lookup index once; every evidenceFor* call below then costs O(1)
   // instead of re-scanning listFacts()/listCommitments() (P0-3: 80k pack went
-  // from 113.75s to linear time).
-  const index = requestedAny ? createEvidenceIndex(ledger) : undefined
+  // from 113.75s to linear time). The per-item secrecy check reads the same
+  // records, so it shares the index.
+  const index = requestedAny || clearanceValue !== null ? createEvidenceIndex(ledger) : undefined
   const requested = normalizeRequestedIds(ids, ledger, index)
   const requestedCount =
     requested.commitments.length + requested.facts.length + requested.preferences.length + requested.unknown.length
   if (requestedCount > effectiveLimit) throw new EvidencePackLimitError(requestedCount, effectiveLimit)
   const entries = []
+  const protectedIds = []
+  let protectedExcluded = 0
+  /**
+   * A-1 (0.2.5): a pack materializes every requested ledger row, so the
+   * clearance gate must judge each row by the secrecy of ITS OWN matter — the
+   * old "active matter only" check let a secrecy=3 matter leak into a pack built
+   * while another matter was active. With `error` (the CLI's explicit --ids
+   * path) the whole pack fails closed; with `exclude` (the default/bulk path)
+   * the row is omitted and only a count is reported.
+   */
+  const blockedByClearance = (kind, record) => {
+    if (clearanceValue === null || !record) return false
+    if (!isEvidenceRecordAboveClearance(ledger, kind, record, clearanceValue)) return false
+    if (protectedPolicy === 'error') protectedIds.push(String(record.id ?? ''))
+    else protectedExcluded += 1
+    return true
+  }
 
   for (const id of requested.commitments) {
+    const commitment = findCommitment(ledger, id, index)
+    if (blockedByClearance('commitment', commitment)) continue
     const result = evidenceForCommitment(store, ledger, id, index)
     entries.push({
       kind: 'commitment',
@@ -817,10 +974,14 @@ export function buildEvidencePack({
     })
   }
   for (const id of requested.facts) {
+    const fact = findFact(ledger, id, index)
+    if (blockedByClearance('fact', fact)) continue
     const result = evidenceForFact(store, ledger, id, index)
     entries.push({ kind: 'fact', id, found: Boolean(result.fact), sources: result.sources, missing: result.missing, unverifiable: result.unverifiable })
   }
   for (const id of requested.preferences) {
+    const preference = findPreference(ledger, id, index)
+    if (blockedByClearance('preference', preference)) continue
     const result = evidenceForPreference(store, ledger, id, index)
     entries.push({
       kind: 'preference',
@@ -834,6 +995,7 @@ export function buildEvidencePack({
   for (const id of requested.unknown) {
     entries.push({ kind: 'unknown', id, found: false, sources: [], missing: [{ id, reason: 'record_not_found' }] })
   }
+  if (protectedIds.length) throw new ProtectedEvidenceError(protectedIds.length, clearanceValue)
 
   const compacted = entries
     .map(compactEntry)
@@ -878,6 +1040,10 @@ export function buildEvidencePack({
       unverifiableCount,
       operatorEnteredCount,
       truncatedCount,
+      // Additive (0.2.5 A-1): how many requested rows were withheld because
+      // their own matter is protected. Counts only — never a title or quote.
+      protectedExcluded,
+      clearance: clearanceValue,
       notFound: compacted.filter((entry) => !entry.found).map((entry) => entry.id),
       fileHashes: { 'manifest.json': manifestDigest, 'README.txt': readmeDigest },
       entries: compacted,
@@ -1256,6 +1422,13 @@ function receiptEvidenceEntry(entry) {
 function normalizeReceiptEvidence(evidence) {
   const meta = { format: MANIFEST_FORMAT, version: MANIFEST_VERSION }
   let list = []
+  // Additive (0.2.5 A-1): the evidence pack reports how many requested rows it
+  // withheld because their own matter is protected; the receipt summary carries
+  // the same count (never a title/creditor/action/quote).
+  let protectedExcluded = 0
+  const readProtectedExcluded = (summary) => {
+    if (summary && Number.isInteger(summary.protectedExcluded) && summary.protectedExcluded >= 0) protectedExcluded = summary.protectedExcluded
+  }
   if (evidence === undefined || evidence === null) {
     list = []
   } else if (typeof evidence === 'string') {
@@ -1270,6 +1443,7 @@ function normalizeReceiptEvidence(evidence) {
     if (evidence.summary && Array.isArray(evidence.summary.entries)) {
       if (typeof evidence.summary.format === 'string') meta.format = evidence.summary.format
       if (Number.isInteger(evidence.summary.version)) meta.version = evidence.summary.version
+      readProtectedExcluded(evidence.summary)
       list = evidence.summary.entries
     } else if (Array.isArray(evidence.entries)) {
       list = evidence.entries
@@ -1313,6 +1487,7 @@ function normalizeReceiptEvidence(evidence) {
     missingCount,
     unverifiableCount,
     operatorEnteredCount,
+    protectedExcluded,
     entries,
   }
 }
@@ -1999,6 +2174,7 @@ export async function buildReceiptPack(options = {}) {
       missingCount: evidence.missingCount,
       unverifiableCount: evidence.unverifiableCount ?? 0,
       operatorEnteredCount: evidence.operatorEnteredCount ?? 0,
+      protectedExcluded: Number.isInteger(evidence.protectedExcluded) ? evidence.protectedExcluded : 0,
     },
     anchored: anchors.length > 0,
     fileMode: RECEIPT_FILE_MODE,

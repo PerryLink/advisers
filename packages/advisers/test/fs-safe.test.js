@@ -10,6 +10,7 @@ import {
   copyFileWithRetrySync,
   describeFsError,
   fsyncDirSync,
+  fsyncFileSync,
   retryFsSync,
   rmWithRetrySync,
   tempPathForSync,
@@ -25,6 +26,34 @@ import {
 
 function makeDir() {
   return mkdtempSync(join(tmpdir(), 'advisers-fs-safe-'))
+}
+
+/**
+ * Fake fs for fsyncFileSync path tests: records `openSync` flags and plays a
+ * scripted result per flags value ({ fd } or { error }). No real disk involved.
+ */
+function stubFsyncFs(behaviour) {
+  const opens = []
+  const fsyncs = []
+  const closes = []
+  const fs = {
+    openSync: (file, flags) => {
+      opens.push(flags)
+      const result = behaviour[flags]
+      if (!result) throw new Error(`stubFsyncFs: unexpected open flags "${flags}"`)
+      if (result.error) throw result.error
+      return result.fd
+    },
+    fsyncSync: (fd) => { fsyncs.push(fd) },
+    closeSync: (fd) => { closes.push(fd) },
+  }
+  return { fs, opens, fsyncs, closes }
+}
+
+function errnoError(code) {
+  const error = new Error(`${code}: operation not permitted, open`)
+  error.code = code
+  return error
 }
 
 function makeShortWriteFs(chunk = 777) {
@@ -219,10 +248,103 @@ test('fs-safe: describeFsError maps disk-full and permission failures to actiona
   assert.match(describeFsError(denied, { action: 'renaming', target: 'state.db.vault' }), /E_FS_PERMISSION.*denied.*permissions/)
 })
 
+test('fs-safe: fsyncFileSync(path) opens a writable non-truncating handle and leaves bytes/length unchanged', () => {
+  const dir = makeDir()
+  try {
+    const file = join(dir, 'import-backup.db')
+    const payload = Buffer.alloc(4096, 0x5a)
+    writeFileSync(file, payload)
+    const sizeBefore = statSync(file).size
+    const flags = []
+    const recordingFs = {
+      ...realFs,
+      openSync: (path, flag, mode) => { flags.push(flag); return realFs.openSync(path, flag, mode) },
+    }
+    fsyncFileSync(file, { fs: recordingFs, retries: 0 })
+    assert.deepEqual(flags, ['r+'], 'fsync must open writable but non-truncating (r+), never r/w/w+')
+    assert.deepEqual(readFileSync(file), payload, 'fsync must not change the file bytes')
+    assert.equal(statSync(file).size, sizeBefore, 'fsync must not change the file length')
+  } finally { rmSync(dir, { recursive: true, force: true }) }
+})
+
+test('fs-safe: Windows never fsyncs a read-only handle (fail-closed, classified E_FS_PERMISSION)', () => {
+  for (const code of ['EACCES', 'EPERM']) {
+    const { fs, opens, fsyncs } = stubFsyncFs({ 'r+': { error: errnoError(code) }, r: { fd: 9 } })
+    let thrown = null
+    try {
+      fsyncFileSync('/data/import-backup.db', { fs, platform: 'win32', retries: 0, sleep: () => {} })
+    } catch (error) { thrown = error }
+    assert.ok(thrown, code + ': a read-only file on Windows must fail, not silently skip the flush')
+    assert.equal(thrown.code, code, 'the original errno is preserved for callers/describeFsError')
+    assert.match(thrown.message, /windows/i)
+    assert.match(thrown.message, /writable handle/i)
+    assert.deepEqual(opens, ['r+'], code + ': the read-only fallback must NOT be attempted on Windows')
+    assert.deepEqual(fsyncs, [], code + ': no fsync may be attempted on a handle Windows would reject')
+    assert.match(describeFsError(thrown, { action: 'copying the database to', target: '/data/import-backup.db' }), /E_FS_PERMISSION/)
+  }
+})
+
+test('fs-safe: POSIX keeps the read-only fallback (fsync(2) accepts an O_RDONLY descriptor)', () => {
+  const { fs, opens, fsyncs, closes } = stubFsyncFs({ 'r+': { error: errnoError('EACCES') }, r: { fd: 9 } })
+  fsyncFileSync('/data/read-only.db', { fs, platform: 'linux', retries: 0, sleep: () => {} })
+  assert.deepEqual(opens, ['r+', 'r'])
+  assert.deepEqual(fsyncs, [9])
+  assert.deepEqual(closes, [9])
+})
+
+test('fs-safe: fsyncFileSync(path) never creates a missing file unless createIfMissing is set', () => {
+  const dir = makeDir()
+  try {
+    const missing = join(dir, 'not-written-yet.db')
+    let thrown = null
+    try { fsyncFileSync(missing, { retries: 0, sleep: () => {} }) } catch (error) { thrown = error }
+    assert.equal(thrown && thrown.code, 'ENOENT')
+    assert.equal(existsSync(missing), false, 'fsync must not create a file the caller never wrote')
+    fsyncFileSync(missing, { createIfMissing: true, retries: 0 })
+    assert.equal(existsSync(missing), true)
+    assert.equal(statSync(missing).size, 0)
+  } finally { rmSync(dir, { recursive: true, force: true }) }
+})
+
+test('fs-safe: fsyncFileSync(fd) flushes the caller-owned writable descriptor', () => {
+  const dir = makeDir()
+  try {
+    const file = join(dir, 'wal-copy')
+    const fd = realFs.openSync(file, 'w')
+    try {
+      realFs.writeSync(fd, Buffer.from('durable'))
+      fsyncFileSync(fd, { retries: 0 })
+    } finally { realFs.closeSync(fd) }
+    assert.equal(readFileSync(file, 'utf8'), 'durable')
+  } finally { rmSync(dir, { recursive: true, force: true }) }
+})
+
+test('fs-safe: backup/import copy+fsync leaves the copy byte-identical (the bin contract)', () => {
+  const dir = makeDir()
+  try {
+    const source = join(dir, 'state.db')
+    const backup = join(dir, 'backup.db')
+    const payload = Buffer.concat([Buffer.from('SQLite format 3'), Buffer.alloc(2048, 7)])
+    writeFileSync(source, payload)
+    copyFileWithRetrySync(source, backup)
+    const before = readFileSync(backup)
+    fsyncFileSync(backup, { retries: 0 }) // the exact step bin/backup and import --replace use
+    assert.deepEqual(readFileSync(backup), before)
+    assert.equal(statSync(backup).size, before.length)
+    assert.equal(statSync(backup).mode & 0o777, 0o600, 'backups stay private')
+  } finally { rmSync(dir, { recursive: true, force: true }) }
+})
+
 test('fs-safe: fsyncDirSync is best-effort (returns a boolean, never throws)', () => {
   assert.equal(typeof fsyncDirSync(tmpdir()), 'boolean')
   const failingFs = { ...realFs, openSync: () => { const error = new Error('EPERM: operation not permitted, open'); error.code = 'EPERM'; throw error } }
   assert.equal(fsyncDirSync('/definitely/not/a/dir', { fs: failingFs }), false)
+  // Windows cannot fsync a directory (and cannot open one read-write): report
+  // false without attempting the read-only open that used to EPERM.
+  let opened = 0
+  const neverOpen = { openSync: () => { opened += 1; throw new Error('must not open a directory handle on Windows') } }
+  assert.equal(fsyncDirSync('/definitely/not/a/dir', { fs: neverOpen, platform: 'win32' }), false)
+  assert.equal(opened, 0)
 })
 
 test('fs-safe: stale 0600 temp files can be discovered by the exported prefix for cleanup', () => {

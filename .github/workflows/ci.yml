@@ -69,6 +69,11 @@ jobs:
     # verify-office step and no office commands below). Failures print the
     # failing command, its output, the tool versions and the temporary home
     # contents so a Windows-only failure is diagnosable from the job log alone.
+    # 0.2.4 Windows P0 (0.3 research §4.1/R1): the CLI flow also exercises the
+    # durable-write paths that fsync a plaintext copy (backup, export --out,
+    # import --replace, vault seal/unseal). lib/fs-safe.js used to fsync a
+    # read-only handle, which Windows rejects with EPERM; those commands were
+    # broken on real Windows until that fix, so they are now release-gated here.
     runs-on: windows-latest
     timeout-minutes: 25
     steps:
@@ -153,5 +158,78 @@ jobs:
             exit 1
           }
           $null = Invoke-Advisers 'doctor-check-db' @('doctor', '--check-db')
-          Write-Host 'windows smoke: PASS (--version, init, status, commit add, commit ls, doctor, doctor --check-db)'
+
+          # --- Windows P0 durable-write regression (0.3 research §4.1/R1) ---
+          # These commands fsync a plaintext copy through lib/fs-safe.js. Before
+          # the fix they failed on Windows with "EPERM: operation not permitted,
+          # fsync" because the file was opened read-only before fsync; the fix
+          # opens a writable, non-truncating handle. Order matters: backup copies
+          # the current DB, export produces the ledger that import --replace
+          # consumes, and vault seal/unseal round-trips the database. Any failure
+          # here is a release blocker, so print the command output and the
+          # temporary-home contents.
+          $backupFile = Join-Path $smokeRoot 'smoke-backup.db'
+          $exportFile = Join-Path $smokeRoot 'smoke-export.json'
+          $vaultFile = Join-Path $smokeRoot 'smoke-state.vault'
+
+          $null = Invoke-Advisers 'backup' @('backup', $backupFile)
+          if (-not (Test-Path -LiteralPath $backupFile -PathType Leaf) -or (Get-Item -LiteralPath $backupFile).Length -le 0) {
+            Write-Host '::error::advisers backup did not create a non-empty backup file'
+            Show-Diagnostics
+            exit 1
+          }
+
+          $null = Invoke-Advisers 'export-out' @('export', '--out', $exportFile)
+          if (-not (Test-Path -LiteralPath $exportFile -PathType Leaf) -or (Get-Item -LiteralPath $exportFile).Length -le 0) {
+            Write-Host '::error::advisers export --out did not create a non-empty JSON export'
+            Show-Diagnostics
+            exit 1
+          }
+
+          $null = Invoke-Advisers 'import-replace' @('import', $exportFile, '--replace')
+          $importBackups = @(Get-ChildItem -LiteralPath $env:ADVISERS_HOME -Filter 'import-backup-*.db' -File -ErrorAction SilentlyContinue)
+          if ($importBackups.Count -lt 1) {
+            Write-Host '::error::advisers import --replace did not keep a pre-import recovery backup'
+            Show-Diagnostics
+            exit 1
+          }
+
+          $env:ADVISERS_VAULT_PASSPHRASE = 'windows-smoke-vault-passphrase'
+          $null = Invoke-Advisers 'vault-seal' @('vault', 'seal', '--out', $vaultFile)
+          if (-not (Test-Path -LiteralPath $vaultFile -PathType Leaf) -or (Get-Item -LiteralPath $vaultFile).Length -le 0) {
+            Write-Host '::error::advisers vault seal did not create a non-empty vault file'
+            Show-Diagnostics
+            exit 1
+          }
+
+          $null = Invoke-Advisers 'vault-unseal' @('vault', 'unseal', $vaultFile)
+          $unsealBackups = @(Get-ChildItem -LiteralPath $env:ADVISERS_HOME -Filter 'state.db.before-unseal-*' -File -ErrorAction SilentlyContinue)
+          if ($unsealBackups.Count -lt 1) {
+            Write-Host '::error::advisers vault unseal did not keep a pre-unseal backup'
+            Show-Diagnostics
+            exit 1
+          }
+          $afterUnseal = Invoke-Advisers 'commit-ls-after-unseal' @('commit', 'ls')
+          if ($afterUnseal -notmatch [regex]::Escape($message)) {
+            Write-Host '::error::commit ls after vault unseal does not show the seeded commitment'
+            Show-Diagnostics
+            exit 1
+          }
+
+          # The fsync fix must not leave staged temp files behind. SQLite may leave
+          # <staged-unseal>-wal/-shm sidecars while verifying the image (pre-existing
+          # plaintext artifacts reported by `vault status`), so only the staged file
+          # itself and the fs-safe ".tmp-*" names count as residue here.
+          $leftover = @(Get-ChildItem -LiteralPath $env:ADVISERS_HOME -Force -ErrorAction SilentlyContinue |
+            Where-Object {
+              $_.Name -like '*tmp-*' -or
+              ($_.Name -like '.state.db.unseal-*' -and $_.Name -notlike '*-wal' -and $_.Name -notlike '*-shm')
+            })
+          if ($leftover.Count -gt 0) {
+            Write-Host ('::error::durable-write temp files left in ADVISERS_HOME: ' + (($leftover | ForEach-Object { $_.Name }) -join ', '))
+            Show-Diagnostics
+            exit 1
+          }
+
+          Write-Host 'windows smoke: PASS (--version, init, status, commit add/ls, doctor, doctor --check-db, backup, export --out, import --replace, vault seal/unseal)'
           Remove-Item -LiteralPath $smokeRoot -Recurse -Force -ErrorAction SilentlyContinue

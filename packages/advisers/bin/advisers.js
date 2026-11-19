@@ -28,7 +28,7 @@ try {
   }
   throw error
 }
-import { egressDeniedReason } from '../lib/egress.js'
+import { egressDeniedReason, secrecyLevel } from '../lib/egress.js'
 // 0.2.3 Wave 1: every durable bin/ output goes through the crash-safe helpers
 // (short-write loop, fsync, atomic rename, bounded Windows retry) instead of a
 // one-shot writeFileSync that ENOSPC can truncate.
@@ -5585,7 +5585,11 @@ async function mcpServer() {
     if (mode === 'json') return loadJson()
     if (!store) return new Ledger(LOCAL_PORTS)
     if (kind === 'matters') return Ledger.fromParts({ version: 1, matters: store.loadMatters() }, LOCAL_PORTS)
-    if (kind === 'commitments') return Ledger.fromParts({ version: 1, commitments: store.loadCommitments() }, LOCAL_PORTS)
+    // 0.2.5 A-2: the read models' clearance gate needs each commitment's matter
+    // secrecy, so the commitments view also loads the small matters table.
+    if (kind === 'commitments') {
+      return Ledger.fromParts({ version: 1, matters: store.loadMatters(), commitments: store.loadCommitments() }, LOCAL_PORTS)
+    }
     return Ledger.fromJSON(store.load(), LOCAL_PORTS)
   }
   const { createMcpServer } = await loadMcpServer()
@@ -6151,6 +6155,35 @@ async function printEvidence(args) {
   if (unverifiable.length) console.log('  说明：manual/operator-entered 证据由用户手工录入；本地无法外部核验，不计入 missing。')
 }
 
+/**
+ * A-1 (0.2.5): secrecy level of the matter an item/delivery row belongs to.
+ * No matter id -> 0 (a global row). A named matter the loaded ledger cannot
+ * resolve -> Infinity, i.e. treated as protected: a clearance gate never
+ * guesses a level for a row it cannot see.
+ */
+function itemMatterSecrecy(ledger, matterId) {
+  if (typeof matterId !== 'string' || !matterId) return 0
+  let matter
+  try { matter = typeof ledger?.getMatter === 'function' ? ledger.getMatter(matterId) : undefined } catch { matter = undefined }
+  if (!matter && typeof ledger?.listMatters === 'function') {
+    try { matter = ledger.listMatters().find((row) => row?.id === matterId) } catch { matter = undefined }
+  }
+  return matter ? secrecyLevel(matter) : Number.POSITIVE_INFINITY
+}
+
+/**
+ * Map a ProtectedEvidenceError from buildEvidencePack to a fail-closed CLI
+ * exit. Only the count/clearance and a fixed hint are printed: no id, title,
+ * creditor, action or quote.
+ */
+function reportProtectedPackError(error) {
+  if (error?.code !== 'E_SECRECY_BLOCKED') return false
+  console.error('error: ' + error.message)
+  if (error.hint) console.error('hint: ' + error.hint)
+  process.exitCode = 1
+  return true
+}
+
 async function evidencePack(args) {
   const { flags, positional } = parseFlags(args)
   ensureHome()
@@ -6170,7 +6203,17 @@ async function evidencePack(args) {
   try {
     // Performance audit P1-1: --all was parsed but never forwarded, so the
     // documented escape hatch was a no-op and large ledgers always failed.
-    pack = buildEvidencePack({ store, ledger, ids: targetIds, all: flags.all === true })
+    // A-1 (0.2.5): every included row is judged by its own matter's secrecy.
+    // Explicit --ids must fail closed (never a silently partial answer); the
+    // bulk path excludes protected rows and reports the count.
+    pack = buildEvidencePack({
+      store,
+      ledger,
+      ids: targetIds,
+      all: flags.all === true,
+      clearance: 0,
+      protectedPolicy: ids ? 'error' : 'exclude',
+    })
   } catch (error) {
     if (error instanceof EvidencePackLimitError || error?.code === 'EVIDENCE_PACK_TOO_LARGE') {
       console.error('error: ' + error.message)
@@ -6178,6 +6221,7 @@ async function evidencePack(args) {
       process.exitCode = 1
       return
     }
+    if (reportProtectedPackError(error)) return
     throw error
   }
   const out = flags.out ? String(flags.out) : join(HOME, 'evidence', `evidence-${new Date().toISOString().replace(/[:.]/g, '-')}`)
@@ -6196,15 +6240,22 @@ async function evidencePack(args) {
     receipt = join(out, 'receipt.docx')
   } catch (error) { console.error(`docx receipt skipped: ${error.message}`) }
   const verification = verifyPack(pack.files)
-  // Delivery row + audit row commit together (robustness audit P0-3).
+  const protectedExcluded = Number.isInteger(pack.summary?.protectedExcluded) ? pack.summary.protectedExcluded : 0
+  // Delivery row + audit row commit together (robustness audit P0-3). The audit
+  // reason records the withheld count (a number, never protected content).
   recordDeliveryWithAudit({
     files: [join(out, 'manifest.json'), join(out, 'README.txt'), join(out, 'SHA256SUMS'), ...(receipt ? [receipt] : [])],
     tool: 'evidence-pack',
     title: 'evidence pack',
     validation: verification,
-    audit: { actor: 'local', action: 'evidence.pack', allowed: true, reason: `${pack.summary?.entryCount ?? 0} entries` },
+    audit: {
+      actor: 'local',
+      action: 'evidence.pack',
+      allowed: true,
+      reason: `${pack.summary?.entryCount ?? 0} entries${protectedExcluded ? ', ' + protectedExcluded + ' protected excluded' : ''}`,
+    },
   })
-  console.log(JSON.stringify({ out, files: Object.keys(pack.files), receipt, verification }, null, 2))
+  console.log(JSON.stringify({ out, files: Object.keys(pack.files), receipt, verification, clearance: 0, protectedExcluded }, null, 2))
   if (!verification.ok) process.exitCode = 1
 }
 
@@ -6299,9 +6350,22 @@ async function receiptPack(args) {
     process.exitCode = 1
     return
   }
+  // A-1 (0.2.5): a receipt copies the delivered artifacts and may span every
+  // matter in the ledger. A row from a protected matter is never copied/read;
+  // only a count is reported. Receipts have no per-delivery explicit selection
+  // (--ids names evidence ids), so this path is exclude-only.
+  const visibleRows = []
+  let protectedDeliveries = 0
+  for (const row of rows) {
+    if (itemMatterSecrecy(ledger, row.matterId) > 0) {
+      protectedDeliveries += 1
+      continue
+    }
+    visibleRows.push(row)
+  }
   const skippedFiles = []
   const deliveries = []
-  for (const row of rows) {
+  for (const row of visibleRows) {
     const files = []
     for (const file of Array.isArray(row.files) ? row.files : []) {
       try {
@@ -6320,7 +6384,9 @@ async function receiptPack(args) {
     })
   }
   if (!deliveries.length) {
-    console.error('没有仍存在的交付文件，无法生成回执包（文件可能已被移动或删除）。')
+    if (skippedFiles.length) console.error('没有仍存在的交付文件，无法生成回执包（文件可能已被移动或删除）。')
+    if (protectedDeliveries) console.error(`另有 ${protectedDeliveries} 条交付记录属于受保护事项（secrecy>0），已排除。`)
+    else if (!skippedFiles.length) console.error('没有仍存在的交付文件，无法生成回执包（文件可能已被移动或删除）。')
     if (skippedFiles.length) console.error('缺失：' + skippedFiles.slice(0, 5).join('; '))
     process.exitCode = 1
     return
@@ -6336,7 +6402,16 @@ async function receiptPack(args) {
       facts: ledger.listFacts().map((row) => row.id),
       preferences: ledger.listPreferences({ includeCandidates: false }).map((row) => row.id),
     }
-    evidence = buildEvidencePack({ store, ledger, ids: targetIds, all: flags.all === true })
+    // A-1 (0.2.5): per-item clearance for the embedded evidence entries too.
+    // Explicit --ids fail closed; the bulk path excludes protected rows.
+    evidence = buildEvidencePack({
+      store,
+      ledger,
+      ids: targetIds,
+      all: flags.all === true,
+      clearance: 0,
+      protectedPolicy: ids ? 'error' : 'exclude',
+    })
   } catch (error) {
     if (error instanceof EvidencePackLimitError || error?.code === 'EVIDENCE_PACK_TOO_LARGE') {
       console.error('error: ' + error.message)
@@ -6344,6 +6419,7 @@ async function receiptPack(args) {
       process.exitCode = 1
       return
     }
+    if (reportProtectedPackError(error)) return
     throw error
   }
   const out = typeof flags.out === 'string'
@@ -6379,13 +6455,26 @@ async function receiptPack(args) {
     return
   }
   const summary = pack.summary
+  const evidenceProtectedExcluded = Number.isInteger(evidence?.summary?.protectedExcluded) ? evidence.summary.protectedExcluded : 0
+  const protectedExcluded = protectedDeliveries + evidenceProtectedExcluded
   try {
     recordDeliveryWithAudit({
       files: [join(summary.outDir, 'manifest.json'), join(summary.outDir, 'README.txt'), join(summary.outDir, 'SHA256SUMS'), join(summary.outDir, 'receipt.docx')],
       tool: 'receipt-pack',
       title: 'delivery receipt pack',
       validation: 'receipt-pack-v1.1: ' + summary.verifyStatus,
-      audit: { actor: 'local', action: 'receipt.pack', allowed: true, reason: deliveries.length + ' deliveries/' + summary.fileCount + ' files' },
+      audit: {
+        actor: 'local',
+        action: 'receipt.pack',
+        allowed: true,
+        reason:
+          deliveries.length +
+          ' deliveries/' +
+          summary.fileCount +
+          ' files' +
+          (protectedDeliveries ? ', ' + protectedDeliveries + ' protected deliveries excluded' : '') +
+          (evidenceProtectedExcluded ? ', ' + evidenceProtectedExcluded + ' protected evidence excluded' : ''),
+      },
     })
   } catch {}
   const { verifyReceiptPackDir } = await loadReceiptVerify()
@@ -6404,6 +6493,10 @@ async function receiptPack(args) {
     manifestDigest: summary.manifestDigest,
     receiptSha256: summary.receiptSha256,
     evidence: summary.evidence,
+    clearance: 0,
+    protectedExcluded,
+    deliveriesProtectedExcluded: protectedDeliveries,
+    evidenceProtectedExcluded,
     files: summary.files,
     skippedFiles,
     verification: {

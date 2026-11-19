@@ -14,7 +14,10 @@
  *      its length, then atomically rename it into place; on any failure remove
  *      the temp file and rethrow (no 'best effort' success);
  *   4. retry transient Windows/AV/OneDrive failures (EPERM/EBUSY/EACCES) with
- *      bounded exponential backoff instead of failing a user command once.
+ *      bounded exponential backoff instead of failing a user command once;
+ *   5. flush a path through a writable but non-truncating handle ('r+'): Windows
+ *      rejects fsync on a read-only handle with EPERM, which used to break
+ *      backup/import/vault-unseal/migration on every Windows machine.
  *
  * This is a library-only module: it never imports node:sqlite and never writes
  * to the user's home. Every function takes an optional `fs` implementation
@@ -117,23 +120,83 @@ export function writeAllSync(fd, data, { fs = nodeFs } = {}) {
   return written
 }
 
-/** fsync a file descriptor or a path (opened read-only). */
-export function fsyncFileSync(fileOrFd, { fs = nodeFs, retries = 5, errnos = DEFAULT_RETRY_ERRNOS, backoffMs = retryBackoffMs, sleep = sleepSync } = {}) {
+/**
+ * Errnos a writable open can fail with when the path is read-only for this user.
+ * On Windows they mean fsync cannot be performed at all (see openForFsyncSync).
+ */
+const WINDOWS_FSYNC_UNWRITABLE_ERRNOS = new Set(['EACCES', 'EPERM', 'EROFS'])
+
+/**
+ * Open `file` for the path form of fsyncFileSync.
+ *
+ * Windows: fsyncSync() is FlushFileBuffers(), which only accepts a handle opened
+ * with write access. Opening the file read-only and fsyncing it afterwards fails
+ * with EPERM, which used to break every durable-write path on Windows
+ * (`advisers backup`, `import --replace`, `vault unseal` and the pre-migration
+ * backup; see 0.3 research §4.1/R1). The handle must therefore be writable AND
+ * must never truncate, hence `'r+'`: it requires the file to exist and keeps its
+ * bytes and length exactly as they are. `createIfMissing` opts into `'a+'`
+ * (creates a missing zero-byte file, never truncates an existing one) for a
+ * caller that genuinely needs to flush a path that may not exist yet.
+ *
+ * POSIX: fsync(2) accepts an O_RDONLY descriptor, so a read-only-but-readable
+ * file (and a read-only filesystem) keeps the historical `'r'` fallback.
+ *
+ * Windows read-only files are fail-closed on purpose: returning success without
+ * flushing would let a caller report a backup as durable when it is not.
+ */
+function openForFsyncSync(file, { fs = nodeFs, platform = process.platform, createIfMissing = false } = {}) {
+  try {
+    return fs.openSync(file, 'r+')
+  } catch (error) {
+    const code = errnoOf(error)
+    if (code === 'ENOENT' && createIfMissing) return fs.openSync(file, 'a+')
+    if (platform !== 'win32') {
+      // POSIX: flush a readable descriptor when the file cannot be opened writable.
+      return fs.openSync(file, 'r')
+    }
+    if (WINDOWS_FSYNC_UNWRITABLE_ERRNOS.has(code)) {
+      const denied = new Error(`${code}: cannot fsync ${file} on Windows: FlushFileBuffers requires a writable handle and the file could not be opened read-write; make the file/directory writable, or close the program (antivirus/OneDrive/sync client) that may be holding it`)
+      denied.code = code
+      if (error?.errno !== undefined) denied.errno = error.errno
+      denied.cause = error
+      throw denied
+    }
+    throw error
+  }
+}
+
+/**
+ * fsync a file descriptor or a path.
+ *
+ * The numeric form flushes the caller's descriptor (a temp file the caller just
+ * wrote is already open for writing). The path form opens a writable,
+ * non-truncating handle for the duration of the fsync -- never a read-only one,
+ * because Windows rejects fsync on read-only handles with EPERM (see
+ * openForFsyncSync). The file's bytes and length are left unchanged.
+ */
+export function fsyncFileSync(fileOrFd, { fs = nodeFs, platform = process.platform, createIfMissing = false, retries = 5, errnos = DEFAULT_RETRY_ERRNOS, backoffMs = retryBackoffMs, sleep = sleepSync } = {}) {
   if (typeof fileOrFd === 'number') {
     return retryFsSync(() => fs.fsyncSync(fileOrFd), { retries, errnos, backoffMs, sleep })
   }
   return retryFsSync(() => {
-    const fd = fs.openSync(fileOrFd, 'r')
+    const fd = openForFsyncSync(fileOrFd, { fs, platform, createIfMissing })
     try { fs.fsyncSync(fd) } finally { try { fs.closeSync(fd) } catch {} }
   }, { retries, errnos, backoffMs, sleep })
 }
 
 /**
  * fsync a directory entry so a completed rename survives a crash. Windows
- * returns EPERM for directory fsync (and FAT/network shares may not support it),
- * so this is best-effort by contract: it returns a boolean, never throws.
+ * cannot fsync a directory through Node (and cannot open one read-write), while
+ * FAT/network shares may not support it either, so this is best-effort by
+ * contract: it returns a boolean, never throws, and is a no-op (false) on
+ * Windows.
  */
-export function fsyncDirSync(dir, { fs = nodeFs } = {}) {
+export function fsyncDirSync(dir, { fs = nodeFs, platform = process.platform } = {}) {
+  // Windows cannot fsync a directory at all (and cannot open one read-write):
+  // FlushFileBuffers has no directory-handle semantics there, so honour the
+  // documented best-effort contract without attempting a doomed read-only open.
+  if (platform === 'win32') return false
   try {
     const fd = fs.openSync(dir, 'r')
     try { fs.fsyncSync(fd) } finally { try { fs.closeSync(fd) } catch {} }
