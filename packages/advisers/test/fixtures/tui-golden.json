@@ -1,0 +1,502 @@
+{
+  "note": "Golden human-output snapshots for the 0.3.0 output kernel. Options are merged into the render call; colour is off, so no ANSI may appear.",
+  "cases": [
+    {
+      "name": "status-idle-80",
+      "kind": "status",
+      "width": 80,
+      "input": {
+        "kind": "idle",
+        "today": {
+          "due": 2,
+          "overdue": 1
+        },
+        "model": "deepseek-flash"
+      },
+      "options": {},
+      "expected": [
+        "* 就绪 · 今天 2 件到期 / 1 件逾期 · deepseek-flash · /help"
+      ]
+    },
+    {
+      "name": "status-idle-40-degraded",
+      "kind": "status",
+      "width": 40,
+      "input": {
+        "kind": "idle",
+        "today": {
+          "due": 2,
+          "overdue": 1
+        },
+        "model": "deepseek-flash"
+      },
+      "options": {},
+      "expected": [
+        "* 就绪 · 今天 2 件到期 / 1 件逾期"
+      ]
+    },
+    {
+      "name": "status-idle-local-80",
+      "kind": "status",
+      "width": 80,
+      "input": {
+        "kind": "idle",
+        "today": {
+          "due": 2,
+          "overdue": 1
+        },
+        "local": true
+      },
+      "options": {},
+      "expected": [
+        "* 就绪 · 今天 2 件到期 / 1 件逾期 · 本地模式 · /help"
+      ]
+    },
+    {
+      "name": "status-busy-80",
+      "kind": "status",
+      "width": 80,
+      "input": {
+        "kind": "busy",
+        "seconds": 3
+      },
+      "options": {},
+      "expected": [
+        "~ 工作中 3s · Esc 中断"
+      ]
+    },
+    {
+      "name": "status-confirm-80",
+      "kind": "status",
+      "width": 80,
+      "input": {
+        "kind": "confirm"
+      },
+      "options": {},
+      "expected": [
+        "! 待确认 · y 写入 / n 取消（默认 n）"
+      ]
+    },
+    {
+      "name": "status-error-80",
+      "kind": "status",
+      "width": 80,
+      "input": {
+        "kind": "error",
+        "reason": "同步邮件（work）"
+      },
+      "options": {},
+      "expected": [
+        "! 上次失败：同步邮件（work） · /retry"
+      ]
+    },
+    {
+      "name": "status-offline-80",
+      "kind": "status",
+      "width": 80,
+      "input": {
+        "kind": "offline"
+      },
+      "options": {},
+      "expected": [
+        "* 就绪 · 模型不可达（上次失败） · /status"
+      ]
+    },
+    {
+      "name": "status-offline-40-degraded",
+      "kind": "status",
+      "width": 40,
+      "input": {
+        "kind": "offline"
+      },
+      "options": {},
+      "expected": [
+        "* 模型不可达（上次失败） · /status"
+      ]
+    },
+    {
+      "name": "status-accessible-idle-80",
+      "kind": "status",
+      "width": 80,
+      "input": {
+        "kind": "idle",
+        "today": {
+          "due": 2,
+          "overdue": 1
+        },
+        "model": "deepseek-flash"
+      },
+      "options": {
+        "accessible": true
+      },
+      "expected": [
+        "[状态] 就绪 · 今天 2 件到期 / 1 件逾期 · deepseek-flash · /help"
+      ]
+    },
+    {
+      "name": "status-accessible-idle-40",
+      "kind": "status",
+      "width": 40,
+      "input": {
+        "kind": "idle",
+        "today": {
+          "due": 2,
+          "overdue": 1
+        },
+        "model": "deepseek-flash"
+      },
+      "options": {
+        "accessible": true
+      },
+      "expected": [
+        "[状态] 就绪 · 今天 2 件到期 / 1 件逾期"
+      ]
+    },
+    {
+      "name": "result-client-80",
+      "kind": "result",
+      "width": 80,
+      "input": {
+        "prompt": "看一下王工现在到哪一步",
+        "headline": "王工 · 活跃 · 2 个项目 · 保密 0",
+        "lines": [
+          {
+            "role": "fact",
+            "text": "欠他 2 件：11-24 发修订报价；未排期 补一版范围说明"
+          },
+          {
+            "role": "fact",
+            "text": "等他 1 件：范围确认（无到期日）"
+          },
+          {
+            "role": "item",
+            "text": "最近：11-17 交付 报价确认单"
+          },
+          {
+            "role": "item",
+            "text": "最近：11-10 备注 预算 8 万"
+          }
+        ],
+        "next": "advisers client timeline cl_wang"
+      },
+      "options": {},
+      "expected": [
+        "> 看一下王工现在到哪一步",
+        "  王工 · 活跃 · 2 个项目 · 保密 0",
+        "  欠他 2 件：11-24 发修订报价；未排期 补一版范围说明",
+        "  等他 1 件：范围确认（无到期日）",
+        "  - 最近：11-17 交付 报价确认单",
+        "  - 最近：11-10 备注 预算 8 万",
+        "  下一步：advisers client timeline cl_wang"
+      ]
+    },
+    {
+      "name": "result-artifacts-80",
+      "kind": "result",
+      "width": 80,
+      "input": {
+        "headline": "已生成报价 docx",
+        "artifacts": [
+          {
+            "path": "out/王工-报价-2026-11-19.docx",
+            "bytes": 23961,
+            "verified": true
+          }
+        ],
+        "checks": [
+          "结构通过（内容未逐字核对）"
+        ],
+        "warnings": [
+          "本次内容含模型生成部分，事实以证据为准",
+          "第二条警告应折叠"
+        ],
+        "next": "打开确认；要改哪段直接说"
+      },
+      "options": {},
+      "expected": [
+        "  已生成报价 docx",
+        "  文件：out/王工-报价-2026-11-19.docx（23.4 KB，结构通过）",
+        "  校验：结构通过（内容未逐字核对）",
+        "  ! 本次内容含模型生成部分，事实以证据为准（+1 条）",
+        "  下一步：打开确认；要改哪段直接说"
+      ]
+    },
+    {
+      "name": "result-artifacts-40",
+      "kind": "result",
+      "width": 40,
+      "input": {
+        "headline": "已生成报价 docx",
+        "artifacts": [
+          {
+            "path": "out/王工-报价-2026-11-19.docx",
+            "bytes": 23961,
+            "verified": null
+          }
+        ],
+        "checks": [
+          "结构通过（内容未逐字核对）"
+        ],
+        "next": "打开确认；要改哪段直接说"
+      },
+      "options": {},
+      "expected": [
+        "  已生成报价 docx",
+        "  文件：out/王工-…11-19.docx（23.4 KB）",
+        "  校验：结构通过（内容未逐字核对）",
+        "  下一步：打开确认；要改哪段直接说"
+      ]
+    },
+    {
+      "name": "result-summary-overflow-40",
+      "kind": "result",
+      "width": 40,
+      "input": {
+        "summary": "这是一段需要折叠的长总结。这是一段需要折叠的长总结。这是一段需要折叠的长总结。这是一段需要折叠的长总结。这是一段需要折叠的长总结。这是一段需要折叠的长总结。这是一段需要折叠的长总结。这是一段需要折叠的长总结。这是一段需要折叠的长总结。这是一段需要折叠的长总结。这是一段需要折叠的长总结。这是一段需要折叠的长总结。"
+      },
+      "options": {
+        "maxLines": 5
+      },
+      "expected": [
+        "  这是一段需要折叠的长总结。这是一段需要",
+        "  折叠的长总结。这是一段需要折叠的长总",
+        "  结。这是一段需要折叠的长总结。这是一段",
+        "  需要折叠的长总结。这是一段需要折叠的长",
+        "  总结。这是一段需要折叠的长总结。这是一",
+        "  …（+4 行，/more 或 --json 查看）"
+      ]
+    },
+    {
+      "name": "result-items-overflow-40",
+      "kind": "result",
+      "width": 40,
+      "input": {
+        "lines": [
+          {
+            "role": "item",
+            "text": "第 1 条事项"
+          },
+          {
+            "role": "item",
+            "text": "第 2 条事项"
+          },
+          {
+            "role": "item",
+            "text": "第 3 条事项"
+          },
+          {
+            "role": "item",
+            "text": "第 4 条事项"
+          },
+          {
+            "role": "item",
+            "text": "第 5 条事项"
+          },
+          {
+            "role": "item",
+            "text": "第 6 条事项"
+          },
+          {
+            "role": "item",
+            "text": "第 7 条事项"
+          },
+          {
+            "role": "item",
+            "text": "第 8 条事项"
+          },
+          {
+            "role": "item",
+            "text": "第 9 条事项"
+          },
+          {
+            "role": "item",
+            "text": "第 10 条事项"
+          },
+          {
+            "role": "item",
+            "text": "第 11 条事项"
+          }
+        ]
+      },
+      "options": {},
+      "expected": [
+        "  - 第 1 条事项",
+        "  - 第 2 条事项",
+        "  - 第 3 条事项",
+        "  - 第 4 条事项",
+        "  - 第 5 条事项",
+        "  - 第 6 条事项",
+        "  - 第 7 条事项",
+        "  - 第 8 条事项",
+        "  …（+3 条，/more 或 --json 查看）"
+      ]
+    },
+    {
+      "name": "result-verbose-80",
+      "kind": "result",
+      "width": 80,
+      "input": {
+        "headline": "完成",
+        "tools": [
+          {
+            "name": "office.generate",
+            "ok": true
+          },
+          {
+            "name": "fs.write",
+            "ok": false
+          }
+        ],
+        "durationMs": 1234
+      },
+      "options": {
+        "verbose": true
+      },
+      "expected": [
+        "  完成",
+        "  · office.generate ok",
+        "  · fs.write FAILED",
+        "  耗时：1.2s"
+      ]
+    },
+    {
+      "name": "result-interrupted-80",
+      "kind": "result",
+      "width": 80,
+      "input": {
+        "kind": "notice",
+        "headline": "已中断：Ctrl+C",
+        "lines": [
+          {
+            "role": "fact",
+            "text": "已保留：当前会话与已生成文件；没有写账本"
+          }
+        ],
+        "next": "重新说一遍即可"
+      },
+      "options": {},
+      "expected": [
+        "  已中断：Ctrl+C",
+        "  已保留：当前会话与已生成文件；没有写账本",
+        "  下一步：重新说一遍即可"
+      ]
+    },
+    {
+      "name": "error-imap-80",
+      "kind": "error",
+      "width": 80,
+      "input": {
+        "title": "同步邮件（work）",
+        "reason": "服务器 UIDVALIDITY 变了，本地游标不再可信",
+        "kept": "本地队列 3 封；没有删邮件、没有写账本",
+        "next": "advisers mail sync work --full",
+        "code": "E_IMAP_UIDVALIDITY"
+      },
+      "options": {},
+      "expected": [
+        "! 没做成：同步邮件（work）",
+        "  原因：服务器 UIDVALIDITY 变了，本地游标不再可信",
+        "  已保留：本地队列 3 封；没有删邮件、没有写账本",
+        "  下一步：advisers mail sync work --full",
+        "  代码：E_IMAP_UIDVALIDITY"
+      ]
+    },
+    {
+      "name": "error-imap-40",
+      "kind": "error",
+      "width": 40,
+      "input": {
+        "title": "同步邮件（work）",
+        "reason": "服务器 UIDVALIDITY 变了，本地游标不再可信",
+        "kept": "本地队列 3 封；没有删邮件、没有写账本",
+        "next": "advisers mail sync work --full",
+        "code": "E_IMAP_UIDVALIDITY"
+      },
+      "options": {},
+      "expected": [
+        "! 没做成：同步邮件（work）",
+        "  原因：服务器 UIDVALIDITY 变了，本地游",
+        "        标不再可信",
+        "  已保留：本地队列 3 封；没有删邮件、没",
+        "          有写账本",
+        "  下一步：advisers mail sync work --full",
+        "  代码：E_IMAP_UIDVALIDITY"
+      ]
+    },
+    {
+      "name": "confirm-write-80",
+      "kind": "confirm",
+      "width": 80,
+      "input": {
+        "title": "把候选 cand_123 写入账本（王工 / 发修订报价）",
+        "reason": "邮件「Re: 报价」11-17 10:02，引用逐字命中",
+        "write": "1 条承诺 + 1 条证据；不发邮件、不改客户",
+        "summary": "sha256 3f9a1c2e77aa…"
+      },
+      "options": {},
+      "expected": [
+        "! 需要确认：把候选 cand_123 写入账本（王工 / 发修订报价）",
+        "  原因：邮件「Re: 报价」11-17 10:02，引用逐字命中",
+        "  写入：1 条承诺 + 1 条证据；不发邮件、不改客户",
+        "  摘要：sha256 3f9a1c2e77aa…",
+        "  y 写入 / n 取消（默认 n）"
+      ]
+    },
+    {
+      "name": "confirm-write-40",
+      "kind": "confirm",
+      "width": 40,
+      "input": {
+        "title": "把候选 cand_123 写入账本（王工 / 发修订报价）",
+        "reason": "邮件「Re: 报价」11-17 10:02，引用逐字命中",
+        "write": "1 条承诺 + 1 条证据；不发邮件、不改客户",
+        "summary": "sha256 3f9a1c2e77aa…"
+      },
+      "options": {},
+      "expected": [
+        "! 需要确认：把候选 cand_123 写入账本（王",
+        "            工 / 发修订报价）",
+        "  原因：邮件「Re: 报价」11-17 10:02，引",
+        "        用逐字命中",
+        "  写入：1 条承诺 + 1 条证据；不发邮件、",
+        "        不改客户",
+        "  摘要：sha256 3f9a1c2e77aa…",
+        "  y 写入 / n 取消（默认 n）"
+      ]
+    },
+    {
+      "name": "snapshot-80",
+      "kind": "snapshot",
+      "width": 80,
+      "input": {
+        "title": "Advisers TUI",
+        "sections": [
+          {
+            "heading": "Today",
+            "lines": [
+              "2 due, 1 overdue",
+              "next: 11-24 发修订报价"
+            ]
+          },
+          {
+            "heading": "Open commitments",
+            "lines": [
+              "无"
+            ]
+          }
+        ]
+      },
+      "options": {},
+      "expected": [
+        "Advisers TUI",
+        "",
+        "Today",
+        "  2 due, 1 overdue",
+        "  next: 11-24 发修订报价",
+        "",
+        "Open commitments",
+        "  无"
+      ]
+    }
+  ]
+}

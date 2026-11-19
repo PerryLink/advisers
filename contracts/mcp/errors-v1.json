@@ -1,0 +1,76 @@
+{
+  "version": 1,
+  "status": "frozen",
+  "frozenAt": "2026-11-20",
+  "sourceCommit": "35a51c3",
+  "description": "Frozen JSON-RPC error vocabulary for the stdio server plus the tool-error envelope. Error messages are fixed or sanitized and never echo raw arguments, quotes or absolute paths.",
+  "jsonRpcErrors": {
+    "-32600": "invalid request (bad JSON-RPC envelope, or a line over the 1 MiB limit)",
+    "-32601": "unknown method",
+    "-32602": "invalid params / unknown tool (raw argument values are not echoed)",
+    "-32603": "unexpected internal error (fixed message, no stack)",
+    "-32700": "parse error (invalid JSON)",
+    "-32002": "unknown resource URI"
+  },
+  "toolErrorEnvelope": {
+    "result": {
+      "content": [
+        {
+          "type": "text",
+          "text": "<sanitized fixed message>"
+        }
+      ],
+      "isError": true
+    },
+    "note": "Tool execution failures use the MCP convention result.isError=true with one sanitized text block. v1 does NOT assert an E_* code on the wire for MCP tool errors; the CLI error-code registry is a separate surface."
+  },
+  "probes": [
+    {
+      "id": "unknown-method",
+      "request": {
+        "jsonrpc": "2.0",
+        "id": 1,
+        "method": "contracts/no-such-method"
+      },
+      "expectCode": -32601
+    },
+    {
+      "id": "unknown-tool",
+      "request": {
+        "jsonrpc": "2.0",
+        "id": 2,
+        "method": "tools/call",
+        "params": {
+          "name": "advisers_no_such_tool",
+          "arguments": {}
+        }
+      },
+      "expectCode": -32602
+    },
+    {
+      "id": "unknown-resource",
+      "request": {
+        "jsonrpc": "2.0",
+        "id": 3,
+        "method": "resources/read",
+        "params": {
+          "uri": "advisers://contracts-missing"
+        }
+      },
+      "expectCode": -32002
+    },
+    {
+      "id": "parse-error",
+      "line": "not json",
+      "expectCode": -32700
+    },
+    {
+      "id": "invalid-request",
+      "request": {
+        "jsonrpc": "2.0",
+        "id": 4
+      },
+      "expectCode": -32600
+    }
+  ]
+}

@@ -21,7 +21,8 @@
     "check:js": "node scripts/check-js.mjs",
     "verify:release": "node scripts/verify-release.mjs",
     "test:security": "node scripts/security-suite.mjs",
-    "test:fault": "node scripts/fault-injection.mjs"
+    "test:fault": "node scripts/fault-injection.mjs",
+    "eval:det": "node scripts/eval-det.mjs"
   },
   "devDependencies": {
     "@types/node": "^22.20.5",

@@ -1,0 +1,143 @@
+{
+  "version": 1,
+  "status": "frozen",
+  "frozenAt": "2026-11-20",
+  "sourceCommit": "35a51c3",
+  "description": "Frozen CLI exit codes. 0 = success; 1 = user/config/runtime error (bad args, missing key, unknown id, failed verification, locked/corrupt store); 3 = TOS consent required. `check-contracts --exit` runs the probes below against the real CLI and asserts the observed code.",
+  "codes": [
+    {
+      "code": 0,
+      "meaning": "success",
+      "retryable": false
+    },
+    {
+      "code": 1,
+      "meaning": "user/config/runtime error (bad args, missing key, unknown id, failed verification, E_DB_LOCKED/E_DB_CORRUPT)",
+      "retryable": false
+    },
+    {
+      "code": 3,
+      "meaning": "TOS consent required (E_TOS_REQUIRED); run `advisers tos accept` or pass --accept-tos / ADVISERS_ACCEPT_TOS=1",
+      "retryable": true,
+      "retryHint": "after accepting the current TOS"
+    }
+  ],
+  "codeToExit": {
+    "default": 1,
+    "E_TOS_REQUIRED": 3
+  },
+  "tosExempt": [
+    "help",
+    "version",
+    "status",
+    "doctor",
+    "init",
+    "tos",
+    "privacy",
+    "export",
+    "audit",
+    "purge",
+    "evidence verify <dir>"
+  ],
+  "probeEnv": "Every probe runs with a temporary ADVISERS_HOME, ADVISERS_CORE_LOCAL=1, ADVISERS_OFFICE_LOCAL=1, ADVISERS_NO_MODEL=1 and no credentials. Accepted-home probes also set ADVISERS_ACCEPT_TOS=1 (the documented non-interactive consent flag).",
+  "probes": [
+    {
+      "id": "success",
+      "argv": [
+        "status",
+        "--json"
+      ],
+      "home": "fresh",
+      "needsTos": false,
+      "expectExit": 0,
+      "expectStdout": "json"
+    },
+    {
+      "id": "help",
+      "argv": [
+        "--help"
+      ],
+      "home": "fresh",
+      "needsTos": false,
+      "expectExit": 0,
+      "expectStdout": "text"
+    },
+    {
+      "id": "usage",
+      "argv": [
+        "agenda",
+        "--days",
+        "99"
+      ],
+      "home": "accepted",
+      "needsTos": true,
+      "expectExit": 1,
+      "expectStderr": "error-envelope",
+      "expectCode": "E_USAGE"
+    },
+    {
+      "id": "unknown-matter",
+      "argv": [
+        "matter",
+        "show",
+        "matter_missing_contract_vector",
+        "--json"
+      ],
+      "home": "accepted",
+      "needsTos": true,
+      "expectExit": 1,
+      "expectStderr": "error-envelope",
+      "expectCode": "E_MATTER_NOT_FOUND"
+    },
+    {
+      "id": "unknown-command",
+      "argv": [
+        "bogus-command"
+      ],
+      "home": "fresh",
+      "needsTos": false,
+      "expectExit": 1,
+      "expectStdout": "text",
+      "expectStderrPattern": "unknown command: bogus-command"
+    },
+    {
+      "id": "tos-required",
+      "argv": [
+        "commit",
+        "add",
+        "发报价",
+        "--quote",
+        "q"
+      ],
+      "home": "fresh",
+      "needsTos": false,
+      "expectExit": 3,
+      "expectStderrPattern": "E_TOS_REQUIRED"
+    },
+    {
+      "id": "offline-verify-failed",
+      "argv": [
+        "evidence",
+        "verify",
+        "{missingDir}"
+      ],
+      "home": "fresh",
+      "needsTos": false,
+      "expectExit": 1,
+      "expectStdout": "json",
+      "note": "evidence verify is TOS-exempt and reports {ok:false} on stdout (not the error envelope)."
+    }
+  ],
+  "reservedNotActive": [
+    4,
+    5,
+    6
+  ],
+  "reservedDraft": "exit-codes-v2.draft.json",
+  "knownGaps": [
+    {
+      "id": "strict-flags",
+      "note": "In 0.2.4 unknown flags are ignored on some commands (for example `status --json --bogus` exits 0). v1 does NOT guarantee strict-flag exit 1; the M7 hardening item will tighten this additively (documented in docs/CONTRACTS.md)."
+    }
+  ]
+}

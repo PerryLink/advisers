@@ -1,7 +1,18 @@
 import assert from 'node:assert/strict'
-import test from 'node:test'
+import { mkdtempSync, rmSync } from 'node:fs'
+import { tmpdir } from 'node:os'
+import { join } from 'node:path'
+import test, { after } from 'node:test'
 import { assertSupportedJsonSchema, validateJsonSchemaValue } from '@deepseek-ai/dsh-tools'
 import { apply } from '../index.js'
+
+// Isolate the suite from the developer's real ~/.advisers: the ledger read tools
+// now open the real ledger when one exists, and these tests exercise the marked
+// preview fallback with seeded in-memory data.
+const EMPTY_ROOT = mkdtempSync(join(tmpdir(), 'advisers-dsh-schema-'))
+process.env.ADVISERS_HOME = join(EMPTY_ROOT, 'home')
+delete process.env.ADVISERS_STORE
+after(() => { rmSync(EMPTY_ROOT, { recursive: true, force: true }) })
 
 const ALL_TOOL_NAMES = ['advisers_brief', 'advisers_evidence', 'advisers_office', 'advisers_today', 'advisers_who']
 const READ_ONLY_TOOL_NAMES = ['advisers_evidence', 'advisers_today', 'advisers_who']

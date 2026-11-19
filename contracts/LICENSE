@@ -1,0 +1,16 @@
+Advisers interface contracts (documentation/data)
+Copyright 2026 PerryLink contributors
+Intended license: Creative Commons Attribution-NonCommercial-ShareAlike 4.0
+International (SPDX: CC-BY-NC-SA-4.0).
+Full legal code and attribution/scope template: ../LICENSE-DOCS
+Canonical legal code: https://creativecommons.org/licenses/by-nc-sa/4.0/legalcode.en
+
+Scope: the contract artifacts in this directory (README.md, *.json, *.schema.json and
+the vectors/ tree). This is a pointer to the existing documentation license, not new
+legal text. It does not change the license of software under packages/ or scripts/
+(PolyForm Noncommercial 1.0.0).
+
+Status note: LICENSING.md currently lists docs/**, eval/**, examples/** and other
+documentation/data files but does not enumerate contracts/. Recording contracts/ in that
+scope list requires owner/legal confirmation (see docs/CONTRACTS.md "Known gaps"). Until
+then this notice records the intended license of these artifacts only.

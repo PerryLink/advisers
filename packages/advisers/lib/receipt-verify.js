@@ -26,9 +26,18 @@
  *
  * The verifier deliberately does not trust manifest.json before SHA256SUMS
  * matches: checksums are verified first, then the manifest schema is checked.
+ *
+ * Resource limits (0.3.0, 04-0.3-research §4.12): a receipt pack arrives from a
+ * counterparty, so every read is capped -- entries, directory depth, single-file
+ * size, total bytes, SHA256SUMS size and manifest size (RECEIPT_LIMIT_DEFAULTS).
+ * Hits are reported with the stable code E_RECEIPT_LIMIT plus structured
+ * metadata {limit, max, actual, file}; files are hashed in 1 MiB chunks instead
+ * of being loaded whole, and receipt.docx is scanned in chunks as well. Normal
+ * v1/v1.1 packs are far below every limit and are unaffected.
  */
 
-import { existsSync, readFileSync, readdirSync, statSync } from 'node:fs'
+import { createHash } from 'node:crypto'
+import { closeSync, existsSync, openSync, readFileSync, readdirSync, readSync, statSync } from 'node:fs'
 import { join, resolve } from 'node:path'
 import {
   MAX_QUOTE_CHARS,
@@ -44,6 +53,56 @@ import {
 const MAX_ERRORS = 300
 const SUMS_LINE_RE = /^([0-9a-f]{64})  (.+)$/
 const ISO_DATE_RE = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d{3})?Z$/
+
+/** Stable error code for a receipt pack that exceeds a resource limit. */
+export const RECEIPT_LIMIT_CODE = 'E_RECEIPT_LIMIT'
+/**
+ * Resource limits for verifying an UNTRUSTED receipt pack (04-0.3-research
+ * §4.12). A receipt pack arrives from a counterparty: without caps, a 100k-file
+ * directory, a 100-level path nest, a multi-GiB file or a huge SHA256SUMS could
+ * exhaust memory/time before any integrity result is produced. Limits apply to
+ * both the directory walk and every read/hash, so a file growing during the
+ * check cannot bypass the stat-time cap. Normal packs (5 required files + a
+ * handful of deliveries) are orders of magnitude below every limit.
+ */
+export const RECEIPT_LIMIT_DEFAULTS = Object.freeze({
+  maxEntries: 5000,
+  maxDepth: 8,
+  maxFileBytes: 32 * 1024 * 1024,
+  maxTotalBytes: 256 * 1024 * 1024,
+  maxSumsBytes: 64 * 1024,
+  maxManifestBytes: 1024 * 1024,
+})
+const LIMIT_LABELS = Object.freeze({
+  maxEntries: 'entry count',
+  maxDepth: 'directory depth',
+  maxFileBytes: 'single file size',
+  maxTotalBytes: 'total pack size',
+  maxSumsBytes: 'SHA256SUMS size',
+  maxManifestBytes: 'manifest size',
+})
+
+function normalizeLimits(input) {
+  const limits = { ...RECEIPT_LIMIT_DEFAULTS }
+  if (!input || typeof input !== 'object') return limits
+  for (const key of Object.keys(RECEIPT_LIMIT_DEFAULTS)) {
+    if (!(key in input)) continue
+    const value = Number(input[key])
+    if (Number.isFinite(value) && value > 0) limits[key] = Math.floor(value)
+  }
+  return limits
+}
+
+function limitMessage(violation) {
+  const label = LIMIT_LABELS[violation.limit] ?? violation.limit
+  return RECEIPT_LIMIT_CODE + ': receipt pack ' + label + ' exceeded the limit ' + violation.max +
+    ' (actual ' + violation.actual + (violation.file ? ', first at ' + violation.file : '') + '); refusing to read a pack that could exhaust memory or time. ' +
+    'A legitimate pack is far below these limits; inspect the pack before retrying.'
+}
+
+function makeViolation(limits, limit, actual, file) {
+  return { code: RECEIPT_LIMIT_CODE, limit, max: limits[limit], actual, file: file ?? null }
+}
 
 function addError(errors, message) {
   if (errors.length < MAX_ERRORS) errors.push(message)
@@ -112,12 +171,25 @@ export function parseReceiptSums(text) {
   return { entries, errors }
 }
 
-function walkPackFiles(root) {
+/**
+ * Walk the pack directory with hard caps on entries, depth, per-file size and
+ * total size. Stops at the first violation so a hostile pack (100k entries, a
+ * deep nest, huge files) is rejected in roughly O(limit) work instead of O(pack).
+ * Returns the violation as a structured object for stable CLI/JSON reporting.
+ */
+function walkPackFiles(root, limits) {
   const files = []
   const errors = []
-  const stack = ['']
-  while (stack.length) {
-    const relativeDir = stack.pop()
+  const stack = [{ relativeDir: '', depth: 0 }]
+  let entryCount = 0
+  let totalBytes = 0
+  let violation = null
+  const trip = (limit, actual, file) => {
+    violation = makeViolation(limits, limit, actual, file)
+    addError(errors, limitMessage(violation))
+  }
+  while (stack.length && !violation) {
+    const { relativeDir, depth } = stack.pop()
     const directory = relativeDir ? join(root, ...relativeDir.split('/')) : root
     let dirents
     try {
@@ -127,24 +199,97 @@ function walkPackFiles(root) {
       continue
     }
     for (const dirent of dirents) {
+      entryCount += 1
       const relativePath = relativeDir ? relativeDir + '/' + dirent.name : dirent.name
+      if (entryCount > limits.maxEntries) { trip('maxEntries', entryCount, relativePath); break }
       if (dirent.isSymbolicLink()) {
         addError(errors, 'symbolic links are not allowed in a receipt pack: ' + relativePath)
         continue
       }
       if (dirent.isDirectory()) {
-        stack.push(relativePath)
+        const childDepth = depth + 1
+        if (childDepth > limits.maxDepth) { trip('maxDepth', childDepth, relativePath); break }
+        stack.push({ relativeDir: relativePath, depth: childDepth })
         continue
       }
       if (!dirent.isFile()) {
         addError(errors, 'unsupported file type in receipt pack: ' + relativePath)
         continue
       }
+      let info
+      try {
+        info = statSync(join(root, ...relativePath.split('/')))
+      } catch (error) {
+        addError(errors, 'cannot stat ' + relativePath + ': ' + (error.code || error.message))
+        continue
+      }
+      if (info.size > limits.maxFileBytes) { trip('maxFileBytes', info.size, relativePath); break }
+      totalBytes += info.size
+      if (totalBytes > limits.maxTotalBytes) { trip('maxTotalBytes', totalBytes, relativePath); break }
       files.push(relativePath)
     }
   }
-  files.sort()
-  return { files, errors }
+  if (!violation) files.sort()
+  return { files, errors, violation, totalBytes, entryCount }
+}
+
+/**
+ * Streaming sha256 with a hard byte cap (1 MiB chunks, bounded memory).
+ * Returns {sha256, bytes} or {violation} when the file grew past maxBytes
+ * after the stat-time check (a file can be swapped/grown between stat and read).
+ */
+function hashFileWithLimit(file, limits, { chunkSize = 1024 * 1024 } = {}) {
+  const hash = createHash('sha256')
+  const buffer = Buffer.allocUnsafe(Math.min(chunkSize, 1024 * 1024))
+  let bytes = 0
+  const fd = openSync(file, 'r')
+  try {
+    for (;;) {
+      const count = readSync(fd, buffer, 0, buffer.length, null)
+      if (!count) break
+      bytes += count
+      if (bytes > limits.maxFileBytes) return { violation: makeViolation(limits, 'maxFileBytes', bytes, null) }
+      hash.update(buffer.subarray(0, count))
+    }
+  } finally {
+    try { closeSync(fd) } catch {}
+  }
+  return { sha256: hash.digest('hex'), bytes }
+}
+
+/**
+ * receipt.docx structural smoke check without loading the file into memory:
+ * ZIP magic in the first bytes + the word/document.xml entry name somewhere in
+ * the archive. Never calls Office/WPS. Enforces the single-file byte cap while
+ * scanning, since the file may have grown after the walk.
+ */
+function checkDocxStructure(file, limits) {
+  const needle = Buffer.from('word/document.xml', 'utf8')
+  const chunkSize = 64 * 1024
+  const buffer = Buffer.allocUnsafe(chunkSize)
+  let position = 0
+  let bytes = 0
+  let zip = false
+  let hasDocument = false
+  let carry = Buffer.alloc(0)
+  const fd = openSync(file, 'r')
+  try {
+    for (;;) {
+      const count = readSync(fd, buffer, 0, buffer.length, position)
+      if (!count) break
+      position += count
+      bytes += count
+      if (bytes > limits.maxFileBytes) return { violation: makeViolation(limits, 'maxFileBytes', bytes, null) }
+      const chunk = buffer.subarray(0, count)
+      if (bytes === count && count >= 4) zip = chunk[0] === 0x50 && chunk[1] === 0x4b
+      const scan = carry.length ? Buffer.concat([carry, chunk]) : chunk
+      if (!hasDocument && scan.includes(needle)) hasDocument = true
+      carry = scan.subarray(Math.max(0, scan.length - (needle.length - 1)))
+    }
+  } finally {
+    try { closeSync(fd) } catch {}
+  }
+  return { zip, hasDocument, bytes }
 }
 
 // --- manifest schema (format v1; keep it in sync with buildReceiptPack) ------
@@ -489,17 +634,27 @@ function validateReceiptManifest(manifest, sums, errors, result) {
  * Verify a receipt pack directory offline.
  *
  * @param {string} dir pack directory produced by buildReceiptPack({outDir})
+ * @param {{limits?: Partial<typeof RECEIPT_LIMIT_DEFAULTS>}} [options]
+ *   `limits` lowers/raises the resource caps (tests and the future WebCrypto
+ *   verification page use smaller values; the defaults are the contract).
  * @returns {{ok: boolean, errors: string[], warnings: string[], dir: string,
  *            fileCount: number, checksumCount: number, files: string[],
  *            checksums: Record<string, string>, manifest: object|null,
- *            anchorsRecorded: number, anchorsVerified: boolean, anchored: boolean}}
+ *            anchorsRecorded: number, anchorsVerified: boolean, anchored: boolean,
+ *            limits: object, totalBytes: number, limitViolation: object|null,
+ *            code: string|null}}
+ *   `code` is 'E_RECEIPT_LIMIT' when a resource cap was hit (with metadata in
+ *   limitViolation: {code, limit, max, actual, file}); ok is false in that case
+ *   and no manifest/checksum result is trusted.
  */
-export function verifyReceiptPackDir(dir) {
+export function verifyReceiptPackDir(dir, options = {}) {
   const errors = []
   const warnings = []
   const files = []
+  const limits = normalizeLimits(options?.limits)
   const result = {
     ok: false,
+    code: null,
     errors,
     warnings,
     dir: String(dir),
@@ -513,6 +668,15 @@ export function verifyReceiptPackDir(dir) {
     anchorsRecorded: 0,
     anchorsVerified: false,
     anchored: false,
+    limits: { ...limits },
+    totalBytes: 0,
+    limitViolation: null,
+  }
+  const failLimit = (violation) => {
+    result.code = RECEIPT_LIMIT_CODE
+    result.limitViolation = violation
+    result.ok = false
+    return result
   }
   let root
   try {
@@ -538,10 +702,12 @@ export function verifyReceiptPackDir(dir) {
     return result
   }
 
-  const walked = walkPackFiles(root)
+  const walked = walkPackFiles(root, limits)
   for (const error of walked.errors) addError(errors, error)
   for (const file of walked.files) files.push(file)
   result.fileCount = files.length
+  result.totalBytes = walked.totalBytes
+  if (walked.violation) return failLimit(walked.violation)
   const fileSet = new Set(files)
 
   const sumsPath = join(root, RECEIPT_SHA256SUMS_FILE)
@@ -551,6 +717,12 @@ export function verifyReceiptPackDir(dir) {
   }
   let sumsText
   try {
+    const sumsStat = statSync(sumsPath)
+    if (sumsStat.size > limits.maxSumsBytes) {
+      const violation = makeViolation(limits, 'maxSumsBytes', sumsStat.size, RECEIPT_SHA256SUMS_FILE)
+      addError(errors, limitMessage(violation))
+      return failLimit(violation)
+    }
     sumsText = readFileSync(sumsPath, 'utf8')
   } catch (error) {
     addError(errors, 'cannot read SHA256SUMS: ' + (error.code || error.message))
@@ -573,11 +745,24 @@ export function verifyReceiptPackDir(dir) {
     if (!parsed.entries.has(name)) addError(errors, 'file not covered by SHA256SUMS: ' + name)
   }
 
+  let hashedTotal = 0
   for (const [name, expected] of parsed.entries) {
     if (!fileSet.has(name)) continue
     const full = join(root, ...name.split('/'))
     try {
-      const actual = sha256Hex(readFileSync(full))
+      const hashed = hashFileWithLimit(full, limits)
+      if (hashed.violation) {
+        hashed.violation.file = name
+        addError(errors, limitMessage(hashed.violation))
+        return failLimit(hashed.violation)
+      }
+      hashedTotal += hashed.bytes
+      if (hashedTotal > limits.maxTotalBytes) {
+        const violation = makeViolation(limits, 'maxTotalBytes', hashedTotal, name)
+        addError(errors, limitMessage(violation))
+        return failLimit(violation)
+      }
+      const actual = hashed.sha256
       if (actual !== expected) {
         addError(errors, 'hash mismatch: ' + name + ' (expected ' + expected.slice(0, 12) + '..., computed ' + actual.slice(0, 12) + '...)')
       }
@@ -587,12 +772,19 @@ export function verifyReceiptPackDir(dir) {
   }
 
   // receipt.docx structural smoke check (never call Office/WPS to verify it).
+  // Streamed with a byte cap: an untrusted pack must not be able to make the
+  // verifier allocate a multi-GiB Buffer before reporting a limit error.
   if (fileSet.has('receipt.docx')) {
     try {
-      const bytes = readFileSync(join(root, 'receipt.docx'))
-      if (bytes.length < 4 || bytes[0] !== 0x50 || bytes[1] !== 0x4b) {
+      const docx = checkDocxStructure(join(root, 'receipt.docx'), limits)
+      if (docx.violation) {
+        docx.violation.file = 'receipt.docx'
+        addError(errors, limitMessage(docx.violation))
+        return failLimit(docx.violation)
+      }
+      if (!docx.zip) {
         addError(errors, 'receipt.docx is not a ZIP/DOCX file')
-      } else if (!bytes.includes(Buffer.from('word/document.xml', 'utf8'))) {
+      } else if (!docx.hasDocument) {
         addError(errors, 'receipt.docx is missing word/document.xml')
       }
     } catch (error) {
@@ -603,6 +795,12 @@ export function verifyReceiptPackDir(dir) {
   if (!fileSet.has('manifest.json')) return result
   let manifest = null
   try {
+    const manifestStat = statSync(join(root, 'manifest.json'))
+    if (manifestStat.size > limits.maxManifestBytes) {
+      const violation = makeViolation(limits, 'maxManifestBytes', manifestStat.size, 'manifest.json')
+      addError(errors, limitMessage(violation))
+      return failLimit(violation)
+    }
     manifest = JSON.parse(readFileSync(join(root, 'manifest.json'), 'utf8'))
   } catch (error) {
     addError(errors, 'manifest.json is not valid JSON: ' + (error.message || error))

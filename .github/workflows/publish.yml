@@ -1,11 +1,26 @@
 name: release-gate
 
-# Manual pre-release gate. The gate job NEVER publishes: staged publishing needs
-# the npm account owner's approval (OTP in their own terminal for the local
-# path, or approval of a CI-staged build). The trusted-publish-draft job below
-# grants id-token: write but is opt-in (confirm=yes) and still does not publish
-# or stage anything: real CI publishing needs the owner to configure an npm
-# Trusted Publisher for every package and to make that decision explicitly.
+# Manual release gate plus an opt-in Trusted Publishing staging path.
+#
+# The `gate` job runs the full release checks and NEVER publishes or stages.
+#
+# The `trusted-publish-draft` job is opt-in (workflow_dispatch input
+# confirm=yes) and grants `id-token: write` so npm can exchange the GitHub OIDC
+# token for a short-lived credential:
+#   confirm=yes, stage=no   -> OIDC reachability check and a
+#                              `release.mjs --dry-run --provenance` diagnostic
+#                              run. Nothing is staged.
+#   confirm=yes, stage=yes  -> runs `node scripts/release.mjs --provenance`,
+#                              which uploads a stage for each of the six
+#                              packages with npm build-provenance attestations.
+#                              It still does NOT publish: the npm account owner
+#                              approves every stage with their own OTP.
+#
+# CI staging requires the owner to configure an npm Trusted Publisher for each
+# package on npmjs.com (owner decision, not stored in this repository). The
+# staging step refuses to run if NPM_TOKEN is set, so a long-lived token cannot
+# silently replace OIDC authentication, and it prints the tail of the npm debug
+# log when staging fails.
 #
 # Supply-chain hardening: every action is pinned to a full commit SHA; the
 # comment records the upstream release tag. Bump the SHA and the comment
@@ -26,7 +41,7 @@ on:
         type: choice
         options: ["no", "yes"]
       stage:
-        description: "actually stage with provenance (needs confirm=yes and the version to be unreleased)"
+        description: "stage the six packages with provenance (requires confirm=yes; never publishes)"
         required: true
         default: "no"
         type: choice
@@ -66,17 +81,27 @@ jobs:
       - name: Manual publish instructions
         run: |
           echo "Gate passed for tag ${{ inputs.release_tag }}."
-          echo "This workflow does not publish. The current path is a local staged release:"
-          echo "  RELEASE_TAG=${{ inputs.release_tag }} NPM_TOKEN=... node scripts/release.mjs"
-          echo "Then approve each stage id in your own terminal (OTP is human-only)."
-          echo "Trusted publishing is drafted below; dispatch with confirm=yes and read the"
-          echo "trusted-publish-draft job output for the npmjs setup steps."
+          echo ""
+          echo "Two staged-release paths exist; neither one publishes automatically:"
+          echo ""
+          echo "1) Local staged release (existing path, no provenance):"
+          echo "     RELEASE_TAG=${{ inputs.release_tag }} NPM_TOKEN=... node scripts/release.mjs"
+          echo "   Then approve each stage id in your own terminal (OTP is human-only)."
+          echo ""
+          echo "2) CI Trusted Publishing with provenance (owner-authorized):"
+          echo "     dispatch this workflow with confirm=yes and stage=yes"
+          echo "   That runs: RELEASE_TAG=${{ inputs.release_tag }} node scripts/release.mjs --provenance"
+          echo "   No NPM_TOKEN is accepted on that path; OIDC supplies the short-lived credential."
+          echo "   Approval is still manual: npm stage approve <stage-id> in the owner's terminal."
+          echo ""
+          echo "If CI staging fails, the staging step prints the tail of the npm debug log."
 
   trusted-publish-draft:
-    # Draft only, opt-in via confirm=yes: it grants OIDC so the provenance path
-    # can be exercised, but it never publishes and never stages. Real publishing
-    # remains an explicit owner decision. The intended future step is commented
-    # out at the end of this job until every package has an npm Trusted Publisher.
+    # Opt-in via confirm=yes. With stage=yes this job DOES stage the six packages
+    # through npm Trusted Publishing with provenance (OIDC); without stage=yes it
+    # only runs the diagnostic dry run. It never publishes: approval of every
+    # staged build remains the npm account owner's explicit action.
+    # Requires an npm Trusted Publisher per package and no NPM_TOKEN.
     needs: gate
     if: ${{ inputs.confirm == 'yes' }}
     runs-on: ubuntu-latest
@@ -111,7 +136,7 @@ jobs:
           status="$(curl -s -o /dev/null -w '%{http_code}' -H "Authorization: bearer ${ACTIONS_ID_TOKEN_REQUEST_TOKEN}" "${ACTIONS_ID_TOKEN_REQUEST_URL}${sep}audience=npm:registry.npmjs.org")"
           echo "OIDC token endpoint: HTTP ${status} (token not printed)"
           test "${status}" = "200"
-      - name: Provenance dry-run (diagnostic only; nothing is staged)
+      - name: Provenance dry-run (diagnostic; nothing is staged)
         continue-on-error: true
         env:
           RELEASE_TAG: ${{ inputs.release_tag }}
@@ -120,30 +145,44 @@ jobs:
           echo "This exercises the npm --provenance / OIDC path. It is expected to fail or"
           echo "warn until a Trusted Publisher is configured for every package."
           node scripts/release.mjs --dry-run --provenance
-      - name: Stage with Trusted Publishing + provenance (owner-authorized)
+      - name: Stage with Trusted Publishing + provenance (owner-authorized; never publishes)
         if: ${{ inputs.confirm == 'yes' && inputs.stage == 'yes' }}
         env:
           RELEASE_TAG: ${{ inputs.release_tag }}
           NPM_CONFIG_LOGLEVEL: verbose
         run: |
-          if [ -n "$NPM_TOKEN" ]; then
+          set -u
+          if [ -n "${NPM_TOKEN:-}" ]; then
             echo "::error::NPM_TOKEN must not be set for Trusted Publishing; OIDC supplies the short-lived token"
             exit 1
           fi
+          echo "Staging (not publishing) with RELEASE_TAG=${RELEASE_TAG}; OIDC supplies the npm credential."
           set +e
           node scripts/release.mjs --provenance
           code=$?
           if [ "$code" -ne 0 ]; then
-            echo '--- npm debug log (tail; tokens are not printed by npm) ---'
+            echo "::error::Trusted Publishing staging failed; see the npm debug log below"
+            echo '--- npm debug log (tail; npm does not print auth tokens) ---'
+            found=0
             for f in "$HOME"/.npm/_logs/*-debug-0.log; do
-              [ -f "$f" ] && tail -250 "$f"
+              if [ -f "$f" ]; then
+                found=1
+                echo "== $f"
+                tail -250 "$f"
+              fi
             done
+            if [ "$found" -eq 0 ]; then
+              echo "no npm debug log found under $HOME/.npm/_logs"
+            fi
+            echo '--- end npm debug log ---'
           fi
           exit "$code"
 
-      - name: Trusted Publisher setup and owner decision
+      - name: Trusted Publisher setup and owner decision (reference)
         run: |
-          echo "This draft job does NOT publish or stage anything."
+          echo "This step is informational; it does not stage or publish."
+          echo "When this dispatch used stage=yes, the stage step above already uploaded"
+          echo "stages (it never published them)."
           echo ""
           echo "To enable trusted publishing (owner decision), for EACH of the six packages on npmjs.com:"
           echo "  Settings -> Trusted Publisher -> GitHub Actions"
@@ -154,14 +193,11 @@ jobs:
           echo "  npm CLI on the runner must be >= 11.15.0 for staged publishing with OIDC."
           echo "  Current npm CLI: $(npm --version)"
           echo ""
-          echo "Then the real command (from a job with id-token: write, after the owner configures npmjs) is:"
-          echo "  RELEASE_TAG=${{ inputs.release_tag }} node scripts/release.mjs --provenance"
-          echo "Every staged build still needs the owner's explicit approval before it is published."
-      # ---------------------------------------------------------------------
-      # Real trusted-publishing step: intentionally commented out until the
-      # owner configures the Trusted Publisher and decides CI may stage builds.
-      # - name: Stage via trusted publishing (owner-approved change)
-      #   env:
-      #     RELEASE_TAG: ${{ inputs.release_tag }}
-      #   run: node scripts/release.mjs --provenance
-      # ---------------------------------------------------------------------
+          echo "Every staged build still needs the owner's explicit approval before it is published:"
+          echo "  npm stage approve <stage-id>"
+          echo "After approval, verify the registry instead of trusting the workflow output:"
+          echo "  node scripts/verify-release.mjs --version <version> --tag ${{ inputs.release_tag }}"
+
+      # The real staging command is the active step above. It stays opt-in behind
+      # both confirm=yes and stage=yes so a dispatch can run the gate and the
+      # OIDC/provenance diagnostics without uploading anything.

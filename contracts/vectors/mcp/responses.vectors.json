@@ -1,0 +1,897 @@
+{
+  "version": 1,
+  "schema": "../../mcp/responses-v1.schema.json",
+  "description": "Conformance vectors for MCP stdio responses and their JSON payloads. Envelopes and payloads were captured from the real server at the freeze commit and normalized.",
+  "covers": [
+    "#/$defs/CaptureCandidatePayload",
+    "#/$defs/CommitmentsResource",
+    "#/$defs/EvidenceIndexResource",
+    "#/$defs/EvidenceToolPayload",
+    "#/$defs/InitializeResult",
+    "#/$defs/JsonRpcErrorResponse",
+    "#/$defs/PackVerifyPayload",
+    "#/$defs/RemindToolPayload",
+    "#/$defs/ResourceReadResult",
+    "#/$defs/ResourcesListResult",
+    "#/$defs/TodayResource",
+    "#/$defs/ToolCallResult",
+    "#/$defs/ToolsListResult",
+    "#/$defs/WhoResource"
+  ],
+  "cases": [
+    {
+      "id": "initialize.valid",
+      "target": "#/$defs/InitializeResult",
+      "expect": "accept",
+      "value": {
+        "jsonrpc": "2.0",
+        "id": 1,
+        "result": {
+          "protocolVersion": "2024-11-05",
+          "capabilities": {
+            "tools": {
+              "listChanged": false
+            },
+            "resources": {
+              "subscribe": false,
+              "listChanged": false
+            }
+          },
+          "serverInfo": {
+            "name": "advisers",
+            "version": "0.2.4"
+          }
+        }
+      }
+    },
+    {
+      "id": "initialize.boundary-requested-2025-11-25",
+      "target": "#/$defs/InitializeResult",
+      "expect": "accept",
+      "why": "A supported negotiated legacy version is a valid answer.",
+      "value": {
+        "jsonrpc": "2.0",
+        "id": 1,
+        "result": {
+          "protocolVersion": "2025-11-25",
+          "capabilities": {
+            "tools": {
+              "listChanged": false
+            },
+            "resources": {
+              "subscribe": false,
+              "listChanged": false
+            }
+          },
+          "serverInfo": {
+            "name": "advisers",
+            "version": "0.2.4"
+          }
+        }
+      }
+    },
+    {
+      "id": "initialize.reject-protocol-pattern",
+      "target": "#/$defs/InitializeResult",
+      "expect": "reject",
+      "value": {
+        "jsonrpc": "2.0",
+        "id": 1,
+        "result": {
+          "protocolVersion": "legacy",
+          "capabilities": {
+            "tools": {
+              "listChanged": false
+            },
+            "resources": {
+              "subscribe": false,
+              "listChanged": false
+            }
+          },
+          "serverInfo": {
+            "name": "advisers",
+            "version": "0.2.4"
+          }
+        }
+      }
+    },
+    {
+      "id": "tools-list.valid",
+      "target": "#/$defs/ToolsListResult",
+      "expect": "accept",
+      "value": {
+        "jsonrpc": "2.0",
+        "id": 2,
+        "result": {
+          "tools": [
+            {
+              "name": "advisers_today",
+              "description": "Read the open-commitment count and the open commitments (read-only). Records belonging to protected matters (matter secrecy above this server clearance, default 0) are excluded and only counted in protectedExcluded.",
+              "inputSchema": {
+                "type": "object",
+                "properties": {}
+              },
+              "annotations": {
+                "readOnlyHint": true,
+                "destructiveHint": false,
+                "idempotentHint": true,
+                "openWorldHint": false
+              }
+            },
+            {
+              "name": "advisers_commit_ls",
+              "description": "List commitments (open by default; pass all=true for every status). Returns {commitments, clearance, protectedExcluded}. Read-only. Records belonging to protected matters (matter secrecy above this server clearance, default 0) are excluded and only counted in protectedExcluded.",
+              "inputSchema": {
+                "type": "object",
+                "properties": {
+                  "all": {
+                    "type": "boolean",
+                    "description": "Include done/snoozed/dropped commitments."
+                  }
+                }
+              },
+              "annotations": {
+                "readOnlyHint": true,
+                "destructiveHint": false,
+                "idempotentHint": true,
+                "openWorldHint": false
+              }
+            },
+            {
+              "name": "advisers_who",
+              "description": "Who owes whom: mine (user/agent) versus waiting (third parties). Read-only. Records belonging to protected matters (matter secrecy above this server clearance, default 0) are excluded and only counted in protectedExcluded.",
+              "inputSchema": {
+                "type": "object",
+                "properties": {}
+              },
+              "annotations": {
+                "readOnlyHint": true,
+                "destructiveHint": false,
+                "idempotentHint": true,
+                "openWorldHint": false
+              }
+            },
+            {
+              "name": "advisers_evidence",
+              "description": "Read the source turns for a commitment/fact/preference id. Read-only. Evidence of a protected record is withheld (no id content) and reported as protectedExcluded.",
+              "inputSchema": {
+                "type": "object",
+                "properties": {
+                  "id": {
+                    "type": "string",
+                    "description": "cm_* commitment, fact_* fact, or pref_* preference id."
+                  }
+                },
+                "required": [
+                  "id"
+                ]
+              },
+              "annotations": {
+                "readOnlyHint": true,
+                "destructiveHint": false,
+                "idempotentHint": true,
+                "openWorldHint": false
+              }
+            },
+            {
+              "name": "advisers_remind",
+              "description": "Read due reminders (no delivery, no network). Returns {reminders, clearance, protectedExcluded}. Read-only. Records belonging to protected matters (matter secrecy above this server clearance, default 0) are excluded and only counted in protectedExcluded.",
+              "inputSchema": {
+                "type": "object",
+                "properties": {}
+              },
+              "annotations": {
+                "readOnlyHint": true,
+                "destructiveHint": false,
+                "idempotentHint": true,
+                "openWorldHint": false
+              }
+            },
+            {
+              "name": "advisers_capture_candidate",
+              "description": "Propose a PENDING commitment candidate captured from a quote. This writes a memory candidate only: it never accepts the candidate and never changes the ledger. A human must review it with \"advisers memory candidates\" and run \"advisers memory accept <id>\".",
+              "inputSchema": {
+                "type": "object",
+                "properties": {
+                  "action": {
+                    "type": "string",
+                    "minLength": 1,
+                    "maxLength": 500,
+                    "description": "What must be done (verbatim or near-verbatim)."
+                  },
+                  "quote": {
+                    "type": "string",
+                    "minLength": 1,
+                    "maxLength": 2000,
+                    "description": "The verbatim source text this candidate was captured from."
+                  },
+                  "debtor": {
+                    "type": "string",
+                    "enum": [
+                      "user",
+                      "agent",
+                      "third"
+                    ],
+                    "description": "Who owes the action. Defaults to user."
+                  },
+                  "creditor": {
+                    "type": "string",
+                    "maxLength": 200,
+                    "description": "Who is owed the action. Defaults to someone."
+                  },
+                  "dueAt": {
+                    "type": "string",
+                    "maxLength": 64,
+                    "description": "ISO 8601 due date-time, e.g. 2026-12-01T10:00:00+08:00."
+                  },
+                  "matterId": {
+                    "type": "string",
+                    "maxLength": 120,
+                    "description": "Existing matter id. Defaults to the first active matter."
+                  }
+                },
+                "required": [
+                  "action",
+                  "quote"
+                ],
+                "additionalProperties": false
+              },
+              "annotations": {
+                "readOnlyHint": false,
+                "destructiveHint": false,
+                "idempotentHint": false,
+                "openWorldHint": false
+              }
+            },
+            {
+              "name": "advisers_pack_verify",
+              "description": "Read-only verification of an evidence-pack receipt directory: recomputes SHA256SUMS for manifest.json and README.txt, rejects unsafe or unhashed pack files, and reports whether a receipt.docx is present. Never modifies the directory. The directory path is not echoed in errors.",
+              "inputSchema": {
+                "type": "object",
+                "properties": {
+                  "dir": {
+                    "type": "string",
+                    "minLength": 1,
+                    "maxLength": 4096,
+                    "description": "Directory written by \"advisers deliveries --pack\" (contains manifest.json, README.txt, SHA256SUMS, optionally receipt.docx)."
+                  }
+                },
+                "required": [
+                  "dir"
+                ],
+                "additionalProperties": false
+              },
+              "annotations": {
+                "readOnlyHint": true,
+                "destructiveHint": false,
+                "idempotentHint": true,
+                "openWorldHint": false
+              }
+            }
+          ]
+        }
+      }
+    },
+    {
+      "id": "tools-list.reject-tool-missing-annotations",
+      "target": "#/$defs/ToolsListResult",
+      "expect": "reject",
+      "value": {
+        "jsonrpc": "2.0",
+        "id": 2,
+        "result": {
+          "tools": [
+            {
+              "name": "advisers_today",
+              "description": "Read the open-commitment count and the open commitments (read-only). Records belonging to protected matters (matter secrecy above this server clearance, default 0) are excluded and only counted in protectedExcluded.",
+              "inputSchema": {
+                "type": "object",
+                "properties": {}
+              }
+            },
+            {
+              "name": "advisers_commit_ls",
+              "description": "List commitments (open by default; pass all=true for every status). Returns {commitments, clearance, protectedExcluded}. Read-only. Records belonging to protected matters (matter secrecy above this server clearance, default 0) are excluded and only counted in protectedExcluded.",
+              "inputSchema": {
+                "type": "object",
+                "properties": {
+                  "all": {
+                    "type": "boolean",
+                    "description": "Include done/snoozed/dropped commitments."
+                  }
+                }
+              },
+              "annotations": {
+                "readOnlyHint": true,
+                "destructiveHint": false,
+                "idempotentHint": true,
+                "openWorldHint": false
+              }
+            },
+            {
+              "name": "advisers_who",
+              "description": "Who owes whom: mine (user/agent) versus waiting (third parties). Read-only. Records belonging to protected matters (matter secrecy above this server clearance, default 0) are excluded and only counted in protectedExcluded.",
+              "inputSchema": {
+                "type": "object",
+                "properties": {}
+              },
+              "annotations": {
+                "readOnlyHint": true,
+                "destructiveHint": false,
+                "idempotentHint": true,
+                "openWorldHint": false
+              }
+            },
+            {
+              "name": "advisers_evidence",
+              "description": "Read the source turns for a commitment/fact/preference id. Read-only. Evidence of a protected record is withheld (no id content) and reported as protectedExcluded.",
+              "inputSchema": {
+                "type": "object",
+                "properties": {
+                  "id": {
+                    "type": "string",
+                    "description": "cm_* commitment, fact_* fact, or pref_* preference id."
+                  }
+                },
+                "required": [
+                  "id"
+                ]
+              },
+              "annotations": {
+                "readOnlyHint": true,
+                "destructiveHint": false,
+                "idempotentHint": true,
+                "openWorldHint": false
+              }
+            },
+            {
+              "name": "advisers_remind",
+              "description": "Read due reminders (no delivery, no network). Returns {reminders, clearance, protectedExcluded}. Read-only. Records belonging to protected matters (matter secrecy above this server clearance, default 0) are excluded and only counted in protectedExcluded.",
+              "inputSchema": {
+                "type": "object",
+                "properties": {}
+              },
+              "annotations": {
+                "readOnlyHint": true,
+                "destructiveHint": false,
+                "idempotentHint": true,
+                "openWorldHint": false
+              }
+            },
+            {
+              "name": "advisers_capture_candidate",
+              "description": "Propose a PENDING commitment candidate captured from a quote. This writes a memory candidate only: it never accepts the candidate and never changes the ledger. A human must review it with \"advisers memory candidates\" and run \"advisers memory accept <id>\".",
+              "inputSchema": {
+                "type": "object",
+                "properties": {
+                  "action": {
+                    "type": "string",
+                    "minLength": 1,
+                    "maxLength": 500,
+                    "description": "What must be done (verbatim or near-verbatim)."
+                  },
+                  "quote": {
+                    "type": "string",
+                    "minLength": 1,
+                    "maxLength": 2000,
+                    "description": "The verbatim source text this candidate was captured from."
+                  },
+                  "debtor": {
+                    "type": "string",
+                    "enum": [
+                      "user",
+                      "agent",
+                      "third"
+                    ],
+                    "description": "Who owes the action. Defaults to user."
+                  },
+                  "creditor": {
+                    "type": "string",
+                    "maxLength": 200,
+                    "description": "Who is owed the action. Defaults to someone."
+                  },
+                  "dueAt": {
+                    "type": "string",
+                    "maxLength": 64,
+                    "description": "ISO 8601 due date-time, e.g. 2026-12-01T10:00:00+08:00."
+                  },
+                  "matterId": {
+                    "type": "string",
+                    "maxLength": 120,
+                    "description": "Existing matter id. Defaults to the first active matter."
+                  }
+                },
+                "required": [
+                  "action",
+                  "quote"
+                ],
+                "additionalProperties": false
+              },
+              "annotations": {
+                "readOnlyHint": false,
+                "destructiveHint": false,
+                "idempotentHint": false,
+                "openWorldHint": false
+              }
+            },
+            {
+              "name": "advisers_pack_verify",
+              "description": "Read-only verification of an evidence-pack receipt directory: recomputes SHA256SUMS for manifest.json and README.txt, rejects unsafe or unhashed pack files, and reports whether a receipt.docx is present. Never modifies the directory. The directory path is not echoed in errors.",
+              "inputSchema": {
+                "type": "object",
+                "properties": {
+                  "dir": {
+                    "type": "string",
+                    "minLength": 1,
+                    "maxLength": 4096,
+                    "description": "Directory written by \"advisers deliveries --pack\" (contains manifest.json, README.txt, SHA256SUMS, optionally receipt.docx)."
+                  }
+                },
+                "required": [
+                  "dir"
+                ],
+                "additionalProperties": false
+              },
+              "annotations": {
+                "readOnlyHint": true,
+                "destructiveHint": false,
+                "idempotentHint": true,
+                "openWorldHint": false
+              }
+            }
+          ]
+        }
+      }
+    },
+    {
+      "id": "resources-list.valid",
+      "target": "#/$defs/ResourcesListResult",
+      "expect": "accept",
+      "value": {
+        "jsonrpc": "2.0",
+        "id": 3,
+        "result": {
+          "resources": [
+            {
+              "uri": "advisers://today",
+              "name": "today",
+              "description": "Open commitments and their count (same shape as advisers_today; protected matters excluded at the server clearance).",
+              "mimeType": "application/json"
+            },
+            {
+              "uri": "advisers://commitments",
+              "name": "commitments",
+              "description": "All commitments (open and closed) as compact rows.",
+              "mimeType": "application/json"
+            },
+            {
+              "uri": "advisers://who",
+              "name": "who",
+              "description": "Who owes whom: mine (user/agent) vs waiting (third parties).",
+              "mimeType": "application/json"
+            },
+            {
+              "uri": "advisers://evidence",
+              "name": "evidence",
+              "description": "Evidence traceback index for commitments, facts and preferences (counts only).",
+              "mimeType": "application/json"
+            }
+          ]
+        }
+      }
+    },
+    {
+      "id": "resources-list.reject-mime-type",
+      "target": "#/$defs/ResourcesListResult",
+      "expect": "reject",
+      "value": {
+        "jsonrpc": "2.0",
+        "id": 3,
+        "result": {
+          "resources": [
+            {
+              "uri": "advisers://today",
+              "name": "today",
+              "description": "Open commitments and their count (same shape as advisers_today; protected matters excluded at the server clearance).",
+              "mimeType": "text/plain"
+            },
+            {
+              "uri": "advisers://commitments",
+              "name": "commitments",
+              "description": "All commitments (open and closed) as compact rows.",
+              "mimeType": "application/json"
+            },
+            {
+              "uri": "advisers://who",
+              "name": "who",
+              "description": "Who owes whom: mine (user/agent) vs waiting (third parties).",
+              "mimeType": "application/json"
+            },
+            {
+              "uri": "advisers://evidence",
+              "name": "evidence",
+              "description": "Evidence traceback index for commitments, facts and preferences (counts only).",
+              "mimeType": "application/json"
+            }
+          ]
+        }
+      }
+    },
+    {
+      "id": "resource-read.valid",
+      "target": "#/$defs/ResourceReadResult",
+      "expect": "accept",
+      "value": {
+        "jsonrpc": "2.0",
+        "id": 4,
+        "result": {
+          "contents": [
+            {
+              "uri": "advisers://today",
+              "mimeType": "application/json",
+              "text": "{\n  \"open\": 1,\n  \"commitments\": [\n    {\n      \"id\": \"cm_mwnqdoen_233c7729_1\",\n      \"debtor\": \"user\",\n      \"creditor\": \"someone\",\n      \"action\": \"发报价单\",\n      \"dueAt\": \"2026-12-01T10:00:00+08:00\"\n    }\n  ],\n  \"clearance\": 0,\n  \"protectedExcluded\": 0\n}"
+            }
+          ]
+        }
+      }
+    },
+    {
+      "id": "resource-read.reject-empty-contents",
+      "target": "#/$defs/ResourceReadResult",
+      "expect": "reject",
+      "value": {
+        "jsonrpc": "2.0",
+        "id": 4,
+        "result": {
+          "contents": []
+        }
+      }
+    },
+    {
+      "id": "tool-call.valid",
+      "target": "#/$defs/ToolCallResult",
+      "expect": "accept",
+      "value": {
+        "jsonrpc": "2.0",
+        "id": 8,
+        "result": {
+          "content": [
+            {
+              "type": "text",
+              "text": "{\n  \"open\": 1,\n  \"commitments\": [\n    {\n      \"id\": \"cm_mwnqdoen_233c7729_1\",\n      \"debtor\": \"user\",\n      \"creditor\": \"someone\",\n      \"action\": \"发报价单\",\n      \"dueAt\": \"2026-12-01T10:00:00+08:00\"\n    }\n  ],\n  \"clearance\": 0,\n  \"protectedExcluded\": 0\n}"
+            }
+          ],
+          "isError": false
+        }
+      }
+    },
+    {
+      "id": "tool-call.reject-missing-iserror",
+      "target": "#/$defs/ToolCallResult",
+      "expect": "reject",
+      "value": {
+        "jsonrpc": "2.0",
+        "id": 8,
+        "result": {
+          "content": [
+            {
+              "type": "text",
+              "text": "{\n  \"open\": 1,\n  \"commitments\": [\n    {\n      \"id\": \"cm_mwnqdoen_233c7729_1\",\n      \"debtor\": \"user\",\n      \"creditor\": \"someone\",\n      \"action\": \"发报价单\",\n      \"dueAt\": \"2026-12-01T10:00:00+08:00\"\n    }\n  ],\n  \"clearance\": 0,\n  \"protectedExcluded\": 0\n}"
+            }
+          ]
+        }
+      }
+    },
+    {
+      "id": "error-response.valid",
+      "target": "#/$defs/JsonRpcErrorResponse",
+      "expect": "accept",
+      "value": {
+        "jsonrpc": "2.0",
+        "id": 14,
+        "error": {
+          "code": -32601,
+          "message": "unknown method"
+        }
+      }
+    },
+    {
+      "id": "error-response.reject-missing-code",
+      "target": "#/$defs/JsonRpcErrorResponse",
+      "expect": "reject",
+      "value": {
+        "jsonrpc": "2.0",
+        "id": 14,
+        "error": {
+          "message": "unknown method"
+        }
+      }
+    },
+    {
+      "id": "payload.today.valid",
+      "target": "#/$defs/TodayResource",
+      "expect": "accept",
+      "value": {
+        "open": 1,
+        "commitments": [
+          {
+            "id": "cm_mwnqdoen_233c7729_1",
+            "debtor": "user",
+            "creditor": "someone",
+            "action": "发报价单",
+            "dueAt": "2026-12-01T10:00:00+08:00"
+          }
+        ],
+        "clearance": 0,
+        "protectedExcluded": 0
+      }
+    },
+    {
+      "id": "payload.today.reject-open-type",
+      "target": "#/$defs/TodayResource",
+      "expect": "reject",
+      "value": {
+        "open": "1",
+        "commitments": [
+          {
+            "id": "cm_mwnqdoen_233c7729_1",
+            "debtor": "user",
+            "creditor": "someone",
+            "action": "发报价单",
+            "dueAt": "2026-12-01T10:00:00+08:00"
+          }
+        ],
+        "clearance": 0,
+        "protectedExcluded": 0
+      }
+    },
+    {
+      "id": "payload.commitments.valid",
+      "target": "#/$defs/CommitmentsResource",
+      "expect": "accept",
+      "value": {
+        "commitments": [
+          {
+            "id": "cm_mwnqdoen_233c7729_1",
+            "status": "open",
+            "action": "发报价单",
+            "dueAt": "2026-12-01T10:00:00+08:00",
+            "creditor": "someone"
+          }
+        ],
+        "clearance": 0,
+        "protectedExcluded": 0
+      }
+    },
+    {
+      "id": "payload.who.valid",
+      "target": "#/$defs/WhoResource",
+      "expect": "accept",
+      "value": {
+        "mine": [
+          {
+            "id": "cm_mwnqdoen_233c7729_1",
+            "matterId": "matter_mwnqdo9b_232v52ef_1",
+            "debtor": "user",
+            "creditor": "someone",
+            "action": "发报价单",
+            "dueAt": "2026-12-01T10:00:00+08:00",
+            "timezone": "Asia/Shanghai",
+            "status": "open",
+            "evidence": [
+              {
+                "kind": "manual",
+                "type": "manual",
+                "source": "operator",
+                "quote": "周五前发报价单",
+                "quoteSha256": "30c89c2eb81e42698033bb119cb7fd2c195ff6f516951dcc0cedfc6a040badfd",
+                "capturedAt": "2026-11-19T15:54:35.087Z",
+                "capturedBy": "local",
+                "command": "commit add",
+                "cliVersion": "0.2.4"
+              }
+            ],
+            "capability": "todo"
+          }
+        ],
+        "waiting": [],
+        "clearance": 0,
+        "protectedExcluded": 0
+      }
+    },
+    {
+      "id": "payload.evidence-index.valid",
+      "target": "#/$defs/EvidenceIndexResource",
+      "expect": "accept",
+      "value": {
+        "limits": {
+          "perKind": 50
+        },
+        "clearance": 0,
+        "protectedExcluded": 0,
+        "commitments": [
+          {
+            "kind": "commitment",
+            "id": "cm_mwnqdoen_233c7729_1",
+            "found": true,
+            "sources": 0,
+            "missing": 0
+          }
+        ],
+        "facts": [],
+        "preferences": []
+      }
+    },
+    {
+      "id": "payload.remind.valid",
+      "target": "#/$defs/RemindToolPayload",
+      "expect": "accept",
+      "value": {
+        "reminders": [],
+        "clearance": 0,
+        "protectedExcluded": 0
+      }
+    },
+    {
+      "id": "payload.evidence-tool.valid",
+      "target": "#/$defs/EvidenceToolPayload",
+      "expect": "accept",
+      "value": {
+        "schemaVersion": 2,
+        "commitment": {
+          "id": "cm_mwnqdoen_233c7729_1",
+          "matterId": "matter_mwnqdo9b_232v52ef_1",
+          "debtor": "user",
+          "creditor": "someone",
+          "action": "发报价单",
+          "dueAt": "2026-12-01T10:00:00+08:00",
+          "timezone": "Asia/Shanghai",
+          "status": "open",
+          "evidence": [
+            {
+              "kind": "manual",
+              "type": "manual",
+              "source": "operator",
+              "quote": "周五前发报价单",
+              "quoteSha256": "30c89c2eb81e42698033bb119cb7fd2c195ff6f516951dcc0cedfc6a040badfd",
+              "capturedAt": "2026-11-19T15:54:35.087Z",
+              "capturedBy": "local",
+              "command": "commit add",
+              "cliVersion": "0.2.4"
+            }
+          ],
+          "capability": "todo"
+        },
+        "sources": [],
+        "missing": [],
+        "unverifiable": [
+          {
+            "kind": "manual",
+            "type": "manual",
+            "source": "operator",
+            "quote": "周五前发报价单",
+            "quoteChars": 7,
+            "truncated": false,
+            "quoteSha256": "30c89c2eb81e42698033bb119cb7fd2c195ff6f516951dcc0cedfc6a040badfd",
+            "resolution": "unverifiable",
+            "reason": "operator_entered",
+            "capturedAt": "2026-11-19T15:54:35.087Z",
+            "capturedBy": "local",
+            "command": "commit add",
+            "cliVersion": "0.2.4"
+          }
+        ],
+        "clearance": 0,
+        "protectedExcluded": 0
+      }
+    },
+    {
+      "id": "payload.capture-candidate.valid",
+      "target": "#/$defs/CaptureCandidatePayload",
+      "expect": "accept",
+      "value": {
+        "ok": true,
+        "candidate": {
+          "id": "cand_mwnqdqw9_uuy9qu",
+          "kind": "commitment",
+          "status": "pending"
+        },
+        "note": "Pending candidate only; it is not in the ledger. A human must run \"advisers memory accept <id>\"."
+      }
+    },
+    {
+      "id": "payload.pack-verify.valid",
+      "target": "#/$defs/PackVerifyPayload",
+      "expect": "accept",
+      "value": {
+        "ok": true,
+        "errors": [],
+        "files": [
+          "manifest.json",
+          "README.txt",
+          "SHA256SUMS"
+        ],
+        "fileCount": 3,
+        "receiptPresent": false,
+        "extraFileCount": 0,
+        "verifiedAt": "2026-11-20T00:00:00.000Z"
+      }
+    },
+    {
+      "id": "payload.pack-verify.reject-ok-type",
+      "target": "#/$defs/PackVerifyPayload",
+      "expect": "reject",
+      "value": {
+        "ok": "yes",
+        "errors": [],
+        "files": [],
+        "fileCount": 0,
+        "receiptPresent": false,
+        "extraFileCount": 0,
+        "verifiedAt": "2026-11-20T00:00:00.000Z"
+      }
+    },
+    {
+      "id": "payload.commitments.boundary-capped",
+      "target": "#/$defs/CommitmentsResource",
+      "expect": "accept",
+      "why": "0.3.0 additive cap fields: rows may be truncated with the true total.",
+      "value": {
+        "commitments": [
+          {
+            "id": "cm_mwnqdoen_233c7729_1",
+            "status": "open",
+            "action": "发报价单",
+            "dueAt": "2026-12-01T10:00:00+08:00",
+            "creditor": "someone"
+          }
+        ],
+        "clearance": 0,
+        "protectedExcluded": 0,
+        "total": 120,
+        "truncated": true,
+        "limit": 50
+      }
+    },
+    {
+      "id": "payload.who.boundary-capped",
+      "target": "#/$defs/WhoResource",
+      "expect": "accept",
+      "why": "0.3.0 additive per-array totals.",
+      "value": {
+        "mine": [
+          {
+            "id": "cm_mwnqdoen_233c7729_1",
+            "matterId": "matter_mwnqdo9b_232v52ef_1",
+            "debtor": "user",
+            "creditor": "someone",
+            "action": "发报价单",
+            "dueAt": "2026-12-01T10:00:00+08:00",
+            "timezone": "Asia/Shanghai",
+            "status": "open",
+            "evidence": [
+              {
+                "kind": "manual",
+                "type": "manual",
+                "source": "operator",
+                "quote": "周五前发报价单",
+                "quoteSha256": "30c89c2eb81e42698033bb119cb7fd2c195ff6f516951dcc0cedfc6a040badfd",
+                "capturedAt": "2026-11-19T15:54:35.087Z",
+                "capturedBy": "local",
+                "command": "commit add",
+                "cliVersion": "0.2.4"
+              }
+            ],
+            "capability": "todo"
+          }
+        ],
+        "waiting": [],
+        "clearance": 0,
+        "protectedExcluded": 0,
+        "mineTotal": 40,
+        "waitingTotal": 3,
+        "truncated": true
+      }
+    }
+  ]
+}

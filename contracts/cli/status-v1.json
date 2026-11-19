@@ -1,0 +1,30 @@
+{
+  "version": 1,
+  "status": "frozen",
+  "frozenAt": "2026-11-20",
+  "sourceCommit": "35a51c3",
+  "description": "The `advisers status --json` contract: always the first command a consumer can call (no TOS acceptance, no key, no model) and the carrier of the additive contracts discovery field.",
+  "command": "status",
+  "argv": [
+    "status",
+    "--json"
+  ],
+  "needsTos": false,
+  "needsKey": false,
+  "deterministic": false,
+  "deterministicNote": "Values depend on the local home (paths/counts/version); the SHAPE is stable. It is excluded from the byte-determinism expectations of eval, not from the schema check.",
+  "schemaRef": "read-models-v1.schema.json#/$defs/StatusPayload",
+  "discovery": {
+    "field": "contracts",
+    "status": "pending-integration-wave",
+    "expected": "versions-v1.json#/discovery/expected",
+    "schemaRef": "read-models-v1.schema.json#/$defs/ContractsDiscovery",
+    "rule": "Additive optional object. When present, every key must equal versions-v1.json discovery.expected (mcpProtocol may be any version listed in mcp/versions-v1.json supportedProtocolVersions). Consumers that do not see it must assume the v1 defaults.",
+    "note": "Adding this field requires a bin/ change, which is outside the contracts-only implementation (Wave 2 integration). The checker prints INFO while it is absent and fails if it is present but inconsistent."
+  },
+  "invariants": [
+    "status must succeed on a fresh HOME with no TOS acceptance and no credentials",
+    "status must not require a model/key, and must not print diagnostics to stdout in --json mode",
+    "existing keys keep their meaning; new keys are additive (backward compatible)"
+  ]
+}

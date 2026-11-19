@@ -112,7 +112,13 @@ function looksLikePersonName(value) {
  * titles/actions. `masked` is a count of replacements (for `redactions`).
  */
 function createRedactor(rawNames) {
-  const names = [...new Set((rawNames ?? []).map(oneLine).filter((name) => looksLikePersonName(name)))]
+  // 0.3.0 P0-T2: dedupe the raw candidate strings before oneLine/regex work.
+  // The caller passes every commitment creditor + every listFacts() subject
+  // (233k strings at a 200k ledger, a few hundred distinct names); the old
+  // order ran oneLine + looksLikePersonName on all 233k rows. Deduping first
+  // is output-equivalent (the final Set still collapses oneLine collisions)
+  // and cuts the redactor setup by ~10x.
+  const names = [...new Set([...new Set(rawNames ?? [])].map(oneLine).filter((name) => looksLikePersonName(name)))]
     .sort((a, b) => b.length - a.length || cmp(a, b))
   let masked = 0
   const redact = (value) => {
@@ -143,12 +149,16 @@ function isPublicMatter(matter) {
 }
 
 function confidenceOfCommitment(commitment) {
+  // 0.3.0 P0-T2: a narrow projection answers "has evidence" in SQL so the
+  // pet-brief read path does not ship 66k evidence JSON strings to JS.
+  // Ledger rows (no hasEvidence field) keep the original array check.
+  if (commitment.hasEvidence !== undefined) return commitment.hasEvidence ? 0.95 : 0.75
   return Array.isArray(commitment.evidence) && commitment.evidence.length > 0 ? 0.95 : 0.75
 }
 
-function riskOfDue(dueMs, nowMs, today) {
+function riskOfDue(dueMs, nowMs, today, dueDay) {
   if (dueMs < nowMs) return 'high'
-  const day = localDay(new Date(dueMs).toISOString())
+  const day = dueDay ?? localDay(new Date(dueMs).toISOString())
   if (day === today) return 'high'
   if (dueMs <= nowMs + 3 * 86_400_000) return 'medium'
   return 'low'
@@ -166,6 +176,10 @@ const RISK_RANK = { low: 1, medium: 2, high: 3 }
  * @param {number} [options.maxItems]
  * @param {number} [options.minConfidence]
  * @param {'public'|'private'|'none'} [options.displayPolicy='private'] who may see the brief
+ * @param {string[]} [options.nameCandidates] Complete redactor name candidate set
+ *   (all commitment creditors + all listFacts() subjects). Read paths that pass
+ *   a narrow projection supply it so the redactor does not have to scan the
+ *   full ledger; when omitted the ledger-derived set is used (unchanged).
  * @returns {object} contract v0.2 brief (no writes, no network).
  */
 export function buildPetBrief(ledger, options = {}) {
@@ -194,11 +208,18 @@ export function buildPetBrief(ledger, options = {}) {
 
   const allCommitments = ledger.listCommitments() ?? []
   const openCommitments = allCommitments.filter((commitment) => commitment.status === 'open')
-  const rawNames = [
-    ...allCommitments.map((commitment) => commitment.creditor),
-    ...(ledger.listFacts() ?? []).map((fact) => fact.subject),
-    ...allMatters.flatMap((matter) => matter.participants ?? []),
-  ]
+  // 0.3.0 P0-T2: the redactor only needs strings that can match brief output.
+  // A caller that hands in a narrow projection supplies the complete candidate
+  // set (every commitment creditor + every listFacts() subject) so this view
+  // never scans the full ledger for names (233k strings at a 200k ledger).
+  const suppliedNames = Array.isArray(options.nameCandidates) ? options.nameCandidates : null
+  const rawNames = suppliedNames
+    ? [...suppliedNames, ...allMatters.flatMap((matter) => matter.participants ?? [])]
+    : [
+        ...allCommitments.map((commitment) => commitment.creditor),
+        ...(ledger.listFacts() ?? []).map((fact) => fact.subject),
+        ...allMatters.flatMap((matter) => matter.participants ?? []),
+      ]
   const redactor = createRedactor(rawNames)
   const redacted = (value) => redactor.redact(value)
 
@@ -216,20 +237,51 @@ export function buildPetBrief(ledger, options = {}) {
     else if (matterSecrecy(matter) >= 2) excludedOpen.secrecy += 1
     else excludedOpen.inactive += 1
   }
-  const dueMsOf = (commitment) => {
-    if (!commitment.dueAt) return null
-    const ms = Date.parse(commitment.dueAt)
-    return Number.isFinite(ms) ? ms : null
+  // 0.3.0 P0-T2: parse each distinct dueAt string once (a 200k ledger has a
+  // few hundred distinct due dates, not ~67k), and keep only the top `limit`
+  // due commitments under the historical comparator instead of sorting all
+  // of them -- the caller only ever reads that slice.
+  const dueCache = new Map()
+  const dueInfoOf = (commitment) => {
+    const value = commitment.dueAt
+    if (!value) return null
+    const key = typeof value === 'string' ? value : String(value)
+    let info = dueCache.get(key)
+    if (info === undefined) {
+      const ms = Date.parse(value)
+      info = Number.isFinite(ms) ? { ms, day: localDay(new Date(ms).toISOString()) } : null
+      dueCache.set(key, info)
+    }
+    return info
   }
+  // Comparator of an already-kept entry against a new candidate, matching the
+  // historical sort: risk rank desc, dueMs asc, id asc.
+  const entryBeforeCandidate = (entry, risk, dueMs, id) =>
+    RISK_RANK[risk] - RISK_RANK[entry.risk] || entry.dueMs - dueMs || cmp(entry.commitment.id, id)
 
   // --- today: active public matters, urgency first, deterministic tie-break.
   const urgency = new Map()
+  const dueTop = []
   for (const commitment of publicOpen) {
-    const ms = dueMsOf(commitment)
-    if (ms === null) continue
-    const day = localDay(new Date(ms).toISOString())
-    if (day !== today && ms >= nowMs) continue
-    urgency.set(commitment.matterId, (urgency.get(commitment.matterId) ?? 0) + 1)
+    const info = dueInfoOf(commitment)
+    if (info === null) continue
+    if (info.day === today || info.ms < nowMs) urgency.set(commitment.matterId, (urgency.get(commitment.matterId) ?? 0) + 1)
+    const risk = riskOfDue(info.ms, nowMs, today, info.day)
+    // Bounded insertion keeps the same stable order as the old sort: equal
+    // keys keep ledger order, only `limit` rows are ever held, and the
+    // confidence/evidence check runs only for rows that enter the top-N.
+    let index = dueTop.length
+    while (index > 0 && entryBeforeCandidate(dueTop[index - 1], risk, info.ms, commitment.id) > 0) index -= 1
+    if (index < limit) {
+      dueTop.splice(index, 0, {
+        commitment,
+        dueMs: info.ms,
+        dueDay: info.day,
+        risk,
+        confidence: confidenceOfCommitment(commitment),
+      })
+      if (dueTop.length > limit) dueTop.pop()
+    }
   }
   const todayItems = [...activeMatters]
     .sort((a, b) => (urgency.get(b.id) ?? 0) - (urgency.get(a.id) ?? 0) || cmp(String(b.updatedAt ?? ''), String(a.updatedAt ?? '')) || cmp(a.id, b.id))
@@ -241,25 +293,19 @@ export function buildPetBrief(ledger, options = {}) {
     }))
 
   // --- commitments: open, due-dated, public; risk ordered then due date.
-  const dueCommitments = publicOpen
-    .map((commitment) => ({ commitment, dueMs: dueMsOf(commitment) }))
-    .filter((row) => row.dueMs !== null)
-    .map((row) => ({ ...row, risk: riskOfDue(row.dueMs, nowMs, today), confidence: confidenceOfCommitment(row.commitment) }))
-    .sort((a, b) => RISK_RANK[b.risk] - RISK_RANK[a.risk] || a.dueMs - b.dueMs || cmp(a.commitment.id, b.commitment.id))
-    .slice(0, limit)
-  const commitmentItems = dueCommitments.map(({ commitment, dueMs, risk, confidence }) => ({
+  const commitmentItems = dueTop.map(({ commitment, dueDay, risk, confidence }) => ({
     id: clip(commitment.id, 64),
     matter: clip(commitment.matterId, 64),
     who: clip(redacted(commitment.creditor), 40),
     what: clip(redacted(commitment.action), 80),
-    due: clip(localDay(new Date(dueMs).toISOString()) ?? clip(commitment.dueAt, 32), 32),
+    due: clip(dueDay ?? clip(commitment.dueAt, 32), 32),
     risk,
     confidence,
   }))
 
   // --- risks: deterministic derivation from the same public commitments.
   const risks = []
-  for (const { commitment, dueMs, risk } of dueCommitments) {
+  for (const { commitment, dueMs, risk } of dueTop) {
     const who = clip(redacted(commitment.creditor), 12)
     const what = clip(redacted(commitment.action), 24)
     if (risk === 'high') {
@@ -281,20 +327,38 @@ export function buildPetBrief(ledger, options = {}) {
       })
     }
   }
-  for (const commitment of publicOpen.filter((row) => !row.dueAt && isPublicMatter(matterById.get(row.matterId)))) {
+  // Undated public commitments each produce a medium risk. Only `limit` can
+  // ever be shown, so the loop keeps the smallest ids (the historical
+  // tie-break) instead of building and sorting one object per row; the
+  // per-summary safety check still runs for every candidate so the dropped
+  // count stays exact.
+  const noDueRisks = []
+  for (const commitment of publicOpen) {
+    if (commitment.dueAt) continue
+    if (!isPublicMatter(matterById.get(commitment.matterId))) continue
     const who = clip(redacted(commitment.creditor), 12)
     const what = clip(redacted(commitment.action), 24)
-    risks.push({
-      id: clip(`risk_${commitment.id}`, 64),
+    // The redaction runs before the confidence filter so the reported
+    // "masked N names" count matches the pre-0.3.0 whole-list behaviour.
+    const summary = clip(`${who}的${what}还没有截止时间`, 80)
+    if (0.75 < minConfidence) continue
+    if (isBlockedLine(summary, hmacKey)) { dropped.risks += 1; continue }
+    const id = clip(`risk_${commitment.id}`, 64)
+    let index = noDueRisks.length
+    while (index > 0 && cmp(id, noDueRisks[index - 1].id) < 0) index -= 1
+    if (index >= limit) continue
+    noDueRisks.splice(index, 0, {
+      id,
       level: 'medium',
-      summary: clip(`${who}的${what}还没有截止时间`, 80),
+      summary,
       evidence: clip(commitment.id, 64),
       confidence: 0.75,
     })
+    if (noDueRisks.length > limit) noDueRisks.pop()
   }
   const byDay = new Map()
-  for (const { commitment, dueMs } of dueCommitments) {
-    const day = localDay(new Date(dueMs).toISOString())
+  for (const { commitment, dueDay } of dueTop) {
+    const day = dueDay
     if (!day || day < today) continue
     byDay.set(day, [...(byDay.get(day) ?? []), commitment])
   }
@@ -308,13 +372,12 @@ export function buildPetBrief(ledger, options = {}) {
       confidence: 0.72,
     })
   }
-  const riskItems = risks
-    .filter((risk) => risk.confidence >= minConfidence)
-    .filter((risk) => {
-      if (!isBlockedLine(risk.summary, hmacKey)) return true
-      dropped.risks += 1
-      return false
-    })
+  for (const risk of risks) {
+    if (risk.confidence < minConfidence) continue
+    if (isBlockedLine(risk.summary, hmacKey)) { dropped.risks += 1; continue }
+    noDueRisks.push(risk)
+  }
+  const riskItems = noDueRisks
     .sort((a, b) => RISK_RANK[b.level] - RISK_RANK[a.level] || b.confidence - a.confidence || cmp(a.id, b.id))
     .slice(0, limit)
 

@@ -1,0 +1,4 @@
+# eval:det writes one det-<stamp>.json per run plus latest.json here.
+# Raw results stay out of git; publish selected evidence explicitly.
+*
+!.gitignore

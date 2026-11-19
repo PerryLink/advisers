@@ -32,11 +32,13 @@ ADVISERS_HOME=/tmp/advisers-mcp node scripts/mcp-dev.mjs
 
 首次运行会在 `ADVISERS_HOME` 下创建 `state.db` 与 `audit.key`；若已有旧版 `state.json`，会像 CLI 一样一次性迁移进 SQLite。
 
-### 1.3 DSH 适配器是 preview，不是 MCP 端
+### 1.3 DSH 适配器：读真实账本（只读），不是 MCP 端
 
-`packages/dsh-advisers` 是 **DSH 宿主内的工具适配器**（5 个工具），不是 MCP server，也不经过本文件的 JSON-RPC 协议。0.2.3 里它仍是 **preview**：bundle 创建内存 runtime，**不打开 `~/.advisers/state.db`**（只读账本接线计划在 0.3）。因此它的三个账本读工具（`advisers_today`/`advisers_who`/`advisers_evidence`）返回的是空的内存账本，必须带 `preview: true`、`source: "preview-no-ledger"`、`note` 三个字段，渲染文本以 `[preview: no ledger]` 开头；`EVIDENCE_NOT_FOUND` 也明确说明只查了 preview 账本。别把 DSH 的空结果当成真实账本为空。
+`packages/dsh-advisers` 是 **DSH 宿主内的工具适配器**（5 个工具），不是 MCP server，也不经过本文件的 JSON-RPC 协议。0.3.0 起它的三个账本读工具（`advisers_today`/`advisers_who`/`advisers_evidence`）通过受控只读门面 `advisers/lib/ledger-read.js` 读 **真实本地账本**（`docs/LEDGER-READ-API.md`）：只读连接、不取 HOME 写锁、不迁移、不建 HOME、不写库、TOS 已接受记录门禁、clearance=0；`advisers_today`/`advisers_who` 用窄承诺索引投影，`advisers_evidence` 用主键点查，不装载整账本。
 
-要读**真实账本**，用 CLI（`advisers today --json` / `who --json` / `evidence show <id> --json`）或本文件的 `advisers mcp --stdio`（真实 SQLite 账本，只读视图）。DSH 的 `advisers_office` 仍只写 `config.workspace` 内的文件。
+**preview 只是回退标记**：无库（首次运行）、门面不可用（旧 `advisers` 包 / 宿主无 `node:sqlite`）或 `config.mode: "preview"` 时，才回退到 0.2.x 的 marked preview（`preview: true`、`source: "preview-no-ledger"`、`note`，渲染以 `[preview: no ledger]` 开头）；TOS/vault/schema/损坏/忙等其它门禁失败必须返回结构化 `LEDGER_*` 错误，**不得**用空数据冒充“没有”。
+
+要读**逐字段同源视图**，仍可用 CLI（`advisers today --json` / `who --json` / `evidence show <id> --json`）或本文件的 `advisers mcp --stdio`（真实 SQLite 账本，只读视图）。DSH 的 `advisers_office` 仍只写 `config.workspace` 内的文件。
 
 ## 2. 客户端配置片段
 

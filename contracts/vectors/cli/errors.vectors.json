@@ -1,0 +1,91 @@
+{
+  "version": 1,
+  "schema": "../../cli/errors-v1.schema.json",
+  "description": "Conformance vectors for the CLI error envelope written to stderr on failure.",
+  "covers": [
+    "#"
+  ],
+  "cases": [
+    {
+      "id": "envelope.minimal",
+      "target": "#",
+      "expect": "accept",
+      "value": {
+        "error": {
+          "code": "E_USAGE",
+          "message": "invalid arguments"
+        }
+      }
+    },
+    {
+      "id": "envelope.with-hint-details",
+      "target": "#",
+      "expect": "accept",
+      "value": {
+        "error": {
+          "code": "E_MATTER_NOT_FOUND",
+          "message": "unknown matter: matter_x",
+          "hint": "advisers matter ls",
+          "details": {
+            "path": "matter"
+          }
+        }
+      }
+    },
+    {
+      "id": "envelope.tos-required",
+      "target": "#",
+      "expect": "accept",
+      "value": {
+        "error": {
+          "code": "E_TOS_REQUIRED",
+          "message": "accept the current terms first"
+        }
+      }
+    },
+    {
+      "id": "envelope.reject-missing-code",
+      "target": "#",
+      "expect": "reject",
+      "value": {
+        "error": {
+          "message": "x"
+        }
+      }
+    },
+    {
+      "id": "envelope.reject-lowercase-code",
+      "target": "#",
+      "expect": "reject",
+      "value": {
+        "error": {
+          "code": "E_usage",
+          "message": "x"
+        }
+      }
+    },
+    {
+      "id": "envelope.reject-extra-top-level",
+      "target": "#",
+      "expect": "reject",
+      "value": {
+        "error": {
+          "code": "E_USAGE",
+          "message": "x"
+        },
+        "ok": false
+      }
+    },
+    {
+      "id": "envelope.reject-empty-message",
+      "target": "#",
+      "expect": "reject",
+      "value": {
+        "error": {
+          "code": "E_USAGE",
+          "message": ""
+        }
+      }
+    }
+  ]
+}

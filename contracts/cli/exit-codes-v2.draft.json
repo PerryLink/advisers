@@ -1,0 +1,36 @@
+{
+  "version": 2,
+  "status": "draft-not-active",
+  "frozenAt": "2026-11-20",
+  "sourceCommit": "35a51c3",
+  "activatesWith": "0.3.0 GA policy engine integration (not enabled by this contracts-only change)",
+  "description": "Draft additive exit codes reserved for the policy engine. NOT ACTIVE in 0.2.4 or in the contracts-only change: scripts must read error.code and treat all failures as exit 1 or 3 until the CHANGELOG announces v2 activation.",
+  "codes": [
+    {
+      "code": 4,
+      "meaning": "confirmation required / unavailable (non-interactive)",
+      "policyCodes": [
+        "POLICY_CONFIRMATION_REQUIRED",
+        "POLICY_CONFIRMATION_UNAVAILABLE"
+      ]
+    },
+    {
+      "code": 5,
+      "meaning": "policy denial (other than TOS/confirmation/content)",
+      "policyCodes": [
+        "POLICY_DENIED",
+        "POLICY_*"
+      ]
+    },
+    {
+      "code": 6,
+      "meaning": "content-safety refusal",
+      "policyCodes": [
+        "POLICY_CONTENT_BLOCKED",
+        "CONTENT_SAFETY_BLOCKED"
+      ]
+    }
+  ],
+  "compatibility": "additive; exit 1 keeps its v1 meaning; exit 0/3 unchanged",
+  "futureDocs": "docs/ERROR-CODES.md (policy section) once the engine is wired"
+}

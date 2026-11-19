@@ -1,0 +1,1017 @@
+{
+  "version": 1,
+  "schema": "../../cli/read-models-v1.schema.json",
+  "description": "Conformance vectors for the CLI read models. Every entry is either accepted or rejected by the frozen schema; values were captured from the real CLI at the freeze commit and normalized.",
+  "covers": [
+    "#/$defs/Delivery",
+    "#/$defs/MatterRow",
+    "#/$defs/MemoryCandidate",
+    "#/$defs/StatusPayload",
+    "#/$defs/TickPayload",
+    "#/$defs/TodayPayload",
+    "#/$defs/RemindPayload",
+    "#/$defs/WhoPayload",
+    "#/$defs/AgendaPayload",
+    "#/$defs/MorningPayload",
+    "#/$defs/MatterShowPayload",
+    "#/$defs/EvidenceShowPayload",
+    "#/$defs/PrivacyPayload",
+    "#/$defs/TosStatusPayload"
+  ],
+  "cases": [
+    {
+      "id": "status.valid",
+      "target": "#/$defs/StatusPayload",
+      "expect": "accept",
+      "value": {
+        "version": "0.2.4",
+        "node": "v24.22.1",
+        "office": "local build linked",
+        "home": "<ADVISERS_HOME>",
+        "store": {
+          "type": "sqlite",
+          "path": "<ADVISERS_HOME>/state.db"
+        },
+        "model": "not configured (local mode)",
+        "soul": "not initialized",
+        "matters": 1,
+        "prefs": 0,
+        "routines": 0,
+        "links": 0,
+        "sessions": 0,
+        "deliveries": 0
+      }
+    },
+    {
+      "id": "status.boundary-discovery",
+      "target": "#/$defs/StatusPayload",
+      "expect": "accept",
+      "why": "Additive contracts discovery field (optional in v1).",
+      "value": {
+        "version": "0.2.4",
+        "node": "v24.22.1",
+        "office": "local build linked",
+        "home": "<ADVISERS_HOME>",
+        "store": {
+          "type": "sqlite",
+          "path": "<ADVISERS_HOME>/state.db"
+        },
+        "model": "not configured (local mode)",
+        "soul": "not initialized",
+        "matters": 1,
+        "prefs": 0,
+        "routines": 0,
+        "links": 0,
+        "sessions": 0,
+        "deliveries": 0,
+        "contracts": {
+          "cliJson": 1,
+          "errors": 1,
+          "exitCodes": 1,
+          "mcpTools": 1,
+          "mcpResources": 1,
+          "mcpProtocol": "2024-11-05",
+          "dshTools": 1,
+          "petBrief": 2
+        }
+      }
+    },
+    {
+      "id": "status.reject-missing-version",
+      "target": "#/$defs/StatusPayload",
+      "expect": "reject",
+      "value": {
+        "node": "v24.22.1",
+        "office": "local build linked",
+        "home": "<ADVISERS_HOME>",
+        "store": {
+          "type": "sqlite",
+          "path": "<ADVISERS_HOME>/state.db"
+        },
+        "model": "not configured (local mode)",
+        "soul": "not initialized",
+        "matters": 1,
+        "prefs": 0,
+        "routines": 0,
+        "links": 0,
+        "sessions": 0,
+        "deliveries": 0
+      }
+    },
+    {
+      "id": "status.reject-store-type",
+      "target": "#/$defs/StatusPayload",
+      "expect": "reject",
+      "value": {
+        "version": "0.2.4",
+        "node": "v24.22.1",
+        "office": "local build linked",
+        "home": "<ADVISERS_HOME>",
+        "store": {
+          "type": 3,
+          "path": "<ADVISERS_HOME>/state.db"
+        },
+        "model": "not configured (local mode)",
+        "soul": "not initialized",
+        "matters": 1,
+        "prefs": 0,
+        "routines": 0,
+        "links": 0,
+        "sessions": 0,
+        "deliveries": 0
+      }
+    },
+    {
+      "id": "tick.valid",
+      "target": "#/$defs/TickPayload",
+      "expect": "accept",
+      "value": {
+        "now": "2026-11-19T15:54:35.931Z",
+        "localDay": "2026-11-19",
+        "due": []
+      }
+    },
+    {
+      "id": "tick.reject-missing-localday",
+      "target": "#/$defs/TickPayload",
+      "expect": "reject",
+      "value": {
+        "now": "2026-11-19T15:54:35.931Z",
+        "due": []
+      }
+    },
+    {
+      "id": "today.valid",
+      "target": "#/$defs/TodayPayload",
+      "expect": "accept",
+      "value": {
+        "now": "2026-11-19T15:54:36.110Z",
+        "localDay": "2026-11-19",
+        "counts": {
+          "today": 0,
+          "overdue": 0,
+          "week": 0,
+          "waiting": 0,
+          "noDue": 0
+        },
+        "overdue": [],
+        "today": [],
+        "week": [],
+        "waiting": [],
+        "noDue": [],
+        "next": null
+      }
+    },
+    {
+      "id": "today.boundary-empty",
+      "target": "#/$defs/TodayPayload",
+      "expect": "accept",
+      "why": "All groups empty and next:null is a valid ledger state.",
+      "value": {
+        "now": "2026-11-19T15:54:36.110Z",
+        "localDay": "2026-11-19",
+        "counts": {
+          "today": 0,
+          "overdue": 0,
+          "week": 0,
+          "waiting": 0,
+          "noDue": 0
+        },
+        "overdue": [],
+        "today": [],
+        "week": [],
+        "waiting": [],
+        "noDue": [],
+        "next": null
+      }
+    },
+    {
+      "id": "today.reject-counts-type",
+      "target": "#/$defs/TodayPayload",
+      "expect": "reject",
+      "value": {
+        "now": "2026-11-19T15:54:36.110Z",
+        "localDay": "2026-11-19",
+        "counts": {
+          "today": 0,
+          "overdue": 0,
+          "week": "0",
+          "waiting": 0,
+          "noDue": 0
+        },
+        "overdue": [],
+        "today": [],
+        "week": [],
+        "waiting": [],
+        "noDue": [],
+        "next": null
+      }
+    },
+    {
+      "id": "remind.valid",
+      "target": "#/$defs/RemindPayload",
+      "expect": "accept",
+      "value": {
+        "now": "2026-11-19T15:54:36.263Z",
+        "reminders": []
+      }
+    },
+    {
+      "id": "remind.reject-bucket-enum",
+      "target": "#/$defs/RemindPayload",
+      "expect": "reject",
+      "value": {
+        "now": "2026-11-19T15:54:36.263Z",
+        "reminders": [
+          {
+            "commitmentId": "cm_vector",
+            "action": "x",
+            "dueAt": "2026-12-01T10:00:00+08:00",
+            "bucket": "soon",
+            "level": "L1",
+            "ruleId": "r"
+          }
+        ]
+      }
+    },
+    {
+      "id": "commitment.valid",
+      "target": "#/$defs/Commitment",
+      "expect": "accept",
+      "value": {
+        "id": "cm_mwnqdoen_233c7729_1",
+        "matterId": "matter_mwnqdo9b_232v52ef_1",
+        "debtor": "user",
+        "creditor": "someone",
+        "action": "发报价单",
+        "dueAt": "2026-12-01T10:00:00+08:00",
+        "timezone": "Asia/Shanghai",
+        "status": "open",
+        "evidence": [
+          {
+            "kind": "manual",
+            "type": "manual",
+            "source": "operator",
+            "quote": "周五前发报价单",
+            "quoteSha256": "30c89c2eb81e42698033bb119cb7fd2c195ff6f516951dcc0cedfc6a040badfd",
+            "capturedAt": "2026-11-19T15:54:35.087Z",
+            "capturedBy": "local",
+            "command": "commit add",
+            "cliVersion": "0.2.4"
+          }
+        ],
+        "capability": "todo"
+      }
+    },
+    {
+      "id": "commitment.reject-missing-action",
+      "target": "#/$defs/Commitment",
+      "expect": "reject",
+      "value": {
+        "id": "cm_mwnqdoen_233c7729_1",
+        "matterId": "matter_mwnqdo9b_232v52ef_1",
+        "debtor": "user",
+        "creditor": "someone",
+        "dueAt": "2026-12-01T10:00:00+08:00",
+        "timezone": "Asia/Shanghai",
+        "status": "open",
+        "evidence": [
+          {
+            "kind": "manual",
+            "type": "manual",
+            "source": "operator",
+            "quote": "周五前发报价单",
+            "quoteSha256": "30c89c2eb81e42698033bb119cb7fd2c195ff6f516951dcc0cedfc6a040badfd",
+            "capturedAt": "2026-11-19T15:54:35.087Z",
+            "capturedBy": "local",
+            "command": "commit add",
+            "cliVersion": "0.2.4"
+          }
+        ],
+        "capability": "todo"
+      }
+    },
+    {
+      "id": "commitment.reject-status-enum",
+      "target": "#/$defs/Commitment",
+      "expect": "reject",
+      "value": {
+        "id": "cm_mwnqdoen_233c7729_1",
+        "matterId": "matter_mwnqdo9b_232v52ef_1",
+        "debtor": "user",
+        "creditor": "someone",
+        "action": "发报价单",
+        "dueAt": "2026-12-01T10:00:00+08:00",
+        "timezone": "Asia/Shanghai",
+        "status": "unknown",
+        "evidence": [
+          {
+            "kind": "manual",
+            "type": "manual",
+            "source": "operator",
+            "quote": "周五前发报价单",
+            "quoteSha256": "30c89c2eb81e42698033bb119cb7fd2c195ff6f516951dcc0cedfc6a040badfd",
+            "capturedAt": "2026-11-19T15:54:35.087Z",
+            "capturedBy": "local",
+            "command": "commit add",
+            "cliVersion": "0.2.4"
+          }
+        ],
+        "capability": "todo"
+      }
+    },
+    {
+      "id": "who.valid",
+      "target": "#/$defs/WhoPayload",
+      "expect": "accept",
+      "value": {
+        "mine": [
+          {
+            "id": "cm_mwnqdoen_233c7729_1",
+            "matterId": "matter_mwnqdo9b_232v52ef_1",
+            "debtor": "user",
+            "creditor": "someone",
+            "action": "发报价单",
+            "dueAt": "2026-12-01T10:00:00+08:00",
+            "timezone": "Asia/Shanghai",
+            "status": "open",
+            "evidence": [
+              {
+                "kind": "manual",
+                "type": "manual",
+                "source": "operator",
+                "quote": "周五前发报价单",
+                "quoteSha256": "30c89c2eb81e42698033bb119cb7fd2c195ff6f516951dcc0cedfc6a040badfd",
+                "capturedAt": "2026-11-19T15:54:35.087Z",
+                "capturedBy": "local",
+                "command": "commit add",
+                "cliVersion": "0.2.4"
+              }
+            ],
+            "capability": "todo"
+          }
+        ],
+        "waiting": []
+      }
+    },
+    {
+      "id": "who.reject-missing-mine",
+      "target": "#/$defs/WhoPayload",
+      "expect": "reject",
+      "value": {
+        "waiting": []
+      }
+    },
+    {
+      "id": "delivery.valid",
+      "target": "#/$defs/Delivery",
+      "expect": "accept",
+      "value": {
+        "id": "del_vector_1",
+        "matterId": "matter_vector_1",
+        "conversationId": "conv_vector_1",
+        "files": [
+          "deliveries/del_vector_1/quote.docx"
+        ],
+        "tool": "template",
+        "title": "quote.docx",
+        "validation": "passed",
+        "createdAt": "2026-11-20T00:00:00.000Z"
+      }
+    },
+    {
+      "id": "delivery.reject-files-type",
+      "target": "#/$defs/Delivery",
+      "expect": "reject",
+      "value": {
+        "id": "del_vector_1",
+        "matterId": "matter_vector_1",
+        "conversationId": "conv_vector_1",
+        "files": "quote.docx",
+        "createdAt": "2026-11-20T00:00:00.000Z"
+      }
+    },
+    {
+      "id": "memory-candidate.valid",
+      "target": "#/$defs/MemoryCandidate",
+      "expect": "accept",
+      "value": {
+        "id": "cand_vector_1",
+        "kind": "commitment",
+        "payload": {
+          "action": "发报价"
+        },
+        "evidence": [
+          {
+            "quote": "q"
+          }
+        ],
+        "status": "pending",
+        "createdAt": "2026-11-20T00:00:00.000Z"
+      }
+    },
+    {
+      "id": "memory-candidate.reject-status-enum",
+      "target": "#/$defs/MemoryCandidate",
+      "expect": "reject",
+      "value": {
+        "id": "cand_vector_1",
+        "kind": "commitment",
+        "payload": {},
+        "evidence": [],
+        "status": "waiting",
+        "createdAt": "2026-11-20T00:00:00.000Z"
+      }
+    },
+    {
+      "id": "matter-row.valid",
+      "target": "#/$defs/MatterRow",
+      "expect": "accept",
+      "value": {
+        "id": "matter_mwnqdo9b_232v52ef_1",
+        "title": "合同样例客户",
+        "status": "active",
+        "domain": "general",
+        "secrecy": 0,
+        "clientId": null,
+        "projectId": null,
+        "openCommitments": 1,
+        "nextDueAt": "2026-12-01T10:00:00.000+08:00"
+      }
+    },
+    {
+      "id": "matter-row.reject-nextdue-type",
+      "target": "#/$defs/MatterRow",
+      "expect": "reject",
+      "value": {
+        "id": "matter_mwnqdo9b_232v52ef_1",
+        "title": "合同样例客户",
+        "status": "active",
+        "domain": "general",
+        "secrecy": 0,
+        "clientId": null,
+        "projectId": null,
+        "openCommitments": 1,
+        "nextDueAt": 5
+      }
+    },
+    {
+      "id": "matter-show.valid",
+      "target": "#/$defs/MatterShowPayload",
+      "expect": "accept",
+      "value": {
+        "ok": true,
+        "command": "matter show",
+        "matter": {
+          "id": "matter_mwnqdo9b_232v52ef_1",
+          "title": "合同样例客户",
+          "status": "active",
+          "domain": "general",
+          "secrecy": 0,
+          "summary": "contract check fixture",
+          "participants": [],
+          "deadlines": [],
+          "openQuestions": [],
+          "createdAt": "2026-11-19T15:54:34.895Z",
+          "updatedAt": "2026-11-19T15:54:34.895Z"
+        },
+        "counts": {
+          "commitments": 1,
+          "open": 1,
+          "done": 0
+        },
+        "open": [
+          {
+            "id": "cm_mwnqdoen_233c7729_1",
+            "action": "发报价单",
+            "dueAt": "2026-12-01T10:00:00+08:00",
+            "debtor": "user",
+            "creditor": "someone"
+          }
+        ],
+        "nextDueAt": "2026-12-01T10:00:00.000+08:00"
+      }
+    },
+    {
+      "id": "matter-show.reject-counts-type",
+      "target": "#/$defs/MatterShowPayload",
+      "expect": "reject",
+      "value": {
+        "ok": true,
+        "command": "matter show",
+        "matter": {
+          "id": "matter_mwnqdo9b_232v52ef_1",
+          "title": "合同样例客户",
+          "status": "active",
+          "domain": "general",
+          "secrecy": 0,
+          "summary": "contract check fixture",
+          "participants": [],
+          "deadlines": [],
+          "openQuestions": [],
+          "createdAt": "2026-11-19T15:54:34.895Z",
+          "updatedAt": "2026-11-19T15:54:34.895Z"
+        },
+        "counts": {
+          "commitments": 1,
+          "open": "1",
+          "done": 0
+        },
+        "open": [
+          {
+            "id": "cm_mwnqdoen_233c7729_1",
+            "action": "发报价单",
+            "dueAt": "2026-12-01T10:00:00+08:00",
+            "debtor": "user",
+            "creditor": "someone"
+          }
+        ],
+        "nextDueAt": "2026-12-01T10:00:00.000+08:00"
+      }
+    },
+    {
+      "id": "agenda.valid",
+      "target": "#/$defs/AgendaPayload",
+      "expect": "accept",
+      "value": {
+        "ok": true,
+        "command": "agenda",
+        "now": "2026-11-19T15:54:37.472Z",
+        "window": {
+          "from": "2026-11-19",
+          "to": "2026-11-25",
+          "days": 7,
+          "timezone": "Asia/Shanghai"
+        },
+        "overdue": [],
+        "days": [
+          {
+            "date": "2026-11-19",
+            "weekday": "周四",
+            "load": 0,
+            "items": []
+          },
+          {
+            "date": "2026-11-20",
+            "weekday": "周五",
+            "load": 0,
+            "items": []
+          },
+          {
+            "date": "2026-11-21",
+            "weekday": "周六",
+            "load": 0,
+            "items": []
+          },
+          {
+            "date": "2026-11-22",
+            "weekday": "周日",
+            "load": 0,
+            "items": []
+          },
+          {
+            "date": "2026-11-23",
+            "weekday": "周一",
+            "load": 0,
+            "items": []
+          },
+          {
+            "date": "2026-11-24",
+            "weekday": "周二",
+            "load": 0,
+            "items": []
+          },
+          {
+            "date": "2026-11-25",
+            "weekday": "周三",
+            "load": 0,
+            "items": []
+          }
+        ],
+        "waiting": [],
+        "unscheduled": [],
+        "conflicts": [],
+        "counts": {
+          "overdue": 0,
+          "today": 0,
+          "days": 7,
+          "waiting": 0,
+          "unscheduled": 0,
+          "conflicts": 0,
+          "perDayLoad": {}
+        },
+        "degraded": []
+      }
+    },
+    {
+      "id": "agenda.reject-missing-window",
+      "target": "#/$defs/AgendaPayload",
+      "expect": "reject",
+      "value": {
+        "ok": true,
+        "command": "agenda",
+        "now": "2026-11-19T15:54:37.472Z",
+        "overdue": [],
+        "days": [
+          {
+            "date": "2026-11-19",
+            "weekday": "周四",
+            "load": 0,
+            "items": []
+          },
+          {
+            "date": "2026-11-20",
+            "weekday": "周五",
+            "load": 0,
+            "items": []
+          },
+          {
+            "date": "2026-11-21",
+            "weekday": "周六",
+            "load": 0,
+            "items": []
+          },
+          {
+            "date": "2026-11-22",
+            "weekday": "周日",
+            "load": 0,
+            "items": []
+          },
+          {
+            "date": "2026-11-23",
+            "weekday": "周一",
+            "load": 0,
+            "items": []
+          },
+          {
+            "date": "2026-11-24",
+            "weekday": "周二",
+            "load": 0,
+            "items": []
+          },
+          {
+            "date": "2026-11-25",
+            "weekday": "周三",
+            "load": 0,
+            "items": []
+          }
+        ],
+        "waiting": [],
+        "unscheduled": [],
+        "conflicts": [],
+        "counts": {
+          "overdue": 0,
+          "today": 0,
+          "days": 7,
+          "waiting": 0,
+          "unscheduled": 0,
+          "conflicts": 0,
+          "perDayLoad": {}
+        },
+        "degraded": []
+      }
+    },
+    {
+      "id": "morning.valid",
+      "target": "#/$defs/MorningPayload",
+      "expect": "accept",
+      "value": {
+        "ok": true,
+        "command": "morning",
+        "generatedAt": "2026-11-19T15:54:37.649Z",
+        "localDay": "2026-11-19",
+        "window": {
+          "from": "2026-11-19",
+          "to": "2026-11-25",
+          "days": 7,
+          "timezone": "Asia/Shanghai"
+        },
+        "mustDo": [],
+        "overdue": [],
+        "meetings": [],
+        "waiting": [],
+        "upcoming": [],
+        "unscheduled": [],
+        "conflicts": [],
+        "counts": {
+          "mustDo": 0,
+          "overdue": 0,
+          "meetings": 0,
+          "waiting": 0,
+          "upcoming": 0,
+          "unscheduled": 0,
+          "conflicts": 0
+        },
+        "dataSha256": "3d495c48bc8986bdd1efcafa0fbbe5a2aefefe1fcdf3dff14e24eb0b034e980d",
+        "degraded": []
+      }
+    },
+    {
+      "id": "morning.reject-hash-pattern",
+      "target": "#/$defs/MorningPayload",
+      "expect": "reject",
+      "value": {
+        "ok": true,
+        "command": "morning",
+        "generatedAt": "2026-11-19T15:54:37.649Z",
+        "localDay": "2026-11-19",
+        "window": {
+          "from": "2026-11-19",
+          "to": "2026-11-25",
+          "days": 7,
+          "timezone": "Asia/Shanghai"
+        },
+        "mustDo": [],
+        "overdue": [],
+        "meetings": [],
+        "waiting": [],
+        "upcoming": [],
+        "unscheduled": [],
+        "conflicts": [],
+        "counts": {
+          "mustDo": 0,
+          "overdue": 0,
+          "meetings": 0,
+          "waiting": 0,
+          "upcoming": 0,
+          "unscheduled": 0,
+          "conflicts": 0
+        },
+        "dataSha256": "not-a-sha256",
+        "degraded": []
+      }
+    },
+    {
+      "id": "privacy.valid",
+      "target": "#/$defs/PrivacyPayload",
+      "expect": "accept",
+      "value": {
+        "home": "<ADVISERS_HOME>",
+        "database": "<ADVISERS_HOME>/state.db",
+        "telemetry": "none",
+        "default_egress": "none",
+        "explicit_egress": [
+          "model provider — chat / brief --deep / review / learn review (only when ADVISERS_API_KEY is set; ADVISERS_BASE_URL)",
+          "research --web|--url — provider web search/read tool (explicit opt-in; no silent research egress)",
+          "capture --from-imap — read-only IMAP fetch from the server you configure (TLS by default)",
+          "remind --deliver --notify — optional outbound webhook or local notifier you configure",
+          "sync push|pull — the directory you provide; snapshots are AES-256-GCM encrypted before writing",
+          "bridge — Hermes file gateway: inbox/outbox JSON files are handed to the Hermes process",
+          "MCP --stdio / DSH host tools / pet-brief — local consumers; the host or reader may forward the data",
+          "ocr / timestamp — local adapter subprocess you configure (this CLI does not call a cloud OCR/TSA)"
+        ],
+        "provider": {
+          "baseUrl": "https://api.deepseek.com",
+          "model": "deepseek-flash"
+        },
+        "secret_matter": "egress fail-closed for secrecy > 0 on the wired model paths (local rule layer)",
+        "at_rest_encryption": "opt-in database vault (advisers vault seal); general data is not encrypted at rest",
+        "audit": {
+          "ok": true,
+          "count": 2
+        },
+        "export": "advisers export --all",
+        "delete": "advisers purge <matter> --yes"
+      }
+    },
+    {
+      "id": "privacy.reject-telemetry-const",
+      "target": "#/$defs/PrivacyPayload",
+      "expect": "reject",
+      "value": {
+        "home": "<ADVISERS_HOME>",
+        "database": "<ADVISERS_HOME>/state.db",
+        "telemetry": "on",
+        "default_egress": "none",
+        "explicit_egress": [
+          "model provider — chat / brief --deep / review / learn review (only when ADVISERS_API_KEY is set; ADVISERS_BASE_URL)",
+          "research --web|--url — provider web search/read tool (explicit opt-in; no silent research egress)",
+          "capture --from-imap — read-only IMAP fetch from the server you configure (TLS by default)",
+          "remind --deliver --notify — optional outbound webhook or local notifier you configure",
+          "sync push|pull — the directory you provide; snapshots are AES-256-GCM encrypted before writing",
+          "bridge — Hermes file gateway: inbox/outbox JSON files are handed to the Hermes process",
+          "MCP --stdio / DSH host tools / pet-brief — local consumers; the host or reader may forward the data",
+          "ocr / timestamp — local adapter subprocess you configure (this CLI does not call a cloud OCR/TSA)"
+        ],
+        "provider": {
+          "baseUrl": "https://api.deepseek.com",
+          "model": "deepseek-flash"
+        },
+        "secret_matter": "egress fail-closed for secrecy > 0 on the wired model paths (local rule layer)",
+        "at_rest_encryption": "opt-in database vault (advisers vault seal); general data is not encrypted at rest",
+        "audit": {
+          "ok": true,
+          "count": 2
+        },
+        "export": "advisers export --all",
+        "delete": "advisers purge <matter> --yes"
+      }
+    },
+    {
+      "id": "tos-status.valid",
+      "target": "#/$defs/TosStatusPayload",
+      "expect": "accept",
+      "value": {
+        "version": "2026.11.2",
+        "manifestVersion": "2026.11.2",
+        "effectiveFrom": "2026-11-17",
+        "textSha256": "c40f869ad806e74a2e3870e7041d4d4602f6d1a4c2619b80b3e453333b9713dd",
+        "canonical": "docs/TOS.md",
+        "termsPath": "/mnt/d/Projects/dsh/plugins/advisers/packages/advisers/lib/tos/terms.zh-CN.md",
+        "url": "https://github.com/PerryLink/advisers/blob/main/docs/TOS.md",
+        "accepted": true,
+        "reason": "accepted",
+        "acceptance": {
+          "version": "2026.11.2",
+          "sha256": "c40f869ad806e74a2e3870e7041d4d4602f6d1a4c2619b80b3e453333b9713dd",
+          "acceptedAt": "2026-11-17T00:00:00.000Z",
+          "channel": "interactive",
+          "nonInteractive": false
+        },
+        "store": {
+          "type": "sqlite",
+          "path": "<ADVISERS_HOME>/state.db"
+        },
+        "audit": {
+          "available": true,
+          "verified": true,
+          "brokenAt": null,
+          "count": 2,
+          "counts": {
+            "accept": 0,
+            "block": 0,
+            "reaccept": 0,
+            "revoke": 0
+          }
+        },
+        "futureSeparateConsent": [
+          "content packs / DLC (not shipped in 0.2.0)",
+          "text-to-speech / TTS (not shipped in 0.2.0)"
+        ]
+      }
+    },
+    {
+      "id": "tos-status.reject-effective-from-pattern",
+      "target": "#/$defs/TosStatusPayload",
+      "expect": "reject",
+      "value": {
+        "version": "2026.11.2",
+        "manifestVersion": "2026.11.2",
+        "effectiveFrom": "2026/11/17",
+        "textSha256": "c40f869ad806e74a2e3870e7041d4d4602f6d1a4c2619b80b3e453333b9713dd",
+        "canonical": "docs/TOS.md",
+        "termsPath": "/mnt/d/Projects/dsh/plugins/advisers/packages/advisers/lib/tos/terms.zh-CN.md",
+        "url": "https://github.com/PerryLink/advisers/blob/main/docs/TOS.md",
+        "accepted": true,
+        "reason": "accepted",
+        "acceptance": {
+          "version": "2026.11.2",
+          "sha256": "c40f869ad806e74a2e3870e7041d4d4602f6d1a4c2619b80b3e453333b9713dd",
+          "acceptedAt": "2026-11-17T00:00:00.000Z",
+          "channel": "interactive",
+          "nonInteractive": false
+        },
+        "store": {
+          "type": "sqlite",
+          "path": "<ADVISERS_HOME>/state.db"
+        },
+        "audit": {
+          "available": true,
+          "verified": true,
+          "brokenAt": null,
+          "count": 2,
+          "counts": {
+            "accept": 0,
+            "block": 0,
+            "reaccept": 0,
+            "revoke": 0
+          }
+        },
+        "futureSeparateConsent": [
+          "content packs / DLC (not shipped in 0.2.0)",
+          "text-to-speech / TTS (not shipped in 0.2.0)"
+        ]
+      }
+    },
+    {
+      "id": "evidence-show.valid",
+      "target": "#/$defs/EvidenceShowPayload",
+      "expect": "accept",
+      "value": {
+        "schemaVersion": 2,
+        "commitment": {
+          "id": "cm_mwnqdoen_233c7729_1",
+          "matterId": "matter_mwnqdo9b_232v52ef_1",
+          "debtor": "user",
+          "creditor": "someone",
+          "action": "发报价单",
+          "dueAt": "2026-12-01T10:00:00+08:00",
+          "timezone": "Asia/Shanghai",
+          "status": "open",
+          "evidence": [
+            {
+              "kind": "manual",
+              "type": "manual",
+              "source": "operator",
+              "quote": "周五前发报价单",
+              "quoteSha256": "30c89c2eb81e42698033bb119cb7fd2c195ff6f516951dcc0cedfc6a040badfd",
+              "capturedAt": "2026-11-19T15:54:35.087Z",
+              "capturedBy": "local",
+              "command": "commit add",
+              "cliVersion": "0.2.4"
+            }
+          ],
+          "capability": "todo"
+        },
+        "sources": [],
+        "missing": [],
+        "unverifiable": [
+          {
+            "kind": "manual",
+            "type": "manual",
+            "source": "operator",
+            "quote": "周五前发报价单",
+            "quoteChars": 7,
+            "truncated": false,
+            "quoteSha256": "30c89c2eb81e42698033bb119cb7fd2c195ff6f516951dcc0cedfc6a040badfd",
+            "resolution": "unverifiable",
+            "reason": "operator_entered",
+            "capturedAt": "2026-11-19T15:54:35.087Z",
+            "capturedBy": "local",
+            "command": "commit add",
+            "cliVersion": "0.2.4"
+          }
+        ],
+        "summary": {
+          "byKind": {
+            "observed": 0,
+            "manual": 1
+          },
+          "missing": 0,
+          "unverifiable": 1,
+          "operatorEntered": 1
+        }
+      }
+    },
+    {
+      "id": "evidence-show.reject-schema-version",
+      "target": "#/$defs/EvidenceShowPayload",
+      "expect": "reject",
+      "value": {
+        "schemaVersion": 3,
+        "commitment": {
+          "id": "cm_mwnqdoen_233c7729_1",
+          "matterId": "matter_mwnqdo9b_232v52ef_1",
+          "debtor": "user",
+          "creditor": "someone",
+          "action": "发报价单",
+          "dueAt": "2026-12-01T10:00:00+08:00",
+          "timezone": "Asia/Shanghai",
+          "status": "open",
+          "evidence": [
+            {
+              "kind": "manual",
+              "type": "manual",
+              "source": "operator",
+              "quote": "周五前发报价单",
+              "quoteSha256": "30c89c2eb81e42698033bb119cb7fd2c195ff6f516951dcc0cedfc6a040badfd",
+              "capturedAt": "2026-11-19T15:54:35.087Z",
+              "capturedBy": "local",
+              "command": "commit add",
+              "cliVersion": "0.2.4"
+            }
+          ],
+          "capability": "todo"
+        },
+        "sources": [],
+        "missing": [],
+        "unverifiable": [
+          {
+            "kind": "manual",
+            "type": "manual",
+            "source": "operator",
+            "quote": "周五前发报价单",
+            "quoteChars": 7,
+            "truncated": false,
+            "quoteSha256": "30c89c2eb81e42698033bb119cb7fd2c195ff6f516951dcc0cedfc6a040badfd",
+            "resolution": "unverifiable",
+            "reason": "operator_entered",
+            "capturedAt": "2026-11-19T15:54:35.087Z",
+            "capturedBy": "local",
+            "command": "commit add",
+            "cliVersion": "0.2.4"
+          }
+        ],
+        "summary": {
+          "byKind": {
+            "observed": 0,
+            "manual": 1
+          },
+          "missing": 0,
+          "unverifiable": 1,
+          "operatorEntered": 1
+        }
+      }
+    }
+  ]
+}

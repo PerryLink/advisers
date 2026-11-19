@@ -1,0 +1,124 @@
+{
+  "version": 1,
+  "status": "frozen",
+  "frozenAt": "2026-11-20",
+  "sourceCommit": "35a51c3",
+  "description": "Contract version manifest and the frozen payload of the `status --json` contracts discovery field. One call tells a consumer which contract versions this CLI implements.",
+  "discovery": {
+    "field": "status.contracts",
+    "status": "pending-integration-wave",
+    "expected": {
+      "cliJson": 1,
+      "errors": 1,
+      "exitCodes": 1,
+      "mcpTools": 1,
+      "mcpResources": 1,
+      "mcpProtocol": "2024-11-05",
+      "dshTools": 1,
+      "petBrief": 2
+    },
+    "note": "mcpProtocol is the negotiated/default legacy protocol; allowed values are listed in mcp/versions-v1.json supportedProtocolVersions. exitCodes stays 1 until exit-codes-v2.draft.json is activated with the policy engine."
+  },
+  "artifacts": {
+    "cliJson": {
+      "version": 1,
+      "status": "frozen",
+      "files": [
+        "cli/read-models-v1.schema.json",
+        "cli/commands-v1.json"
+      ],
+      "compat": "backward",
+      "consumer": "scripts / third parties / DSH / MCP read models"
+    },
+    "cliErrors": {
+      "version": 1,
+      "status": "frozen",
+      "files": [
+        "cli/errors-v1.schema.json"
+      ],
+      "compat": "backward",
+      "consumer": "scripts / CI"
+    },
+    "status": {
+      "version": 1,
+      "status": "frozen",
+      "files": [
+        "cli/status-v1.json"
+      ],
+      "compat": "backward",
+      "consumer": "scripts / DSH / integrations"
+    },
+    "exitCodes": {
+      "version": 1,
+      "status": "frozen",
+      "files": [
+        "cli/exit-codes-v1.json"
+      ],
+      "draft": "cli/exit-codes-v2.draft.json",
+      "compat": "backward",
+      "consumer": "scripts / CI"
+    },
+    "errors": {
+      "version": 1,
+      "status": "frozen",
+      "files": [
+        "errors/codes.v1.json"
+      ],
+      "generatedFrom": "packages/advisers/lib/error-codes.js",
+      "compat": "additive",
+      "consumer": "scripts / docs / CI"
+    },
+    "mcpTools": {
+      "version": 1,
+      "status": "frozen",
+      "files": [
+        "mcp/tools-v1.json"
+      ],
+      "compat": "additive",
+      "consumer": "MCP clients (Claude Code / Cursor / Copilot Studio)"
+    },
+    "mcpResources": {
+      "version": 1,
+      "status": "frozen",
+      "files": [
+        "mcp/resources-v1.json"
+      ],
+      "compat": "additive",
+      "consumer": "MCP clients"
+    },
+    "mcpProtocol": {
+      "version": 1,
+      "status": "frozen",
+      "files": [
+        "mcp/versions-v1.json",
+        "mcp/errors-v1.json",
+        "mcp/responses-v1.schema.json"
+      ],
+      "supported": [
+        "2024-11-05",
+        "2025-06-18",
+        "2025-11-25"
+      ],
+      "default": "2024-11-05",
+      "compat": "protocol negotiation",
+      "consumer": "MCP clients"
+    },
+    "dshTools": {
+      "version": 1,
+      "status": "external-unchanged",
+      "source": "packages/dsh-advisers/index.js",
+      "note": "5 preview tools; error codes preserved in errors/codes.v1.json external section; full DSH payload v2 belongs to the DSH wave.",
+      "compat": "additive",
+      "consumer": "DSH host"
+    },
+    "petBrief": {
+      "version": 2,
+      "status": "external-unchanged",
+      "source": "docs/pet-brief/schema-v0.2.json",
+      "note": "closed schema owned by docs/pet-brief; not duplicated here (copying a closed contract invites drift).",
+      "compat": "closed",
+      "consumer": "Famling / desktop-games (cross-repo, not in this CI)"
+    }
+  },
+  "license": "CC-BY-NC-SA-4.0 (intended; see LICENSE + README status note)"
+}

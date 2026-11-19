@@ -1,0 +1,244 @@
+{
+  "version": 1,
+  "status": "frozen",
+  "frozenAt": "2026-11-20",
+  "sourceCommit": "35a51c3",
+  "cliJsonVersion": 1,
+  "schema": "read-models-v1.schema.json",
+  "description": "The deterministic read-only `--json` commands validated by `node scripts/check-contracts.mjs --cli`. Each entry declares the exact argv, the JSON root shape and the $defs payload schema. Shapes are additive/backward compatible; errors go to stderr as the errors-v1 envelope with exit 1 (or exit 3 for E_TOS_REQUIRED).",
+  "fixtures": {
+    "description": "Sample ledger seeded by the checker before running commands that need rows: one matter + one open commitment with a manual quote. List commands are also validated against the same seed.",
+    "seed": [
+      {
+        "id": "sample-matter",
+        "argv": [
+          "matter",
+          "add",
+          "合同样例客户",
+          "--summary",
+          "contract check fixture"
+        ]
+      },
+      {
+        "id": "sample-commitment",
+        "argv": [
+          "commit",
+          "add",
+          "发报价单",
+          "--quote",
+          "周五前发报价单",
+          "--due",
+          "2026-12-01T10:00:00+08:00"
+        ]
+      }
+    ]
+  },
+  "placeholder": {
+    "description": "`{matterId}` / `{commitmentId}` are substituted by the checker from the seeded rows; `{missingDir}` is a path that does not exist."
+  },
+  "commands": [
+    {
+      "id": "status",
+      "argv": [
+        "status",
+        "--json"
+      ],
+      "root": "object",
+      "schemaRef": "read-models-v1.schema.json#/$defs/StatusPayload",
+      "deterministic": true,
+      "needsKey": false,
+      "needsTos": false,
+      "since": "0.2.0"
+    },
+    {
+      "id": "tos-status",
+      "argv": [
+        "tos",
+        "status",
+        "--json"
+      ],
+      "root": "object",
+      "schemaRef": "read-models-v1.schema.json#/$defs/TosStatusPayload",
+      "deterministic": true,
+      "needsKey": false,
+      "needsTos": false,
+      "since": "0.2.3"
+    },
+    {
+      "id": "tick",
+      "argv": [
+        "tick",
+        "--json"
+      ],
+      "root": "object",
+      "schemaRef": "read-models-v1.schema.json#/$defs/TickPayload",
+      "deterministic": true,
+      "needsKey": false,
+      "needsTos": true,
+      "since": "0.2.0"
+    },
+    {
+      "id": "today",
+      "argv": [
+        "today",
+        "--json"
+      ],
+      "root": "object",
+      "schemaRef": "read-models-v1.schema.json#/$defs/TodayPayload",
+      "deterministic": true,
+      "needsKey": false,
+      "needsTos": true,
+      "since": "0.2.0"
+    },
+    {
+      "id": "remind",
+      "argv": [
+        "remind",
+        "--json"
+      ],
+      "root": "object",
+      "schemaRef": "read-models-v1.schema.json#/$defs/RemindPayload",
+      "deterministic": true,
+      "needsKey": false,
+      "needsTos": true,
+      "since": "0.2.0"
+    },
+    {
+      "id": "commit-ls",
+      "argv": [
+        "commit",
+        "ls",
+        "--json"
+      ],
+      "root": "array",
+      "schemaRef": "read-models-v1.schema.json#/$defs/Commitment",
+      "deterministic": true,
+      "needsKey": false,
+      "needsTos": true,
+      "since": "0.2.0"
+    },
+    {
+      "id": "who",
+      "argv": [
+        "who",
+        "--json"
+      ],
+      "root": "object",
+      "schemaRef": "read-models-v1.schema.json#/$defs/WhoPayload",
+      "deterministic": true,
+      "needsKey": false,
+      "needsTos": true,
+      "since": "0.2.0"
+    },
+    {
+      "id": "deliveries",
+      "argv": [
+        "deliveries",
+        "--json"
+      ],
+      "root": "array",
+      "schemaRef": "read-models-v1.schema.json#/$defs/Delivery",
+      "deterministic": true,
+      "needsKey": false,
+      "needsTos": true,
+      "since": "0.2.0"
+    },
+    {
+      "id": "memory-candidates",
+      "argv": [
+        "memory",
+        "candidates",
+        "--json"
+      ],
+      "root": "array",
+      "schemaRef": "read-models-v1.schema.json#/$defs/MemoryCandidate",
+      "deterministic": true,
+      "needsKey": false,
+      "needsTos": true,
+      "since": "0.2.0"
+    },
+    {
+      "id": "matter-ls",
+      "argv": [
+        "matter",
+        "ls",
+        "--json"
+      ],
+      "root": "array",
+      "schemaRef": "read-models-v1.schema.json#/$defs/MatterRow",
+      "deterministic": true,
+      "needsKey": false,
+      "needsTos": true,
+      "since": "0.2.3"
+    },
+    {
+      "id": "matter-show",
+      "argv": [
+        "matter",
+        "show",
+        "{matterId}",
+        "--json"
+      ],
+      "root": "object",
+      "schemaRef": "read-models-v1.schema.json#/$defs/MatterShowPayload",
+      "deterministic": true,
+      "needsKey": false,
+      "needsTos": true,
+      "since": "0.2.3"
+    },
+    {
+      "id": "agenda",
+      "argv": [
+        "agenda",
+        "--json"
+      ],
+      "root": "object",
+      "schemaRef": "read-models-v1.schema.json#/$defs/AgendaPayload",
+      "deterministic": true,
+      "needsKey": false,
+      "needsTos": true,
+      "since": "0.2.3"
+    },
+    {
+      "id": "morning",
+      "argv": [
+        "morning",
+        "--json"
+      ],
+      "root": "object",
+      "schemaRef": "read-models-v1.schema.json#/$defs/MorningPayload",
+      "deterministic": true,
+      "needsKey": false,
+      "needsTos": true,
+      "since": "0.2.3"
+    },
+    {
+      "id": "privacy",
+      "argv": [
+        "privacy",
+        "--json"
+      ],
+      "root": "object",
+      "schemaRef": "read-models-v1.schema.json#/$defs/PrivacyPayload",
+      "deterministic": true,
+      "needsKey": false,
+      "needsTos": false,
+      "since": "0.2.0"
+    },
+    {
+      "id": "evidence-show",
+      "argv": [
+        "evidence",
+        "show",
+        "{commitmentId}",
+        "--json"
+      ],
+      "root": "object",
+      "schemaRef": "read-models-v1.schema.json#/$defs/EvidenceShowPayload",
+      "deterministic": true,
+      "needsKey": false,
+      "needsTos": true,
+      "since": "0.2.0"
+    }
+  ]
+}

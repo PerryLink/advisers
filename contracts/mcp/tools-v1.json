@@ -1,0 +1,223 @@
+{
+  "version": 1,
+  "status": "frozen",
+  "frozenAt": "2026-11-20",
+  "sourceCommit": "35a51c3",
+  "description": "Frozen MCP tool catalogue exposed by `advisers mcp --stdio` (tools/list). Additive only: tools are added, never silently removed or renamed; a new tool requires a contract minor update. The checker deep-compares every advertised tool name/inputSchema/annotations with this file.",
+  "protocolVersionAtFreeze": "2024-11-05",
+  "transport": "stdio, one JSON-RPC 2.0 object per line, UTF-8",
+  "lineLimitBytes": 1048576,
+  "tools": [
+    {
+      "name": "advisers_today",
+      "description": "Read the open-commitment count and the open commitments (read-only). Returns at most 20 commitment rows; `open`/`total` are the true post-clearance count and `truncated` says rows were withheld. Records belonging to protected matters (matter secrecy above this server clearance, default 0) are excluded and only counted in protectedExcluded.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {}
+      },
+      "annotations": {
+        "readOnlyHint": true,
+        "destructiveHint": false,
+        "idempotentHint": true,
+        "openWorldHint": false
+      },
+      "sideEffect": "read",
+      "policySurface": "mcp.tool",
+      "write": false,
+      "responseSchemaRef": "responses-v1.schema.json#/$defs/TodayResource",
+      "stability": "stable"
+    },
+    {
+      "name": "advisers_commit_ls",
+      "description": "List commitments (open by default; pass all=true for every status). Returns {commitments, total, truncated, limit, clearance, protectedExcluded}; total is the post-clearance row count, so a truncated result is never mistaken for the whole ledger. Read-only. Records belonging to protected matters (matter secrecy above this server clearance, default 0) are excluded and only counted in protectedExcluded.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "all": {
+            "type": "boolean",
+            "description": "Include done/snoozed/dropped commitments."
+          },
+          "limit": {
+            "type": "integer",
+            "minimum": 1,
+            "maximum": 200,
+            "description": "Max rows to return (default 50, max 200)."
+          }
+        }
+      },
+      "annotations": {
+        "readOnlyHint": true,
+        "destructiveHint": false,
+        "idempotentHint": true,
+        "openWorldHint": false
+      },
+      "sideEffect": "read",
+      "policySurface": "mcp.tool",
+      "write": false,
+      "responseSchemaRef": "responses-v1.schema.json#/$defs/CommitmentsResource",
+      "stability": "stable"
+    },
+    {
+      "name": "advisers_who",
+      "description": "Who owes whom: mine (user/agent) versus waiting (third parties). Read-only. Each array is capped at 20 rows; mineTotal/waitingTotal/truncated report the full counts. Records belonging to protected matters (matter secrecy above this server clearance, default 0) are excluded and only counted in protectedExcluded.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {}
+      },
+      "annotations": {
+        "readOnlyHint": true,
+        "destructiveHint": false,
+        "idempotentHint": true,
+        "openWorldHint": false
+      },
+      "sideEffect": "read",
+      "policySurface": "mcp.tool",
+      "write": false,
+      "responseSchemaRef": "responses-v1.schema.json#/$defs/WhoResource",
+      "stability": "stable"
+    },
+    {
+      "name": "advisers_evidence",
+      "description": "Read the source turns for a commitment/fact/preference id. Read-only. Evidence of a protected record is withheld (no id content) and reported as protectedExcluded.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string",
+            "description": "cm_* commitment, fact_* fact, or pref_* preference id."
+          }
+        },
+        "required": [
+          "id"
+        ]
+      },
+      "annotations": {
+        "readOnlyHint": true,
+        "destructiveHint": false,
+        "idempotentHint": true,
+        "openWorldHint": false
+      },
+      "sideEffect": "read",
+      "policySurface": "mcp.tool",
+      "write": false,
+      "responseSchemaRef": "responses-v1.schema.json#/$defs/EvidenceToolPayload",
+      "stability": "stable"
+    },
+    {
+      "name": "advisers_remind",
+      "description": "Read due reminders (no delivery, no network). Returns {reminders, total, truncated, clearance, protectedExcluded}; total is the post-clearance reminder count. Read-only. Records belonging to protected matters (matter secrecy above this server clearance, default 0) are excluded and only counted in protectedExcluded.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {}
+      },
+      "annotations": {
+        "readOnlyHint": true,
+        "destructiveHint": false,
+        "idempotentHint": true,
+        "openWorldHint": false
+      },
+      "sideEffect": "read",
+      "policySurface": "mcp.tool",
+      "write": false,
+      "responseSchemaRef": "responses-v1.schema.json#/$defs/RemindToolPayload",
+      "stability": "stable"
+    },
+    {
+      "name": "advisers_capture_candidate",
+      "description": "Propose a PENDING commitment candidate captured from a quote. This writes a memory candidate only: it never accepts the candidate and never changes the ledger. A human must review it with \"advisers memory candidates\" and run \"advisers memory accept <id>\".",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "action": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 500,
+            "description": "What must be done (verbatim or near-verbatim)."
+          },
+          "quote": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 2000,
+            "description": "The verbatim source text this candidate was captured from."
+          },
+          "debtor": {
+            "type": "string",
+            "enum": [
+              "user",
+              "agent",
+              "third"
+            ],
+            "description": "Who owes the action. Defaults to user."
+          },
+          "creditor": {
+            "type": "string",
+            "maxLength": 200,
+            "description": "Who is owed the action. Defaults to someone."
+          },
+          "dueAt": {
+            "type": "string",
+            "maxLength": 64,
+            "description": "ISO 8601 due date-time, e.g. 2026-12-01T10:00:00+08:00."
+          },
+          "matterId": {
+            "type": "string",
+            "maxLength": 120,
+            "description": "Existing matter id. Defaults to the first active matter."
+          }
+        },
+        "required": [
+          "action",
+          "quote"
+        ],
+        "additionalProperties": false
+      },
+      "annotations": {
+        "readOnlyHint": false,
+        "destructiveHint": false,
+        "idempotentHint": false,
+        "openWorldHint": false
+      },
+      "sideEffect": "write-candidate-pending-only",
+      "policySurface": "mcp.tool",
+      "write": true,
+      "writeNote": "Creates a PENDING memory candidate only; never accepts it and never writes the ledger. A human must accept it with the CLI.",
+      "responseSchemaRef": "responses-v1.schema.json#/$defs/CaptureCandidatePayload",
+      "stability": "stable"
+    },
+    {
+      "name": "advisers_pack_verify",
+      "description": "Read-only verification of an evidence-pack receipt directory: recomputes SHA256SUMS for manifest.json and README.txt, rejects unsafe or unhashed pack files, and reports whether a receipt.docx is present. Never modifies the directory. The directory path is not echoed in errors.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "dir": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 4096,
+            "description": "Directory written by \"advisers deliveries --pack\" (contains manifest.json, README.txt, SHA256SUMS, optionally receipt.docx)."
+          }
+        },
+        "required": [
+          "dir"
+        ],
+        "additionalProperties": false
+      },
+      "annotations": {
+        "readOnlyHint": true,
+        "destructiveHint": false,
+        "idempotentHint": true,
+        "openWorldHint": false
+      },
+      "sideEffect": "read-only-verify",
+      "policySurface": "mcp.tool",
+      "write": false,
+      "writeNote": "Never modifies the receipt directory; reports existence/verification only.",
+      "responseSchemaRef": "responses-v1.schema.json#/$defs/PackVerifyPayload",
+      "stability": "stable"
+    }
+  ],
+  "additiveChanges": [
+    "0.3.0: advisers_commit_ls inputSchema gained the optional `limit` integer (1..200, default 50); tool names, annotations and the other six inputSchemas are unchanged.",
+    "0.3.0: list-shaped tool descriptions now state their output caps and the total/truncated contract; descriptions are documentation snapshots, the checker only requires them to be non-empty."
+  ]
+}

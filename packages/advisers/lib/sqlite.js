@@ -627,8 +627,20 @@ CREATE INDEX IF NOT EXISTS idx_facts_identity ON facts(subject, predicate, matte
 CREATE INDEX IF NOT EXISTS idx_memory_candidates_status ON memory_candidates(status);
 `
 
+/**
+ * 0.3.0 P0-T2 (2026-11-20): two more layout-only indexes for the pet-brief read
+ * projection. Both replace a full facts scan + TEMP B-TREE on every pet-brief:
+ *  - (status, confidence) serves the top-N facts by confidence query
+ *    (measured 40ms -> 5ms at 200k facts);
+ *  - (status, deleted_at, expired_at, subject) is covering for the redactor
+ *    name-candidate scan (measured 69ms -> 34ms).
+ * Neither changes the schema version: secondary indexes are layout only and
+ * are created IF NOT EXISTS on open, like the 0.2.2 P2-1 indexes below.
+ */
 const INDEXES = `
 CREATE INDEX IF NOT EXISTS idx_nudges_commitment_at ON nudges(commitment_id, at);
+CREATE INDEX IF NOT EXISTS idx_facts_status_confidence ON facts(status, confidence);
+CREATE INDEX IF NOT EXISTS idx_facts_valid_subject ON facts(status, deleted_at, expired_at, subject);
 CREATE INDEX IF NOT EXISTS idx_nudges_local_day_level ON nudges(local_day, level);
 CREATE INDEX IF NOT EXISTS idx_nudges_at ON nudges(at);
 CREATE INDEX IF NOT EXISTS idx_commitments_status_due ON commitments(status, due_at);
@@ -2578,25 +2590,178 @@ CREATE TABLE IF NOT EXISTS task_runs (
     return matters
   }
 
-  loadFacts({ status, matterId, includeDeleted } = {}) {
+  /**
+   * Load one ledger table's rows.
+   *
+   * 0.3.0 P0-T1: two optional knobs keep the hot read paths off the TEMP
+   * B-TREE. The v20 status-leading indexes (`idx_facts_status_deleted`,
+   * `idx_commitments_status_due`) cannot satisfy `ORDER BY rowid` for a
+   * status predicate, so SQLite sorted every matching row into a TEMP B-TREE
+   * and spilled it to disk (pet-brief wrote 29 MB per run, today 5.6 MB).
+   *
+   * @param {object} [options]
+   * @param {boolean} [options.validOnly] facts only: `expired_at IS NULL AND
+   *   deleted_at IS NULL`. With `status` also set this is an index key prefix,
+   *   so rowid order comes from the index and no sort/spill happens.
+   * @param {'rowid'|'natural'|'table'} [options.order='rowid'] commitments only:
+   *   'rowid' keeps the historical ORDER BY rowid (may sort); 'natural' leaves
+   *   the order to the plan (index order, no sort); 'table' reads the table
+   *   without an index (rowid order, no sort) -- the cheapest way to keep
+   *   insertion order when a predicate matches a large fraction of the table.
+   */
+  loadFacts({ status, matterId, includeDeleted, validOnly } = {}) {
     const where = []
     const params = []
     if (status !== undefined) { where.push('status = ?'); params.push(status) }
     if (matterId !== undefined) { where.push('matter_id = ?'); params.push(matterId) }
     if (includeDeleted === false) where.push('deleted_at IS NULL')
+    if (validOnly === true) {
+      where.push('expired_at IS NULL')
+      if (includeDeleted !== true) where.push('deleted_at IS NULL')
+    }
     const facts = this._selectRows('facts', where, params, ' ORDER BY rowid').map(mapFactRow)
     this._markLoadedRows('facts', facts)
     return facts
   }
 
-  loadCommitments({ status, matterId } = {}) {
+  loadCommitments({ status, matterId, order = 'rowid' } = {}) {
     const where = []
     const params = []
     if (status !== undefined) { where.push('status = ?'); params.push(status) }
     if (matterId !== undefined) { where.push('matter_id = ?'); params.push(matterId) }
-    const commitments = this._selectRows('commitments', where, params, ' ORDER BY rowid').map(mapCommitmentRow)
+    const table = order === 'table' ? 'commitments NOT INDEXED' : 'commitments'
+    const suffix = order === 'natural' || order === 'table' ? '' : ' ORDER BY rowid'
+    const commitments = this._selectRows(table, where, params, suffix).map(mapCommitmentRow)
     this._markLoadedRows('commitments', commitments)
     return commitments
+  }
+
+  // -------------------------------------------------------------------------
+  // 0.3.0 P0-T2: narrow read projections (2026-11-20).
+  //
+  // The 0.2.x views paid two costs these projections remove: mapping whole
+  // entities (JSON.parse of evidence / reminder_offsets) for rows a view only
+  // counts, and ORDER BY rowid after a status predicate (TEMP B-TREE spill,
+  // see P0-T1 above). Each projection returns exactly the columns its view
+  // reads, in table-scan order (= rowid order): a NOT INDEXED scan is
+  // sequential, so it keeps the historical array order without a sort and is
+  // faster than 66k index -> table lookups at 200k rows (40 ms vs 100-120 ms).
+  //
+  // Only status predicates are pushed to SQL. Every due-date comparison stays
+  // in JS: due_at is TEXT with mixed formats (date-only / no zone / Z /
+  // offsets) and JS Date.parse semantics differ from SQLite julianday() for
+  // the no-zone forms, so SQL-side date filtering would change behaviour.
+  // These helpers are read-only and never feed save().
+  // -------------------------------------------------------------------------
+
+  /**
+   * Run a read-only projection and map rows positionally.
+   * setReturnArrays skips building one object per row inside node:sqlite
+   * (~25% faster at 66k rows) and the view maps only the columns it needs.
+   */
+  _project(sql, params, map) {
+    const statement = this.db.prepare(sql)
+    if (typeof statement.setReturnArrays === 'function') statement.setReturnArrays(true)
+    return statement.all(...params).map(map)
+  }
+
+  /** today (human view): same minimal open-commitment rows as before. */
+  projectOpenCommitmentsForToday() {
+    return this._project(
+      "SELECT id, debtor, creditor, action, due_at FROM commitments NOT INDEXED WHERE status = 'open'",
+      [],
+      (row) => ({ id: row[0], debtor: row[1], creditor: row[2], action: row[3], dueAt: row[4] ?? undefined }),
+    )
+  }
+
+  /**
+   * remind / tui: every row buildReminders can turn into a reminder (not
+   * done/dropped, has a due_at). The due-date test itself stays in JS.
+   */
+  projectCommitmentsForReminders({ includeUndated = false } = {}) {
+    return this._project(
+      includeUndated
+        ? "SELECT id, status, creditor, action, due_at, reminder_offsets FROM commitments NOT INDEXED WHERE status NOT IN ('done','dropped')"
+        : "SELECT id, status, creditor, action, due_at, reminder_offsets FROM commitments NOT INDEXED WHERE status NOT IN ('done','dropped') AND due_at IS NOT NULL",
+      [],
+      (row) => {
+        const offsets = row[5] == null ? null : parse(row[5], null)
+        return {
+          id: row[0], status: row[1], creditor: row[2], action: row[3], dueAt: row[4],
+          ...(Array.isArray(offsets) ? { reminderOffsets: offsets } : {}),
+        }
+      },
+    )
+  }
+
+  /** digest: the two statuses buildDigest reads, in rowid order. */
+  projectCommitmentsForDigest() {
+    return this._project(
+      "SELECT status, action, due_at, done_at FROM commitments NOT INDEXED WHERE status IN ('open','done')",
+      [],
+      (row) => ({ status: row[0], action: row[1], dueAt: row[2] ?? undefined, doneAt: row[3] ?? undefined }),
+    )
+  }
+
+  /**
+   * pet-brief: open commitments, with hasEvidence computed in SQL.
+   *
+   * confidenceOfCommitment() only asks whether the parsed evidence array is
+   * non-empty, so the projection answers it without shipping 66k evidence
+   * JSON strings to JS. The CASE mirrors mapCommitmentRow's JSON.parse +
+   * Array.isArray semantics exactly, including corrupt JSON (json_valid=0 ->
+   * parse falls back to [] -> no evidence).
+   */
+  projectCommitmentsForPetBrief() {
+    return this._project(
+      "SELECT id, matter_id, creditor, action, due_at, CASE WHEN json_valid(evidence) THEN (CASE WHEN json_type(evidence) = 'array' AND json_array_length(evidence) > 0 THEN 1 ELSE 0 END) ELSE 0 END FROM commitments NOT INDEXED WHERE status = 'open'",
+      [],
+      (row) => ({
+        id: row[0], matterId: row[1], creditor: row[2], action: row[3],
+        dueAt: row[4] ?? undefined, status: 'open', hasEvidence: row[5] === 1,
+      }),
+    )
+  }
+
+  /**
+   * pet-brief facts: the top-N confirmed facts by confidence that buildPetBrief
+   * would sort and slice to. matterIds restricts to the public matters (a
+   * matter-less fact is always public, matching buildPetBrief).
+   */
+  projectFactsForPetBrief({ limit = 10, minConfidence = 0.7, matterIds = null } = {}) {
+    // listFacts() semantics: confirmed + not expired + not deleted. buildPetBrief
+    // only ever sees those rows, so the projection must filter them in SQL or an
+    // expired fact could displace a live one in the top-N.
+    const where = ["status = 'confirmed'", 'expired_at IS NULL', 'deleted_at IS NULL', 'confidence >= ?']
+    const params = [minConfidence]
+    if (Array.isArray(matterIds)) {
+      if (matterIds.length) {
+        where.push('(matter_id IS NULL OR matter_id IN (' + matterIds.map(() => '?').join(',') + '))')
+        params.push(...matterIds)
+      } else {
+        where.push('matter_id IS NULL')
+      }
+    }
+    params.push(Math.max(1, Math.trunc(limit)))
+    return this._project(
+      'SELECT id, matter_id, subject, predicate, object, confidence FROM facts WHERE ' + where.join(' AND ') + ' ORDER BY confidence DESC, id LIMIT ?',
+      params,
+      (row) => ({ id: row[0], matterId: row[1] ?? undefined, subject: row[2], predicate: row[3], object: row[4], confidence: row[5] }),
+    )
+  }
+
+  /** pet-brief redactor candidates: subjects of every fact listFacts() returns. */
+  projectFactSubjectCandidates() {
+    return this._project(
+      "SELECT subject FROM facts NOT INDEXED WHERE status = 'confirmed' AND expired_at IS NULL AND deleted_at IS NULL",
+      [],
+      (row) => row[0],
+    )
+  }
+
+  /** pet-brief redactor candidates: every commitment's creditor, all statuses. */
+  projectCommitmentCreditorCandidates() {
+    return this._project('SELECT DISTINCT creditor FROM commitments', [], (row) => row[0])
   }
 
   loadPreferences({ status, kind } = {}) {

@@ -1,0 +1,48 @@
+{
+  "version": 1,
+  "status": "frozen",
+  "frozenAt": "2026-11-20",
+  "sourceCommit": "35a51c3",
+  "description": "Frozen MCP resource catalogue (resources/list + resources/read). The JSON payload of each resource is the same read model as the corresponding CLI view, exposed under the shared read-models/MCP response schema refs. Resources are read-only; they are clearance-filtered before counting.",
+  "resources": [
+    {
+      "uri": "advisers://today",
+      "name": "today",
+      "description": "Open commitments and their count (same shape as advisers_today; protected matters excluded at the server clearance).",
+      "mimeType": "application/json",
+      "schemaRef": "responses-v1.schema.json#/$defs/TodayResource",
+      "stability": "stable",
+      "readOnly": true
+    },
+    {
+      "uri": "advisers://commitments",
+      "name": "commitments",
+      "description": "All commitments (open and closed) as compact rows.",
+      "mimeType": "application/json",
+      "schemaRef": "responses-v1.schema.json#/$defs/CommitmentsResource",
+      "stability": "stable",
+      "readOnly": true
+    },
+    {
+      "uri": "advisers://who",
+      "name": "who",
+      "description": "Who owes whom: mine (user/agent) vs waiting (third parties).",
+      "mimeType": "application/json",
+      "schemaRef": "responses-v1.schema.json#/$defs/WhoResource",
+      "stability": "stable",
+      "readOnly": true
+    },
+    {
+      "uri": "advisers://evidence",
+      "name": "evidence",
+      "description": "Evidence traceback index for commitments, facts and preferences (counts only).",
+      "mimeType": "application/json",
+      "schemaRef": "responses-v1.schema.json#/$defs/EvidenceIndexResource",
+      "stability": "stable",
+      "readOnly": true
+    }
+  ],
+  "additiveChanges": [
+    "0.3.0: payloads gained optional cap fields (total/truncated/limit/mineTotal/waitingTotal/sourcesTotal/missingTotal); existing fields keep their meaning."
+  ]
+}

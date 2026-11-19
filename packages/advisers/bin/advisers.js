@@ -670,20 +670,34 @@ function readLedgerForCommand(parts = null) {
 }
 
 /**
- * Minimal open-commitment rows for the HUMAN `today` view (0.2.3 hot path).
+ * 0.3.0 P0-T2: run one or more narrow read projections on the lock-free read
+ * store inside a single read transaction (one snapshot for a multi-part view).
+ * Returns null in legacy JSON-store mode so the caller keeps that path.
  *
- * `today` classifies every open commitment but only displays id/debtor/creditor/
- * action/dueAt. Loading them through loadCommitments() maps the full entity
- * (JSON.parse of evidence/reminder_offsets, defaults, sortable objects) which at
- * 200k rows is ~365ms in-process vs ~139ms for the six columns actually needed.
- * The JSON/sources forms keep the full entities (their contract needs them).
- * The query runs on the lock-free read connection and is read-only.
+ * The projections return only the columns the view reads, in table-scan order.
+ * Before this, `today` alone loaded 66k full commitment entities for five
+ * displayed columns and every `ORDER BY rowid` after a status predicate spilled
+ * a TEMP B-TREE (today 5.6 MB, pet-brief 29 MB of writes per run at 200k rows).
  */
-function loadOpenCommitmentRowsForToday() {
+function readProjection(project) {
   const store = readStoreOrExit()
-  if (!store) return []
-  const rows = store.db.prepare("SELECT id, debtor, creditor, action, due_at FROM commitments WHERE status = 'open' ORDER BY rowid").all()
-  return rows.map((row) => ({ id: row.id, debtor: row.debtor, creditor: row.creditor, action: row.action, dueAt: row.due_at ?? undefined }))
+  if (!store) return null
+  return store.read(() => project(store))
+}
+
+/** Minimal open-commitment rows for the HUMAN `today` view. */
+function loadOpenCommitmentRowsForToday() {
+  return readProjection((store) => store.projectOpenCommitmentsForToday()) ?? []
+}
+
+/** Narrow commitment rows for reminder planning (remind / tui). */
+function loadReminderRows({ includeUndated = false } = {}) {
+  return readProjection((store) => store.projectCommitmentsForReminders({ includeUndated }))
+}
+
+/** A ledger-shaped view over already-loaded narrow rows (no entity mapping). */
+function reminderLedgerFromRows(rows) {
+  return { listCommitments: () => rows }
 }
 
 function exitStoreWriteFailure(error) {
@@ -2733,7 +2747,7 @@ async function petBriefJsonSchema() {
 async function petBrief(args) {
   const {
     PET_BRIEF_DEFAULT_DISPLAY_POLICY, PET_BRIEF_DISPLAY_POLICIES, PET_BRIEF_MAX_ITEMS,
-    PET_BRIEF_MAX_LINE_LENGTH, PET_BRIEF_MAX_SUGGESTED_LINES, PET_BRIEF_MOODS,
+    PET_BRIEF_MAX_LINE_LENGTH, PET_BRIEF_MAX_SUGGESTED_LINES, PET_BRIEF_MIN_CONFIDENCE, PET_BRIEF_MOODS,
     PET_BRIEF_SCHEMA_VERSION, PET_BRIEF_SOURCE, buildPetBrief, validatePetBrief, writePetBriefAtomic,
   } = await loadPetBrief()
   const { flags } = parseFlags(args)
@@ -2786,34 +2800,62 @@ async function petBrief(args) {
       const sealed = vaultSealedPath()
       if (sealed) return fail('E_VAULT_SEALED', 'the database is sealed at ' + sealed + '; run "ADVISERS_VAULT_PASSPHRASE=... advisers vault unseal" first (no empty database was created)')
     }
-    let snapshot
+    let ledger
+    let nameCandidates
     if (mode === 'json' || !existsSync(DB)) {
       const { readLedgerSnapshotReadOnly } = await import('../lib/pet-brief-store.js')
+      let snapshot
       try {
         snapshot = readLedgerSnapshotReadOnly({ store: mode, dbPath: DB, statePath: STATE })
       } catch (error) {
         return fail(error?.code ?? 'E_STORE', error?.message ?? String(error))
       }
+      ledger = Ledger.fromJSON(snapshot)
     } else {
-      // 0.2.3 P1-1: buildPetBrief only reads matters/commitments/facts, so the
-      // projection no longer pays for the full nine-table snapshot.
+      // 0.3.0 P0-T2: buildPetBrief reads matters/commitments/facts only. The
+      // narrow projections give it the same rows it used to get from whole
+      // entities (top-N facts by the same comparator, open commitments with an
+      // SQL-computed hasEvidence flag, the redactor name candidates) without
+      // the full-entity mapping and without the status+rowid TEMP B-TREE spill.
       try {
         const store = openReadStore()
-        snapshot = store.read(() => ({
-          version: 1,
-          matters: store.loadMatters(),
-          commitments: store.loadCommitments(),
-          // buildPetBrief only ever reads listFacts(), i.e. confirmed + not
-          // expired/deleted; filtering status in SQL avoids mapping history rows.
-          facts: store.loadFacts({ status: 'confirmed' }),
-        }))
+        const projected = store.read(() => {
+          const matters = store.loadMatters()
+          const secrecyOf = (matter) => {
+            const level = Number(matter.secrecy ?? 0)
+            return Number.isFinite(level) ? level : Number.POSITIVE_INFINITY
+          }
+          const publicMatterIds = matters.filter((matter) => matter.status === 'active' && secrecyOf(matter) < 2).map((matter) => matter.id)
+          return {
+            matters,
+            commitments: store.projectCommitmentsForPetBrief(),
+            facts: store.projectFactsForPetBrief({
+              limit: PET_BRIEF_MAX_ITEMS,
+              minConfidence: PET_BRIEF_MIN_CONFIDENCE,
+              matterIds: publicMatterIds,
+            }),
+            names: [...new Set([
+              ...store.projectCommitmentCreditorCandidates(),
+              ...store.projectFactSubjectCandidates(),
+            ])],
+          }
+        })
+        ledger = {
+          listMatters: (status) => status === undefined ? projected.matters : projected.matters.filter((matter) => matter.status === status),
+          listCommitments: () => projected.commitments,
+          listFacts: () => projected.facts,
+        }
+        nameCandidates = projected.names
       } catch (error) {
         const code = error?.code === 'E_SCHEMA_STALE' || error?.code === 'E_SCHEMA_NEWER' ? error.code : 'E_STORE'
         return fail(code, error?.message ?? String(error))
       }
     }
-    const ledger = Ledger.fromJSON(snapshot)
-    const brief = buildPetBrief(ledger, displayPolicy ? { now: Date.now(), displayPolicy } : { now: Date.now() })
+    const brief = buildPetBrief(ledger, {
+      now: Date.now(),
+      ...(nameCandidates ? { nameCandidates } : {}),
+      ...(displayPolicy ? { displayPolicy } : {}),
+    })
     if (check) {
       const result = validatePetBrief(brief, validateOptions)
       console.log(JSON.stringify({ ok: result.ok, checked: 'generated', expiresAt: brief.expiresAt, counts: brief.counts, errors: result.errors, warnings: result.warnings }, null, 2))
@@ -5302,7 +5344,17 @@ async function remind(args) {
   const mutating = sub === 'install' || sub === 'uninstall' || flags.install === true ||
     flags.uninstall === true || flags.ics !== undefined || flags.deliver === true || flags.notify === true
   const store = mutating ? dbStore() : readStoreOrExit()
-  const ledger = mutating ? loadLedger({ commitments: {} }) : loadReadLedger({ commitments: {} })
+  // 0.3.0 P0-T2: reminder planning only reads id/status/action/dueAt/offsets,
+  // so a narrow projection replaces the whole-entity commitment load (which
+  // cost ~480ms and mapped every row at a 200k-row ledger). Legacy JSON-store
+  // mode keeps loadJson().
+  let planLedger = null
+  const plannerLedger = () => {
+    if (planLedger) return planLedger
+    if (mode === 'json' || !store) { planLedger = loadJson(); return planLedger }
+    planLedger = reminderLedgerFromRows(store.read(() => store.projectCommitmentsForReminders()))
+    return planLedger
+  }
   const scheduler = await loadScheduler()
   if (sub === 'install' || flags.install) {
     const dir = join(HOME, 'scheduler')
@@ -5375,7 +5427,7 @@ async function remind(args) {
   // One prefix query instead of getMeta() per commitment (read-only store safe).
   const snoozed = {}
   for (const [key, value] of store?.listMetaByPrefix('snooze:') ?? []) snoozed[key.slice('snooze:'.length)] = value
-  const reminders = buildReminders(ledger, { now: new Date(), snoozedUntil: snoozed })
+  const reminders = buildReminders(plannerLedger(), { now: new Date(), snoozedUntil: snoozed })
   if (flags.ics) {
     const path = typeof flags.ics === 'string' ? flags.ics : (positional[0] || join(HOME, 'reminders.ics'))
     writeFileSync(path, toIcs(reminders, { now: new Date() }), { mode: 0o600 })
@@ -5901,12 +5953,16 @@ async function tui(args) {
   const { buildReminders } = await loadRemind()
   const render = () => {
     // 0.2.3 §4.8: no writer lock; each refresh reads the current committed snapshot.
-    const ledger = loadReadLedger({ commitments: {} })
+    // 0.3.0 P0-T2: one narrow projection feeds both the open list and the
+    // reminder planner (all non-done rows incl. undated open commitments).
     const store = readStoreOrExit()
-    const open = ledger.openCommitments()
+    const rows = mode === 'json' || !store
+      ? loadJson().listCommitments()
+      : store.read(() => store.projectCommitmentsForReminders({ includeUndated: true }))
+    const open = rows.filter((c) => c.status === 'open')
     const localDay = localDayOf(Date.now())
     const due = open.filter((c) => c.dueAt && c.dueAt.slice(0, 10) <= localDay)
-    const reminders = buildReminders(ledger, { now: new Date() })
+    const reminders = buildReminders(reminderLedgerFromRows(rows), { now: new Date() })
     const deliveries = store?.listDeliveries(3) ?? []
     const lines = [
       'Advisers TUI (read-only)',
@@ -7570,7 +7626,10 @@ if (!command) {
   const asJson = args.includes('--json')
   if (asJson || sources) {
     // The JSON contract and --sources need full commitment entities (evidence).
-    const ledger = readLedgerForCommand({ commitments: sources ? {} : { status: 'open' } })
+    // 0.3.0 P0-T1: 'table' reads the table without the status index, so the
+    // historical rowid order is kept with no ORDER BY rowid TEMP B-TREE spill
+    // (today --json used to write 10 MB per run at a 200k-row ledger).
+    const ledger = readLedgerForCommand({ commitments: sources ? {} : { status: 'open', order: 'table' } })
     await today(ledger.openCommitments(), { calendar: args.includes('--calendar'), sources, json: asJson, ledger })
   } else {
     // Human view: six columns + the cached classification (0.2.3 hot path).
@@ -7692,12 +7751,16 @@ if (!command) {
   const period = args[0] === 'week' ? 'week' : 'day'
   const store = readStoreOrExit()
   const { buildDigest } = await loadDigest()
-  const ledger = mode === 'json' ? loadJson() : loadReadLedger({ commitments: {} })
+  // 0.3.0 P0-T2: digest reads status/action/dueAt/doneAt only; the narrow
+  // projection keeps rowid order without mapping 100k full entities.
+  const commitments = mode === 'json' || !store
+    ? loadJson().listCommitments()
+    : store.read(() => store.projectCommitmentsForDigest())
   const conversationId = store?.listSessions(1)?.[0]?.conversationId ?? 'local'
   const { turns, deliveries } = store
     ? store.read(() => ({ turns: store.listTurns(conversationId, 200), deliveries: store.listDeliveries(100) }))
     : { turns: [], deliveries: [] }
-  console.log(buildDigest({ period, turns, commitments: ledger.listCommitments(), deliveries }))
+  console.log(buildDigest({ period, turns, commitments, deliveries }))
   }
 } else if (command === 'week') {
   if (mode === 'json') printWeek(loadJson())

@@ -21,7 +21,8 @@
   "exports": {
     ".": "./index.js",
     "./package.json": "./package.json",
-    "./lib/safety/index.js": "./lib/safety/index.js"
+    "./lib/safety/index.js": "./lib/safety/index.js",
+    "./lib/ledger-read.js": "./lib/ledger-read.js"
   },
   "files": [
     "index.js",

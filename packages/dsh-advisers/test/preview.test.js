@@ -1,19 +1,30 @@
 import assert from 'node:assert/strict'
-import test from 'node:test'
+import { mkdtempSync, rmSync } from 'node:fs'
+import { tmpdir } from 'node:os'
+import { join } from 'node:path'
+import test, { after } from 'node:test'
 import { assertSupportedJsonSchema, validateJsonSchemaValue } from '@deepseek-ai/dsh-tools'
 import { apply } from '../index.js'
 
-// 0.2.3 honest-preview contract (task-85).
+// Preview fallback contract (0.2.3 task-85, kept for the 0.3.0 fallback path).
 //
-// The DSH bundle still reads an in-memory AdvisersRuntime and does not open
-// ~/.advisers/state.db (read-only ledger wiring is planned for 0.3). The three
-// ledger read tools therefore advertise and return a preview marker, so an
-// empty preview is never mistaken for a real empty ledger. These tests pin the
-// contract:
+// The three ledger read tools read the real ledger when one is readable (see
+// ledger-read.test.js). This suite pins the FALLBACK: with no readable ledger the
+// tools return the 0.2.x in-memory preview and a required source marker, so an
+// empty preview is never mistaken for a real empty ledger:
 //   - every successful read payload carries preview / source / note;
 //   - the 0.2.x payload fields, values and error codes are unchanged (additive);
-//   - rendered text and tool descriptions disclose the preview;
+//   - rendered text and tool descriptions disclose the fallback;
 //   - a later edit cannot silently drop the fields (they are schema-required).
+
+// 0.3.0: these tools read the REAL ledger when one exists. These tests cover the
+// preview FALLBACK (no readable ledger): point ADVISERS_HOME at a fresh, empty
+// directory so a developer's real ~/.advisers can never be read by the suite.
+const EMPTY_ROOT = mkdtempSync(join(tmpdir(), 'advisers-dsh-preview-'))
+const EMPTY_HOME = join(EMPTY_ROOT, 'home')
+process.env.ADVISERS_HOME = EMPTY_HOME
+delete process.env.ADVISERS_STORE
+after(() => { rmSync(EMPTY_ROOT, { recursive: true, force: true }) })
 
 const READ_ONLY_TOOL_NAMES = ['advisers_evidence', 'advisers_today', 'advisers_who']
 const PREVIEW_FIELDS = ['note', 'preview', 'source']
@@ -61,7 +72,7 @@ function seedLedger(runtime) {
   return { matter, commitment }
 }
 
-test('read-tool schemas require the preview marker (0.2.3 contract)', () => {
+test('read-tool schemas require the source marker (0.3.0 contract)', () => {
   const { byName } = mount()
   for (const name of READ_ONLY_TOOL_NAMES) {
     const tool = byName.get(name)
@@ -72,9 +83,10 @@ test('read-tool schemas require the preview marker (0.2.3 contract)', () => {
     // defineTool normalizes per-property `required: true` into a parent array.
     const required = success.properties.data.required
     assert.equal(properties.preview?.type, 'boolean')
-    assert.equal(properties.preview?.const, true)
     assert.equal(properties.source?.type, 'string')
-    assert.deepEqual(properties.source?.enum, ['preview-no-ledger'])
+    // 0.3.0: the value is data, not a constant; the real-ledger source is allowed
+    // but the preview source must stay a valid branch.
+    assert.deepEqual(properties.source?.enum, ['preview-no-ledger', 'ledger-readonly'])
     assert.equal(properties.note?.type, 'string')
     assert.ok(required.includes('preview'), name + ' data.preview must be required')
     assert.ok(required.includes('source'), name + ' data.source must be required')
@@ -219,13 +231,14 @@ test('structured error codes and the 0.2.x error envelope are preserved', async 
   assert.match(internal.text, /^INTERNAL_ERROR: /)
 })
 
-test('tool descriptions advertise the preview and the real-data alternative (tools/list)', () => {
+test('tool descriptions advertise the real-ledger read and the preview fallback (tools/list)', () => {
   const { byName } = mount()
   for (const name of READ_ONLY_TOOL_NAMES) {
     const description = byName.get(name).description
-    assert.match(description, /PREVIEW/, name + ' description must say PREVIEW')
-    assert.match(description, /~\/\.advisers\/state\.db/, name + ' description must name the unwired ledger')
-    assert.match(description, /CLI|MCP/, name + ' description must point at a real-data alternative')
+    assert.match(description, /read-only/i, name + ' description must say read-only')
+    assert.match(description, /~\/\.advisers\/state\.db/, name + ' description must name the ledger')
+    assert.match(description, /preview/i, name + ' description must disclose the preview fallback')
+    assert.match(description, /real local Advisers ledger/, name + ' description must point at the real ledger')
     assert.match(description, /(Never writes the ledger|write the ledger, or send a message)/, name + ' keeps the read-only promise')
   }
   // advisers_brief and advisers_office do not depend on the ledger and are unchanged.

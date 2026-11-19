@@ -401,7 +401,11 @@ test('mcp: scripts/mcp-dev.mjs serves the library over real stdio', () => {
     const capture = byId.get(5)
     assert.equal(capture.result.isError, false)
     assert.equal(JSON.parse(capture.result.content[0].text).candidate.status, 'pending')
-    assert.deepEqual(JSON.parse(byId.get(6).result.content[0].text), { commitments: [], clearance: 0, protectedExcluded: 0 })
+    // 0.3.0 P0-T3: list results also carry total/truncated (+ the commit_ls
+    // limit), so a capped result can never look like the whole ledger.
+    assert.deepEqual(JSON.parse(byId.get(6).result.content[0].text), {
+      commitments: [], clearance: 0, protectedExcluded: 0, total: 0, truncated: false, limit: 50,
+    })
 
     const store = new SqliteStore(join(home, 'state.db'))
     try {

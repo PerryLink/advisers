@@ -1,0 +1,59 @@
+{
+  "version": 1,
+  "frozenAt": "2026-11-20",
+  "description": "Contract consumption registry. Add an entry when a consumer starts tracking a contract; this makes the licensing/derivative surface auditable (docs/DERIVED-PROJECTS.md).",
+  "consumers": [
+    {
+      "id": "cli-scripts-third-party",
+      "visibility": "public",
+      "contracts": [
+        "cli-json@1",
+        "errors@1",
+        "exit-codes@1",
+        "status@1"
+      ],
+      "inRepo": true,
+      "inCi": true,
+      "status": "covered by check-contracts --cli/--status/--exit",
+      "note": "Any shell/CI script that parses `advisers ... --json`; the checker validates the frozen shapes against the real CLI."
+    },
+    {
+      "id": "mcp-clients",
+      "visibility": "public",
+      "contracts": [
+        "mcp-tools@1",
+        "mcp-resources@1",
+        "mcp-protocol@legacy",
+        "mcp-errors@1"
+      ],
+      "inRepo": true,
+      "inCi": true,
+      "status": "covered by check-contracts --mcp against the real stdio server",
+      "note": "Claude Code / Cursor / Copilot Studio configured per docs/MCP.md; real third-party clients are not run in this CI."
+    },
+    {
+      "id": "dsh-advisers",
+      "visibility": "public",
+      "contracts": [
+        "dsh-tools@1 (preview)",
+        "errors@1 (external section)"
+      ],
+      "inRepo": true,
+      "inCi": true,
+      "status": "existing package; external error codes preserved in the registry",
+      "note": "Full DSH payload v2 (real read-only ledger) belongs to the DSH wave; 0.2.4 stays preview."
+    },
+    {
+      "id": "famling-desktop-games",
+      "visibility": "private",
+      "contracts": [
+        "pet-brief@0.2"
+      ],
+      "inRepo": false,
+      "inCi": false,
+      "status": "cross-repo, not in this repo CI (docs/PET-BRIEF-CONSUMERS.md)",
+      "note": "Closed schema owned by docs/pet-brief/schema-v0.2.json; not duplicated under contracts/."
+    }
+  ],
+  "license": "CC-BY-NC-SA-4.0 (intended; see LICENSE status note)"
+}

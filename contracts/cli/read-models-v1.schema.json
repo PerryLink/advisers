@@ -1,0 +1,1508 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/PerryLink/advisers/contracts/cli/read-models-v1.schema.json",
+  "title": "Advisers CLI JSON read models (contract v1)",
+  "description": "Frozen v1 shapes for the deterministic, read-only CLI --json surfaces listed in commands-v1.json. Shapes are additive (backward compatible): new optional keys may appear, existing keys keep their meaning; required keys here must always be present. Errors are the separate ErrorEnvelope (stderr, exit 1). Status and exit codes are frozen separately in status-v1.json / exit-codes-v1.json.",
+  "version": 1,
+  "x-license": "CC-BY-NC-SA-4.0",
+  "x-contract-status": "frozen",
+  "x-frozen-at": "2026-11-20",
+  "x-source-commit": "35a51c3",
+  "x-compat": "backward",
+  "x-source": "docs/CLI-JSON.md + live CLI output at the freeze commit",
+  "$defs": {
+    "SourceRef": {
+      "type": "object",
+      "description": "One evidence/source reference. Source schema v2 plus legacy pointer shapes are both read; see docs/SOURCE-SCHEMA.md. The exact shape is owned by that document, not by this v1 freeze.",
+      "additionalProperties": true
+    },
+    "ResolvedEvidenceItem": {
+      "type": "object",
+      "description": "One resolved/unverifiable/missing evidence row. Fields such as kind/type/ref/quote/quoteSha256/resolution/reason are documented in docs/SOURCE-SCHEMA.md; additive fields are allowed.",
+      "additionalProperties": true
+    },
+    "Commitment": {
+      "type": "object",
+      "properties": {
+        "id": {
+          "type": "string",
+          "description": "Commitment id (cm_*)."
+        },
+        "matterId": {
+          "type": "string"
+        },
+        "debtor": {
+          "type": "string",
+          "description": "user | agent | third:<label>"
+        },
+        "creditor": {
+          "type": "string"
+        },
+        "action": {
+          "type": "string"
+        },
+        "dueAt": {
+          "type": "string",
+          "minLength": 4,
+          "description": "Original dueAt text, returned verbatim; may be absent."
+        },
+        "timezone": {
+          "type": "string",
+          "description": "IANA time zone."
+        },
+        "status": {
+          "type": "string",
+          "enum": [
+            "open",
+            "done",
+            "snoozed",
+            "dropped"
+          ]
+        },
+        "evidence": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/SourceRef"
+          }
+        },
+        "capability": {
+          "type": "string",
+          "enum": [
+            "calendar",
+            "todo",
+            "none"
+          ]
+        },
+        "supersedes": {
+          "type": "string"
+        },
+        "doneAt": {
+          "type": "string",
+          "minLength": 4,
+          "description": "ISO-8601 timestamp string"
+        },
+        "reminderOffsets": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        }
+      },
+      "required": [
+        "id",
+        "debtor",
+        "creditor",
+        "action",
+        "status",
+        "timezone",
+        "capability"
+      ],
+      "additionalProperties": true,
+      "description": "A ledger Commitment row (additive: new optional fields may appear)."
+    },
+    "Delivery": {
+      "type": "object",
+      "properties": {
+        "id": {
+          "type": "string",
+          "description": "Delivery id (del_* or template output id)."
+        },
+        "matterId": {
+          "type": "string"
+        },
+        "conversationId": {
+          "type": "string"
+        },
+        "files": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          },
+          "description": "Delivered file paths/names (as recorded)."
+        },
+        "tool": {
+          "type": "string"
+        },
+        "title": {
+          "type": "string"
+        },
+        "validation": {
+          "type": "string"
+        },
+        "createdAt": {
+          "type": "string",
+          "minLength": 4,
+          "description": "ISO-8601 timestamp string"
+        }
+      },
+      "required": [
+        "id",
+        "matterId",
+        "conversationId",
+        "files",
+        "createdAt"
+      ],
+      "additionalProperties": true
+    },
+    "Matter": {
+      "type": "object",
+      "properties": {
+        "id": {
+          "type": "string",
+          "description": "Matter id (matter_*)."
+        },
+        "title": {
+          "type": "string"
+        },
+        "status": {
+          "type": "string",
+          "enum": [
+            "active",
+            "paused",
+            "archived"
+          ]
+        },
+        "domain": {
+          "type": "string"
+        },
+        "secrecy": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 3
+        },
+        "summary": {
+          "type": "string"
+        },
+        "participants": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "deadlines": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "openQuestions": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "createdAt": {
+          "type": "string",
+          "minLength": 4,
+          "description": "ISO-8601 timestamp string"
+        },
+        "updatedAt": {
+          "type": "string",
+          "minLength": 4,
+          "description": "ISO-8601 timestamp string"
+        }
+      },
+      "required": [
+        "id",
+        "title",
+        "status",
+        "domain",
+        "secrecy",
+        "createdAt",
+        "updatedAt"
+      ],
+      "additionalProperties": true
+    },
+    "MatterRow": {
+      "type": "object",
+      "properties": {
+        "id": {
+          "type": "string"
+        },
+        "title": {
+          "type": "string"
+        },
+        "status": {
+          "type": "string",
+          "enum": [
+            "active",
+            "paused",
+            "archived"
+          ]
+        },
+        "domain": {
+          "type": "string"
+        },
+        "secrecy": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 3
+        },
+        "clientId": {
+          "oneOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "projectId": {
+          "oneOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "openCommitments": {
+          "type": "integer"
+        },
+        "nextDueAt": {
+          "oneOf": [
+            {
+              "type": "string",
+              "minLength": 4,
+              "description": "ISO-8601 timestamp string"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        }
+      },
+      "required": [
+        "id",
+        "title",
+        "status",
+        "domain",
+        "secrecy",
+        "clientId",
+        "projectId",
+        "openCommitments",
+        "nextDueAt"
+      ],
+      "additionalProperties": true
+    },
+    "MemoryCandidate": {
+      "type": "object",
+      "properties": {
+        "id": {
+          "type": "string",
+          "description": "cand_* id."
+        },
+        "kind": {
+          "type": "string",
+          "description": "commitment | fact | preference (extensible)."
+        },
+        "payload": {
+          "type": "object",
+          "description": "Kind-specific candidate payload.",
+          "additionalProperties": true
+        },
+        "evidence": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/SourceRef"
+          }
+        },
+        "status": {
+          "type": "string",
+          "enum": [
+            "pending",
+            "accepted",
+            "rejected"
+          ]
+        },
+        "createdAt": {
+          "type": "string",
+          "minLength": 4,
+          "description": "ISO-8601 timestamp string"
+        },
+        "reviewedAt": {
+          "type": "string",
+          "minLength": 4,
+          "description": "ISO-8601 timestamp string"
+        },
+        "rejectReason": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "id",
+        "kind",
+        "payload",
+        "evidence",
+        "status",
+        "createdAt"
+      ],
+      "additionalProperties": true
+    },
+    "ReminderItem": {
+      "type": "object",
+      "properties": {
+        "commitmentId": {
+          "type": "string"
+        },
+        "action": {
+          "type": "string"
+        },
+        "dueAt": {
+          "type": "string",
+          "minLength": 4,
+          "description": "ISO-8601 timestamp string"
+        },
+        "bucket": {
+          "type": "string",
+          "enum": [
+            "overdue",
+            "due-today",
+            "due-1d",
+            "upcoming"
+          ]
+        },
+        "level": {
+          "type": "string",
+          "enum": [
+            "L1",
+            "L2",
+            "L3"
+          ]
+        },
+        "ruleId": {
+          "type": "string"
+        },
+        "reminderOffsets": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        }
+      },
+      "required": [
+        "commitmentId",
+        "action",
+        "dueAt",
+        "bucket",
+        "level",
+        "ruleId"
+      ],
+      "additionalProperties": true
+    },
+    "AgendaItem": {
+      "type": "object",
+      "properties": {
+        "id": {
+          "type": "string",
+          "description": "Commitment/calendar id, or the day id for all-day calendar items without a uid."
+        },
+        "kind": {
+          "type": "string",
+          "enum": [
+            "commitment",
+            "calendar",
+            "done"
+          ]
+        },
+        "title": {
+          "type": "string",
+          "description": "Clipped to 120 characters."
+        },
+        "allDay": {
+          "type": "boolean"
+        },
+        "at": {
+          "oneOf": [
+            {
+              "type": "string",
+              "minLength": 4,
+              "description": "Occurrence instant when known."
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "localDate": {
+          "oneOf": [
+            {
+              "type": "string",
+              "pattern": "^\\d{4}-\\d{2}-\\d{2}$"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "localTime": {
+          "oneOf": [
+            {
+              "type": "string",
+              "pattern": "^\\d{2}:\\d{2}$"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "endAt": {
+          "type": "string",
+          "minLength": 4,
+          "description": "ISO-8601 timestamp string"
+        },
+        "matterId": {
+          "type": "string"
+        },
+        "ref": {
+          "type": "object",
+          "description": "{kind,id} reference.",
+          "additionalProperties": true
+        },
+        "meta": {
+          "type": "object",
+          "description": "Kind-specific metadata (rrule/location/debtor/...).",
+          "additionalProperties": true
+        }
+      },
+      "required": [
+        "id",
+        "kind",
+        "title",
+        "allDay"
+      ],
+      "additionalProperties": true
+    },
+    "Window": {
+      "type": "object",
+      "properties": {
+        "from": {
+          "type": "string",
+          "pattern": "^\\d{4}-\\d{2}-\\d{2}$"
+        },
+        "to": {
+          "type": "string",
+          "pattern": "^\\d{4}-\\d{2}-\\d{2}$"
+        },
+        "days": {
+          "type": "integer"
+        },
+        "timezone": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "from",
+        "to",
+        "days",
+        "timezone"
+      ],
+      "additionalProperties": true
+    },
+    "ContractsDiscovery": {
+      "type": "object",
+      "properties": {
+        "cliJson": {
+          "type": "integer"
+        },
+        "errors": {
+          "type": "integer"
+        },
+        "exitCodes": {
+          "type": "integer"
+        },
+        "mcpTools": {
+          "type": "integer"
+        },
+        "mcpResources": {
+          "type": "integer"
+        },
+        "mcpProtocol": {
+          "type": "string",
+          "description": "Neprotocol version: one of contracts/mcp/versions-v1.json supportedProtocolVersions."
+        },
+        "dshTools": {
+          "type": "integer"
+        },
+        "petBrief": {
+          "type": "integer"
+        }
+      },
+      "required": [
+        "cliJson",
+        "errors",
+        "exitCodes",
+        "mcpTools",
+        "mcpResources",
+        "mcpProtocol",
+        "dshTools",
+        "petBrief"
+      ],
+      "additionalProperties": true,
+      "description": "Additive discovery field. Wired by the 0.3.0 integration wave (bin/ change); when present it must equal contracts/versions-v1.json discovery.expected."
+    },
+    "StatusPayload": {
+      "type": "object",
+      "properties": {
+        "version": {
+          "type": "string",
+          "description": "Running package version."
+        },
+        "node": {
+          "type": "string",
+          "description": "process.version."
+        },
+        "office": {
+          "type": "string",
+          "enum": [
+            "local build linked",
+            "external package"
+          ]
+        },
+        "home": {
+          "type": "string",
+          "description": "ADVISERS_HOME (absolute path)."
+        },
+        "store": {
+          "type": "object",
+          "properties": {
+            "type": {
+              "type": "string",
+              "enum": [
+                "sqlite",
+                "json"
+              ]
+            },
+            "path": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "type",
+            "path"
+          ],
+          "additionalProperties": true
+        },
+        "model": {
+          "type": "string",
+          "description": "Human-readable model mode label; never a key."
+        },
+        "soul": {
+          "type": "string",
+          "enum": [
+            "present",
+            "not initialized"
+          ]
+        },
+        "matters": {
+          "type": "integer"
+        },
+        "prefs": {
+          "type": "integer"
+        },
+        "routines": {
+          "type": "integer"
+        },
+        "links": {
+          "type": "integer"
+        },
+        "sessions": {
+          "type": "integer"
+        },
+        "deliveries": {
+          "type": "integer"
+        },
+        "modelUsage": {
+          "type": "object",
+          "properties": {
+            "calls": {
+              "type": "integer"
+            },
+            "prompt_tokens": {
+              "type": "integer"
+            },
+            "completion_tokens": {
+              "type": "integer"
+            },
+            "reasoning_tokens": {
+              "type": "integer"
+            },
+            "cached_tokens": {
+              "type": "integer"
+            },
+            "total_tokens": {
+              "type": "integer"
+            }
+          },
+          "required": [
+            "calls"
+          ],
+          "additionalProperties": true
+        },
+        "contracts": {
+          "$ref": "#/$defs/ContractsDiscovery"
+        }
+      },
+      "required": [
+        "version",
+        "node",
+        "office",
+        "home",
+        "store",
+        "model",
+        "soul",
+        "matters",
+        "prefs",
+        "routines",
+        "links",
+        "sessions",
+        "deliveries"
+      ],
+      "additionalProperties": true
+    },
+    "TickPayload": {
+      "type": "object",
+      "properties": {
+        "now": {
+          "type": "string",
+          "minLength": 4,
+          "description": "ISO-8601 timestamp string"
+        },
+        "localDay": {
+          "type": "string",
+          "pattern": "^\\d{4}-\\d{2}-\\d{2}$"
+        },
+        "due": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "description": "Due commitment rows (kind-specific).",
+            "additionalProperties": true
+          }
+        }
+      },
+      "required": [
+        "now",
+        "localDay",
+        "due"
+      ],
+      "additionalProperties": true
+    },
+    "TodayCounts": {
+      "type": "object",
+      "properties": {
+        "today": {
+          "type": "integer"
+        },
+        "overdue": {
+          "type": "integer"
+        },
+        "week": {
+          "type": "integer"
+        },
+        "waiting": {
+          "type": "integer"
+        },
+        "noDue": {
+          "type": "integer"
+        }
+      },
+      "required": [
+        "today",
+        "overdue",
+        "week",
+        "waiting",
+        "noDue"
+      ],
+      "additionalProperties": true
+    },
+    "TodayPayload": {
+      "type": "object",
+      "properties": {
+        "now": {
+          "type": "string",
+          "minLength": 4,
+          "description": "ISO-8601 timestamp string"
+        },
+        "localDay": {
+          "type": "string",
+          "pattern": "^\\d{4}-\\d{2}-\\d{2}$"
+        },
+        "counts": {
+          "$ref": "#/$defs/TodayCounts"
+        },
+        "overdue": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/Commitment"
+          }
+        },
+        "today": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/Commitment"
+          }
+        },
+        "week": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/Commitment"
+          }
+        },
+        "waiting": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/Commitment"
+          }
+        },
+        "noDue": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/Commitment"
+          }
+        },
+        "next": {
+          "oneOf": [
+            {
+              "type": "object",
+              "properties": {
+                "id": {
+                  "type": "string"
+                },
+                "action": {
+                  "type": "string"
+                },
+                "dueAt": {
+                  "type": "string",
+                  "minLength": 4,
+                  "description": "ISO-8601 timestamp string"
+                }
+              },
+              "required": [
+                "id",
+                "action"
+              ],
+              "additionalProperties": true
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "calendar": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "description": "Calendar occurrences for today (--calendar only).",
+            "additionalProperties": true
+          }
+        },
+        "sources": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "description": "Commitment sources (--sources only).",
+            "additionalProperties": true
+          }
+        }
+      },
+      "required": [
+        "now",
+        "localDay",
+        "counts",
+        "overdue",
+        "today",
+        "week",
+        "waiting",
+        "noDue",
+        "next"
+      ],
+      "additionalProperties": true
+    },
+    "RemindPayload": {
+      "type": "object",
+      "properties": {
+        "now": {
+          "type": "string",
+          "minLength": 4,
+          "description": "ISO-8601 timestamp string"
+        },
+        "reminders": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/ReminderItem"
+          }
+        }
+      },
+      "required": [
+        "now",
+        "reminders"
+      ],
+      "additionalProperties": true
+    },
+    "WhoPayload": {
+      "type": "object",
+      "properties": {
+        "mine": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/Commitment"
+          }
+        },
+        "waiting": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/Commitment"
+          }
+        }
+      },
+      "required": [
+        "mine",
+        "waiting"
+      ],
+      "additionalProperties": true
+    },
+    "AgendaPayload": {
+      "type": "object",
+      "properties": {
+        "ok": {
+          "type": "boolean",
+          "const": true
+        },
+        "command": {
+          "type": "string",
+          "const": "agenda"
+        },
+        "now": {
+          "type": "string",
+          "minLength": 4,
+          "description": "ISO-8601 timestamp string"
+        },
+        "window": {
+          "$ref": "#/$defs/Window"
+        },
+        "overdue": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/AgendaItem"
+          }
+        },
+        "days": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "properties": {
+              "date": {
+                "type": "string",
+                "pattern": "^\\d{4}-\\d{2}-\\d{2}$"
+              },
+              "weekday": {
+                "type": "string"
+              },
+              "load": {
+                "type": "integer"
+              },
+              "items": {
+                "type": "array",
+                "items": {
+                  "$ref": "#/$defs/AgendaItem"
+                }
+              }
+            },
+            "required": [
+              "date",
+              "load",
+              "items"
+            ],
+            "additionalProperties": true
+          }
+        },
+        "waiting": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/AgendaItem"
+          }
+        },
+        "unscheduled": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/AgendaItem"
+          }
+        },
+        "conflicts": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "description": "{items:[id,id],...} overlapping timed entries.",
+            "additionalProperties": true
+          }
+        },
+        "counts": {
+          "type": "object",
+          "properties": {
+            "overdue": {
+              "type": "integer"
+            },
+            "today": {
+              "type": "integer"
+            },
+            "days": {
+              "type": "integer"
+            },
+            "waiting": {
+              "type": "integer"
+            },
+            "unscheduled": {
+              "type": "integer"
+            },
+            "conflicts": {
+              "type": "integer"
+            },
+            "perDayLoad": {
+              "type": "object",
+              "properties": {},
+              "additionalProperties": true
+            }
+          },
+          "required": [
+            "overdue",
+            "today",
+            "days",
+            "waiting",
+            "unscheduled",
+            "conflicts",
+            "perDayLoad"
+          ],
+          "additionalProperties": true
+        },
+        "degraded": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "description": "{source,code,id,reason} entries for unreadable data sources.",
+            "additionalProperties": true
+          }
+        }
+      },
+      "required": [
+        "ok",
+        "command",
+        "now",
+        "window",
+        "overdue",
+        "days",
+        "waiting",
+        "unscheduled",
+        "conflicts",
+        "counts",
+        "degraded"
+      ],
+      "additionalProperties": true
+    },
+    "MorningPayload": {
+      "type": "object",
+      "properties": {
+        "ok": {
+          "type": "boolean",
+          "const": true
+        },
+        "command": {
+          "type": "string",
+          "const": "morning"
+        },
+        "generatedAt": {
+          "type": "string",
+          "minLength": 4,
+          "description": "ISO-8601 timestamp string"
+        },
+        "localDay": {
+          "type": "string",
+          "pattern": "^\\d{4}-\\d{2}-\\d{2}$"
+        },
+        "window": {
+          "$ref": "#/$defs/Window"
+        },
+        "mustDo": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/AgendaItem"
+          }
+        },
+        "overdue": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/AgendaItem"
+          }
+        },
+        "meetings": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/AgendaItem"
+          }
+        },
+        "waiting": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/AgendaItem"
+          }
+        },
+        "upcoming": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/AgendaItem"
+          }
+        },
+        "unscheduled": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/AgendaItem"
+          }
+        },
+        "conflicts": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "description": "Overlapping timed entries.",
+            "additionalProperties": true
+          }
+        },
+        "counts": {
+          "type": "object",
+          "properties": {
+            "mustDo": {
+              "type": "integer"
+            },
+            "overdue": {
+              "type": "integer"
+            },
+            "meetings": {
+              "type": "integer"
+            },
+            "waiting": {
+              "type": "integer"
+            },
+            "upcoming": {
+              "type": "integer"
+            },
+            "unscheduled": {
+              "type": "integer"
+            },
+            "conflicts": {
+              "type": "integer"
+            }
+          },
+          "required": [
+            "mustDo",
+            "overdue",
+            "meetings",
+            "waiting",
+            "upcoming",
+            "unscheduled",
+            "conflicts"
+          ],
+          "additionalProperties": true
+        },
+        "dataSha256": {
+          "type": "string",
+          "pattern": "^[0-9a-f]{64}$",
+          "description": "SHA-256 of stable-stringified source data (deterministic for the same ledger/calendar day)."
+        },
+        "degraded": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "description": "Degraded data sources.",
+            "additionalProperties": true
+          }
+        },
+        "out": {
+          "type": "string",
+          "description": "Written markdown path when --out is used."
+        }
+      },
+      "required": [
+        "ok",
+        "command",
+        "generatedAt",
+        "localDay",
+        "window",
+        "mustDo",
+        "overdue",
+        "meetings",
+        "waiting",
+        "upcoming",
+        "unscheduled",
+        "conflicts",
+        "counts",
+        "dataSha256",
+        "degraded"
+      ],
+      "additionalProperties": true
+    },
+    "MatterShowPayload": {
+      "type": "object",
+      "properties": {
+        "ok": {
+          "type": "boolean",
+          "const": true
+        },
+        "command": {
+          "type": "string",
+          "const": "matter show"
+        },
+        "matter": {
+          "$ref": "#/$defs/Matter"
+        },
+        "counts": {
+          "type": "object",
+          "properties": {
+            "commitments": {
+              "type": "integer"
+            },
+            "open": {
+              "type": "integer"
+            },
+            "done": {
+              "type": "integer"
+            }
+          },
+          "required": [
+            "commitments",
+            "open",
+            "done"
+          ],
+          "additionalProperties": true
+        },
+        "open": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "properties": {
+              "id": {
+                "type": "string"
+              },
+              "action": {
+                "type": "string"
+              },
+              "dueAt": {
+                "oneOf": [
+                  {
+                    "type": "string",
+                    "minLength": 4,
+                    "description": "ISO-8601 timestamp string"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ]
+              },
+              "debtor": {
+                "type": "string"
+              },
+              "creditor": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "id",
+              "action",
+              "debtor",
+              "creditor"
+            ],
+            "additionalProperties": true
+          }
+        },
+        "nextDueAt": {
+          "oneOf": [
+            {
+              "type": "string",
+              "minLength": 4,
+              "description": "ISO-8601 timestamp string"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        }
+      },
+      "required": [
+        "ok",
+        "command",
+        "matter",
+        "counts",
+        "open",
+        "nextDueAt"
+      ],
+      "additionalProperties": true
+    },
+    "EvidenceSummary": {
+      "type": "object",
+      "properties": {
+        "byKind": {
+          "type": "object",
+          "properties": {
+            "observed": {
+              "type": "integer"
+            },
+            "manual": {
+              "type": "integer"
+            }
+          },
+          "required": [
+            "observed",
+            "manual"
+          ],
+          "additionalProperties": true
+        },
+        "missing": {
+          "type": "integer"
+        },
+        "unverifiable": {
+          "type": "integer"
+        },
+        "operatorEntered": {
+          "type": "integer"
+        }
+      },
+      "required": [
+        "byKind",
+        "missing",
+        "unverifiable",
+        "operatorEntered"
+      ],
+      "additionalProperties": true
+    },
+    "EvidenceShowPayload": {
+      "type": "object",
+      "properties": {
+        "schemaVersion": {
+          "type": "integer",
+          "const": 2
+        },
+        "commitment": {
+          "$ref": "#/$defs/Commitment"
+        },
+        "fact": {
+          "type": "object",
+          "description": "Fact row when the id is fact_*.",
+          "additionalProperties": true
+        },
+        "preference": {
+          "type": "object",
+          "description": "Preference row when the id is pref_*.",
+          "additionalProperties": true
+        },
+        "sources": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/ResolvedEvidenceItem"
+          }
+        },
+        "missing": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/ResolvedEvidenceItem"
+          }
+        },
+        "unverifiable": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/ResolvedEvidenceItem"
+          }
+        },
+        "summary": {
+          "$ref": "#/$defs/EvidenceSummary"
+        }
+      },
+      "required": [
+        "schemaVersion",
+        "sources",
+        "missing",
+        "unverifiable",
+        "summary"
+      ],
+      "additionalProperties": true
+    },
+    "PrivacyPayload": {
+      "type": "object",
+      "properties": {
+        "home": {
+          "type": "string"
+        },
+        "database": {
+          "type": "string"
+        },
+        "telemetry": {
+          "type": "string",
+          "const": "none"
+        },
+        "default_egress": {
+          "type": "string",
+          "const": "none"
+        },
+        "explicit_egress": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          },
+          "description": "Every wired opt-in egress path (human-readable)."
+        },
+        "provider": {
+          "type": "object",
+          "properties": {
+            "baseUrl": {
+              "type": "string"
+            },
+            "model": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "baseUrl",
+            "model"
+          ],
+          "additionalProperties": true
+        },
+        "secret_matter": {
+          "type": "string"
+        },
+        "at_rest_encryption": {
+          "type": "string"
+        },
+        "export": {
+          "type": "string"
+        },
+        "delete": {
+          "type": "string"
+        },
+        "audit": {
+          "type": "object",
+          "properties": {
+            "ok": {
+              "type": "boolean"
+            },
+            "count": {
+              "type": "integer"
+            }
+          },
+          "required": [
+            "ok"
+          ],
+          "additionalProperties": true
+        }
+      },
+      "required": [
+        "home",
+        "database",
+        "telemetry",
+        "default_egress",
+        "explicit_egress",
+        "provider",
+        "secret_matter",
+        "at_rest_encryption",
+        "audit",
+        "export",
+        "delete"
+      ],
+      "additionalProperties": true
+    },
+    "TosStatusPayload": {
+      "type": "object",
+      "properties": {
+        "version": {
+          "type": "string"
+        },
+        "manifestVersion": {
+          "type": "string"
+        },
+        "effectiveFrom": {
+          "type": "string",
+          "pattern": "^\\d{4}-\\d{2}-\\d{2}$"
+        },
+        "textSha256": {
+          "type": "string",
+          "pattern": "^[0-9a-f]{64}$"
+        },
+        "canonical": {
+          "type": "string"
+        },
+        "termsPath": {
+          "type": "string"
+        },
+        "url": {
+          "type": "string"
+        },
+        "accepted": {
+          "type": "boolean"
+        },
+        "reason": {
+          "type": "string"
+        },
+        "acceptance": {
+          "oneOf": [
+            {
+              "type": "object",
+              "description": "Acceptance record {version,sha256,acceptedAt,channel,nonInteractive}.",
+              "additionalProperties": true
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "store": {
+          "$ref": "#/$defs/StatusStore"
+        },
+        "audit": {
+          "type": "object",
+          "description": "Audit availability block {available,verified?,count?,note?}.",
+          "additionalProperties": true
+        },
+        "futureSeparateConsent": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        }
+      },
+      "required": [
+        "version",
+        "manifestVersion",
+        "effectiveFrom",
+        "textSha256",
+        "canonical",
+        "termsPath",
+        "url",
+        "accepted",
+        "reason",
+        "acceptance",
+        "store",
+        "audit",
+        "futureSeparateConsent"
+      ],
+      "additionalProperties": true
+    },
+    "StatusStore": {
+      "type": "object",
+      "properties": {
+        "type": {
+          "type": "string",
+          "enum": [
+            "sqlite",
+            "json"
+          ]
+        },
+        "path": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "type",
+        "path"
+      ],
+      "additionalProperties": true
+    }
+  }
+}

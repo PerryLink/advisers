@@ -19,12 +19,6 @@ export const DEFAULT_HORIZON_DAYS = 7
 const BUCKETS = new Set(['overdue', 'due-today', 'due-1d', 'upcoming'])
 const LEVELS = new Set(['L1', 'L2', 'L3'])
 
-const DAY_FORMAT = new Intl.DateTimeFormat('en-US', {
-  timeZone: TIME_ZONE,
-  year: 'numeric',
-  month: '2-digit',
-  day: '2-digit',
-})
 const TIME_FORMAT = new Intl.DateTimeFormat('en-US', {
   timeZone: TIME_ZONE,
   hour: '2-digit',
@@ -88,18 +82,34 @@ function requireNow(value) {
   return requireDate(value, 'now')
 }
 
-function dayParts(date) {
-  const parts = DAY_FORMAT.formatToParts(date)
-  const pick = (type) => parts.find((part) => part.type === type)?.value
-  return { year: pick('year'), month: pick('month'), day: pick('day') }
-}
-
-/** Local calendar day in Asia/Shanghai, as `YYYY-MM-DD`. */
+/**
+ * Local calendar day in Asia/Shanghai, as `YYYY-MM-DD`.
+ *
+ * 0.3.0 P0-T2: computed with UTC+8 arithmetic instead of
+ * Intl.DateTimeFormat.formatToParts. Shanghai has been a fixed UTC+8 offset
+ * without DST since 1991, so the two agree for every date the ledger stores;
+ * the arithmetic form is ~20x faster, which matters because the reminder and
+ * pet-brief views resolve one local day per due row (66k rows at a 200k
+ * ledger).
+ */
 export function localDay(value) {
   const date = toDate(value)
   if (!date) return null
-  const { year, month, day } = dayParts(date)
-  return `${year}-${month}-${day}`
+  return localDayOf(date)
+}
+
+/** Local calendar day string for an already-parsed instant. */
+function localDayOf(date) {
+  const wall = new Date(date.getTime() + SHANGHAI_OFFSET_MS)
+  const year = wall.getUTCFullYear()
+  const month = wall.getUTCMonth() + 1
+  const day = wall.getUTCDate()
+  return `${String(year).padStart(4, '0')}-${String(month).padStart(2, '0')}-${String(day).padStart(2, '0')}`
+}
+
+/** Day-of-epoch number of the Asia/Shanghai calendar day for an instant. */
+function localDayIndexFromMs(ms) {
+  return Math.floor((ms + SHANGHAI_OFFSET_MS) / DAY_MS)
 }
 
 /** Minutes since local midnight in Asia/Shanghai (0–1439). */
@@ -259,6 +269,9 @@ function resolveReminderOffsets(value) {
   }
   return resolved
 }
+
+/** Shared empty result for the reminder-planning fast path (never mutated). */
+const EMPTY_REMINDER_OFFSETS = Object.freeze([])
 
 /** Human label used inside a VALARM DESCRIPTION. */
 export function describeReminderOffset(value) {
@@ -527,23 +540,61 @@ export function buildReminders(ledger, options = {}) {
   const seen = new Set()
   const reminders = []
 
+  // 0.3.0 P0-T2: per-call caches. Reminder planning needs one parsed due
+  // instant and one local day per row, but a real ledger has only a few
+  // hundred distinct dueAt strings at 200k rows; caching the parse turns ~60k
+  // regex + Date.parse + Intl lookups into a few hundred and keeps remind/tui
+  // inside the 0.3.0 read budget.
+  const dueCache = new Map()
+  const dueInfo = (value) => {
+    const key = typeof value === 'string' ? value : value instanceof Date ? `date:${value.getTime()}` : `ms:${String(value)}`
+    let info = dueCache.get(key)
+    if (info === undefined) {
+      const date = toDate(value)
+      info = date ? { date, dayIndex: localDayIndexFromMs(date.getTime()), dueDay: localDayOf(date) } : null
+      dueCache.set(key, info)
+    }
+    return info
+  }
+  // readSnoozeUntil()/readReminderOffsets() can only find state that was
+  // injected, set on the row, or exposed by a duck-typed ledger hook. The
+  // common CLI path has none of that, so skip the per-row lookup instead of
+  // allocating a candidate array for every commitment.
+  const injectedSnooze = opts.snoozedUntil
+  const snoozeStatePossible = typeof injectedSnooze === 'function' ||
+    (injectedSnooze instanceof Map && injectedSnooze.size > 0) ||
+    (Boolean(injectedSnooze) && typeof injectedSnooze === 'object' && !(injectedSnooze instanceof Map) && Object.keys(injectedSnooze).length > 0) ||
+    typeof ledger.getMeta === 'function'
+  const injectedOffsets = opts.reminderOffsets
+  const offsetStatePossible = typeof injectedOffsets === 'function' ||
+    (injectedOffsets instanceof Map && injectedOffsets.size > 0) ||
+    (Boolean(injectedOffsets) && typeof injectedOffsets === 'object' && !(injectedOffsets instanceof Map) && Object.keys(injectedOffsets).length > 0) ||
+    opts.defaultReminderOffsets !== undefined ||
+    typeof ledger.getMeta === 'function'
+
   for (const commitment of commitments) {
     if (!commitment || typeof commitment !== 'object') continue
     if (!commitment.id) continue
     if (commitment.status === 'done' || commitment.status === 'dropped') continue
     if (commitment.dueAt == null || commitment.dueAt === '') continue
-    const due = toDate(commitment.dueAt)
-    if (!due) continue
+    const info = dueInfo(commitment.dueAt)
+    if (!info) continue
+    const due = info.date
 
-    const snoozeUntil = readSnoozeUntil(commitment, opts, ledger)
+    const snoozeUntil = snoozeStatePossible || commitment.snoozedUntil !== undefined || commitment.snoozeUntil !== undefined ||
+      commitment.snoozeAt !== undefined || commitment.meta !== undefined
+      ? readSnoozeUntil(commitment, opts, ledger)
+      : null
     // An active snooze hides the commitment; once it expires the commitment
     // becomes visible again and the snooze-wake rule fires.
     if (snoozeUntil && snoozeUntil.getTime() > now.getTime()) continue
     const snoozeExpired = Boolean(snoozeUntil)
-    const reminderOffsets = readReminderOffsets(commitment, opts, ledger)
+    const reminderOffsets = offsetStatePossible || commitment.reminderOffsets !== undefined || commitment.meta !== undefined
+      ? readReminderOffsets(commitment, opts, ledger)
+      : EMPTY_REMINDER_OFFSETS
 
-    const dueDay = localDay(due)
-    const dayOffset = localDayIndex(dueDay) - todayIndex
+    const dueDay = info.dueDay
+    const dayOffset = info.dayIndex - todayIndex
     if (dayOffset > horizonDays) continue
 
     const bucket = bucketFor(dayOffset)
@@ -569,27 +620,31 @@ export function buildReminders(ledger, options = {}) {
       if (seen.has(key)) continue
       seen.add(key)
       reminders.push({
-        commitmentId: commitment.id,
-        action: commitment.action ?? '',
-        dueAt: outputDueAt(commitment.dueAt),
-        bucket: result.bucket,
-        level: result.level,
-        ruleId: result.ruleId,
-        // Only present when customised: pre-0.2.0 reminder objects keep their
-        // exact shape and toIcs falls back to the legacy relative alarms.
-        ...(reminderOffsets.length ? { reminderOffsets } : {}),
+        // Kept out of the output object: the final sort needs the instant,
+        // and toDate() per comparator call was the 0.2.x sort's hot spot.
+        dueMs: due.getTime(),
+        reminder: {
+          commitmentId: commitment.id,
+          action: commitment.action ?? '',
+          dueAt: outputDueAt(commitment.dueAt),
+          bucket: result.bucket,
+          level: result.level,
+          ruleId: result.ruleId,
+          // Only present when customised: pre-0.2.0 reminder objects keep their
+          // exact shape and toIcs falls back to the legacy relative alarms.
+          ...(reminderOffsets.length ? { reminderOffsets } : {}),
+        },
       })
     }
   }
 
-  const dueTime = (reminder) => toDate(reminder.dueAt)?.getTime() ?? 0
   reminders.sort(
     (left, right) =>
-      dueTime(left) - dueTime(right) ||
-      left.commitmentId.localeCompare(right.commitmentId) ||
-      left.ruleId.localeCompare(right.ruleId),
+      left.dueMs - right.dueMs ||
+      left.reminder.commitmentId.localeCompare(right.reminder.commitmentId) ||
+      left.reminder.ruleId.localeCompare(right.reminder.ruleId),
   )
-  return reminders
+  return reminders.map((entry) => entry.reminder)
 }
 
 /**

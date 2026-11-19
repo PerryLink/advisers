@@ -17,6 +17,11 @@
  *   the OIDC request environment is present, provenance is attempted by default.
  *   ADVISERS_PROVENANCE=0 or --no-provenance force it off.
  *
+ * When --provenance is active, NPM_TOKEN must be unset: a long-lived npm token
+ * cannot be combined with OIDC provenance, so the script fails closed instead of
+ * publishing without the OIDC identity. A failed `npm stage publish` prints the
+ * npm output and the npm debug-log directory before exiting non-zero.
+ *
  * This script NEVER approves a stage. Approval needs the account owner's OTP
  * (or the owner's approval of a CI-staged build) and must be done by that
  * person in their own terminal:
@@ -29,7 +34,7 @@
  */
 import { execFileSync } from 'node:child_process'
 import { mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
-import { tmpdir } from 'node:os'
+import { homedir, tmpdir } from 'node:os'
 import { join } from 'node:path'
 
 import { fileURLToPath } from 'node:url'
@@ -122,6 +127,17 @@ if (provenance && !oidcRequestable) {
   process.exit(2)
 }
 if (provenance) {
+  if (process.env.NPM_TOKEN) {
+    console.error(
+      [
+        'NPM_TOKEN must not be set when provenance is requested.',
+        'Trusted Publishing authenticates through the CI OIDC identity; a long-lived npm',
+        'token cannot be combined with --provenance. Unset NPM_TOKEN in the publishing job',
+        'and do not add the secret there. Nothing was staged.',
+      ].join('\n'),
+    )
+    process.exit(2)
+  }
   const cliVersion = npmCliVersion()
   if (!npmAtLeast(cliVersion, '11.15.0')) {
     console.error(
@@ -130,11 +146,6 @@ if (provenance) {
         '. Upgrade npm in the runner, then retry.',
     )
     process.exit(2)
-  }
-  if (process.env.NPM_TOKEN) {
-    console.warn(
-      'warning: NPM_TOKEN is set; trusted publishing should authenticate through OIDC instead of a long-lived token.',
-    )
   }
   console.log('provenance: on (npm --provenance via OIDC / Trusted Publishing; npm ' + cliVersion + ')')
 } else {
@@ -205,6 +216,7 @@ if (process.env.NPM_TOKEN) {
 }
 
 const staged = []
+let failed = null
 try {
   execFileSync('pnpm', ['-r', '--if-present', 'run', 'build'], { cwd: root, stdio: 'inherit' })
   for (const [dir, name] of packages) {
@@ -228,7 +240,15 @@ try {
         console.warn('already staged/published (allowed by ADVISERS_ALLOW_ALREADY_STAGED=1)')
         continue
       }
-      throw error
+      console.error('')
+      console.error('npm stage publish failed for ' + name + '@' + ver + (provenance ? ' (provenance/OIDC requested)' : '') + '; staging stopped.')
+      console.error('--- npm output (tail) ---')
+      const output = text.trim()
+      console.error(output ? output.split('\n').slice(-80).join('\n') : String(error.message || error))
+      console.error('npm debug logs (full cause): ' + join(homedir(), '.npm', '_logs'))
+      failed = { name, ver }
+      process.exitCode = 1
+      break
     }
     if (dryRun) {
       console.log('  dry-run ok (npm validated the package; nothing staged)')
@@ -248,6 +268,20 @@ try {
   if (rcDir) rmSync(rcDir, { recursive: true, force: true })
 }
 
+if (failed) {
+  console.error('')
+  if (dryRun) {
+    console.error('DRY-RUN FAILED: ' + failed.name + '@' + failed.ver + ' did not pass npm validation; nothing was staged.')
+  } else {
+    console.error('STAGING FAILED: ' + failed.name + '@' + failed.ver + ' did not stage.')
+    if (staged.length) {
+      console.error(staged.length + ' package(s) staged before the failure (review before approving anything):')
+      for (const item of staged) console.error('  ' + item.name + '@' + item.ver + '  ' + item.id)
+    }
+    console.error('Nothing was published; approval is a separate human step. Read the npm error and debug log before retrying.')
+  }
+  process.exit(1)
+}
 if (dryRun) {
   console.log('\ndry-run finished; nothing was staged.')
   process.exit(process.exitCode || 0)

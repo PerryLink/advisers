@@ -38,10 +38,55 @@ import { buildReminders } from './remind.js'
 import { inspectCaptureText } from './capture.js'
 import { classify, redact, safetyErrorFrom } from './safety/index.js'
 
+/**
+ * Default MCP protocol version. Legacy clients that send no version (or an
+ * unknown one) keep getting 2024-11-05, i.e. the pre-0.3.0 behaviour.
+ */
 export const PROTOCOL_VERSION = '2024-11-05'
+/**
+ * Legacy protocol versions negotiated by `initialize` (0.3.0 P0-T3).
+ *
+ * The 2025-06-18 / 2025-11-25 revisions keep the same initialize/tools/
+ * resources lifecycle this server implements, so echoing the client's
+ * supported version is safe; anything else (including the stateless
+ * 2026-07-28 modern revision, which needs server/discover) falls back to
+ * PROTOCOL_VERSION. The modern revisions are NOT implemented here: this
+ * server deliberately does not advertise server/discover, so a modern client
+ * probes once, gets an unknown-method error, and falls back to initialize.
+ */
+export const SUPPORTED_PROTOCOL_VERSIONS = Object.freeze(['2024-11-05', '2025-06-18', '2025-11-25'])
 export const SERVER_NAME = 'advisers'
 /** Hard cap for one stdio JSON-RPC line (bytes). */
 export const MAX_LINE_BYTES = 1024 * 1024
+/**
+ * Output caps for every list-shaped tool result (0.3.0 P0-T3 / S2).
+ *
+ * The content-safety classifier fail-closes any mcp.tool egress surface above
+ * 100k characters (lib/safety/classifier.js MAX_SCAN_CHARS), so an unbounded
+ * ledger listing used to turn advisers_today/commit_ls/remind into
+ * CONTENT_BLOCKED errors on a large ledger. Every read model now truncates
+ * AFTER the per-item clearance filter and BEFORE the classifier runs, and
+ * reports the true post-filter count in `total`/`mineTotal`/`waitingTotal`
+ * with `truncated: true`. Small ledgers are byte-for-byte unchanged.
+ */
+export const MCP_OUTPUT_LIMITS = Object.freeze({
+  todayCommitments: 20,
+  commitRows: 50,
+  commitRowsMax: 200,
+  whoRows: 20,
+  reminders: 20,
+  evidenceItems: 20,
+})
+/**
+ * Last-resort byte budget for one tool/resource payload. The per-tool row caps
+ * keep every normal result far below this, but a single commitment with a huge
+ * evidence array could still push a list over the classifier's 100k-character
+ * fail-closed threshold. When that happens the longest list is halved (and
+ * marked truncated) until the serialized payload fits, so the egress
+ * classifier never turns a large ledger into CONTENT_BLOCKED.
+ */
+export const MCP_MAX_RESULT_BYTES = 64 * 1024
+const PAYLOAD_LIST_KEYS = Object.freeze(['commitments', 'mine', 'waiting', 'reminders', 'sources', 'missing'])
 /** Receipt directories are small; refuse to slurp anything huge. */
 export const MAX_PACK_FILE_BYTES = 512 * 1024
 export const MAX_PACK_SUMS_BYTES = 64 * 1024
@@ -182,6 +227,30 @@ function safeJson(value) {
   }
 }
 
+/**
+ * Enforce MCP_MAX_RESULT_BYTES on a list-shaped payload, trimming the longest
+ * array until it fits and marking the result truncated (the total fields stay
+ * the true post-clearance counts). Non-list payloads are returned unchanged.
+ */
+function boundPayload(data) {
+  if (Buffer.byteLength(safeJson(data), 'utf8') <= MCP_MAX_RESULT_BYTES) return data
+  if (!data || typeof data !== 'object' || Array.isArray(data)) return data
+  const trimmed = { ...data }
+  for (;;) {
+    if (Buffer.byteLength(safeJson(trimmed), 'utf8') <= MCP_MAX_RESULT_BYTES) break
+    let target = null
+    for (const key of PAYLOAD_LIST_KEYS) {
+      const list = trimmed[key]
+      if (!Array.isArray(list) || list.length === 0) continue
+      if (target === null || list.length > trimmed[target].length) target = key
+    }
+    if (target === null) break
+    trimmed[target] = trimmed[target].slice(0, Math.floor(trimmed[target].length / 2))
+    trimmed.truncated = true
+  }
+  return trimmed
+}
+
 /** Structured CONTENT_BLOCKED tool result: isError=true, no original text. */
 function toolBlocked(id, error) {
   const payload = {
@@ -245,6 +314,16 @@ function optionalBoolean(args, key) {
   const value = args[key]
   if (value === undefined) return false
   if (typeof value !== 'boolean') throw invalidParams(key + ' must be a boolean')
+  return value
+}
+
+/** Optional 1..max integer row limit (undefined keeps the tool default). */
+function optionalLimit(args, key, max) {
+  const value = args[key]
+  if (value === undefined || value === null) return undefined
+  if (typeof value !== 'number' || !Number.isInteger(value) || value < 1 || value > max) {
+    throw invalidParams(key + ' must be an integer between 1 and ' + max)
+  }
   return value
 }
 
@@ -380,6 +459,9 @@ export function readReceiptDirectory(dir) {
  */
 export function createMcpServer({ store, ledger, loadLedger, loadStore, version = '0.0.0', audit, readPack, now = () => new Date(), clearance = 0 } = {}) {
   const serverVersion = String(version ?? '0.0.0')
+  // Protocol version agreed by the last legacy `initialize` (advisory only:
+  // the legacy method surface is identical for every supported revision).
+  let negotiatedProtocolVersion = PROTOCOL_VERSION
   // 0.2.5 A-2: clearance is process configuration, never a tool argument. An
   // invalid/negative value falls back to the most restrictive level (0).
   const requestedClearance = Number(clearance)
@@ -464,34 +546,50 @@ export function createMcpServer({ store, ledger, loadLedger, loadStore, version 
   function todayData() {
     const open = requireLedger('commitments').openCommitments()
     const view = splitByClearance('commitment', open)
+    // Cap AFTER clearance and BEFORE the egress classifier: `open` and `total`
+    // stay the true post-filter count, `truncated` says rows were withheld.
+    const commitments = view.visible.slice(0, MCP_OUTPUT_LIMITS.todayCommitments)
     return {
       open: view.visible.length,
-      commitments: view.visible.map((c) => ({ id: c.id, debtor: c.debtor, creditor: c.creditor, action: c.action, dueAt: c.dueAt })),
+      commitments: commitments.map((c) => ({ id: c.id, debtor: c.debtor, creditor: c.creditor, action: c.action, dueAt: c.dueAt })),
       clearance: clearanceLevel,
       protectedExcluded: view.protectedExcluded,
+      total: view.visible.length,
+      truncated: view.visible.length > commitments.length,
     }
   }
 
-  function commitListData(all) {
+  function commitListData(all, requestedLimit) {
     const rows = requireLedger('commitments')
       .listCommitments()
       .filter((c) => all || c.status === 'open')
     const view = splitByClearance('commitment', rows)
+    const limit = Number.isInteger(requestedLimit) ? requestedLimit : MCP_OUTPUT_LIMITS.commitRows
+    const commitments = view.visible.slice(0, limit)
     return {
-      commitments: view.visible.map((c) => ({ id: c.id, status: c.status, action: c.action, dueAt: c.dueAt, creditor: c.creditor })),
+      commitments: commitments.map((c) => ({ id: c.id, status: c.status, action: c.action, dueAt: c.dueAt, creditor: c.creditor })),
       clearance: clearanceLevel,
       protectedExcluded: view.protectedExcluded,
+      total: view.visible.length,
+      truncated: view.visible.length > commitments.length,
+      limit,
     }
   }
 
   function whoData() {
     const open = requireLedger('commitments').openCommitments()
     const view = splitByClearance('commitment', open)
+    const mine = view.visible.filter((c) => c.debtor === 'user' || c.debtor === 'agent')
+    const waiting = view.visible.filter((c) => c.debtor === 'third' || String(c.debtor).startsWith('third:'))
+    const limit = MCP_OUTPUT_LIMITS.whoRows
     return {
-      mine: view.visible.filter((c) => c.debtor === 'user' || c.debtor === 'agent'),
-      waiting: view.visible.filter((c) => c.debtor === 'third' || String(c.debtor).startsWith('third:')),
+      mine: mine.slice(0, limit),
+      waiting: waiting.slice(0, limit),
       clearance: clearanceLevel,
       protectedExcluded: view.protectedExcluded,
+      mineTotal: mine.length,
+      waitingTotal: waiting.length,
+      truncated: mine.length > limit || waiting.length > limit,
     }
   }
 
@@ -517,7 +615,14 @@ export function createMcpServer({ store, ledger, loadLedger, loadStore, version 
       if (hiddenIds.has(reminder.commitmentId)) protectedExcluded += 1
       else visible.push(reminder)
     }
-    return { reminders: visible, clearance: clearanceLevel, protectedExcluded }
+    const capped = visible.slice(0, MCP_OUTPUT_LIMITS.reminders)
+    return {
+      reminders: capped,
+      clearance: clearanceLevel,
+      protectedExcluded,
+      total: visible.length,
+      truncated: visible.length > capped.length,
+    }
   }
 
   function evidenceData(id) {
@@ -543,7 +648,20 @@ export function createMcpServer({ store, ledger, loadLedger, loadStore, version 
         note: 'record belongs to a protected matter (secrecy above MCP clearance); content withheld',
       }
     }
-    return { ...result, clearance: clearanceLevel, protectedExcluded: 0 }
+    // Same cap contract as the list tools: after clearance, before the
+    // classifier; totals describe the untruncated lists.
+    const sources = Array.isArray(result.sources) ? result.sources : []
+    const missing = Array.isArray(result.missing) ? result.missing : []
+    return {
+      ...result,
+      sources: sources.slice(0, MCP_OUTPUT_LIMITS.evidenceItems),
+      missing: missing.slice(0, MCP_OUTPUT_LIMITS.evidenceItems),
+      clearance: clearanceLevel,
+      protectedExcluded: 0,
+      sourcesTotal: sources.length,
+      missingTotal: missing.length,
+      truncated: sources.length > MCP_OUTPUT_LIMITS.evidenceItems || missing.length > MCP_OUTPUT_LIMITS.evidenceItems,
+    }
   }
 
   function evidenceIndex() {
@@ -667,7 +785,7 @@ export function createMcpServer({ store, ledger, loadLedger, loadStore, version 
   const tools = [
     {
       name: 'advisers_today',
-      description: 'Read the open-commitment count and the open commitments (read-only). ' + CLEARANCE_NOTE,
+      description: 'Read the open-commitment count and the open commitments (read-only). Returns at most ' + MCP_OUTPUT_LIMITS.todayCommitments + ' commitment rows; `open`/`total` are the true post-clearance count and `truncated` says rows were withheld. ' + CLEARANCE_NOTE,
       inputSchema: { type: 'object', properties: {} },
       annotations: READ_ONLY_ANNOTATIONS,
       run: () => todayData(),
@@ -675,15 +793,21 @@ export function createMcpServer({ store, ledger, loadLedger, loadStore, version 
     {
       name: 'advisers_commit_ls',
       description:
-        'List commitments (open by default; pass all=true for every status). Returns {commitments, clearance, protectedExcluded}. Read-only. ' +
+        'List commitments (open by default; pass all=true for every status). Returns {commitments, total, truncated, limit, clearance, protectedExcluded}; total is the post-clearance row count, so a truncated result is never mistaken for the whole ledger. Read-only. ' +
         CLEARANCE_NOTE,
-      inputSchema: { type: 'object', properties: { all: { type: 'boolean', description: 'Include done/snoozed/dropped commitments.' } } },
+      inputSchema: {
+        type: 'object',
+        properties: {
+          all: { type: 'boolean', description: 'Include done/snoozed/dropped commitments.' },
+          limit: { type: 'integer', minimum: 1, maximum: MCP_OUTPUT_LIMITS.commitRowsMax, description: 'Max rows to return (default ' + MCP_OUTPUT_LIMITS.commitRows + ', max ' + MCP_OUTPUT_LIMITS.commitRowsMax + ').' },
+        },
+      },
       annotations: READ_ONLY_ANNOTATIONS,
-      run: (args) => commitListData(optionalBoolean(args, 'all')),
+      run: (args) => commitListData(optionalBoolean(args, 'all'), optionalLimit(args, 'limit', MCP_OUTPUT_LIMITS.commitRowsMax)),
     },
     {
       name: 'advisers_who',
-      description: 'Who owes whom: mine (user/agent) versus waiting (third parties). Read-only. ' + CLEARANCE_NOTE,
+      description: 'Who owes whom: mine (user/agent) versus waiting (third parties). Read-only. Each array is capped at ' + MCP_OUTPUT_LIMITS.whoRows + ' rows; mineTotal/waitingTotal/truncated report the full counts. ' + CLEARANCE_NOTE,
       inputSchema: { type: 'object', properties: {} },
       annotations: READ_ONLY_ANNOTATIONS,
       run: () => whoData(),
@@ -704,7 +828,7 @@ export function createMcpServer({ store, ledger, loadLedger, loadStore, version 
     {
       name: 'advisers_remind',
       description:
-        'Read due reminders (no delivery, no network). Returns {reminders, clearance, protectedExcluded}. Read-only. ' +
+        'Read due reminders (no delivery, no network). Returns {reminders, total, truncated, clearance, protectedExcluded}; total is the post-clearance reminder count. Read-only. ' +
         CLEARANCE_NOTE,
       inputSchema: { type: 'object', properties: {} },
       annotations: READ_ONLY_ANNOTATIONS,
@@ -779,9 +903,20 @@ export function createMcpServer({ store, ledger, loadLedger, loadStore, version 
     return reply(id, { content: [{ type: 'text', text: message }], isError: true })
   }
 
-  function initializeResult() {
+  /**
+   * Legacy `initialize` result. 0.3.0 P0-T3: echo the client's version when
+   * this server implements that legacy revision (2024-11-05 / 2025-06-18 /
+   * 2025-11-25); a missing or unknown version keeps the 2024-11-05 default so
+   * pre-0.3 clients observe exactly the old behaviour. 2026-07-28 modern is
+   * not advertised on purpose (it needs server/discover and stateless
+   * per-request `_meta`; see docs/MCP.md).
+   */
+  function initializeResult(requestedVersion) {
+    const requested = typeof requestedVersion === 'string' ? requestedVersion.trim() : ''
+    const negotiated = SUPPORTED_PROTOCOL_VERSIONS.includes(requested) ? requested : PROTOCOL_VERSION
+    negotiatedProtocolVersion = negotiated
     return {
-      protocolVersion: PROTOCOL_VERSION,
+      protocolVersion: negotiated,
       capabilities: {
         tools: { listChanged: false },
         resources: { subscribe: false, listChanged: false },
@@ -813,6 +948,8 @@ export function createMcpServer({ store, ledger, loadLedger, loadStore, version 
     } catch (error) {
       outcome = { ok: false, error }
     }
+    // 0.3.0 P0-T3: cap the payload BEFORE the egress classifier scans it.
+    if (outcome.ok) outcome.data = boundPayload(outcome.data)
 
     // Gate 2: a tool must not relay block-level text (ledger data, receipt
     // metadata, ...). The returned payload is classified before it is sent.
@@ -857,7 +994,8 @@ export function createMcpServer({ store, ledger, loadLedger, loadStore, version 
     else if (uri === 'advisers://who') data = whoData()
     else data = evidenceIndex()
     await recordAudit({ actor: 'mcp', action: 'mcp.call', allowed: true, reason: 'resource:' + uri })
-    return reply(id, { contents: [{ uri, mimeType: 'application/json', text: JSON.stringify(data, null, 2) }] })
+    const bounded = boundPayload(data)
+    return reply(id, { contents: [{ uri, mimeType: 'application/json', text: JSON.stringify(bounded, null, 2) }] })
   }
 
   /**
@@ -879,7 +1017,10 @@ export function createMcpServer({ store, ledger, loadLedger, loadStore, version 
     const method = message.method
 
     try {
-      if (method === 'initialize') return hasId ? reply(id, initializeResult()) : null
+      if (method === 'initialize') {
+        const params = paramsObject(message.params)
+        return hasId ? reply(id, initializeResult(params.protocolVersion)) : null
+      }
       if (method === 'notifications/initialized') return hasId ? reply(id, {}) : null
       if (method === 'ping') return hasId ? reply(id, {}) : null
       if (method === 'tools/list') {

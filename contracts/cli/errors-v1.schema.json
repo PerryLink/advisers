@@ -1,0 +1,47 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/PerryLink/advisers/contracts/cli/errors-v1.schema.json",
+  "title": "Advisers CLI error envelope (contract v1)",
+  "description": "The machine-readable error envelope every CLI command writes to stderr on failure: one JSON object per failure (exit 1, or exit 3 for E_TOS_REQUIRED). stdout stays empty/human-free in --json mode. `message` is safe to show; `hint` is optional; `details` is optional machine data and never customer text. Codes must be registered in contracts/errors/codes.v1.json.",
+  "version": 1,
+  "x-license": "CC-BY-NC-SA-4.0",
+  "x-contract-status": "frozen",
+  "x-frozen-at": "2026-11-20",
+  "x-source-commit": "35a51c3",
+  "x-compat": "backward",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "error"
+  ],
+  "properties": {
+    "error": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "code",
+        "message"
+      ],
+      "properties": {
+        "code": {
+          "type": "string",
+          "pattern": "^E_[A-Z][A-Z0-9_]*$",
+          "description": "Registered code from contracts/errors/codes.v1.json."
+        },
+        "message": {
+          "type": "string",
+          "minLength": 1
+        },
+        "hint": {
+          "type": "string",
+          "minLength": 1
+        },
+        "details": {
+          "type": "object",
+          "description": "Optional machine-readable details (never customer text).",
+          "additionalProperties": true
+        }
+      }
+    }
+  }
+}

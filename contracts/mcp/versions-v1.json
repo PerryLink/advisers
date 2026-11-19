@@ -1,0 +1,43 @@
+{
+  "version": 1,
+  "status": "frozen",
+  "frozenAt": "2026-11-20",
+  "sourceCommit": "35a51c3",
+  "description": "MCP protocol version matrix. 0.3.0 target = legacy negotiation between 2024-11-05 / 2025-06-18 / 2025-11-25 (the server echoes a supported requested version and rejects unknown ones instead of silently downgrading). Modern 2026-07-28 (stateless, per-request _meta, server/discover) is explicitly 0.3.1+, not part of this contract.",
+  "defaultProtocolVersion": "2024-11-05",
+  "supportedProtocolVersions": [
+    "2024-11-05",
+    "2025-06-18",
+    "2025-11-25"
+  ],
+  "negotiation": "active-fallback",
+  "negotiationNote": "Implemented in 0.3.0 (lib/mcp-server.js): initialize echoes a requested version when it is in supportedProtocolVersions, and a missing or unknown version (including the modern 2026-07-28 stateless revision, which needs server/discover) falls back to defaultProtocolVersion 2024-11-05 so pre-0.3 clients observe exactly the old behaviour. The 04/15 research target was a readable error listing the supported matrix; 0.3.0 deliberately chose the legacy-compatible fallback instead. The checker asserts both the echo and the fallback while negotiation is \"active-fallback\"; set negotiation to \"active\" only if the server is changed to reject unknown versions.",
+  "serverInfo": {
+    "name": "advisers",
+    "versionSource": "packages/advisers/package.json"
+  },
+  "capabilities": {
+    "tools": {
+      "listChanged": false
+    },
+    "resources": {
+      "subscribe": false,
+      "listChanged": false
+    }
+  },
+  "methods": [
+    "initialize",
+    "notifications/initialized",
+    "ping",
+    "tools/list",
+    "tools/call",
+    "resources/list",
+    "resources/read"
+  ],
+  "lineLimitBytes": 1048576,
+  "modernProtocol": {
+    "version": "2026-07-28",
+    "status": "out-of-scope-0.3.1",
+    "note": "Fallback target only: initialize with 2026-07-28 returns 2024-11-05 instead of an error (intentional legacy compatibility)."
+  }
+}
