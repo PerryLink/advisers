@@ -230,6 +230,10 @@ try {
       }
       throw error
     }
+    if (dryRun) {
+      console.log('  dry-run ok (npm validated the package; nothing staged)')
+      continue
+    }
     const id = /staged with id ([0-9a-f-]{36})/i.exec(out)?.[1]
     if (!id) {
       console.error('could not parse stage id from npm output for ' + name)
