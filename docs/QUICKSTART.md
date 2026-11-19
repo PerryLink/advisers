@@ -1,15 +1,15 @@
 # Quickstart (Windows + PowerShell)
 
-> Current status: `0.2.4` is a **release candidate** (2026-11-19) with no user-facing
-> functional or behavioural change; it will be staged from CI through npm Trusted
-> Publishing with provenance attestations and becomes installable only after the account
-> owner's OTP approval. Until then npm `latest` is still `0.2.3` (published 2026-11-18
-> after OTP approval) and `next` also points at `0.2.3`; all six published packages are
-> lockstep at `0.2.4` in the repository. Install with
-> `npm i -g --registry=https://registry.npmjs.org advisers@latest advisers-office@latest`. The checkout instructions below remain valid
-> for development builds.
+> Current status: **`0.3.0` is a release candidate (2026-11-20) and is NOT published.**
+> The repository is lockstep at package version `0.3.0`; the earlier `0.2.4` was an
+> **unpublished release candidate** superseded by `0.3.0` (its `v0.2.4` tag points at an
+> older commit, there is no 0.2.4 tarball on npm, so do not try to install it). npm
+> `latest` = `next` = `0.2.3` (published 2026-11-18). Stable-channel install:
+> `npm i -g --registry=https://registry.npmjs.org advisers@latest advisers-office@latest`.
+> The checkout instructions below are the supported way to try the 0.3.0 release
+> candidate; no 0.3.0 package has been staged or published.
 
-> **Before you start** — read the [Terms of Service](TOS.md) (v2026.11.2),
+> **Before you start** — read the [Terms of Service](TOS.md) (v2026.11.3),
 > [Disclaimer](DISCLAIMER.md), [Safety & content review](SAFETY.md), and
 > [Privacy & data-flow notice](PRIVACY.md). AI output can be wrong; illegal, infringing,
 > deceptive, or unlabeled synthetic content is prohibited.
@@ -95,20 +95,22 @@ node $A memory candidates
 node $A chat "做一份 Q4 汇报 PPT，放到 out\q4.pptx"
 ```
 
-## B. Installed CLI (stable channel = 0.2.3; 0.2.4 pending approval)
+## B. Installed CLI (stable channel = 0.2.3; 0.3.0 is a release candidate, not published)
 
 ```powershell
-# Stable channel: npm @latest currently resolves to 0.2.3 (published 2026-11-18);
-# 0.2.4 is a release candidate pending the owner's approval of the CI-staged build.
+# Stable channel: npm @latest resolves to 0.2.3 (published 2026-11-18).
+# 0.3.0 (release candidate) is not published; build it from a checkout (section A) to try it.
 npm i -g --registry=https://registry.npmjs.org advisers@latest advisers-office@latest
-# Pre-release channel (preview/RC builds land on `next` before promotion):
+# Pre-release channel (a future 0.3.0 pre-release would land on `next` first):
 # npm i -g --registry=https://registry.npmjs.org advisers@next advisers-office@next
-advisers --version    # expect 0.2.3 (0.2.4 after the owner approves the staged build)
+advisers --version    # expect 0.2.3
 advisers status
 advisers soul init
 advisers template weekly weekly.json out\weekly.docx
 advisers verify out\weekly.docx
 ```
+> `0.2.4` never reached npm and must not be presented as installable; the 0.3.0
+> release notes (when published) are the only place that can claim provenance.
 
 If `advisers-office` is missing, install it explicitly (`advisers-office@latest`, or
 `@next` before promotion); the CLI does not pull it automatically.
@@ -258,3 +260,53 @@ node $A sync pull --dir .\Sync\advisers
 
 Encrypted whole-DB snapshots in a **user-provided** folder; no Advisers server,
 no merge, last-snapshot-wins. See `docs/SYNC.md`.
+
+## O. 0.3.0 release-candidate additions (checkout only; not published)
+
+These are on the 0.3.0 release-candidate tree and are exercised from a checkout, not from
+npm. They are documented as candidate features — do not treat them as a released contract:
+
+```powershell
+# MCP: legacy protocol negotiation (2024-11-05 / 2025-06-18 / 2025-11-25) + capped list output
+# (today/commit_ls/remind now return total/truncated instead of CONTENT_BLOCKED on a big ledger)
+@(
+  '{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2025-11-25"}}',
+  '{"jsonrpc":"2.0","id":2,"method":"tools/list"}'
+) | node $A mcp --stdio
+
+# interface contracts (CLI read models/errors/exit codes/MCP); offline, temp home
+corepack pnpm check:contracts
+
+# deterministic eval suite (no API key, no network)
+corepack pnpm eval:det
+
+# 200k read benchmark: write-byte budget, not wall-clock gates (Linux for writeBytes)
+node scripts/bench-read-200k.mjs --home (Join-Path $env:TEMP "advisers-bench") --seed
+node scripts/bench-read-200k.mjs --home (Join-Path $env:TEMP "advisers-bench") --reps 3
+```
+
+Recovery and audit-anchor commands (0.3.0 release-candidate tree; **not in 0.2.3**):
+
+```powershell
+node $A backup --dry-run                     # managed backup plan (no backup file written)
+node $A backup --keep daily=7,weekly=4,monthly=3 --apply   # rotate managed backups only
+node $A backups ls
+node $A backups verify                       # FAIL -> exit 1
+node $A restore <backup-name> --dry-run      # plan by default; add --yes to apply
+node $A audit                                # chain status + anchor: match|absent|grown|FAIL
+node $A audit --write-anchor                 # record/refresh the local tail anchor
+node $A doctor --repair --dry-run            # --only lock,temp,wal,fts
+```
+
+These are local-only (no network). The anchor is a local file (not a third-party
+timestamp); `restore` refuses an anchor-behind backup unless you pass
+`--allow-anchor-behind`, and `doctor --repair` takes a safe backup before applying.
+
+DSH users: `packages/dsh-advisers` now reads the real local ledger read-only (TOS-gated,
+clearance 0, no HOME lock/migration/writes) and falls back to the marked preview only when
+no ledger exists or the facade is unavailable. See `docs/LEDGER-READ-API.md` and
+`docs/MCP.md` §1.3. The TUI/console-safe bin wiring is now in place (`--plain`/
+`--accessible`/`--color` policy, plain output on a pipe, sanitized webhook/IMAP text);
+the interactive TUI shell and the remaining 0.3.x items are still in development, and
+`advisers tui --once` remains the read-only dashboard snapshot rendered through the
+output kernel.

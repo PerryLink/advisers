@@ -54,6 +54,9 @@ export function createCommitment(ports: OpsPorts, input: CommitmentInput): Commi
     status: 'open',
     evidence: input.evidence,
     capability: input.capability ?? 'none',
+    // 0.3.0 (schema v21): the customer timeline needs the moment a commitment
+    // was recorded, not just its due date. Additive on the wire (optional).
+    createdAt: ports.clock.now(),
     // Never invent the field for old callers: a missing key keeps snapshots
     // byte-compatible with pre-0.2.0 data.
     ...(reminderOffsets === undefined ? {} : { reminderOffsets }),

@@ -11,6 +11,10 @@ let inspectWalStatus
 let readInstanceLock
 let instanceLockIsStale
 let openReadStoreLib
+let WAL_CORRUPT_SUFFIX
+// 0.3.0 customer entities (destructured from lib/sqlite.js below).
+let DATA_TABLES
+let SCHEMA_VERSION
 try {
   ({
     SqliteStore,
@@ -20,6 +24,13 @@ try {
     readInstanceLock,
     instanceLockIsStale,
     openReadStore: openReadStoreLib,
+    WAL_CORRUPT_SUFFIX,
+    // 0.3.0 customer entities: DATA_TABLES is the single list export --all
+    // reads (and import --replace restores) so a new table cannot be silently
+    // dropped by a hard-coded bin list; SCHEMA_VERSION gates imports of a
+    // database/export written by a newer CLI.
+    DATA_TABLES,
+    SCHEMA_VERSION,
   } = await import('../lib/sqlite.js'))
 } catch (error) {
   if (String(error?.message || error).includes('node:sqlite')) {
@@ -29,6 +40,12 @@ try {
   throw error
 }
 import { egressDeniedReason, secrecyLevel } from '../lib/egress.js'
+// 0.3.0 Wave 3 (TUI/console wiring, docs/TUI.md §4): the one-line console/log
+// sanitiser is the chokepoint for text that came from outside the program before
+// it reaches stderr, friendlyError()/reportFatalError() or reminders.log.
+// lib/notify.js already sanitises webhook details and lib/imap.js sanitises
+// server greeting/status lines; bin must not trust its own formatting either.
+import { sanitizeConsoleText } from '../lib/text-safe.js'
 // 0.2.3 Wave 1: every durable bin/ output goes through the crash-safe helpers
 // (short-write loop, fsync, atomic rename, bounded Windows retry) instead of a
 // one-shot writeFileSync that ENOSPC can truncate.
@@ -39,6 +56,7 @@ import {
   describeFsError,
   fsyncDirSync,
   fsyncFileSync,
+  renameWithRetrySync,
   rmWithRetrySync,
   writeAllToTempSync,
 } from '../lib/fs-safe.js'
@@ -63,6 +81,9 @@ const loadIcal = lazyModule(() => import('../lib/ical.js'))
 const loadImporters = lazyModule(() => import('../lib/importers.js'))
 const loadNotify = lazyModule(() => import('../lib/notify.js'))
 const loadReceiptVerify = lazyModule(() => import('../lib/receipt-verify.js'))
+// 0.3.0 Wave 2: operations libraries (audit tail anchor, backup rotation/restore).
+const loadAuditAnchor = lazyModule(() => import('../lib/audit-anchor.js'))
+const loadBackup = lazyModule(() => import('../lib/backup.js'))
 const loadScheduler = lazyModule(() => import('../lib/scheduler.js'))
 const loadSource = lazyModule(() => import('../lib/source.js'))
 const loadOcr = lazyModule(() => import('../lib/ocr.js'))
@@ -74,6 +95,10 @@ const loadVault = lazyModule(() => import('../lib/vault.js'))
 const loadTos = lazyModule(() => import('../lib/tos/index.js'))
 const loadMcpServer = lazyModule(() => import('../lib/mcp-server.js'))
 const loadSafety = lazyModule(() => import('../lib/safety/index.js'))
+// 0.3.0 Wave 3: the output kernel (policy/width/render/json) is loaded only by
+// the human-output paths that need it (tui, repl, rendered error blocks), so
+// --version / --json-only commands do not pay for the width tables.
+const loadTui = lazyModule(() => import('../lib/tui/index.js'))
 // P2-4 (0.2.1): every command used to pay for the full static import graph,
 // including the model/agent stack, safety classifier, Pet Brief, UI server,
 // IMAP client and review helpers (~63-75ms of compiled JS). They are only
@@ -196,6 +221,26 @@ function storeFailureHint(error) {
 const DAY_FORMAT = new Intl.DateTimeFormat('en-CA', { timeZone: 'Asia/Shanghai' })
 /** Asia/Shanghai calendar day (YYYY-MM-DD) for a Date, timestamp or ISO string. */
 const localDayOf = (value) => DAY_FORMAT.format(new Date(value))
+
+/**
+ * Calendar TZIDs the local reader accepts (0.3.0 Wave 3, 13-mail-calendar C5).
+ *
+ * lib/ical.js pins all wall-clock reasoning to Asia/Shanghai and ships no
+ * time-zone database, so both `agenda` and `today --calendar` must treat every
+ * other zone as degraded-and-skip instead of guessing. Before this, agenda
+ * skipped a Berlin event while today --calendar sliced the UTC instant as if it
+ * were +08:00 (Berlin 10:00 shown as 17:00) - one dataset, two semantics.
+ */
+const CALENDAR_TZID_WHITELIST = new Set(['', 'Asia/Shanghai', 'UTC', 'Etc/UTC', 'GMT', 'Z'])
+
+function calendarTzidOf(row) {
+  return row?.tzid === undefined || row?.tzid === null ? '' : String(row.tzid)
+}
+
+function calendarTzidSupported(row) {
+  const tzid = calendarTzidOf(row)
+  return !tzid || CALENDAR_TZID_WHITELIST.has(tzid)
+}
 
 /**
  * P1-6: default upper bound for `advisers deliver` (open commitments).
@@ -809,7 +854,7 @@ function resolveDeliveryMatterId(store) {
   return matter.id
 }
 
-function recordDeliveryWithAudit({ files, tool, title, validation, audit, matterId }) {
+function recordDeliveryWithAudit({ files, tool, title, validation, audit, matterId, clientId, projectId, templateName, templateVersion, quoteNo, dataSha256 }) {
   const store = dbStore()
   if (!store) return
   const conversationId = latestConversationId()
@@ -821,6 +866,16 @@ function recordDeliveryWithAudit({ files, tool, title, validation, audit, matter
     tool,
     title,
     validation: typeof validation === 'string' ? validation : JSON.stringify(validation),
+    // v21 lineage (0.3.0): snapshot WHO and WHICH template this delivery was
+    // generated for, at generation time. When the caller omits client/project
+    // the store derives them from the delivery's matter, so a later re-link
+    // never rewrites an already-generated receipt/timeline entry.
+    ...(clientId === undefined ? {} : { clientId }),
+    ...(projectId === undefined ? {} : { projectId }),
+    ...(templateName === undefined ? {} : { templateName }),
+    ...(templateVersion === undefined ? {} : { templateVersion }),
+    ...(quoteNo === undefined ? {} : { quoteNo }),
+    ...(dataSha256 === undefined ? {} : { dataSha256 }),
   }), audit)
 }
 
@@ -988,19 +1043,52 @@ async function askYesNo(rl, prompt, defaultYes = true) {
 }
 
 const VERSION = JSON.parse(readFileSync(new URL('../package.json', import.meta.url), 'utf8')).version
+/**
+ * Additive `status --json` contracts discovery field (0.3.0 contract C6).
+ *
+ * Keep in sync with contracts/versions-v1.json `discovery.expected`: the
+ * published npm package does not ship contracts/, so the CLI carries the frozen
+ * values and `node scripts/check-contracts.mjs --status` asserts equality with
+ * the artifact tree. mcpProtocol is the negotiated *default* legacy revision
+ * (lib/mcp-server.js PROTOCOL_VERSION); a client may still negotiate 2025-06-18
+ * or 2025-11-25 through initialize.
+ */
+const CONTRACTS_DISCOVERY = Object.freeze({
+  cliJson: 1,
+  errors: 1,
+  exitCodes: 1,
+  mcpTools: 1,
+  mcpResources: 1,
+  mcpProtocol: '2024-11-05',
+  dshTools: 1,
+  petBrief: 2,
+})
 function friendlyError(error) {
   const message = error instanceof Error ? error.message : String(error)
   if (/ENOENT/.test(message)) return 'file not found; check the path and run `advisers doctor`'
   if (/Unexpected token|JSON/.test(message)) return 'invalid JSON; use UTF-8 without BOM and see examples/'
   if (/model (HTTP|timeout)|fetch failed|ECONN/.test(message)) return 'model request failed; check ADVISERS_API_KEY / network and run `advisers doctor`'
   if (/database is locked/.test(message)) return 'database is busy; close other advisers processes and retry'
-  return message
+  // 0.3.0 Wave 3: the fallback is where a raw Error message reaches the terminal.
+  // Model/provider/IMAP errors can carry ANSI/OSC/bidi and inject a second line
+  // (docs/TUI.md §4), so it always goes through the console sanitiser.
+  return sanitizeConsoleText(message, { max: 4000 })
 }
+
+/** Print one message with every line passed through the console sanitiser. */
+function printSafeConsoleLines(text, { stream = 'error', max = 4000 } = {}) {
+  const write = stream === 'error' ? console.error : console.log
+  for (const line of String(text ?? '').split('\n')) write(sanitizeConsoleText(line, { max }))
+}
+
 function reportFatalError(error) {
   // E_DB_LOCKED / E_DB_CORRUPT get backup/doctor/concurrency guidance instead of
   // the generic one-line message (commands that touch the store without going
-  // through loadLedger() end up here).
-  console.error(storeFailureHint(error) ?? `advisers: ${friendlyError(error)}`)
+  // through loadLedger() end up here). The hint and the fallback are both
+  // untrusted in the same sense as any other error text.
+  const hint = storeFailureHint(error)
+  if (hint) printSafeConsoleLines(hint, { max: 4000 })
+  else console.error(sanitizeConsoleText(`advisers: ${friendlyError(error)}`, { max: 4000 }))
   process.exit(1)
 }
 process.on('uncaughtException', reportFatalError)
@@ -1017,7 +1105,60 @@ for (let index = rawArgv.length - 1; index >= 0; index--) {
   if (value === '--accept-tos') { acceptTosFlag = true; rawArgv.splice(index, 1) }
   else if (value.startsWith('--accept-tos=')) { acceptTosFlag = value.slice('--accept-tos='.length); rawArgv.splice(index, 1) }
 }
+
+// 0.3.0 Wave 3: global output flags (docs/TUI.md §5-§6, plan 26 §5.5).
+//
+// --plain / --accessible / --color[=]auto|always|never are accepted by every
+// human-output command and stripped before the per-command flag parser runs, so
+// an older command cannot mistake them for one of its own options. The resolved
+// policy is computed lazily by getOutputPolicy() (tui + REPL consume it); the
+// commands that keep their historical bytes are otherwise unaffected.
+// NO_COLOR / ADVISERS_PLAIN / ADVISERS_ACCESSIBLE stay environment-only.
+const outputArgv = rawArgv.slice()
+const OUTPUT_MODE_FLAGS = new Set(['--plain', '--accessible'])
+const COLOR_MODES = new Set(['auto', 'always', 'never'])
+function invalidColorFlag(value) {
+  console.error('advisers: E_USAGE: --color must be auto, always or never (got ' + JSON.stringify(String(value ?? '')) + ')')
+  process.exit(1)
+}
+for (let index = rawArgv.length - 1; index >= 0; index--) {
+  const value = rawArgv[index]
+  if (OUTPUT_MODE_FLAGS.has(value)) { rawArgv.splice(index, 1); continue }
+  if (value === '--color') {
+    const mode = String(rawArgv[index + 1] ?? '').toLowerCase()
+    if (!COLOR_MODES.has(mode)) invalidColorFlag(rawArgv[index + 1])
+    rawArgv.splice(index, 2)
+    continue
+  }
+  if (value.startsWith('--color=')) {
+    const mode = value.slice('--color='.length).toLowerCase()
+    if (!COLOR_MODES.has(mode)) invalidColorFlag(value.slice('--color='.length))
+    rawArgv.splice(index, 1)
+  }
+}
+
 const [command, ...args] = rawArgv
+
+/**
+ * Resolve the single output policy for this invocation (docs/TUI.md §5-§6).
+ *
+ * One decision object covers plain/accessible/colour/cursor control for the
+ * whole process; renderers receive it spread into their options. Loaded lazily
+ * because only tui and the REPL render through the kernel today.
+ */
+let outputPolicyCache = null
+async function getOutputPolicy() {
+  if (outputPolicyCache) return outputPolicyCache
+  const { resolveOutputPolicy } = await loadTui()
+  outputPolicyCache = resolveOutputPolicy({
+    argv: outputArgv,
+    env: process.env,
+    stdinIsTTY: Boolean(process.stdin.isTTY),
+    stdoutIsTTY: Boolean(process.stdout.isTTY),
+    stderrIsTTY: Boolean(process.stderr.isTTY),
+  })
+  return outputPolicyCache
+}
 
 function help() {
   console.log(`advisers — a staff of AI advisers
@@ -1027,10 +1168,14 @@ Usage:
   advisers chat [--file <path>] [--allow-path <dir>]... [text]
                               one-shot task, or start the local conversation
   advisers init               initialize home + soul
-  advisers doctor [--check-db]
+  advisers doctor [--check-db] [--json]
                               check Node/SQLite/Office/policy/model; --check-db adds
                               quick_check + FTS integrity + WAL + backup + plaintext/temp checks
-  advisers status             home/store/model/counts
+  advisers doctor --repair [--dry-run|--yes] [--only lock,temp,wal,fts] [--json]
+                              recovery console: dry-run plan by default; --yes takes the
+                              writer lock, writes a safety backup, repairs, re-verifies,
+                              records doctor.repair and refreshes the audit anchor
+  advisers status [--json]    home/store/model/counts (+ contracts discovery in --json)
   advisers history            recent conversations
   advisers search <text>       full-text search old turns
   advisers compact ls|rollback summary versions
@@ -1045,7 +1190,7 @@ Usage:
   advisers pet-brief [--json] [--out [path]] [--check [--strict]] [--display-policy public|private|none]
                               read-only redacted Pet Brief (contract v0.2); --print-schema prints the JSON Schema
   advisers tick               due commitments in the next 7 days
-  advisers week               last 7 days
+  advisers week [--json]      last 7 local days (Asia/Shanghai); --json is one JSON document
   advisers agenda [--days 7] [--json]
                               7-day agenda: commitments + calendar_events, Asia/Shanghai days
   advisers morning [--json] [--out f]
@@ -1062,7 +1207,10 @@ Usage:
   advisers prefs [--all] | correct <text>
   advisers nudge list|done|ignore <id>  nudge outcomes
   advisers decay              apply 30-day preference decay
-  advisers audit              verify the local audit hash chain
+  advisers audit              verify the local audit hash chain + tail anchor (--json, --check-db)
+  advisers audit --write-anchor  record the current head as the tail-deletion baseline
+  advisers audit --expect-count <N> [--expect-head <64 hex>]  explicit head check
+  advisers audit --rebuild-fts  rebuild the FTS5 indexes (the repair the reader warning names)
   advisers purge <matter> [--yes]  privacy delete a matter
   advisers commit add|edit|ls|done|snooze commitments
   advisers commit add "..." --quote "..." [--remind-offsets "-1d,-2h"]
@@ -1071,10 +1219,28 @@ Usage:
   advisers deliveries         recent generated files
   advisers receipt            one-screen delivery receipt
   advisers ls                 list matters (alias of matter ls)
-  advisers matter add <title> [--secrecy 0-3] [--domain d] [--summary s] [--json]
-  advisers matter ls [--all] [--json]
+  advisers matter add <title> [--secrecy 0-3] [--domain d] [--summary s]
+                      [--client <id> [--project <id>]] [--json]
+  advisers matter ls [--all] [--client <id>] [--project <id>] [--unclassified] [--json]
   advisers matter show|rename|archive|use <id> ...
                               create/inspect/rename/archive a matter; 'use' sets the write default
+  advisers client add "<name>" [--aliases a,b] [--tags t1,t2] [--secrecy 0-3]
+                      [--note text] [--link-matter <id>] [--json]
+  advisers client list [--all] [--limit n] [--json]
+  advisers client show <id> [--timeline-limit n] [--clearance 0-3] [--json]
+  advisers client timeline <id> [--since 90d|ISO] [--kind delivery,note,commitment]
+                      [--limit n] [--clearance 0-3] [--json]
+  advisers client archive <id> [--dry-run] [--json]
+  advisers client merge <from> <into> [--dry-run] [--json]
+  advisers client note add <id> "<summary>" [--kind k] [--at ISO] [--project id] [--matter id] [--json]
+  advisers client note list <id> [--project id] [--limit n] [--json]
+  advisers project add <client-id> "<name>" [--start YYYY-MM-DD] [--end YYYY-MM-DD]
+                      [--default-matter <id>] [--note text] [--json]
+  advisers project list [--client <id>] [--all] [--limit n] [--json]
+  advisers project show <id> [--timeline-limit n] [--clearance 0-3] [--json]
+  advisers project archive <id> [--dry-run] [--json]
+                              customer/project entities + derived timeline (SQLite store;
+                              see docs/CLIENTS.md)
   advisers privacy [--json] [--prove]  show/verify local data & egress facts
   advisers why <pref-id>      explain a preference
   advisers forget <pref-id>   forget a preference (tombstone)
@@ -1082,7 +1248,14 @@ Usage:
   advisers import <file> [--replace]  import an export (encrypted or plain)
   advisers vault seal [--out f] [--remove] | unseal [f] | status  AES-256-GCM database vault
   advisers sync push|pull|status --dir <dir>  file-based E2EE snapshot sync (user-provided dir)
-  advisers backup <path.db>   checkpoint and copy the SQLite database
+  advisers backup [<path.db>|--out f] [--tag name] [--keep daily=7,weekly=4,monthly=3] [--dry-run|--apply] [--json]
+                              verify+checkpoint the database and copy it: an explicit path is a
+                              plain copy; no path writes a managed backup + .sha256/.anchor.json
+                              under <home>/backups. --keep plans GFS rotation (dry-run unless --apply)
+  advisers backups ls|verify [--json] [--limit n]  list / re-verify managed backups
+  advisers restore <backup> [--dry-run] [--yes] [--allow-anchor-behind] [--json]
+                              plan by default; --yes writes a pre-restore backup, installs the
+                              verified backup, rolls back on failure, audits db.restore, reopens
   advisers brief [--deep] <text>  print the IntentBrief; --deep adds model refinement
   advisers --version          print the CLI version
   advisers who                 who I owe / who owes me
@@ -1106,7 +1279,9 @@ Usage:
   advisers office-read <file>  read DOCX/XLSX/PPTX/OFD text
   advisers ocr <image> [--out text]  local OCR adapter (ADVISERS_OCR_CMD; no cloud)
   advisers timestamp <file> [--out proof]  local timestamp/signing adapter
-  advisers tui [--once]          read-only terminal dashboard
+  advisers tui [--once] [--json] [--width n]
+                              read-only terminal dashboard; non-TTY/--plain/--accessible
+                              print one plain snapshot (never clear the screen); --json is pure JSON
   advisers office-edit <file> <ops.json> [out]  surgical Office edit
   advisers verify <file> [--json] [--content]  structural + deterministic content checks
   advisers office <kind> <spec.json> <out>
@@ -1158,7 +1333,11 @@ Environment:
   ADVISERS_FORCE=1 overwrite existing files without asking
   ADVISERS_ALLOW_PATHS    explicit path-list (OS path separator) widening the
                   agent file-tool boundary, same as repeated --allow-path
-  ADVISERS_PROGRESS=0 hide [tool] progress lines
+  ADVISERS_PROGRESS=1  show internal [tool]/[attach]/[compact] process lines
+                  (default hidden; /debug in the REPL also enables them)
+  --plain / --accessible / --color auto|always|never
+                  global output policy for every human-output command; NO_COLOR
+                  and TERM=dumb are honoured (see docs/TUI.md)
   ADVISERS_ACCEPT_TOS=1  record TOS consent without a TTY (same as --accept-tos)
   ADVISERS_NOTIFY_WEBHOOK  optional outbound webhook for remind --deliver --notify
   ADVISERS_LOCK_TIMEOUT_MS  wait for another advisers process to release the
@@ -1250,7 +1429,8 @@ function purgeMatter(id, confirmed) {
     const commitments = ledger.openCommitments(id).length
     console.log(`matter ${id}: ${matter.title}`)
     console.log(`facts=${facts} links=${links} updates=${updates} open_commitments=${commitments}`)
-    if (!confirmed) { console.log('dry-run only; re-run with --yes to purge'); return }
+    if (!confirmed) { console.log('后果：加 --yes 后不可撤销；先运行 advisers backup 可保留可恢复副本。'); console.log('dry-run only; re-run with --yes to purge'); return }
+    console.log('! 需要确认：删除事项 ' + sanitizeConsoleText(id, { max: 200 }) + ' 的本地数据（--yes，不可撤销）；已保留审计行，不会删除备份文件')
     const counts = ledger.purgeMatter(id)
     saveJson(ledger)
     console.log(`purged: ${JSON.stringify(counts)} sqlite={}`)
@@ -1273,10 +1453,17 @@ function purgeMatter(id, confirmed) {
       if (!matter) { console.error(`unknown matter: ${id}`); process.exitCode = 1; return }
       console.log(`matter ${id}: ${matter.title}`)
       console.log(`facts=${facts} links=${links} updates=${updates} open_commitments=${commitments}`)
+      console.log('后果：--yes 后不可撤销；先运行 advisers backup 可保留可恢复副本。')
       console.log('dry-run only; re-run with --yes to purge')
     } catch (error) { reportCommandFailure(error) }
     return
   }
+  // 0.3.0 Wave 3 (plan 26 §4.5): --yes is the confirmation; state the
+  // irreversible consequence before the transaction (tombstones + VACUUM).
+  console.log('! 需要确认：删除事项 ' + sanitizeConsoleText(id, { max: 200 }) + ' 的本地数据（--yes，不可撤销）')
+  console.log('  删除：事实/承诺/偏好/路由/链接标记（状态改为 [purged]）')
+  console.log('  已保留：本地审计行（记录本次 purge）；不会删除备份文件')
+  console.log('  如需可恢复副本，请先运行：advisers backup')
   const audit = { actor: 'local', action: 'matter.purge', allowed: true, reason: '' }
   try {
     const { result } = mutateWithAudit((store) => {
@@ -1342,6 +1529,96 @@ function parseFlags(args) {
   }
   return { flags, positional }
 }
+
+/* ---------------------------------------------------------------------------
+ * 0.3.0 Wave 2: strict option parsing for the operational commands.
+ *
+ * Before this, unknown flags were silently ignored, so `doctor --repair` and
+ * `audit --rebuild-fts` (both not implemented in 0.2.4) exited 0 without doing
+ * anything, and a typo like `--yse` looked like success (P0-D1). The commands
+ * extended below parse an explicit allowlist and fail closed with E_USAGE.
+ * parseFlags() above keeps its historical lenient behaviour for the older
+ * commands; do not use it for new options.
+ * ------------------------------------------------------------------------- */
+
+/**
+ * Parse `--flag`, `--flag=value` and `--flag value` against an allowlist.
+ * @returns {{ok: true, flags: object, positional: string[]} | {ok: false, error: string}}
+ */
+function parseStrictFlags(args, { booleans = [], values = [], positional = true } = {}) {
+  const flags = {}
+  const rest = []
+  const booleanSet = new Set(booleans)
+  const valueSet = new Set(values)
+  for (let index = 0; index < args.length; index++) {
+    const arg = args[index]
+    if (arg === '--') { rest.push(...args.slice(index + 1)); break }
+    if (typeof arg !== 'string' || !arg.startsWith('--')) { rest.push(arg); continue }
+    const eq = arg.indexOf('=')
+    const name = eq === -1 ? arg.slice(2) : arg.slice(2, eq)
+    const inline = eq === -1 ? undefined : arg.slice(eq + 1)
+    if (booleanSet.has(name)) {
+      if (inline !== undefined) return { ok: false, error: `--${name} does not take a value` }
+      flags[name] = true
+      continue
+    }
+    if (valueSet.has(name)) {
+      if (inline !== undefined) { flags[name] = inline; continue }
+      const next = args[index + 1]
+      if (next === undefined || (typeof next === 'string' && next.startsWith('--'))) {
+        return { ok: false, error: `--${name} requires a value` }
+      }
+      flags[name] = next
+      index++
+      continue
+    }
+    return { ok: false, error: `unknown option ${arg}` }
+  }
+  if (!positional && rest.length) return { ok: false, error: `unexpected argument ${rest[0]}` }
+  return { ok: true, flags, positional: rest }
+}
+
+/** Print one usage error (E_USAGE) and mark the command failed; never throws. */
+function usageFail(message, usage = '') {
+  console.error(`advisers: E_USAGE: ${message}${usage ? '\n' + usage : ''}`)
+  process.exitCode = 1
+}
+
+/** 12-hex audit/command hash prefix for human output (full hash in --json). */
+function shortAuditHash(hash) {
+  return typeof hash === 'string' && hash ? hash.slice(0, 12) : '(none)'
+}
+
+/** Human byte size for backup listings (1024-based, one decimal). */
+function formatBytes(bytes) {
+  const value = Number(bytes)
+  if (!Number.isFinite(value) || value < 0) return '?'
+  if (value < 1024) return value + ' B'
+  const units = ['KiB', 'MiB', 'GiB', 'TiB']
+  let size = value / 1024
+  let unit = 0
+  while (size >= 1024 && unit < units.length - 1) { size /= 1024; unit++ }
+  return (Math.round(size * 10) / 10) + ' ' + units[unit]
+}
+
+/** Report a store maintenance failure (writable open / lock) consistently. */
+function reportMaintenanceFailure(error, asJson, label) {
+  const code = error?.code ?? null
+  const hint = storeFailureHint(error)
+  if (asJson) {
+    console.log(JSON.stringify({ ok: false, label, code, error: String(error?.message ?? error), hint: hint ?? undefined }, null, 2))
+  } else {
+    console.error(`${label}: FAILED${code ? ' (' + code + ')' : ''}: ${error?.message ?? error}`)
+    if (hint) console.error(hint)
+  }
+  process.exitCode = 1
+}
+
+const AUDIT_USAGE = 'usage: advisers audit [--check-db] [--json]\n       advisers audit --write-anchor [--json]\n       advisers audit --expect-count <N> [--expect-head <64 hex>] [--json]\n       advisers audit --rebuild-fts [--json]'
+const DOCTOR_USAGE = 'usage: advisers doctor [--check-db] [--json]\n       advisers doctor --repair [--dry-run|--yes] [--only lock,temp,wal,fts] [--json]'
+const BACKUP_USAGE = 'usage: advisers backup [--out <file> | <path.db>] [--tag <name>] [--keep daily=7,weekly=4,monthly=3] [--dry-run|--apply] [--json]\n       advisers backup <path.db>          explicit copy, never rotated'
+const BACKUPS_USAGE = 'usage: advisers backups ls [--json] [--limit <n>]\n       advisers backups verify [--json] [--limit <n>]'
+const RESTORE_USAGE = 'usage: advisers restore <backup-file> [--dry-run] [--yes] [--allow-anchor-behind] [--allow-broken-audit-chain] [--json]'
 
 /**
  * Read --remind / --remind-offsets from parsed flags and strictly normalise.
@@ -1545,23 +1822,74 @@ function printMemory(ledger) {
   console.log('输入 /why <pref-id> 看依据；/forget <pref-id> 删除；/audit 看审计。')
 }
 
-function printWeek(ledger) {
-  const now = Date.now()
-  const weekAgo = now - 7 * 86400_000
+/**
+ * `week` window: the last 7 local days ending today (Asia/Shanghai), inclusive.
+ * The old implementation used `due >= weekAgo || due < now`, so any overdue
+ * commitment ever (e.g. a 2026-10-01 item) counted as "this week's due"; the
+ * local-day window is the 0.3.0 fix (13-mail-calendar C8 / U2) and is the same
+ * window the --json contract publishes.
+ */
+function weekWindow(nowMs) {
+  const to = localDayOf(nowMs)
+  const from = localDayOf(nowMs - 6 * 86400_000)
+  return { from, to, days: 7, timezone: 'Asia/Shanghai' }
+}
+
+function weekReport(ledger, nowMs = Date.now()) {
+  const window = weekWindow(nowMs)
   const commitments = ledger.listCommitments()
-  const due = commitments.filter((c) => c.dueAt && (Date.parse(c.dueAt) >= weekAgo || Date.parse(c.dueAt) < now))
-  const done = due.filter((c) => c.status === 'done')
+  const itemRows = []
+  for (const c of commitments) {
+    if (!c.dueAt) continue
+    const ms = Date.parse(c.dueAt)
+    if (Number.isNaN(ms)) continue
+    const day = localDayOf(ms)
+    if (day < window.from || day > window.to) continue
+    itemRows.push({ commitment: c, ms })
+  }
+  itemRows.sort((a, b) => (a.ms === b.ms ? (String(a.commitment.id) < String(b.commitment.id) ? -1 : 1) : a.ms - b.ms))
+  const dueRows = itemRows.map((row) => row.commitment)
+  const done = dueRows.filter((c) => c.status === 'done')
   const open = commitments.filter((c) => c.status === 'open')
-  const overdue = open.filter((c) => c.dueAt && Date.parse(c.dueAt) < now)
+  const overdue = open.filter((c) => c.dueAt && !Number.isNaN(Date.parse(c.dueAt)) && Date.parse(c.dueAt) < nowMs)
   let deliveries = []
   try { deliveries = readStoreOrExit()?.listDeliveries(100) ?? [] } catch {}
-  const weekDeliveries = deliveries.filter((d) => Date.parse(d.createdAt) >= weekAgo)
-  console.log(`本周（${new Date(weekAgo).toISOString().slice(0, 10)} – ${new Date(now).toISOString().slice(0, 10)}）`)
-  console.log(`承诺：到期 ${due.length} 件，完成 ${done.length} 件，未完成 ${open.length} 件，逾期 ${overdue.length} 件。`)
-  for (const c of due.slice(0, 5)) console.log(`  ${c.status === 'done' ? '✓' : '○'} ${c.action}${c.dueAt ? `（${c.dueAt.slice(0, 10)}）` : ''}`)
-  console.log(`交付：${weekDeliveries.length} 个文件。`)
-  const next = [...open].filter((c) => c.dueAt).sort((a, b) => Date.parse(a.dueAt) - Date.parse(b.dueAt))[0]
-  console.log('下周一件：' + (next?.action ?? open[0]?.action ?? '先定一个承诺或交付。'))
+  const weekDeliveries = deliveries.filter((d) => {
+    const ms = Date.parse(d.createdAt)
+    if (Number.isNaN(ms)) return false
+    const day = localDayOf(ms)
+    return day >= window.from && day <= window.to
+  })
+  const datedOpen = [...open].filter((c) => c.dueAt && !Number.isNaN(Date.parse(c.dueAt)))
+  datedOpen.sort((a, b) => Date.parse(a.dueAt) - Date.parse(b.dueAt))
+  const next = datedOpen.find((c) => localDayOf(Date.parse(c.dueAt)) > window.to) ?? datedOpen[0]
+  return { window, dueRows, done, open, overdue, weekDeliveries, next }
+}
+
+function printWeek(ledger, asJson = false) {
+  const report = weekReport(ledger)
+  if (asJson) {
+    // 0.3.0 JSON contract (03-design-product-0.3 §5.6.3): window + counts +
+    // deterministic items. Previously `week --json` printed Chinese human text
+    // because the dispatch keyed off the *store* mode instead of the --json flag.
+    console.log(JSON.stringify({
+      ok: true,
+      command: 'week',
+      window: report.window,
+      due: report.dueRows.length,
+      done: report.done.length,
+      overdue: report.overdue.length,
+      deliveries: report.weekDeliveries.length,
+      items: report.dueRows.map((c) => ({ id: c.id, status: c.status, due: c.dueAt ?? null, action: c.action })),
+      next: report.next ? { id: report.next.id, action: report.next.action, dueAt: report.next.dueAt ?? null } : null,
+    }, null, 2))
+    return
+  }
+  console.log('本周（' + report.window.from + ' – ' + report.window.to + '）')
+  console.log('承诺：到期 ' + report.dueRows.length + ' 件，完成 ' + report.done.length + ' 件，未完成 ' + report.open.length + ' 件，逾期 ' + report.overdue.length + ' 件。')
+  for (const c of report.dueRows.slice(0, 5)) console.log('  ' + (c.status === 'done' ? '✓' : '○') + ' ' + sanitizeConsoleText(c.action, { max: 2000 }) + (c.dueAt ? '（' + c.dueAt.slice(0, 10) + '）' : ''))
+  console.log('交付：' + report.weekDeliveries.length + ' 个文件。')
+  console.log('下周一件：' + sanitizeConsoleText(report.next?.action ?? report.open[0]?.action ?? '先定一个承诺或交付。', { max: 2000 }))
 }
 
 // ---------------------------------------------------------------------------
@@ -1595,8 +1923,11 @@ function matterJsonRow(matter, openByMatter) {
     status: matter.status,
     domain: matter.domain ?? 'general',
     secrecy: Number(matter.secrecy ?? 0),
-    clientId: null,
-    projectId: null,
+    // v21 (0.3.0): real ownership. Pre-v21 matters stay null (unclassified) and
+    // are visible through `matter ls` / `--unclassified` — the CLI never
+    // invents a client for an unlinked matter.
+    clientId: matter.clientId ?? null,
+    projectId: matter.projectId ?? null,
     openCommitments: open.length,
     nextDueAt: matterNextDueAt(open),
   }
@@ -1619,6 +1950,19 @@ async function matterCommand(args) {
     }
     const domain = typeof flags.domain === 'string' ? flags.domain : 'general'
     const summary = typeof flags.summary === 'string' ? flags.summary : undefined
+    // 0.3.0 v21 ownership: --client [--project] links the new matter through the
+    // store (the only writer of matters.client_id/project_id), so an unknown or
+    // archived entity fails closed instead of writing a dangling owner.
+    const clientId = typeof flags.client === 'string' ? flags.client.trim() : undefined
+    const projectId = typeof flags.project === 'string' ? flags.project.trim() : undefined
+    if ((clientId || projectId) && mode !== 'sqlite') {
+      fail('E_STORE', '客户/项目归属需要 SQLite 账本（ADVISERS_STORE=sqlite）', 'advisers client add "<name>"')
+      return
+    }
+    if (projectId && !clientId) {
+      fail('E_USAGE', '--project requires --client (a project belongs to exactly one client)', 'advisers project list --client <id>')
+      return
+    }
     if (mode === 'json') {
       const ledger = loadJson()
       const matter = ledger.addMatter({ title: title, domain: domain, secrecy: secrecy, summary: summary })
@@ -1637,8 +1981,10 @@ async function matterCommand(args) {
           participants: [], deadlines: [], openQuestions: [], createdAt: timestamp, updatedAt: timestamp,
         }
         store.insertMatter(row)
-        audit.reason = row.id
-        return row
+        if (!clientId) { audit.reason = row.id; return row }
+        const linked = store.setMatterClient(row.id, { clientId: clientId, ...(projectId ? { projectId: projectId } : {}) })
+        audit.reason = row.id + ';client=' + clientId + (projectId ? ';project=' + projectId : '')
+        return linked
       }, audit)
       const matter = made.result
       if (asJson) { console.log(JSON.stringify({ ok: true, command: 'matter add', matter: matter }, null, 2)); return }
@@ -1658,7 +2004,26 @@ async function matterCommand(args) {
         list.push(commitment)
         openByMatter.set(commitment.matterId, list)
       }
-      const rows = matters.map((matter) => matterJsonRow(matter, openByMatter))
+      // 0.3.0 v21 ownership filters. An unknown --client/--project fails closed
+      // (an empty list would look like "no matters" and hide a typo). With no
+      // filter the default list includes unclassified matters, so incompletely
+      // linked work stays visible instead of disappearing behind the entity view.
+      const clientFilter = typeof flags.client === 'string' ? flags.client.trim() : undefined
+      const projectFilter = typeof flags.project === 'string' ? flags.project.trim() : undefined
+      const onlyUnclassified = flags.unclassified === true
+      if ((clientFilter || projectFilter) && mode === 'sqlite') {
+        const store = readStoreOrExit()
+        if (clientFilter && !store?.getClient(clientFilter)) { fail('E_CLIENT_NOT_FOUND', 'unknown client: ' + clientFilter, 'advisers client list'); return }
+        if (projectFilter && !store?.getProject(projectFilter)) { fail('E_PROJECT_NOT_FOUND', 'unknown project: ' + projectFilter, 'advisers project list'); return }
+      }
+      const rows = matters
+        .map((matter) => matterJsonRow(matter, openByMatter))
+        .filter((row) => {
+          if (clientFilter && row.clientId !== clientFilter) return false
+          if (projectFilter && row.projectId !== projectFilter) return false
+          if (onlyUnclassified && row.clientId !== null) return false
+          return true
+        })
       rows.sort((a, b) => (a.status === b.status ? (a.id < b.id ? -1 : a.id > b.id ? 1 : 0) : (a.status < b.status ? -1 : 1)))
       if (asJson) { console.log(JSON.stringify(rows, null, 2)); return }
       if (!rows.length) { console.log('（没有事项）'); return }
@@ -1675,10 +2040,17 @@ async function matterCommand(args) {
       if (!matter) { fail('E_MATTER_NOT_FOUND', 'unknown matter: ' + id, 'advisers matter ls'); return }
       const commitments = ledger.listCommitments().filter((commitment) => commitment.matterId === id)
       const open = commitments.filter((commitment) => commitment.status === 'open')
+      // 0.3.0: the raw matter row already carries clientId/projectId (v21); the
+      // resolved names are additive display fields, never a second source of truth.
+      const entityStore = mode === 'sqlite' ? readStoreOrExit() : null
+      const linkedClient = matter.clientId && entityStore ? entityStore.getClient(matter.clientId) : undefined
+      const linkedProject = matter.projectId && entityStore ? entityStore.getProject(matter.projectId) : undefined
       const payload = {
         ok: true,
         command: 'matter show',
         matter: matter,
+        client: linkedClient ? { id: linkedClient.id, name: linkedClient.name, status: linkedClient.status } : null,
+        project: linkedProject ? { id: linkedProject.id, name: linkedProject.name, status: linkedProject.status, clientId: linkedProject.clientId } : null,
         counts: { commitments: commitments.length, open: open.length, done: commitments.filter((c) => c.status === 'done').length },
         open: open.map((c) => ({ id: c.id, action: c.action, dueAt: c.dueAt ?? null, debtor: c.debtor, creditor: c.creditor })),
         nextDueAt: matterNextDueAt(open),
@@ -1686,6 +2058,7 @@ async function matterCommand(args) {
       if (asJson) { console.log(JSON.stringify(payload, null, 2)); return }
       console.log(matter.id + '  ' + matter.title)
       console.log('状态 ' + matter.status + ' · 保密 ' + Number(matter.secrecy ?? 0) + ' · 领域 ' + (matter.domain ?? 'general'))
+      if (payload.client) console.log('客户 ' + payload.client.name + ' (' + payload.client.id + ')' + (payload.project ? ' · 项目 ' + payload.project.name + ' (' + payload.project.id + ')' : ''))
       if (matter.summary) console.log('摘要：' + matter.summary)
       console.log('未完成承诺 ' + open.length + ' · 总承诺 ' + commitments.length + ' · 下一截止 ' + (payload.nextDueAt ?? '无'))
       for (const c of open.slice(0, 20)) console.log('  ' + c.id + '  ' + c.action + (c.dueAt ? ' · ' + c.dueAt : ''))
@@ -1791,8 +2164,8 @@ async function matterCommand(args) {
   }
   if (!sub || sub === 'help' || sub === '--help') {
     console.log('usage: advisers matter <add|ls|show|rename|archive|use> ...')
-    console.log('  advisers matter add <title> [--secrecy 0-3] [--domain name] [--summary text] [--json]')
-    console.log('  advisers matter ls [--all] [--json]')
+    console.log('  advisers matter add <title> [--secrecy 0-3] [--domain name] [--summary text] [--client id [--project id]] [--json]')
+    console.log('  advisers matter ls [--all] [--client id] [--project id] [--unclassified] [--json]')
     console.log('  advisers matter show <id> [--json]')
     console.log('  advisers matter rename <id> <title> [--json]')
     console.log('  advisers matter archive <id> [--dry-run] [--json]')
@@ -1800,6 +2173,1057 @@ async function matterCommand(args) {
     return
   }
   fail('E_USAGE', 'unknown matter subcommand: ' + sub, 'advisers matter help')
+}
+
+/* ---------------------------------------------------------------------------
+ * 0.3.0 customer entities: client / project commands + derived views.
+ *
+ * clients/projects/client_notes are SQLite-only rows (schema v21): they never
+ * enter the wire LedgerSnapshot, so every command here is a thin adapter over
+ * SqliteStore. Writes are one directed statement in a single mutate()
+ * transaction with exactly one audit row (ids/counts only -- never names, notes,
+ * titles or paths); reads run in one lock-free snapshot and every query is
+ * scoped by the client/project's own matter ids (no full-table read followed by
+ * an in-memory filter, so two clients can never see each other's rows).
+ *
+ * The customer timeline is DERIVED (packages/core/src/customer.ts); there is no
+ * event table and no stored counter. --clearance N is an opt-in per-item
+ * secrecy gate: a matter whose effective secrecy max(client.secrecyDefault,
+ * matter.secrecy) is above N is withheld with its rows and only a COUNT is
+ * reported (never an id/title/name). The local CLI default is 3 (the user's own
+ * data is visible); pass --clearance 0 to build output safe to hand to someone
+ * else. Unclassified (pre-v21) matters stay visible in matter ls: no ownership
+ * is ever invented for them.
+ * ------------------------------------------------------------------------- */
+const CUSTOMER_SOURCE_LIMIT = 200
+const CUSTOMER_TIMELINE_DEFAULT = 20
+const CUSTOMER_TIMELINE_MAX = 200
+const CUSTOMER_DEFAULT_CLEARANCE = 3
+const CUSTOMER_DEFAULT_LIMIT = 100
+const CUSTOMER_MAX_LIMIT = 1000
+
+const CUSTOMER_USAGE = {
+  add: 'usage: advisers client add "<name>" [--aliases a,b] [--tags t1,t2] [--secrecy 0-3] [--note text] [--link-matter <id>] [--json]',
+  list: 'usage: advisers client list [--all] [--limit n] [--json]',
+  show: 'usage: advisers client show <id> [--timeline-limit n] [--clearance 0-3] [--json]',
+  timeline: 'usage: advisers client timeline <id> [--since 90d|ISO] [--kind delivery,note,commitment] [--limit n] [--clearance 0-3] [--json]',
+  archive: 'usage: advisers client archive <id> [--dry-run] [--json]',
+  merge: 'usage: advisers client merge <from-id> <into-id> [--dry-run] [--json]',
+  note: 'usage: advisers client note add <id> "<summary>" [--kind note|call|meeting|decision|email-summary] [--at ISO] [--project <id>] [--matter <id>] [--json]',
+  noteList: 'usage: advisers client note list <id> [--project <id>] [--limit n] [--json]',
+  projectAdd: 'usage: advisers project add <client-id> "<name>" [--start YYYY-MM-DD] [--end YYYY-MM-DD] [--default-matter <id>] [--note text] [--json]',
+  projectList: 'usage: advisers project list [--client <id>] [--all] [--limit n] [--json]',
+  projectShow: 'usage: advisers project show <id> [--timeline-limit n] [--clearance 0-3] [--json]',
+  projectArchive: 'usage: advisers project archive <id> [--dry-run] [--json]',
+}
+
+/** An application error with a stable E_* code and optional actionable hint. */
+function customerError(code, message, hint) {
+  const error = new Error(code + ': ' + message)
+  error.code = code
+  if (hint) error.hint = hint
+  return error
+}
+
+/** Machine-readable failure on stderr; stdout stays a clean JSON document. */
+function customerFail(code, message, hint) {
+  const payload = { error: { code: code, message: message } }
+  if (hint) payload.error.hint = hint
+  console.error(JSON.stringify(payload))
+  process.exitCode = 1
+}
+
+/** Report a customer-command failure (store failures keep their documented hints). */
+function reportCustomerFailure(error) {
+  if (isStoreWriteFailure(error)) { exitStoreWriteFailure(error); return }
+  const code = typeof error?.code === 'string' ? error.code : 'E_UNKNOWN'
+  let message = String(error?.message ?? error)
+  if (message.startsWith(code + ': ')) message = message.slice(code.length + 2)
+  const hintMarker = message.lastIndexOf(' (hint: ')
+  if (hintMarker !== -1 && message.endsWith(')')) message = message.slice(0, hintMarker)
+  customerFail(code, message, typeof error?.hint === 'string' ? error.hint : undefined)
+}
+
+/** Customer entities are SQLite-only; the legacy JSON store has no tables. */
+function customerStoreOrFail() {
+  if (mode === 'sqlite') return true
+  customerFail('E_STORE', '客户/项目实体只存在于 SQLite 账本（ADVISERS_STORE=sqlite）；JSON store 没有这些表。', 'advisers init')
+  return false
+}
+
+/** Parse one --flag as an integer inside [min,max]; undefined -> fallback. */
+function customerIntegerFlag(value, name, min, max, fallback, usage) {
+  if (value === undefined) return fallback
+  if (typeof value !== 'string' || !/^(?:0|[1-9][0-9]*)$/.test(value)) {
+    throw customerError('E_USAGE', '--' + name + ' must be an integer ' + min + '..' + max, usage)
+  }
+  const number = Number(value)
+  if (!Number.isFinite(number) || number < min || number > max) {
+    throw customerError('E_USAGE', '--' + name + ' must be an integer ' + min + '..' + max, usage)
+  }
+  return number
+}
+
+/** Parse a comma-separated list flag (undefined stays undefined). */
+function customerCommaList(value, name, usage) {
+  if (value === undefined) return undefined
+  if (typeof value !== 'string') throw customerError('E_USAGE', '--' + name + ' requires a comma-separated value', usage)
+  const list = value.split(',').map((item) => item.trim()).filter(Boolean)
+  if (!list.length) throw customerError('E_USAGE', '--' + name + ' requires at least one value', usage)
+  return list
+}
+
+/** Strict subcommand flag parsing: unknown options fail closed with E_USAGE. */
+function customerFlags(args, spec, usage) {
+  const parsed = parseStrictFlags(args, spec)
+  if (!parsed.ok) throw customerError('E_USAGE', parsed.error, usage)
+  return parsed
+}
+
+/** Required positional id (trimmed); E_USAGE when missing. */
+function customerIdArg(parts, index, name, usage) {
+  const value = parts[index]
+  const id = typeof value === 'string' ? value.trim() : ''
+  if (!id) throw customerError('E_USAGE', name + ' is required', usage)
+  return id
+}
+
+/** Effective secrecy of a matter for one client: max(default, matter level). */
+function effectiveMatterSecrecy(client, matter) {
+  const clientLevel = Number(client?.secrecyDefault ?? 0)
+  const matterLevel = matter?.secrecy === undefined || matter?.secrecy === null ? 0 : Number(matter.secrecy)
+  if (!Number.isFinite(clientLevel) || !Number.isFinite(matterLevel)) return Number.POSITIVE_INFINITY
+  return Math.max(clientLevel, matterLevel)
+}
+
+function customerSqlIn(ids) {
+  return ids.map(() => '?').join(',')
+}
+
+function customerCountRows(store, table, matterIds) {
+  if (!matterIds.length) return 0
+  const row = store.db.prepare('SELECT COUNT(*) AS n FROM ' + table + ' WHERE matter_id IN (' + customerSqlIn(matterIds) + ')').get(...matterIds)
+  return Number(row?.n ?? 0)
+}
+
+function customerNextDueAt(openRows) {
+  let next = null
+  for (const row of openRows) {
+    const ms = dueInstantOfValue(row.due_at ?? row.dueAt)
+    if (ms !== null && (next === null || ms < next)) next = ms
+  }
+  return next === null ? null : toShanghaiIso(next)
+}
+
+/** mine = we owe the client; waiting = the client owes us (debtor third:*). */
+function customerSplitOpen(openRows, matterById) {
+  const rows = openRows.map((row) => ({
+    id: row.id,
+    action: row.action,
+    debtor: row.debtor,
+    creditor: row.creditor,
+    status: 'open',
+    ...(row.matter_id === null || row.matter_id === undefined ? {} : { matterId: row.matter_id }),
+    ...(row.due_at === null || row.due_at === undefined ? {} : { dueAt: row.due_at }),
+  }))
+  const matters = [...matterById.values()].map((matter) => ({
+    id: matter.id,
+    ...(matter.projectId === undefined ? {} : { projectId: matter.projectId }),
+    ...(matter.status === undefined ? {} : { status: matter.status }),
+    ...(matter.secrecy === undefined ? {} : { secrecy: matter.secrecy }),
+  }))
+  return core.splitOpenCommitments(rows, matters)
+}
+
+function customerOverdueCount(rows) {
+  const nowMs = Date.now()
+  return rows.filter((row) => {
+    const ms = dueInstantOfValue(row.dueAt)
+    return ms !== null && ms < nowMs
+  }).length
+}
+
+/** Map raw rows to the core timeline input shapes (no unmapped column leaks). */
+function customerCommitmentEvent(row) {
+  return {
+    id: row.id,
+    matterId: row.matter_id,
+    action: row.action,
+    debtor: row.debtor,
+    creditor: row.creditor,
+    status: row.status,
+    ...(row.due_at === null || row.due_at === undefined ? {} : { dueAt: row.due_at }),
+    ...(row.done_at === null || row.done_at === undefined ? {} : { doneAt: row.done_at }),
+    ...(row.created_at === null || row.created_at === undefined ? {} : { createdAt: row.created_at }),
+  }
+}
+
+function customerDeliveryEvent(row) {
+  return {
+    id: row.id,
+    matterId: row.matter_id,
+    createdAt: row.created_at,
+    ...(row.title === null || row.title === undefined ? {} : { title: row.title }),
+    ...(row.tool === null || row.tool === undefined ? {} : { tool: row.tool }),
+    ...(row.template_name === null || row.template_name === undefined ? {} : { templateName: row.template_name }),
+  }
+}
+
+function customerNoteEvent(row) {
+  return {
+    id: row.id,
+    at: row.at,
+    summary: row.summary,
+    ...(row.kind === undefined ? {} : { kind: row.kind }),
+    ...(row.projectId === undefined ? {} : { projectId: row.projectId }),
+    ...(row.matterId === undefined ? {} : { matterId: row.matterId }),
+  }
+}
+
+function customerNoteRow(row) {
+  let source
+  if (row.source) {
+    try { source = JSON.parse(row.source) } catch { source = undefined }
+  }
+  return {
+    id: row.id,
+    clientId: row.client_id,
+    kind: row.kind,
+    at: row.at,
+    summary: row.summary,
+    createdAt: row.created_at,
+    ...(row.project_id === null || row.project_id === undefined ? {} : { projectId: row.project_id }),
+    ...(row.matter_id === null || row.matter_id === undefined ? {} : { matterId: row.matter_id }),
+    ...(source === undefined ? {} : { source: source }),
+    ...(row.deleted_at === null || row.deleted_at === undefined ? {} : { deletedAt: row.deleted_at }),
+  }
+}
+
+/** Load the matter-scoped rows a client/project view derives from (bounded). */
+function customerMatterRows(store, matterIds, limit) {
+  if (!matterIds.length) return { commitments: [], deliveries: [], open: [] }
+  const marks = customerSqlIn(matterIds)
+  return {
+    commitments: store.db.prepare(
+      'SELECT id, matter_id, action, debtor, creditor, status, due_at, done_at, created_at FROM commitments WHERE matter_id IN (' + marks + ') ORDER BY (created_at IS NULL), created_at DESC, rowid DESC LIMIT ?'
+    ).all(...matterIds, limit),
+    deliveries: store.db.prepare(
+      'SELECT id, matter_id, client_id, project_id, title, tool, template_name, created_at FROM deliveries WHERE matter_id IN (' + marks + ') ORDER BY created_at DESC, rowid DESC LIMIT ?'
+    ).all(...matterIds, limit),
+    open: store.db.prepare(
+      "SELECT id, matter_id, action, debtor, creditor, due_at FROM commitments WHERE matter_id IN (" + marks + ") AND status = 'open' ORDER BY rowid"
+    ).all(...matterIds),
+  }
+}
+
+/** One read snapshot of a client's rows (every query scoped by its own matters). */
+function readClientView(store, clientId) {
+  const client = store.getClient(String(clientId))
+  if (!client) throw customerError('E_CLIENT_NOT_FOUND', 'unknown client: ' + String(clientId), 'advisers client list')
+  const projects = store.listProjects({ clientId: client.id, status: 'all', includeDeleted: true, limit: 1000 })
+  const matters = store.listMattersByClient(client.id)
+  const rows = customerMatterRows(store, matters.map((matter) => matter.id), CUSTOMER_SOURCE_LIMIT)
+  const notes = store.listClientNotes({ clientId: client.id, limit: CUSTOMER_SOURCE_LIMIT })
+  return {
+    client: client,
+    projects: projects,
+    matters: matters,
+    matterById: new Map(matters.map((matter) => [matter.id, matter])),
+    commitments: rows.commitments,
+    deliveries: rows.deliveries,
+    open: rows.open,
+    notes: notes,
+  }
+}
+
+/** Notes of one project: explicit project_id OR a matter belonging to the project. */
+function customerProjectNotes(store, project, matterIds, limit) {
+  let sql = 'SELECT id, client_id, project_id, matter_id, kind, at, summary, source, created_at, deleted_at FROM client_notes WHERE client_id = ? AND deleted_at IS NULL AND project_id = ?'
+  const params = [project.clientId, project.id]
+  if (matterIds.length) {
+    sql = 'SELECT id, client_id, project_id, matter_id, kind, at, summary, source, created_at, deleted_at FROM client_notes WHERE client_id = ? AND deleted_at IS NULL AND (project_id = ? OR matter_id IN (' + customerSqlIn(matterIds) + '))'
+    params.push(...matterIds)
+  }
+  return store.db.prepare(sql + ' ORDER BY at DESC, rowid DESC LIMIT ?').all(...params, limit).map(customerNoteRow)
+}
+
+/** One read snapshot of a project's rows (matter/project scoped). */
+function readProjectView(store, projectId) {
+  const project = store.getProject(String(projectId))
+  if (!project) throw customerError('E_PROJECT_NOT_FOUND', 'unknown project: ' + String(projectId), 'advisers project list')
+  const client = store.getClient(project.clientId)
+  const matters = store.listMattersByProject(project.id)
+  const matterIds = matters.map((matter) => matter.id)
+  const rows = customerMatterRows(store, matterIds, CUSTOMER_SOURCE_LIMIT)
+  return {
+    project: project,
+    client: client,
+    matters: matters,
+    matterById: new Map(matters.map((matter) => [matter.id, matter])),
+    commitments: rows.commitments,
+    deliveries: rows.deliveries,
+    open: rows.open,
+    notes: customerProjectNotes(store, project, matterIds, CUSTOMER_SOURCE_LIMIT),
+  }
+}
+
+function customerCountClientNotes(store, client, allowedSet, clearance) {
+  const groups = store.db.prepare('SELECT matter_id, COUNT(*) AS n FROM client_notes WHERE client_id = ? AND deleted_at IS NULL GROUP BY matter_id').all(client.id)
+  const clientLevel = Number(client?.secrecyDefault ?? 0)
+  let count = 0
+  for (const group of groups) {
+    if (group.matter_id === null || group.matter_id === undefined) {
+      if (clientLevel <= clearance) count += Number(group.n)
+    } else if (allowedSet.has(group.matter_id)) {
+      count += Number(group.n)
+    }
+  }
+  return count
+}
+
+function customerCountProjectNotes(store, project, allowedSet, clearance, client) {
+  const ids = [...allowedSet]
+  let sql = 'SELECT matter_id, COUNT(*) AS n FROM client_notes WHERE client_id = ? AND deleted_at IS NULL AND project_id = ? GROUP BY matter_id'
+  let params = [project.clientId, project.id]
+  if (ids.length) {
+    sql = 'SELECT matter_id, COUNT(*) AS n FROM client_notes WHERE client_id = ? AND deleted_at IS NULL AND (project_id = ? OR matter_id IN (' + customerSqlIn(ids) + ')) GROUP BY matter_id'
+    params = [project.clientId, project.id, ...ids]
+  }
+  const clientLevel = Number(client?.secrecyDefault ?? 0)
+  let count = 0
+  for (const group of store.db.prepare(sql).all(...params)) {
+    if (group.matter_id === null || group.matter_id === undefined) {
+      if (clientLevel <= clearance) count += Number(group.n)
+    } else if (allowedSet.has(group.matter_id)) {
+      count += Number(group.n)
+    }
+  }
+  return count
+}
+
+/**
+ * Apply the opt-in clearance gate to one client/project view BEFORE counting,
+ * paging or limiting: a withheld matter takes its commitments/deliveries/notes
+ * with it, and only the COUNT is reported (never an id/title/name/quote).
+ */
+function clearCustomerView(view, clearance) {
+  const allowed = []
+  const allowedIds = new Set()
+  let protectedExcluded = 0
+  for (const matter of view.matters) {
+    if (effectiveMatterSecrecy(view.client, matter) <= clearance) {
+      allowed.push(matter)
+      allowedIds.add(matter.id)
+    } else {
+      protectedExcluded++
+    }
+  }
+  const clientLevel = Number(view.client?.secrecyDefault ?? 0)
+  const notes = view.notes.filter((note) => {
+    if (note.matterId !== undefined && note.matterId !== null) return allowedIds.has(note.matterId)
+    if (clientLevel <= clearance) return true
+    protectedExcluded++
+    return false
+  })
+  return {
+    ...view,
+    matters: allowed,
+    matterById: new Map(allowed.map((matter) => [matter.id, matter])),
+    allowedIds: allowedIds,
+    commitments: view.commitments.filter((row) => allowedIds.has(row.matter_id)),
+    deliveries: view.deliveries.filter((row) => allowedIds.has(row.matter_id)),
+    open: view.open.filter((row) => allowedIds.has(row.matter_id)),
+    notes: notes,
+    protectedExcluded: protectedExcluded,
+  }
+}
+
+/** Exact counts for one filtered client view (SQL counts, not the bounded page). */
+function customerClientCounts(store, view, filtered, clearance) {
+  const { mine, waiting } = customerSplitOpen(filtered.open, view.matterById)
+  return {
+    matters: filtered.matters.length,
+    mattersArchived: filtered.matters.filter((matter) => matter.status === 'archived').length,
+    deliveries: customerCountRows(store, 'deliveries', [...filtered.allowedIds]),
+    notes: customerCountClientNotes(store, view.client, filtered.allowedIds, clearance),
+    commitments: customerCountRows(store, 'commitments', [...filtered.allowedIds]),
+    openMine: mine.length,
+    openWaiting: waiting.length,
+    overdue: customerOverdueCount([...mine, ...waiting]),
+  }
+}
+
+/** Exact counts for one filtered project view. */
+function customerProjectCounts(store, view, filtered, clearance) {
+  const matters = filtered.matters
+  const allowedIds = matters.map((matter) => matter.id)
+  const allowedSet = new Set(allowedIds)
+  const openRows = filtered.open.filter((row) => allowedSet.has(row.matter_id))
+  const { mine, waiting } = customerSplitOpen(openRows, view.matterById)
+  return {
+    matters: matters.length,
+    mattersArchived: matters.filter((matter) => matter.status === 'archived').length,
+    deliveries: customerCountRows(store, 'deliveries', allowedIds),
+    notes: customerCountProjectNotes(store, view.project, allowedSet, clearance, view.client),
+    commitments: customerCountRows(store, 'commitments', allowedIds),
+    openMine: mine.length,
+    openWaiting: waiting.length,
+    overdue: customerOverdueCount([...mine, ...waiting]),
+  }
+}
+
+/** Derive the merged timeline from the filtered snapshot (pure core function). */
+function customerTimeline(view, filtered, options = {}) {
+  const clientLevel = Number(view.client?.secrecyDefault ?? 0)
+  const derived = core.deriveClientTimeline({
+    matters: filtered.matters.map((matter) => ({
+      id: matter.id,
+      status: matter.status,
+      ...(matter.secrecy === undefined ? {} : { secrecy: matter.secrecy }),
+      ...(matter.projectId === undefined ? {} : { projectId: matter.projectId }),
+    })),
+    commitments: filtered.commitments.map(customerCommitmentEvent),
+    deliveries: filtered.deliveries.map(customerDeliveryEvent),
+    notes: filtered.notes.map(customerNoteEvent),
+  }, {
+    ...(options.since === undefined ? {} : { since: options.since }),
+    ...(options.kinds === undefined ? {} : { kinds: options.kinds }),
+    ...(options.limit === undefined ? {} : { limit: options.limit }),
+    defaultLimit: options.defaultLimit === undefined ? CUSTOMER_TIMELINE_DEFAULT : options.defaultLimit,
+    maxLimit: CUSTOMER_TIMELINE_MAX,
+  })
+  // Effective secrecy includes the client default; a withheld row never reaches
+  // this point, so the label can never understate the real protection level.
+  const items = derived.items.map((item) => {
+    const matter = item.matterId === undefined ? undefined : view.matterById.get(item.matterId)
+    const secrecy = matter ? effectiveMatterSecrecy(view.client, matter) : clientLevel
+    return { ...item, secrecy: secrecy }
+  })
+  return { items: items, total: derived.total, truncated: derived.truncated, degraded: derived.degraded }
+}
+
+function customerOpenBuckets(view, filtered) {
+  const { mine, waiting } = customerSplitOpen(filtered.open, view.matterById)
+  const decorate = (row) => {
+    const matter = row.matterId === undefined ? undefined : view.matterById.get(row.matterId)
+    const secrecy = matter ? effectiveMatterSecrecy(view.client, matter) : Number(view.client?.secrecyDefault ?? 0)
+    return { ...row, secrecy: secrecy }
+  }
+  return { mine: mine.map(decorate), waiting: waiting.map(decorate) }
+}
+
+/** Parse --since as a relative window (90d / 24h) or an ISO timestamp. */
+function customerSince(value, usage) {
+  if (value === undefined) return undefined
+  if (typeof value !== 'string') throw customerError('E_USAGE', '--since requires an ISO timestamp or a relative window like 90d', usage)
+  const text = value.trim()
+  const relative = /^([0-9]+)([dh])$/i.exec(text)
+  if (relative) {
+    const amount = Number(relative[1])
+    const unitMs = relative[2].toLowerCase() === 'd' ? 86400000 : 3600000
+    return Date.now() - amount * unitMs
+  }
+  const ms = Date.parse(text)
+  if (!Number.isFinite(ms)) throw customerError('E_USAGE', '--since is not a valid timestamp or relative window (90d / 24h / ISO)', usage)
+  return ms
+}
+
+/** Parse --kind against the kinds this build derives (facts are 0.3.x). */
+function customerTimelineKinds(value, usage) {
+  if (value === undefined) return undefined
+  const allowed = ['delivery', 'note', 'commitment']
+  const kinds = String(value).split(',').map((item) => item.trim()).filter(Boolean)
+  if (!kinds.length) throw customerError('E_USAGE', '--kind requires at least one value (' + allowed.join(',') + ')', usage)
+  for (const kind of kinds) {
+    if (!allowed.includes(kind)) throw customerError('E_USAGE', 'unknown timeline kind: ' + kind, usage + ' (allowed: ' + allowed.join(',') + ')')
+  }
+  return kinds
+}
+
+function customerTimelineLines(items, emptyText) {
+  if (!items.length) return ['（' + (emptyText || '时间线为空') + '）']
+  return items.map((item) => {
+    const at = String(item.at).replace('T', ' ').slice(0, 16)
+    const status = item.kind === 'commitment' && item.status ? ' [' + item.status + ']' : ''
+    return '  ' + at + '  ' + String(item.kind).padEnd(10) + ' ' + item.title + status
+  })
+}
+
+function customerClearanceLines(payload) {
+  const lines = []
+  if (payload.protectedExcluded) lines.push('clearance=' + payload.clearance + ' · 已隐藏 ' + payload.protectedExcluded + ' 个受保护对象（只报计数，不展示内容）')
+  if (payload.degraded && payload.degraded.length) lines.push('降级（无法放置到时间线的行）：' + payload.degraded.join(', '))
+  return lines
+}
+
+function customerDescribeOpen(open, limit) {
+  const lines = []
+  if (open.mine.length) {
+    lines.push('未完成 · 我方欠客户（' + open.mine.length + '）：')
+    for (const row of open.mine.slice(0, limit)) lines.push('  ' + row.id + '  ' + row.action + (row.dueAt ? ' · 截止 ' + row.dueAt : '') + (row.projectId ? ' [' + row.projectId + ']' : ''))
+  }
+  if (open.waiting.length) {
+    lines.push('未完成 · 等对方（' + open.waiting.length + '）：')
+    for (const row of open.waiting.slice(0, limit)) lines.push('  ' + row.id + '  ' + row.action + (row.dueAt ? ' · 截止 ' + row.dueAt : '') + (row.projectId ? ' [' + row.projectId + ']' : ''))
+  }
+  return lines
+}
+
+function customerPrint(asJson, payload, lines) {
+  if (asJson) { console.log(JSON.stringify(payload, null, 2)); return }
+  for (const line of lines) console.log(line)
+}
+
+/* ---------------------------- client commands ---------------------------- */
+
+function clientUsage() {
+  console.log('usage: advisers client <add|list|show|timeline|archive|merge|note> ...')
+  console.log('  ' + CUSTOMER_USAGE.add)
+  console.log('  ' + CUSTOMER_USAGE.list)
+  console.log('  ' + CUSTOMER_USAGE.show)
+  console.log('  ' + CUSTOMER_USAGE.timeline)
+  console.log('  ' + CUSTOMER_USAGE.archive)
+  console.log('  ' + CUSTOMER_USAGE.merge)
+  console.log('  ' + CUSTOMER_USAGE.note)
+  console.log('  ' + CUSTOMER_USAGE.noteList)
+  console.log('客户是归属维度：matter 通过 --client/--project 挂到客户；commitments/facts 仍只挂 matter。')
+}
+
+function clientAdd(rest) {
+  const usage = CUSTOMER_USAGE.add
+  try {
+    const parsed = customerFlags(rest, { booleans: ['json'], values: ['aliases', 'tags', 'secrecy', 'note', 'link-matter'] }, usage)
+    const name = parsed.positional.join(' ').trim()
+    if (!name) throw customerError('E_USAGE', 'a client name is required', usage)
+    const aliases = customerCommaList(parsed.flags.aliases, 'aliases', usage)
+    const tags = customerCommaList(parsed.flags.tags, 'tags', usage)
+    const secrecyDefault = customerIntegerFlag(parsed.flags.secrecy, 'secrecy', 0, 3, 0, usage)
+    const notes = typeof parsed.flags.note === 'string' ? parsed.flags.note : undefined
+    const linkMatter = typeof parsed.flags['link-matter'] === 'string' ? parsed.flags['link-matter'].trim() : undefined
+    if (!customerStoreOrFail()) return
+    const audit = { actor: 'local', action: 'client.add', allowed: true, reason: '' }
+    const made = mutateWithAudit((store) => {
+      const client = store.addClient({ name: name, aliases: aliases, tags: tags, secrecyDefault: secrecyDefault, notes: notes })
+      let matter = null
+      if (linkMatter) {
+        matter = store.setMatterClient(linkMatter, { clientId: client.id })
+        audit.reason = client.id + ';matter=' + matter.id
+      } else {
+        audit.reason = client.id
+      }
+      return { client: client, matter: matter }
+    }, audit)
+    const result = made.result
+    const payload = { ok: true, command: 'client add', client: result.client }
+    if (result.matter) payload.matter = result.matter
+    const lines = ['created ' + result.client.id + '  ' + result.client.name + (result.client.aliases.length ? '  (' + result.client.aliases.join('/') + ')' : '')]
+    if (result.matter) lines.push('linked matter ' + result.matter.id + '  ' + result.matter.title)
+    customerPrint(parsed.flags.json === true, payload, lines)
+  } catch (error) { reportCustomerFailure(error) }
+}
+
+/* ---------------------------- client views ------------------------------- */
+
+/** One derived list row: client row + exact counts + next due + clearance info. */
+function clientListRow(store, client) {
+  const clearance = CUSTOMER_DEFAULT_CLEARANCE
+  const view = readClientView(store, client.id)
+  const filtered = clearCustomerView(view, clearance)
+  return {
+    ...client,
+    counts: customerClientCounts(store, view, filtered, clearance),
+    nextDueAt: customerNextDueAt(filtered.open),
+    clearance: clearance,
+    protectedExcluded: filtered.protectedExcluded,
+  }
+}
+
+/** One project row inside a cleared client view (counts scoped to that project). */
+function customerProjectOfClientCounts(store, view, filtered, project, clearance) {
+  const matters = filtered.matters.filter((matter) => matter.projectId === project.id)
+  const allowedIds = matters.map((matter) => matter.id)
+  const allowedSet = new Set(allowedIds)
+  const openRows = filtered.open.filter((row) => allowedSet.has(row.matter_id))
+  const { mine, waiting } = customerSplitOpen(openRows, filtered.matterById)
+  return {
+    counts: {
+      matters: matters.length,
+      mattersArchived: matters.filter((matter) => matter.status === 'archived').length,
+      deliveries: customerCountRows(store, 'deliveries', allowedIds),
+      notes: customerCountProjectNotes(store, project, allowedSet, clearance, view.client),
+      commitments: customerCountRows(store, 'commitments', allowedIds),
+      openMine: mine.length,
+      openWaiting: waiting.length,
+      overdue: customerOverdueCount([...mine, ...waiting]),
+    },
+    nextDueAt: customerNextDueAt(openRows),
+  }
+}
+
+function clientList(rest) {
+  const usage = CUSTOMER_USAGE.list
+  try {
+    const parsed = customerFlags(rest, { booleans: ['json', 'all'], values: ['limit'] }, usage)
+    const limit = customerIntegerFlag(parsed.flags.limit, 'limit', 1, CUSTOMER_MAX_LIMIT, CUSTOMER_DEFAULT_LIMIT, usage)
+    if (!customerStoreOrFail()) return
+    const store = readStoreOrExit()
+    const all = parsed.flags.all === true
+    const rows = store.read(() => store.listClients({ status: all ? 'all' : 'active', includeDeleted: all, limit: limit }).map((client) => clientListRow(store, client)))
+    const lines = rows.length
+      ? rows.map((row) => row.id + '  ' + row.status + '  secrecy=' + row.secrecyDefault + '  matters=' + row.counts.matters + '  open=' + (row.counts.openMine + row.counts.openWaiting) + '  next=' + (row.nextDueAt || '-') + '  ' + row.name + (row.aliases.length ? ' (' + row.aliases.join('/') + ')' : ''))
+      : ['（没有客户）']
+    customerPrint(parsed.flags.json === true, rows, lines)
+  } catch (error) { reportCustomerFailure(error) }
+}
+
+function clientShow(rest) {
+  const usage = CUSTOMER_USAGE.show
+  try {
+    const parsed = customerFlags(rest, { booleans: ['json'], values: ['timeline-limit', 'clearance'] }, usage)
+    const id = customerIdArg(parsed.positional, 0, 'a client id', usage)
+    const clearance = customerIntegerFlag(parsed.flags.clearance, 'clearance', 0, 3, CUSTOMER_DEFAULT_CLEARANCE, usage)
+    const timelineLimit = customerIntegerFlag(parsed.flags['timeline-limit'], 'timeline-limit', 0, CUSTOMER_TIMELINE_MAX, CUSTOMER_TIMELINE_DEFAULT, usage)
+    if (!customerStoreOrFail()) return
+    const store = readStoreOrExit()
+    const payload = store.read(() => {
+      const view = readClientView(store, id)
+      const filtered = clearCustomerView(view, clearance)
+      const counts = customerClientCounts(store, view, filtered, clearance)
+      const timeline = customerTimeline(view, filtered, { limit: timelineLimit })
+      const open = customerOpenBuckets(view, filtered)
+      const projects = view.projects.map((project) => {
+        const summary = customerProjectOfClientCounts(store, view, filtered, project, clearance)
+        return { ...project, counts: summary.counts, nextDueAt: summary.nextDueAt }
+      })
+      const matters = filtered.matters.map((matter) => {
+        const openRows = filtered.open.filter((row) => row.matter_id === matter.id)
+        return {
+          id: matter.id,
+          title: matter.title,
+          status: matter.status,
+          secrecy: Number(matter.secrecy ?? 0),
+          projectId: matter.projectId ?? null,
+          openCommitments: openRows.length,
+          nextDueAt: customerNextDueAt(openRows),
+        }
+      })
+      return {
+        ok: true,
+        command: 'client show',
+        client: view.client,
+        projects: projects,
+        matters: matters,
+        counts: counts,
+        open: open,
+        nextDueAt: customerNextDueAt(filtered.open),
+        timeline: timeline.items,
+        timelineTotal: timeline.total,
+        timelineTruncated: timeline.truncated,
+        nextCursor: null,
+        clearance: clearance,
+        protectedExcluded: filtered.protectedExcluded,
+        degraded: timeline.degraded,
+      }
+    })
+    const lines = []
+    lines.push(payload.client.name + '  ' + payload.client.id + '  ' + payload.client.status)
+    lines.push('保密默认 ' + payload.client.secrecyDefault + ' · 标签 ' + (payload.client.tags.length ? payload.client.tags.join(',') : '-') + (payload.client.notes ? ' · 备注 ' + payload.client.notes : ''))
+    lines.push('事项 ' + payload.counts.matters + '（归档 ' + payload.counts.mattersArchived + '） · 未完成 我方 ' + payload.counts.openMine + ' / 对方 ' + payload.counts.openWaiting + ' · 逾期 ' + payload.counts.overdue + ' · 交付 ' + payload.counts.deliveries + ' · 备注 ' + payload.counts.notes + ' · 下一截止 ' + (payload.nextDueAt || '无'))
+    if (payload.projects.length) {
+      lines.push('项目（' + payload.projects.length + '）：')
+      for (const project of payload.projects) {
+        lines.push('  ' + project.id + '  ' + project.name + '  ' + project.status + '  matters=' + project.counts.matters + '  open=' + (project.counts.openMine + project.counts.openWaiting) + '  next=' + (project.nextDueAt || '-'))
+      }
+    }
+    lines.push(...customerDescribeOpen(payload.open, 10))
+    lines.push('时间线（显示 ' + payload.timeline.length + ' / 匹配 ' + payload.timelineTotal + '）：')
+    lines.push(...customerTimelineLines(payload.timeline))
+    lines.push(...customerClearanceLines(payload))
+    customerPrint(parsed.flags.json === true, payload, lines)
+  } catch (error) { reportCustomerFailure(error) }
+}
+
+function clientTimeline(rest) {
+  const usage = CUSTOMER_USAGE.timeline
+  try {
+    const parsed = customerFlags(rest, { booleans: ['json'], values: ['since', 'kind', 'limit', 'clearance'] }, usage)
+    const id = customerIdArg(parsed.positional, 0, 'a client id', usage)
+    const clearance = customerIntegerFlag(parsed.flags.clearance, 'clearance', 0, 3, CUSTOMER_DEFAULT_CLEARANCE, usage)
+    const limit = customerIntegerFlag(parsed.flags.limit, 'limit', 0, CUSTOMER_TIMELINE_MAX, CUSTOMER_TIMELINE_DEFAULT, usage)
+    const since = customerSince(typeof parsed.flags.since === 'string' ? parsed.flags.since : undefined, usage)
+    const kinds = customerTimelineKinds(typeof parsed.flags.kind === 'string' ? parsed.flags.kind : undefined, usage)
+    if (!customerStoreOrFail()) return
+    const store = readStoreOrExit()
+    const payload = store.read(() => {
+      const view = readClientView(store, id)
+      const filtered = clearCustomerView(view, clearance)
+      const timeline = customerTimeline(view, filtered, { since: since, kinds: kinds, limit: limit })
+      return {
+        ok: true,
+        command: 'client timeline',
+        clientId: view.client.id,
+        client: { id: view.client.id, name: view.client.name },
+        items: timeline.items,
+        total: timeline.total,
+        truncated: timeline.truncated,
+        nextCursor: null,
+        clearance: clearance,
+        protectedExcluded: filtered.protectedExcluded,
+        degraded: timeline.degraded,
+      }
+    })
+    const lines = [payload.client.name + ' 时间线（显示 ' + payload.items.length + ' / 匹配 ' + payload.total + (payload.truncated ? '，已截断' : '') + '）：']
+    lines.push(...customerTimelineLines(payload.items))
+    lines.push(...customerClearanceLines(payload))
+    customerPrint(parsed.flags.json === true, payload, lines)
+  } catch (error) { reportCustomerFailure(error) }
+}
+
+/** Shared archive precondition: active projects block archiving (fail closed). */
+function clientActiveProjects(store, clientId) {
+  return store.listProjects({ clientId: clientId, status: 'active', limit: 1000 })
+}
+
+function clientArchive(rest) {
+  const usage = CUSTOMER_USAGE.archive
+  try {
+    const parsed = customerFlags(rest, { booleans: ['json', 'dry-run'], values: [] }, usage)
+    const id = customerIdArg(parsed.positional, 0, 'a client id', usage)
+    if (!customerStoreOrFail()) return
+    const dryRun = parsed.flags['dry-run'] === true
+    if (dryRun) {
+      const store = readStoreOrExit()
+      const plan = store.read(() => {
+        const client = store.getClient(id)
+        if (!client) throw customerError('E_CLIENT_NOT_FOUND', 'unknown client: ' + id, 'advisers client list')
+        return { client: client, activeProjects: clientActiveProjects(store, id) }
+      })
+      const payload = {
+        ok: true,
+        command: 'client archive',
+        dryRun: true,
+        client: plan.client,
+        activeProjects: plan.activeProjects.length,
+        wouldBlock: plan.activeProjects.length > 0,
+      }
+      const lines = ['would archive ' + plan.client.id + '  ' + plan.client.name + '（dry-run，未写入）']
+      if (payload.wouldBlock) lines.push('注意：还有 ' + payload.activeProjects + ' 个 active 项目，正式执行会被拒绝（E_CLIENT_HAS_ACTIVE_PROJECTS）')
+      customerPrint(parsed.flags.json === true, payload, lines)
+      return
+    }
+    const audit = { actor: 'local', action: 'client.archive', allowed: true, reason: id }
+    const made = mutateWithAudit((store) => {
+      const client = store.getClient(id)
+      if (!client) throw customerError('E_CLIENT_NOT_FOUND', 'unknown client: ' + id, 'advisers client list')
+      const activeProjects = clientActiveProjects(store, id)
+      if (activeProjects.length) {
+        throw customerError('E_CLIENT_HAS_ACTIVE_PROJECTS', 'client has ' + activeProjects.length + ' active project(s); archive them first', 'advisers project list --client ' + id)
+      }
+      return store.archiveClient(id)
+    }, audit)
+    const payload = { ok: true, command: 'client archive', client: made.result }
+    customerPrint(parsed.flags.json === true, payload, ['archived ' + made.result.id + '  ' + made.result.name])
+  } catch (error) { reportCustomerFailure(error) }
+}
+
+function clientMerge(rest) {
+  const usage = CUSTOMER_USAGE.merge
+  try {
+    const parsed = customerFlags(rest, { booleans: ['json', 'dry-run'], values: [] }, usage)
+    const fromId = customerIdArg(parsed.positional, 0, 'a source client id', usage)
+    const intoId = customerIdArg(parsed.positional, 1, 'a target client id', usage)
+    if (fromId === intoId) throw customerError('E_CLIENT_MERGE_SELF', 'cannot merge a client into itself', usage)
+    if (!customerStoreOrFail()) return
+    const dryRun = parsed.flags['dry-run'] === true
+    if (dryRun) {
+      const store = readStoreOrExit()
+      const plan = store.read(() => {
+        const source = store.getClient(fromId)
+        if (!source) throw customerError('E_CLIENT_NOT_FOUND', 'unknown client: ' + fromId, 'advisers client list')
+        const target = store.getClient(intoId)
+        if (!target) throw customerError('E_CLIENT_NOT_FOUND', 'unknown client: ' + intoId, 'advisers client list')
+        if (target.status !== 'active' || target.deletedAt) throw customerError('E_CLIENT_ARCHIVED', 'target client is archived: ' + intoId, 'advisers client list')
+        const sourceProjects = store.listProjects({ clientId: fromId, status: 'all', includeDeleted: true, limit: 1000 })
+        const targetProjects = store.listProjects({ clientId: intoId, status: 'active', limit: 1000 })
+        const targetNames = new Set(targetProjects.map((project) => project.nameNorm))
+        let movedProjects = 0
+        let mergedProjects = 0
+        for (const project of sourceProjects) {
+          if (targetNames.has(project.nameNorm)) mergedProjects++
+          else movedProjects++
+        }
+        const countClientRows = (table) => Number(store.db.prepare('SELECT COUNT(*) AS n FROM ' + table + ' WHERE client_id = ?').get(fromId)?.n ?? 0)
+        return {
+          source: source,
+          target: target,
+          plan: {
+            movedMatters: Number(store.db.prepare('SELECT COUNT(*) AS n FROM matters WHERE client_id = ?').get(fromId)?.n ?? 0),
+            movedProjects: movedProjects,
+            mergedProjects: mergedProjects,
+            movedNotes: countClientRows('client_notes'),
+            movedDeliveries: countClientRows('deliveries'),
+          },
+        }
+      })
+      const payload = { ok: true, command: 'client merge', dryRun: true, from: plan.source, into: plan.target, plan: plan.plan }
+      const lines = [
+        'would merge ' + plan.source.id + '  ' + plan.source.name + '  ->  ' + plan.target.id + '  ' + plan.target.name + '（dry-run，未写入）',
+        '  matters=' + plan.plan.movedMatters + '  projects=' + plan.plan.movedProjects + ' (+' + plan.plan.mergedProjects + ' 同名合并)  notes=' + plan.plan.movedNotes + '  deliveries=' + plan.plan.movedDeliveries,
+        '  源客户会归档（不删除），名称/别名在不冲突时并入目标客户；不自动合并同名事项。',
+      ]
+      customerPrint(parsed.flags.json === true, payload, lines)
+      return
+    }
+    const audit = { actor: 'local', action: 'client.merge', allowed: true, reason: fromId + '->' + intoId }
+    const made = mutateWithAudit((store) => {
+      const result = store.mergeClients(fromId, intoId)
+      audit.reason = fromId + '->' + intoId + ';matter=' + result.movedMatters + ';project=' + result.movedProjects + ';note=' + result.movedNotes
+      return result
+    }, audit)
+    const payload = { ok: true, command: 'client merge', ...made.result }
+    const lines = [
+      'merged ' + made.result.mergedFrom + '  ->  ' + made.result.client.id + '  ' + made.result.client.name,
+      '  matters=' + made.result.movedMatters + '  projects=' + made.result.movedProjects + ' (+' + made.result.mergedProjects + ' 同名合并)  notes=' + made.result.movedNotes + '  deliveries=' + made.result.movedDeliveries + '  aliases+' + made.result.carriedAliases,
+    ]
+    customerPrint(parsed.flags.json === true, payload, lines)
+  } catch (error) { reportCustomerFailure(error) }
+}
+
+function clientNote(rest) {
+  const sub = rest[0]
+  if (sub === 'add') return clientNoteAdd(rest.slice(1))
+  if (sub === 'list' || sub === 'ls') return clientNoteList(rest.slice(1))
+  customerFail('E_USAGE', 'unknown client note subcommand: ' + String(sub), CUSTOMER_USAGE.note + ' / ' + CUSTOMER_USAGE.noteList)
+}
+
+function clientNoteAdd(rest) {
+  const usage = CUSTOMER_USAGE.note
+  try {
+    const parsed = customerFlags(rest, { booleans: ['json'], values: ['kind', 'at', 'project', 'matter'] }, usage)
+    const clientId = customerIdArg(parsed.positional, 0, 'a client id', usage)
+    const summary = parsed.positional.slice(1).join(' ').trim()
+    if (!summary) throw customerError('E_USAGE', 'a note summary is required', usage)
+    const kind = typeof parsed.flags.kind === 'string' ? parsed.flags.kind : undefined
+    const at = typeof parsed.flags.at === 'string' ? parsed.flags.at : undefined
+    const projectId = typeof parsed.flags.project === 'string' ? parsed.flags.project.trim() : undefined
+    const matterId = typeof parsed.flags.matter === 'string' ? parsed.flags.matter.trim() : undefined
+    if (!customerStoreOrFail()) return
+    const audit = { actor: 'local', action: 'client.note.add', allowed: true, reason: '' }
+    const made = mutateWithAudit((store) => {
+      const note = store.addClientNote({ clientId: clientId, summary: summary, kind: kind, at: at, projectId: projectId, matterId: matterId })
+      audit.reason = note.id
+      return note
+    }, audit)
+    const payload = { ok: true, command: 'client note add', note: made.result }
+    const preview = made.result.summary.replace(/\s+/g, ' ').slice(0, 80)
+    customerPrint(parsed.flags.json === true, payload, ['added ' + made.result.id + '  ' + made.result.at + '  [' + made.result.kind + ']  ' + preview])
+  } catch (error) { reportCustomerFailure(error) }
+}
+
+function clientNoteList(rest) {
+  const usage = CUSTOMER_USAGE.noteList
+  try {
+    const parsed = customerFlags(rest, { booleans: ['json'], values: ['project', 'limit'] }, usage)
+    const clientId = customerIdArg(parsed.positional, 0, 'a client id', usage)
+    const projectId = typeof parsed.flags.project === 'string' ? parsed.flags.project.trim() : undefined
+    const limit = customerIntegerFlag(parsed.flags.limit, 'limit', 1, 500, 50, usage)
+    if (!customerStoreOrFail()) return
+    const store = readStoreOrExit()
+    const rows = store.read(() => {
+      const client = store.getClient(clientId)
+      if (!client) throw customerError('E_CLIENT_NOT_FOUND', 'unknown client: ' + clientId, 'advisers client list')
+      return store.listClientNotes({ clientId: clientId, projectId: projectId, limit: limit })
+    })
+    const lines = rows.length
+      ? rows.map((note) => note.id + '  ' + note.at + '  [' + note.kind + ']  ' + String(note.summary).replace(/\s+/g, ' ').slice(0, 100) + (note.projectId ? '  [' + note.projectId + ']' : ''))
+      : ['（没有备注）']
+    customerPrint(parsed.flags.json === true, rows, lines)
+  } catch (error) { reportCustomerFailure(error) }
+}
+
+function clientCommand(rawArgs) {
+  const sub = rawArgs[0]
+  const rest = rawArgs.slice(1)
+  if (!sub || sub === 'help' || sub === '--help') { clientUsage(); return }
+  if (sub === 'add') return clientAdd(rest)
+  if (sub === 'list' || sub === 'ls') return clientList(rest)
+  if (sub === 'show') return clientShow(rest)
+  if (sub === 'timeline') return clientTimeline(rest)
+  if (sub === 'archive') return clientArchive(rest)
+  if (sub === 'merge') return clientMerge(rest)
+  if (sub === 'note') return clientNote(rest)
+  customerFail('E_USAGE', 'unknown client subcommand: ' + String(sub), 'advisers client help')
+}
+
+/* ---------------------------- project commands --------------------------- */
+
+function projectUsage() {
+  console.log('usage: advisers project <add|list|show|archive> ...')
+  console.log('  ' + CUSTOMER_USAGE.projectAdd)
+  console.log('  ' + CUSTOMER_USAGE.projectList)
+  console.log('  ' + CUSTOMER_USAGE.projectShow)
+  console.log('  ' + CUSTOMER_USAGE.projectArchive)
+  console.log('项目属于一个客户；跨客户工作拆成两个项目。事项用 matter add --client --project 挂到项目。')
+}
+
+function projectAdd(rest) {
+  const usage = CUSTOMER_USAGE.projectAdd
+  try {
+    const parsed = customerFlags(rest, { booleans: ['json'], values: ['start', 'end', 'default-matter', 'note'] }, usage)
+    const clientId = customerIdArg(parsed.positional, 0, 'a client id', usage)
+    const name = parsed.positional.slice(1).join(' ').trim()
+    if (!name) throw customerError('E_USAGE', 'a project name is required', usage)
+    const startedAt = typeof parsed.flags.start === 'string' ? parsed.flags.start : undefined
+    const dueAt = typeof parsed.flags.end === 'string' ? parsed.flags.end : undefined
+    const defaultMatterId = typeof parsed.flags['default-matter'] === 'string' ? parsed.flags['default-matter'].trim() : undefined
+    const notes = typeof parsed.flags.note === 'string' ? parsed.flags.note : undefined
+    if (!customerStoreOrFail()) return
+    const audit = { actor: 'local', action: 'project.add', allowed: true, reason: '' }
+    const made = mutateWithAudit((store) => {
+      const project = store.addProject({ clientId: clientId, name: name, startedAt: startedAt, dueAt: dueAt, defaultMatterId: defaultMatterId, notes: notes })
+      audit.reason = project.id
+      return project
+    }, audit)
+    const payload = { ok: true, command: 'project add', project: made.result }
+    customerPrint(parsed.flags.json === true, payload, ['created ' + made.result.id + '  ' + made.result.name + '  (client ' + made.result.clientId + ')'])
+  } catch (error) { reportCustomerFailure(error) }
+}
+
+function projectListRow(store, project, client) {
+  const clearance = CUSTOMER_DEFAULT_CLEARANCE
+  const view = readProjectView(store, project.id)
+  const filtered = clearCustomerView(view, clearance)
+  return {
+    ...project,
+    client: client ? { id: client.id, name: client.name, status: client.status } : null,
+    counts: customerProjectCounts(store, view, filtered, clearance),
+    nextDueAt: customerNextDueAt(filtered.open),
+    clearance: clearance,
+    protectedExcluded: filtered.protectedExcluded,
+  }
+}
+
+function projectList(rest) {
+  const usage = CUSTOMER_USAGE.projectList
+  try {
+    const parsed = customerFlags(rest, { booleans: ['json', 'all'], values: ['client', 'limit'] }, usage)
+    const clientId = typeof parsed.flags.client === 'string' ? parsed.flags.client.trim() : undefined
+    const limit = customerIntegerFlag(parsed.flags.limit, 'limit', 1, CUSTOMER_MAX_LIMIT, CUSTOMER_DEFAULT_LIMIT, usage)
+    if (!customerStoreOrFail()) return
+    const store = readStoreOrExit()
+    const all = parsed.flags.all === true
+    const rows = store.read(() => {
+      if (clientId && !store.getClient(clientId)) throw customerError('E_CLIENT_NOT_FOUND', 'unknown client: ' + clientId, 'advisers client list')
+      const projects = store.listProjects({ clientId: clientId, status: all ? 'all' : 'active', includeDeleted: all, limit: limit })
+      const clientById = new Map(store.listClients({ status: 'all', includeDeleted: true, limit: 1000 }).map((client) => [client.id, client]))
+      return projects.map((project) => projectListRow(store, project, clientById.get(project.clientId)))
+    })
+    const lines = rows.length
+      ? rows.map((row) => row.id + '  ' + row.status + '  matters=' + row.counts.matters + '  open=' + (row.counts.openMine + row.counts.openWaiting) + '  next=' + (row.nextDueAt || '-') + '  ' + row.name + (row.client ? '  [' + row.client.name + ']' : ''))
+      : ['（没有项目）']
+    customerPrint(parsed.flags.json === true, rows, lines)
+  } catch (error) { reportCustomerFailure(error) }
+}
+
+function projectShow(rest) {
+  const usage = CUSTOMER_USAGE.projectShow
+  try {
+    const parsed = customerFlags(rest, { booleans: ['json'], values: ['timeline-limit', 'clearance'] }, usage)
+    const id = customerIdArg(parsed.positional, 0, 'a project id', usage)
+    const clearance = customerIntegerFlag(parsed.flags.clearance, 'clearance', 0, 3, CUSTOMER_DEFAULT_CLEARANCE, usage)
+    const timelineLimit = customerIntegerFlag(parsed.flags['timeline-limit'], 'timeline-limit', 0, CUSTOMER_TIMELINE_MAX, CUSTOMER_TIMELINE_DEFAULT, usage)
+    if (!customerStoreOrFail()) return
+    const store = readStoreOrExit()
+    const payload = store.read(() => {
+      const view = readProjectView(store, id)
+      const filtered = clearCustomerView(view, clearance)
+      const counts = customerProjectCounts(store, view, filtered, clearance)
+      const timeline = customerTimeline(view, filtered, { limit: timelineLimit })
+      const open = customerOpenBuckets(view, filtered)
+      const matters = filtered.matters.map((matter) => {
+        const openRows = filtered.open.filter((row) => row.matter_id === matter.id)
+        return {
+          id: matter.id,
+          title: matter.title,
+          status: matter.status,
+          secrecy: Number(matter.secrecy ?? 0),
+          openCommitments: openRows.length,
+          nextDueAt: customerNextDueAt(openRows),
+        }
+      })
+      return {
+        ok: true,
+        command: 'project show',
+        project: view.project,
+        client: view.client,
+        matters: matters,
+        counts: counts,
+        open: open,
+        nextDueAt: customerNextDueAt(filtered.open),
+        timeline: timeline.items,
+        timelineTotal: timeline.total,
+        timelineTruncated: timeline.truncated,
+        nextCursor: null,
+        clearance: clearance,
+        protectedExcluded: filtered.protectedExcluded,
+        degraded: timeline.degraded,
+      }
+    })
+    const lines = []
+    lines.push(payload.project.name + '  ' + payload.project.id + '  ' + payload.project.status + (payload.client ? '  [' + payload.client.name + ']' : ''))
+    lines.push('事项 ' + payload.counts.matters + '（归档 ' + payload.counts.mattersArchived + '） · 未完成 我方 ' + payload.counts.openMine + ' / 对方 ' + payload.counts.openWaiting + ' · 逾期 ' + payload.counts.overdue + ' · 交付 ' + payload.counts.deliveries + ' · 备注 ' + payload.counts.notes + ' · 下一截止 ' + (payload.nextDueAt || '无'))
+    if (payload.matters.length) {
+      lines.push('事项：')
+      for (const matter of payload.matters) lines.push('  ' + matter.id + '  ' + matter.title + '  ' + matter.status + '  open=' + matter.openCommitments + '  next=' + (matter.nextDueAt || '-'))
+    }
+    lines.push(...customerDescribeOpen(payload.open, 10))
+    lines.push('时间线（显示 ' + payload.timeline.length + ' / 匹配 ' + payload.timelineTotal + '）：')
+    lines.push(...customerTimelineLines(payload.timeline))
+    lines.push(...customerClearanceLines(payload))
+    customerPrint(parsed.flags.json === true, payload, lines)
+  } catch (error) { reportCustomerFailure(error) }
+}
+
+function projectArchive(rest) {
+  const usage = CUSTOMER_USAGE.projectArchive
+  try {
+    const parsed = customerFlags(rest, { booleans: ['json', 'dry-run'], values: [] }, usage)
+    const id = customerIdArg(parsed.positional, 0, 'a project id', usage)
+    if (!customerStoreOrFail()) return
+    const dryRun = parsed.flags['dry-run'] === true
+    if (dryRun) {
+      const store = readStoreOrExit()
+      const plan = store.read(() => {
+        const project = store.getProject(id)
+        if (!project) throw customerError('E_PROJECT_NOT_FOUND', 'unknown project: ' + id, 'advisers project list')
+        return { project: project, activeMatters: store.listMattersByProject(id, { status: 'active' }).length }
+      })
+      const payload = { ok: true, command: 'project archive', dryRun: true, project: plan.project, activeMatters: plan.activeMatters }
+      const lines = ['would archive ' + plan.project.id + '  ' + plan.project.name + '（dry-run，未写入）']
+      if (plan.activeMatters) lines.push('注意：' + plan.activeMatters + ' 个 active 事项仍挂在该项目下（归档项目不会删除事项）')
+      customerPrint(parsed.flags.json === true, payload, lines)
+      return
+    }
+    const audit = { actor: 'local', action: 'project.archive', allowed: true, reason: id }
+    const made = mutateWithAudit((store) => {
+      const project = store.getProject(id)
+      if (!project) throw customerError('E_PROJECT_NOT_FOUND', 'unknown project: ' + id, 'advisers project list')
+      return store.archiveProject(id)
+    }, audit)
+    const payload = { ok: true, command: 'project archive', project: made.result }
+    customerPrint(parsed.flags.json === true, payload, ['archived ' + made.result.id + '  ' + made.result.name])
+  } catch (error) { reportCustomerFailure(error) }
+}
+
+function projectCommand(rawArgs) {
+  const sub = rawArgs[0]
+  const rest = rawArgs.slice(1)
+  if (!sub || sub === 'help' || sub === '--help') { projectUsage(); return }
+  if (sub === 'add') return projectAdd(rest)
+  if (sub === 'list' || sub === 'ls') return projectList(rest)
+  if (sub === 'show') return projectShow(rest)
+  if (sub === 'archive') return projectArchive(rest)
+  customerFail('E_USAGE', 'unknown project subcommand: ' + String(sub), 'advisers project help')
 }
 
 // ---------------------------------------------------------------------------
@@ -1985,9 +3409,8 @@ async function buildAgendaData(input) {
   }
   if (includeCalendar) {
     for (const row of input.events ?? []) {
-      const tzid = row.tzid === undefined || row.tzid === null ? '' : String(row.tzid)
-      if (tzid && !['Asia/Shanghai', 'UTC', 'Etc/UTC', 'GMT', 'Z'].includes(tzid)) {
-        degraded.push({ source: 'calendar', code: 'E_CALENDAR_SKIP', id: row.uid ?? null, reason: 'unsupported tzid: ' + tzid })
+      if (!calendarTzidSupported(row)) {
+        degraded.push({ source: 'calendar', code: 'E_CALENDAR_SKIP', id: row.uid ?? null, reason: 'unsupported tzid: ' + calendarTzidOf(row) })
         continue
       }
       let instances
@@ -2437,7 +3860,13 @@ async function today(openRows, { calendar = false, sources = false, json = false
       noDue,
       next: next ? { id: next.id, action: next.action, dueAt: next.dueAt } : null,
     }
-    if (calendar) payload.calendar = (await calendarOccurrencesToday()).occurrences
+    if (calendar) {
+      const calendarToday = await calendarOccurrencesToday()
+      payload.calendar = calendarToday.occurrences
+      // Additive key only: the same E_CALENDAR_SKIP shape `agenda --json`
+      // publishes, so consumers can see which events were skipped (not guessed).
+      payload.calendarDegraded = calendarToday.degraded
+    }
     if (sources && ledger) {
       payload.sources = (await collectSourceRows(ledger)).map(({ commitmentId, action, type, ref, quote }) => ({ commitmentId, action, type, ref, quote }))
     }
@@ -2544,35 +3973,269 @@ function tick(ledger, asJson = false) {
   }
 }
 
-function printAudit(args = []) {
+/**
+ * Rebuild the two FTS5 indexes from their source tables — the repair action
+ * pointed at by `verifyFtsIntegrity()` / reader warnings ("advisers audit
+ * --rebuild-fts"). Runs in the single-writer lock inside one immediate
+ * transaction so a failure leaves the previous index intact, then verifies the
+ * rebuilt index and records an audit row. `_setupFts()` is the same migration
+ * helper v19 uses (test/fts-integrity.test.js pins this contract).
+ */
+async function rebuildFtsIndexes({ asJson = false } = {}) {
+  let store
+  try { store = openStore() } catch (error) { return reportMaintenanceFailure(error, asJson, 'fts') }
+  const before = store.verifyFtsIntegrity()
+  if (before.ok) {
+    if (asJson) console.log(JSON.stringify({ ok: true, rebuilt: false, reason: 'already-consistent', state: before.state, tokenizer: before.tokenizer }, null, 2))
+    else console.log(`fts: consistent (state=${before.state}); no rebuild needed`)
+    return
+  }
+  let rebuildError = null
+  try {
+    store.db.exec('BEGIN IMMEDIATE')
+    try {
+      store._setupFts()
+      store.db.exec('COMMIT')
+    } catch (error) {
+      try { store.db.exec('ROLLBACK') } catch {}
+      throw error
+    }
+  } catch (error) { rebuildError = error }
+  const after = rebuildError ? null : store.verifyFtsIntegrity()
+  if (!rebuildError && after.ok) {
+    // The store caches the "FTS unusable, fall back to LIKE" flag; this process
+    // just fixed it, so later reads in the same process may trust FTS again.
+    store._ftsBroken = false
+    store.ftsIntegrityWarning = null
+    let auditRow = null
+    try { auditRow = store.appendAudit({ actor: 'local', action: 'audit.rebuild_fts', allowed: true, reason: `state=${before.state};errors=${(before.errors ?? []).length};tokenizer=${after.tokenizer ?? 'none'}` }) } catch {}
+    if (asJson) {
+      console.log(JSON.stringify({ ok: true, rebuilt: true, before: { state: before.state, errors: before.errors }, after: { state: after.state, tokenizer: after.tokenizer }, audit: auditRow }, null, 2))
+    } else {
+      console.log(`fts: rebuilt (${before.state} -> ${after.state}, tokenizer=${after.tokenizer ?? 'none'})`)
+      console.log(auditRow ? `audit: appended seq ${auditRow.seq}` : 'audit: could not append the rebuild row')
+    }
+    return
+  }
+  const detail = rebuildError ? String(rebuildError.message ?? rebuildError) : (after.errors ?? []).join('; ')
+  if (asJson) console.log(JSON.stringify({ ok: false, rebuilt: false, code: rebuildError?.code ?? null, errors: [detail] }, null, 2))
+  else {
+    console.error(`fts: rebuild FAILED: ${detail}`)
+    console.error('  hint: run `advisers backup` first and retry; search keeps using the LIKE fallback until the index is rebuilt (results stay complete).')
+  }
+  process.exitCode = 1
+}
+
+/** Human one-line anchor status for `advisers audit` / `doctor`. */
+function describeAnchorCheck(check) {
+  const anchor = check.anchor ?? null
+  const head = check.head ?? null
+  if (check.status === 'absent') {
+    return 'absent (yellow — no baseline recorded yet; run `advisers audit --write-anchor` to make future tail deletions detectable)'
+  }
+  if (check.status === 'match') {
+    return `match (count=${anchor?.count ?? head?.count ?? '?'} lastSeq=${anchor?.lastSeq ?? '?'} head=${shortAuditHash(anchor?.headHash)} keyed=${anchor?.keyed === true ? 'hmac' : 'unkeyed'})`
+  }
+  if (check.status === 'grown') {
+    return `grown (anchor ${anchor?.count ?? '?'} -> current ${head?.count ?? '?'}; run \`advisers audit --write-anchor\` to refresh)`
+  }
+  return `FAIL (${check.code ?? 'anchor-error'})`
+}
+
+/**
+ * `advisers audit` — verify the audit hash chain and, when recorded, its tail
+ * anchor (0.3.0 P0-L2).
+ *
+ * A hash chain detects edits/deletions in the middle, but a *tail* deletion
+ * leaves a still-valid shorter chain. The local anchor
+ * ($ADVISERS_HOME/audit-anchor.json, HMAC with audit.key) records the last
+ * count/lastSeq/headHash: a live database that is shorter than its anchor is
+ * E_AUDIT_TAIL_TRUNCATED. It is a local self-checkpoint — the same user can
+ * rewrite both files — so it is never third-party attestation.
+ */
+async function auditCommand(args = []) {
+  const parsed = parseStrictFlags(args, {
+    booleans: ['check-db', 'json', 'write-anchor', 'rebuild-fts'],
+    values: ['expect-count', 'expect-head'],
+    positional: false,
+  })
+  if (!parsed.ok) return usageFail(parsed.error, AUDIT_USAGE)
+  const { flags } = parsed
+  const asJson = flags.json === true
+  const hasExpect = flags['expect-count'] !== undefined || flags['expect-head'] !== undefined
+  if (flags['rebuild-fts'] && (flags['write-anchor'] || hasExpect || flags['check-db'])) {
+    return usageFail('--rebuild-fts cannot be combined with --write-anchor/--expect-*/--check-db', AUDIT_USAGE)
+  }
+  if (flags['write-anchor'] && (hasExpect || flags['check-db'])) {
+    return usageFail('--write-anchor cannot be combined with --expect-*/--check-db', AUDIT_USAGE)
+  }
+  if (hasExpect && flags['check-db']) return usageFail('--expect-* cannot be combined with --check-db', AUDIT_USAGE)
+  if (mode === 'json') {
+    if (asJson) console.log(JSON.stringify({ ok: false, code: 'E_USAGE', error: 'audit requires the SQLite store (ADVISERS_STORE=sqlite)' }, null, 2))
+    else console.log('audit requires SQLite store')
+    process.exitCode = 1
+    return
+  }
   ensureHome()
+  if (flags['rebuild-fts']) return rebuildFtsIndexes({ asJson })
   const store = readStoreOrExit()
-  if (!store) { console.log('audit requires SQLite store'); return }
-  if (args.includes('--check-db')) {
+  if (!store) {
+    if (asJson) console.log(JSON.stringify({ ok: false, code: 'E_USAGE', error: 'audit requires the SQLite store' }, null, 2))
+    else console.log('audit requires SQLite store')
+    process.exitCode = 1
+    return
+  }
+  let integrity = null
+  if (flags['check-db']) {
     try {
       store.assertIntegrity()
-      console.log('integrity: ok')
+      integrity = 'ok'
+      if (!asJson) console.log('integrity: ok')
     } catch (error) {
-      console.error(`integrity: FAIL (${error.message})`)
+      integrity = 'FAIL'
+      if (asJson) console.log(JSON.stringify({ ok: false, integrity, code: 'E_DB_CORRUPT', error: error.message }, null, 2))
+      else console.error(`integrity: FAIL (${error.message})`)
       process.exitCode = 1
       return
     }
   }
+  const lib = await loadAuditAnchor()
   const verify = store.verifyAudit()
-  console.log(`audit: ${verify.ok ? 'verified' : `BROKEN at seq ${verify.seq}`} (${verify.count ?? 0} entries)`)
-  if (!verify.ok) process.exitCode = 1
-  for (const row of store.listAudit(20)) {
-    console.log(`${row.seq}\t${row.at.slice(0, 19)}\t${row.action}\t${row.allowed ? 'allow' : 'deny'}\t${row.reason ?? ''}`)
+  const head = lib.readAuditHead(store, { verifyChain: false })
+  if (!head.ok) {
+    if (asJson) console.log(JSON.stringify({ ok: false, integrity, code: head.code, errors: head.errors }, null, 2))
+    else { console.error(`audit: cannot read the audit head (${head.code}): ${(head.errors ?? []).join('; ')}`); console.error(`  hint: ${lib.describeAuditAnchorCode(head.code)}`) }
+    process.exitCode = 1
+    return
   }
+  if (flags['write-anchor']) {
+    const written = lib.writeAuditAnchor({ home: HOME, store, generator: `advisers/${VERSION}` })
+    if (!written.ok) {
+      if (asJson) console.log(JSON.stringify({ ok: false, code: written.code, errors: written.errors, warnings: written.warnings }, null, 2))
+      else {
+        console.error(`anchor: write FAILED (${written.code})`)
+        for (const line of written.errors ?? []) console.error(`  ${line}`)
+        console.error(`  hint: ${lib.describeAuditAnchorCode(written.code)}`)
+      }
+      process.exitCode = 1
+      return
+    }
+    if (asJson) {
+      console.log(JSON.stringify({ ok: true, path: written.path, anchor: written.anchor, keyed: written.keyed, keySource: written.keySource, warnings: written.warnings }, null, 2))
+      return
+    }
+    console.log(`anchor: written ${written.path}`)
+    console.log(`anchor: entries=${written.anchor.count} lastSeq=${written.anchor.lastSeq} head=${shortAuditHash(written.anchor.headHash)} keyed=${written.anchor.keyed ? 'hmac' : 'no'} (${written.keySource ?? 'none'})`)
+    for (const warning of written.warnings ?? []) console.log(`warning: ${warning}`)
+    return
+  }
+  if (hasExpect) {
+    const expectedCount = flags['expect-count'] !== undefined ? flags['expect-count'] : null
+    const check = lib.verifyExpectedAudit(store, { expectedCount, expectedHead: flags['expect-head'] ?? null })
+    const ok = verify.ok === true && check.ok === true
+    if (asJson) {
+      console.log(JSON.stringify({
+        ok,
+        chain: { ok: verify.ok, count: verify.count ?? head.count, brokenAt: verify.ok ? null : verify.seq },
+        head: { count: head.count, lastSeq: head.lastSeq, headHash: head.headHash },
+        expectation: { ok: check.ok, code: check.code, expectedCount: check.expectedCount, expectedHead: check.expectedHead, errors: check.errors },
+      }, null, 2))
+    } else {
+      console.log(verify.ok ? `audit: verified (${verify.count ?? head.count} entries) head=${shortAuditHash(head.headHash)}` : `audit: BROKEN at seq ${verify.seq}`)
+      if (!verify.ok) console.error('expect: not evaluated (the audit chain itself is broken)')
+      else if (check.ok) console.log(`expect: match (count=${check.count} head=${shortAuditHash(check.headHash)})`)
+      else {
+        console.error(`expect: FAIL (${check.code})`)
+        for (const line of check.errors ?? []) console.error(`  ${line}`)
+      }
+    }
+    if (!ok) process.exitCode = 1
+    return
+  }
+  // Default: chain status line + recorded-anchor comparison.
+  const anchorCheck = lib.verifyAuditAgainstAnchor({ home: HOME, store, head, env: process.env })
+  const anchorRed = anchorCheck.ok !== true && anchorCheck.status !== 'absent'
+  const ok = verify.ok === true && !anchorRed
+  const entries = store.listAudit(20).map((row) => ({ seq: row.seq, at: row.at, action: row.action, allowed: row.allowed, reason: row.reason }))
+  if (asJson) {
+    console.log(JSON.stringify({
+      ok,
+      integrity,
+      chain: { ok: verify.ok, count: verify.count ?? head.count, brokenAt: verify.ok ? null : verify.seq },
+      head: { count: head.count, lastSeq: head.lastSeq, headHash: head.headHash },
+      anchor: {
+        found: anchorCheck.found === true,
+        status: anchorCheck.status,
+        ok: anchorCheck.ok === true,
+        code: anchorCheck.code ?? null,
+        path: anchorCheck.path ?? null,
+        count: anchorCheck.anchor?.count ?? null,
+        lastSeq: anchorCheck.anchor?.lastSeq ?? null,
+        headHash: anchorCheck.anchor?.headHash ?? null,
+        keyed: anchorCheck.anchor?.keyed ?? null,
+        hmacVerified: anchorCheck.hmacVerified === true,
+        errors: anchorCheck.errors ?? [],
+        warnings: anchorCheck.warnings ?? [],
+      },
+      entries,
+    }, null, 2))
+  } else {
+    console.log(verify.ok
+      ? `audit: verified (${verify.count ?? head.count} entries) head=${shortAuditHash(head.headHash)} lastSeq=${head.lastSeq}`
+      : `audit: BROKEN at seq ${verify.seq} (${head.count} entries)`)
+    console.log(`anchor: ${describeAnchorCheck(anchorCheck)}`)
+    for (const warning of anchorCheck.warnings ?? []) console.log(`warning: ${warning}`)
+    if (anchorRed) {
+      for (const line of anchorCheck.errors ?? []) console.error(`  ${line}`)
+      console.error(`  hint: ${lib.describeAuditAnchorCode(anchorCheck.code)}`)
+    }
+    if (verify.ok) {
+      for (const row of entries) {
+        console.log(`${row.seq}\t${row.at.slice(0, 19)}\t${row.action}\t${row.allowed ? 'allow' : 'deny'}\t${row.reason ?? ''}`)
+      }
+    }
+  }
+  if (!ok) process.exitCode = 1
 }
 
-function printPrivacy(args = []) {
+async function printPrivacy(args = []) {
   ensureHome()
   const asJson = args.includes('--json')
   const prove = args.includes('--prove')
   const store = readStoreOrExit()
   let audit = null
   try { const v = store?.verifyAudit(); if (v) audit = { ok: v.ok, count: v.count ?? 0 } } catch {}
+  // 0.3.0 P0-L2: report the audit tail anchor next to the chain. Absent is a
+  // yellow state (no baseline was ever recorded), not a failure and not proof
+  // of tampering; a mismatch is red because it means a tail deletion/rollback.
+  let auditAnchor = null
+  if (store) {
+    try {
+      const lib = await loadAuditAnchor()
+      const head = lib.readAuditHead(store, { verifyChain: false })
+      if (head.ok) {
+        const check = lib.verifyAuditAgainstAnchor({ home: HOME, store, head, env: process.env })
+        auditAnchor = {
+          found: check.found === true,
+          status: check.status,
+          ok: check.ok === true,
+          code: check.code ?? null,
+          count: check.anchor?.count ?? null,
+          lastSeq: check.anchor?.lastSeq ?? null,
+          headHash: check.anchor?.headHash ?? null,
+          keyed: check.anchor?.keyed ?? null,
+          hmacVerified: check.hmacVerified === true,
+          path: check.path ?? null,
+          errors: check.errors ?? [],
+          warnings: check.warnings ?? [],
+        }
+      } else {
+        auditAnchor = { found: false, status: 'unavailable', ok: false, code: head.code ?? null, count: null, lastSeq: null, headHash: null, keyed: null, hmacVerified: false, path: null, errors: head.errors ?? [], warnings: [] }
+      }
+    } catch (error) {
+      auditAnchor = { found: false, status: 'unavailable', ok: false, code: null, count: null, lastSeq: null, headHash: null, keyed: null, hmacVerified: false, path: null, errors: [String(error?.message ?? error)], warnings: [] }
+    }
+  }
   // Privacy audit P2-2: list every actual egress surface from the code base
   // instead of two hardcoded names, and never expose internal numbering.
   const egressSurfaces = [
@@ -2595,6 +4258,7 @@ function printPrivacy(args = []) {
     secret_matter: 'egress fail-closed for secrecy > 0 on the wired model paths (local rule layer)',
     at_rest_encryption: 'opt-in database vault (advisers vault seal); general data is not encrypted at rest',
     audit,
+    auditAnchor,
     export: 'advisers export --all',
     delete: 'advisers purge <matter> --yes',
   }
@@ -2610,6 +4274,7 @@ function printPrivacy(args = []) {
   console.log(`secret:     ${facts.secret_matter}`)
   console.log(`encryption: ${facts.at_rest_encryption}`)
   console.log(`audit:      ${audit ? (audit.ok ? `verified (${audit.count} entries)` : 'BROKEN') : 'unavailable'}`)
+  console.log(`anchor:     ${privacyAnchorLine(auditAnchor)}`)
   console.log(`export:     ${facts.export}`)
   console.log(`delete:     ${facts.delete}`)
   if (prove) {
@@ -2625,9 +4290,29 @@ function printPrivacy(args = []) {
     console.log('self-checks（本地自检：结果只说明本机文件/配置与纯函数检查；不是第三方审计，也不证明运行时无出网）')
     let failed = 0
     for (const [name, ok, detail] of checks) { if (!ok) failed++; console.log(`[${ok ? 'PASS' : 'FAIL'}] ${name} (${detail})`) }
+    if (auditAnchor) {
+      if (auditAnchor.found !== true) {
+        console.log(`[WARN] audit anchor absent (local self-check: yellow, not a PASS — record a baseline with \`advisers audit --write-anchor\` so a later tail deletion is detectable)`)
+      } else if (auditAnchor.ok !== true && auditAnchor.status !== 'grown') {
+        failed++
+        console.log(`[FAIL] audit anchor ${auditAnchor.code ?? auditAnchor.status} (local self-check: the audit tail is shorter/rewritten vs the recorded anchor; see \`advisers audit\`)`)
+      }
+    }
     console.log('egress gate coverage: chat/model, review, research, brief --deep, learn review, bridge and capture are wired to the local secrecy gate; the other surfaces listed above are self-attested.')
     if (failed) process.exitCode = 1
   }
+}
+
+/** One-line audit-anchor status for `privacy` (yellow absent / red mismatch). */
+function privacyAnchorLine(anchor) {
+  if (!anchor) return 'unavailable (JSON store or no audit chain)'
+  if (anchor.found !== true) {
+    if (anchor.status === 'unavailable') return `unavailable (${anchor.code ?? 'no audit head'})`
+    return 'absent (yellow — run `advisers audit --write-anchor` to make future tail deletions detectable)'
+  }
+  if (anchor.status === 'match') return `match (count=${anchor.count} keyed=${anchor.keyed === true ? 'hmac' : 'unkeyed'})`
+  if (anchor.status === 'grown') return `grown (anchor ${anchor.count} -> current; run \`advisers audit --write-anchor\` to refresh)`
+  return `FAIL (${anchor.code ?? anchor.status}) — see \`advisers audit\``
 }
 
 function printLinks() {
@@ -2897,15 +4582,33 @@ function printPreferences() {
 }
 
 /**
- * `advisers doctor [--check-db]` — local diagnostics.
+ * `advisers doctor [--check-db] [--json]` — local diagnostics.
  *
  * Default is intentionally lightweight (0.2.3 Wave 1 / robustness P1-4):
  * opening the store validates the file header, instance lock and WAL; the O(db)
  * PRAGMA quick_check and O(index) FTS verification only run with --check-db,
  * together with WAL/backup/plaintext/temp-file checks. Any FAIL exits non-zero.
+ *
+ * 0.3.0 P0-D1 adds the recovery console:
+ *   doctor --repair [--dry-run|--yes] [--only lock,temp,wal,fts] [--json]
+ * --dry-run (the default) only prints a plan; --yes takes the writer lock,
+ * writes a safety backup, repairs the selected items, re-verifies, records one
+ * `doctor.repair` audit row and a fresh audit anchor. Unsupported --only items
+ * and unknown flags fail closed with E_USAGE instead of being ignored.
  */
 async function doctor(args = []) {
-  const checkDb = Array.isArray(args) && args.includes('--check-db')
+  const parsed = parseStrictFlags(args, {
+    booleans: ['check-db', 'json', 'repair', 'dry-run', 'yes'],
+    values: ['only'],
+    positional: false,
+  })
+  if (!parsed.ok) return usageFail(parsed.error, DOCTOR_USAGE)
+  const flags = parsed.flags
+  if (flags.repair === true) return doctorRepair(flags)
+  if (flags['dry-run'] || flags.yes) return usageFail('--dry-run/--yes are only valid with --repair', DOCTOR_USAGE)
+  if (flags.only !== undefined) return usageFail('--only is only valid with --repair', DOCTOR_USAGE)
+  const checkDb = flags['check-db'] === true
+  const asJson = flags.json === true
   const rows = []
   const check = (name, ok, detail = '') => rows.push({ name, ok, detail })
   const [nodeMajor, nodeMinor] = process.versions.node.split('.').map(Number)
@@ -3003,6 +4706,24 @@ async function doctor(args = []) {
           : `state=${fts.state} tokenizer=${fts.tokenizer ?? '-'}${ftsOk ? '' : ` errors=${(fts.errors ?? []).slice(0, 2).join(' | ')}`}`)
         const walReport = report.wal ?? maintenanceStore.walReport()
         check('db-wal', walReport.ok === true, `journal=${walReport.journalMode ?? '?'} initial=${walReport.initial?.status ?? '?'} current=${walReport.current?.status ?? '?'}${walReport.ok ? '' : `; ${(report.errors ?? []).slice(0, 1).join('')}`}`)
+        // 0.3.0 P0-L2: report the audit tail anchor next to the chain. No anchor
+        // is yellow (no baseline was recorded), not a failure.
+        try {
+          const anchorLib = await loadAuditAnchor()
+          const anchorHead = anchorLib.readAuditHead(maintenanceStore, { verifyChain: false })
+          if (anchorHead.ok !== true) {
+            check('db-anchor', false, `cannot read the audit head (${anchorHead.code ?? 'unknown'})`)
+          } else {
+            const anchorCheck = anchorLib.verifyAuditAgainstAnchor({ home: HOME, store: maintenanceStore, head: anchorHead, env: process.env })
+            const yellow = anchorCheck.status === 'absent' || anchorCheck.status === 'grown'
+            let detail
+            if (anchorCheck.status === 'match') detail = `match (count=${anchorCheck.anchor?.count ?? '?'} keyed=${anchorCheck.anchor?.keyed === true ? 'hmac' : 'unkeyed'})`
+            else if (anchorCheck.status === 'grown') detail = `grown (anchor ${anchorCheck.anchor?.count ?? '?'} -> current ${anchorCheck.head?.count ?? '?'}; run \`advisers audit --write-anchor\` to refresh)`
+            else if (anchorCheck.status === 'absent') detail = 'absent (yellow: no baseline; run \`advisers audit --write-anchor\`)'
+            else detail = `FAIL ${anchorCheck.code ?? anchorCheck.status}: ${(anchorCheck.errors ?? [])[0] ?? ''}`
+            check('db-anchor', anchorCheck.ok === true || yellow, detail)
+          }
+        } catch (error) { check('db-anchor', false, String(error?.message ?? error)) }
         checkBackupReadable(check)
       } catch (error) {
         if (error?.code === 'E_DB_LOCKED') {
@@ -3039,8 +4760,327 @@ async function doctor(args = []) {
   check('office', officeOk, officeOk ? 'advisers-office resolvable' : 'npm i -g advisers-office@next, or ADVISERS_OFFICE_LOCAL=1 in checkout')
   check('policy', Boolean(StrictPolicyPack), StrictPolicyPack ? 'strict pack loaded' : 'policy pack missing')
   check('model', true, process.env.ADVISERS_API_KEY ? 'API key present (not tested)' : 'optional; ADVISERS_API_KEY not set')
+  const ok = !rows.some((row) => !row.ok)
+  if (asJson) {
+    console.log(JSON.stringify({ ok, mode: 'diagnose', checks: rows }, null, 2))
+    if (!ok) process.exitCode = 1
+    return
+  }
   for (const row of rows) console.log(`${row.ok ? 'PASS' : 'FAIL'}  ${row.name}  ${row.detail}`)
-  if (rows.some((r) => !r.ok)) process.exitCode = 1
+  if (!ok) process.exitCode = 1
+}
+
+/* ---------------------------------------------------------------------------
+ * 0.3.0 P0-D1: `doctor --repair` (recovery console).
+ *
+ * Registry (MVP, matching 04-0.3-research §4.2): lock / temp / wal / fts.
+ * Invariants: dry-run is the default; apply takes the single-writer lock; a
+ * safety backup of the live database is written BEFORE any mutation and a
+ * backup failure aborts the whole repair (fail-closed); each run appends one
+ * `doctor.repair` audit row and refreshes the audit anchor; the final step
+ * re-verifies with quick_check + FTS integrity and exits non-zero on any
+ * remaining failure. Audit reasons carry basenames only (no absolute paths).
+ * `plaintext`/`backup` are intentionally not auto-repaired here: --only rejects
+ * them (E_USAGE) instead of pretending to fix them.
+ * ------------------------------------------------------------------------- */
+
+const DOCTOR_REPAIR_ITEMS = ['lock', 'temp', 'wal', 'fts']
+const REPAIR_STALE_TEMP_MS = 60 * 60 * 1000
+
+/** Parse/validate the --only list for doctor --repair. */
+function repairItemSelection(only) {
+  if (only === undefined) return { ok: true, items: DOCTOR_REPAIR_ITEMS.slice() }
+  const items = String(only).split(',').map((value) => value.trim()).filter(Boolean)
+  if (!items.length) return { ok: false, error: '--only requires at least one item' }
+  const unique = [...new Set(items)]
+  const unknown = unique.filter((item) => !DOCTOR_REPAIR_ITEMS.includes(item))
+  if (unknown.length) return { ok: false, error: `unsupported repair item(s): ${unknown.join(', ')} (supported: ${DOCTOR_REPAIR_ITEMS.join(', ')}) ' }`.trim() }
+  return { ok: true, items: unique }
+}
+
+function repairStamp() {
+  return new Date().toISOString().replace(/[-:]/g, '').replace(/\.\d{3}Z$/, 'Z')
+}
+
+/**
+ * Stale crash-residue scan (read-only): fs-safe temp files (".<name>.tmp-<pid>-…")
+ * and staged sync-pull copies (".advisers-pull-verify-<pid>-…"). A live pid is
+ * never touched; pull stages additionally must be older than the 1h stale window.
+ */
+function scanRepairTempFiles() {
+  const result = { candidates: [], errors: [] }
+  for (const dir of [HOME, join(HOME, 'backups')]) {
+    let names
+    try { names = readdirSync(dir) } catch (error) { if (error?.code !== 'ENOENT') result.errors.push(`${basename(dir)}: ${error?.code ?? error?.message ?? error}`); continue }
+    for (const name of names) {
+      const file = join(dir, name)
+      let info
+      try { info = statSync(file) } catch { continue }
+      if (!info.isFile()) continue
+      let pid = null
+      let stale = false
+      if (name.startsWith('.advisers-pull-verify-')) {
+        pid = Number.parseInt(name.slice('.advisers-pull-verify-'.length).split('-')[0], 10)
+        stale = Date.now() - info.mtimeMs >= REPAIR_STALE_TEMP_MS
+      } else {
+        const match = /^\.(.+)\.tmp-(\d+)-/.exec(name)
+        if (!match) continue
+        pid = Number(match[2])
+        stale = true
+      }
+      if (!Number.isInteger(pid) || pid <= 0 || pid === process.pid) continue
+      let alive = false
+      try { process.kill(pid, 0); alive = true } catch (error) { alive = error?.code === 'EPERM' }
+      if (alive || !stale) continue
+      result.candidates.push({ path: file, name, pid, ageMs: Date.now() - info.mtimeMs })
+    }
+  }
+  return result
+}
+
+/** Cheap read-only FTS consistency probe (integrity-check itself needs a write). */
+function probeFtsReadOnly(store) {
+  const probe = { ok: true, state: 'ok', issues: [] }
+  try {
+    const tables = new Set(store.db.prepare("SELECT name FROM sqlite_master WHERE type = 'table' AND name IN ('turns_fts', 'summaries_fts')").all().map((row) => row.name))
+    if (tables.size === 0) return { ok: true, state: 'degraded', issues: ['no FTS index table (search uses LIKE)'] }
+    const triggers = new Set(store.db.prepare("SELECT name FROM sqlite_master WHERE type = 'trigger'").all().map((row) => row.name))
+    for (const [table, source, needed] of [
+      ['turns_fts', 'turns', ['turns_ai', 'turns_ad', 'turns_au']],
+      ['summaries_fts', 'session_summaries', ['summaries_ai', 'summaries_ad', 'summaries_au']],
+    ]) {
+      if (!tables.has(table)) { probe.ok = false; probe.state = 'inconsistent'; probe.issues.push(`${table}: index table missing`); continue }
+      const missing = needed.filter((name) => !triggers.has(name))
+      if (missing.length) { probe.ok = false; probe.state = 'inconsistent'; probe.issues.push(`${table}: sync trigger(s) missing: ${missing.join(', ')}`) }
+      try {
+        const sourceCount = Number(store.db.prepare(`SELECT COUNT(*) AS n FROM ${source}`).get()?.n ?? 0)
+        const indexCount = Number(store.db.prepare(`SELECT COUNT(*) AS n FROM ${table}_docsize`).get()?.n ?? 0)
+        if (sourceCount !== indexCount) { probe.ok = false; probe.state = 'inconsistent'; probe.issues.push(`${table}: index has ${indexCount} row(s) for ${sourceCount} source row(s)`) }
+      } catch (error) { probe.issues.push(`${table}: count probe failed (${error?.message ?? error})`) }
+    }
+    if (probe.issues.length && probe.ok) { probe.ok = false; probe.state = 'unknown' }
+  } catch (error) { return { ok: false, state: 'unknown', issues: [String(error?.message ?? error)] } }
+  return probe
+}
+
+/** Read-only repair plan (never writes). */
+async function buildRepairPlan(items) {
+  const plan = { ok: true, issues: [], blockers: [], errors: [], warnings: [] }
+  if (items.includes('lock')) {
+    try {
+      const info = readInstanceLock(HOME)
+      if (info) {
+        if (info.record && !instanceLockIsStale(info)) {
+          plan.blockers.push(`the writer lock is held by a live process (pid ${info.record.pid}${info.record.command ? ': ' + info.record.command : ''}); stop it before repairing`)
+        } else if (instanceLockIsStale(info)) {
+          plan.issues.push({ item: 'lock', action: 'remove the stale instance lock', detail: 'instance.lock' })
+        }
+      }
+    } catch (error) { plan.errors.push(`cannot inspect the instance lock: ${error?.message ?? error}`) }
+  }
+  if (items.includes('temp')) {
+    const temp = scanRepairTempFiles()
+    for (const candidate of temp.candidates) plan.issues.push({ item: 'temp', action: 'remove a stale temp file left by a crashed process', detail: candidate.name })
+    for (const error of temp.errors) plan.errors.push(error)
+  }
+  let walBad = false
+  if (items.includes('wal')) {
+    try {
+      const wal = inspectWalStatus(DB)
+      walBad = ['invalid', 'truncated', 'unreadable'].includes(String(wal?.status))
+      if (walBad) plan.issues.push({ item: 'wal', action: `preserve and move aside the unusable WAL (status=${wal.status}${wal.reason ? ', ' + wal.reason : ''})`, detail: basename(wal.path) })
+    } catch (error) { plan.errors.push(`cannot inspect the WAL: ${error?.message ?? error}`) }
+  }
+  if (items.includes('fts')) {
+    try {
+      if (existsSync(DB) && !walBad) {
+        const readStore = openReadStoreLib(DB)
+        try {
+          const probe = probeFtsReadOnly(readStore)
+          if (!probe.ok) plan.issues.push({ item: 'fts', action: `rebuild the FTS indexes (${probe.state})`, detail: probe.issues.slice(0, 2).join(' | ') })
+        } finally { try { readStore.close() } catch {} }
+      } else if (walBad) {
+        plan.warnings.push('fts: detection deferred until the WAL item is repaired (read-only probe skipped)')
+      }
+    } catch (error) { plan.warnings.push(`fts: read-only probe skipped (${error?.code ?? error?.message ?? error})`) }
+  }
+  plan.ok = plan.blockers.length === 0 && plan.errors.length === 0
+  return plan
+}
+
+/** Safety backup before a repair mutation; a failure must abort the repair. */
+async function makeRepairBackup(walBad) {
+  const lib = await loadBackup()
+  const target = lib.backupPathFor({ home: HOME, tag: 'pre-repair' })
+  let store = null
+  if (!walBad) { try { store = openStore() } catch { store = null } }
+  return lib.createBackup({
+    dbPath: DB,
+    targetPath: target,
+    store,
+    checkpoint: Boolean(store),
+    verify: true,
+    verifyChain: false,
+    writeSha256: true,
+  })
+}
+
+/** Shared text/JSON reporting for a repair failure before any mutation. */
+function reportRepairFailure(result, asJson) {
+  if (asJson) console.log(JSON.stringify({ ...result, ok: false }, null, 2))
+  else {
+    console.error(`repair: FAILED ${result.errors?.[0] ? '(' + result.errors[0] + ')' : ''}`)
+    for (const error of result.errors ?? []) if (error !== result.errors[0]) console.error(`  ${error}`)
+    console.error('  nothing was changed; the live database is intact.')
+  }
+  process.exitCode = 1
+}
+
+/**
+ * `advisers doctor --repair` — plan (default) or apply the recovery actions.
+ */
+async function doctorRepair(flags) {
+  const asJson = flags.json === true
+  if (flags['dry-run'] === true && flags.yes === true) return usageFail('--dry-run and --yes are mutually exclusive', DOCTOR_USAGE)
+  const selection = repairItemSelection(flags.only)
+  if (!selection.ok) return usageFail(selection.error, DOCTOR_USAGE)
+  if (mode === 'json') return usageFail('doctor --repair requires the SQLite store (ADVISERS_STORE=sqlite)', DOCTOR_USAGE)
+  const items = selection.items
+  const apply = flags.yes === true && flags['dry-run'] !== true
+  ensureHome()
+  const plan = await buildRepairPlan(items)
+  if (!apply) {
+    const payload = { ok: plan.ok, mode: 'dry-run', only: items, issues: plan.issues, blockers: plan.blockers, errors: plan.errors, warnings: plan.warnings }
+    if (asJson) console.log(JSON.stringify(payload, null, 2))
+    else {
+      console.log(`repair: dry-run (no changes) · only=${items.join(',')}`)
+      if (!plan.issues.length && !plan.blockers.length) console.log('repair: nothing to do')
+      for (const blocker of plan.blockers) console.error(`blocked: ${blocker}`)
+      for (const issue of plan.issues) console.log(`plan: ${issue.item} — ${issue.action}${issue.detail ? ' [' + issue.detail + ']' : ''}`)
+      for (const warning of plan.warnings) console.log(`warning: ${warning}`)
+      for (const error of plan.errors) console.error(`error: ${error}`)
+      if (plan.issues.length) console.log('next: advisers doctor --repair --yes   (writes a safety backup, repairs, re-verifies and audits)')
+    }
+    if (!plan.ok) process.exitCode = 1
+    return
+  }
+  if (!plan.issues.length && !plan.blockers.length && !plan.errors.length) {
+    if (asJson) console.log(JSON.stringify({ ok: true, mode: 'apply', only: items, fixed: [], issues: [], note: 'nothing to do' }, null, 2))
+    else console.log('repair: nothing to do (no selected issue detected)')
+    return
+  }
+  const result = { ok: false, mode: 'apply', only: items, fixed: [], backup: null, errors: [], verify: null, audit: null, anchor: null }
+  // 1) Stale lock first: the writer lock below would otherwise wait/fail.
+  if (items.includes('lock')) {
+    try {
+      const info = readInstanceLock(HOME)
+      if (info) {
+        if (info.record && !instanceLockIsStale(info)) {
+          result.errors.push(`the writer lock is held by a live process (pid ${info.record.pid}${info.record.command ? ': ' + info.record.command : ''}); stop it and retry`)
+          return reportRepairFailure(result, asJson)
+        }
+        rmWithRetrySync(info.file)
+        result.fixed.push('lock')
+      }
+    } catch (error) { result.errors.push(`lock: ${error?.message ?? error}`); return reportRepairFailure(result, asJson) }
+  }
+  try { ensureInstanceLock() } catch (error) { return reportMaintenanceFailure(error, asJson, 'repair') }
+  // 2) Safety backup before opening/mutating the database (every repair item per
+  // 04-0.3-research §4.2). Abort on failure: fail-closed, nothing is changed.
+  if (existsSync(DB)) {
+    const backup = await makeRepairBackup(plan.issues.some((issue) => issue.item === 'wal'))
+    if (!backup.ok) {
+      result.errors.push(...(backup.errors ?? [`safety backup failed (${backup.code ?? 'unknown'})`]))
+      return reportRepairFailure(result, asJson)
+    }
+    result.backup = backup.path
+  }
+  // 3) WAL: preserve the unusable sidecar, keep the main database, never touch it.
+  if (items.includes('wal') && plan.issues.some((issue) => issue.item === 'wal')) {
+    try {
+      const wal = inspectWalStatus(DB)
+      if (['invalid', 'truncated', 'unreadable'].includes(String(wal?.status))) {
+        const quarantined = `${DB}${WAL_CORRUPT_SUFFIX}${repairStamp()}`
+        renameWithRetrySync(wal.path, quarantined)
+        try { if (existsSync(DB + '-shm')) rmWithRetrySync(DB + '-shm') } catch {}
+        result.fixed.push('wal')
+        result.walQuarantined = basename(quarantined)
+      }
+    } catch (error) { result.errors.push(`wal: ${error?.message ?? error}`) }
+  }
+  // 4) Stale crash residue.
+  if (items.includes('temp')) {
+    const temp = scanRepairTempFiles()
+    for (const candidate of temp.candidates) {
+      try { rmWithRetrySync(candidate.path); result.fixed.push('temp') } catch (error) { result.errors.push(`temp ${candidate.name}: ${error?.message ?? error}`) }
+    }
+  }
+  // 5) FTS via a writable store (integrity-check/rebuild need writes).
+  let store = null
+  try { store = openStore() } catch (error) { result.errors.push(`sqlite: ${error?.message ?? error}`) }
+  if (store && items.includes('fts')) {
+    try {
+      const before = store.verifyFtsIntegrity()
+      if (!before.ok) {
+        store.db.exec('BEGIN IMMEDIATE')
+        try {
+          store._setupFts()
+          store.db.exec('COMMIT')
+        } catch (error) {
+          try { store.db.exec('ROLLBACK') } catch {}
+          throw error
+        }
+        const after = store.verifyFtsIntegrity()
+        if (!after.ok) throw new Error(`FTS indexes still inconsistent after the rebuild: ${(after.errors ?? []).join('; ')}`)
+        store._ftsBroken = false
+        store.ftsIntegrityWarning = null
+        result.fixed.push('fts')
+      }
+    } catch (error) { result.errors.push(`fts: ${error?.message ?? error}`) }
+  }
+  // 6) Re-verify, audit, refresh the anchor.
+  try {
+    const finalStore = store ?? openStore()
+    const verifyReport = finalStore.integrityReport({ quickCheck: true, fts: true })
+    const auditCheck = finalStore.verifyAudit()
+    const fixedNow = [...new Set(result.fixed)]
+    let auditRow = null
+    if (fixedNow.length) {
+      auditRow = finalStore.appendAudit({
+        actor: 'local',
+        action: 'doctor.repair',
+        allowed: result.errors.length === 0,
+        reason: `only=${items.join('+')};fixed=${fixedNow.join('+')};backup=${result.backup ? basename(result.backup) : 'none'}`,
+      })
+    }
+    let anchorWrite = null
+    if (auditRow) {
+      const anchorLib = await loadAuditAnchor()
+      anchorWrite = anchorLib.writeAuditAnchor({ home: HOME, store: finalStore, generator: `advisers/${VERSION}` })
+    }
+    result.audit = auditRow
+    result.anchor = anchorWrite ? { ok: anchorWrite.ok === true, code: anchorWrite.code ?? null, path: anchorWrite.path ?? null, count: anchorWrite.anchor?.count ?? null } : null
+    result.verify = {
+      quickCheck: verifyReport.quickCheck?.verdict ?? null,
+      fts: verifyReport.fts?.state ?? null,
+      audit: { ok: auditCheck.ok === true, count: auditCheck.count ?? 0 },
+    }
+    result.ok = result.errors.length === 0 && verifyReport.ok === true && auditCheck.ok === true && (anchorWrite === null || anchorWrite.ok === true) && result.fixed.length > 0
+  } catch (error) {
+    result.errors.push(`verification: ${error?.message ?? error}`)
+    result.ok = false
+  }
+  if (asJson) console.log(JSON.stringify(result, null, 2))
+  else {
+    console.log(`repair: ${result.ok ? 'done' : 'INCOMPLETE'} · fixed=${[...new Set(result.fixed)].join(',') || 'none'}${result.backup ? ' · backup=' + result.backup : ''}`)
+    if (result.verify) {
+      console.log(`verify: quick_check=${result.verify.quickCheck ?? '?'} fts=${result.verify.fts ?? '?'} audit=${result.verify.audit.ok ? 'verified(' + result.verify.audit.count + ')' : 'BROKEN'}${result.anchor ? ' anchor=' + (result.anchor.ok ? 'written' : 'FAIL ' + result.anchor.code) : ''}`)
+    }
+    for (const warning of plan.warnings) console.log(`warning: ${warning}`)
+    for (const error of result.errors) console.error(`error: ${error}`)
+    if (result.ok) console.log('next: advisers doctor --check-db')
+  }
+  if (!result.ok) process.exitCode = 1
 }
 
 function init() {
@@ -3065,6 +5105,9 @@ function printStatus(asJson = false) {
     store: mode === 'sqlite' ? { type: 'sqlite', path: DB } : { type: mode, path: STATE },
     model: modelLabel(),
     soul: existsSync(SOUL) ? 'present' : 'not initialized',
+    // Additive 0.3.0 discovery field: one call tells a consumer which contract
+    // versions this CLI implements (contracts/versions-v1.json discovery.expected).
+    contracts: { ...CONTRACTS_DISCOVERY },
   }
   if (mode === 'json') {
     // Legacy JSON store: the snapshot is small, keep the historical behaviour.
@@ -3075,6 +5118,9 @@ function printStatus(asJson = false) {
     data.links = ledger.listLinks().length
     data.sessions = 0
     data.deliveries = 0
+    // 0.3.0 additive: the JSON store carries no customer tables.
+    data.clients = 0
+    data.projects = 0
   } else {
     // P1-2 (0.2.2): COUNT-only status. The old path loaded all 9 tables just to
     // count four of them (664ms / 352MB RSS at 50k rows in the round-2 audit).
@@ -3090,6 +5136,12 @@ function printStatus(asJson = false) {
       links: store.countLinks({ excludeRejected: true }),
       sessions: store.countSessions(),
       deliveries: store.countDeliveries(),
+      // 0.3.0 additive: live customer/project counts. Additive keys only, so the
+      // frozen status v1 shape keeps its meaning (contracts/cli/status-v1.json).
+      // The store's customer CRUD has no count helper; these are COUNT-only
+      // queries on the same read snapshot (no row materialisation).
+      clients: Number(store.db.prepare("SELECT COUNT(*) AS n FROM clients WHERE status = 'active' AND deleted_at IS NULL").get()?.n ?? 0),
+      projects: Number(store.db.prepare("SELECT COUNT(*) AS n FROM projects WHERE status = 'active' AND deleted_at IS NULL").get()?.n ?? 0),
       usage: store.sumModelUsage(),
     }))
     data.matters = counts.matters
@@ -3098,6 +5150,8 @@ function printStatus(asJson = false) {
     data.links = counts.links
     data.sessions = counts.sessions
     data.deliveries = counts.deliveries
+    data.clients = counts.clients
+    data.projects = counts.projects
     const usage = counts.usage
     if (usage.calls) data.modelUsage = usage
   }
@@ -3114,6 +5168,8 @@ function printStatus(asJson = false) {
   console.log(`links     ${data.links}`)
   if (data.sessions != null) console.log(`sessions  ${data.sessions}`)
   if (data.deliveries != null) console.log(`deliveries ${data.deliveries}`)
+  if (data.clients != null) console.log(`clients   ${data.clients}`)
+  if (data.projects != null) console.log(`projects  ${data.projects}`)
   if (data.modelUsage) console.log(`model calls ${data.modelUsage.calls} · tokens ${data.modelUsage.total_tokens} · reasoning ${data.modelUsage.reasoning_tokens}`)
   console.log(`soul      ${data.soul}`)
 }
@@ -3310,7 +5366,11 @@ async function runTurn(options) {
   }
 }
 
-async function runTurnInner({ runtime, ledger, text, conversationId, debug = false, confirm, attachments = [], allowPaths = [] }) {
+async function runTurnInner({ runtime, ledger, text, conversationId, debug = false, confirm, attachments = [], allowPaths = [], renderWidth = null }) {
+  // 0.3.0 Wave 3 (plan 26 §4.1): internal process lines ([tool]/[attach]/[compact])
+  // are hidden by default; ADVISERS_PROGRESS=1 (or /debug) is the explicit
+  // opt-in. Results, confirmations and failures are never gated.
+  const showProgress = debug || process.env.ADVISERS_PROGRESS === '1'
   const result = await runtime.ingest({
     linkId: 'cli',
     accountId: 'local',
@@ -3358,9 +5418,11 @@ async function runTurnInner({ runtime, ledger, text, conversationId, debug = fal
       const attachment = await attachmentLib.extractAttachment(file, { cwd: process.cwd() })
       extracted.push(attachment)
       if (attachment?.text) untrusted.push({ label: 'attachment:' + attachment.name, text: attachment.text })
-      console.log(`[attach] ${attachment.name} (${attachment.text.length} chars${attachment.truncated ? ', truncated' : ''})`)
+      if (showProgress) console.log(`[attach] ${sanitizeConsoleText(attachment.name, { max: 200 })}`)
     } catch (error) {
-      console.log(`[attach] ${file}: ${error.message}`)
+      // An unreadable attachment is a failure, not process noise: keep it
+      // visible even when internal progress is hidden; sanitise path/message.
+      console.error(sanitizeConsoleText('附件无法读取：' + file + '：' + (error?.message ?? error), { max: 2000 }))
     }
   }
   const agentText = text
@@ -3395,7 +5457,7 @@ async function runTurnInner({ runtime, ledger, text, conversationId, debug = fal
   })
   const prompt = pins ? `${context.prompt}\n<session-pins>\n${pins}\n</session-pins>` : context.prompt
   const fitted = fitHistory({ system: prompt, summary: history.summary, history: history.turns, current: agentText, maxTokens: Number(process.env.ADVISERS_CONTEXT_TOKENS || 12000) })
-  if (fitted.trimmed) console.log(`[compact] 裁剪 ${fitted.trimmed} 轮旧历史`)
+  if (fitted.trimmed && showProgress) console.log(`[compact] 裁剪 ${fitted.trimmed} 轮旧历史`)
   const { runAgent } = await loadAgent()
   // 0.2.3 Wave 1 default workspace: agent file tools are confined to a 0700
   // directory under ADVISERS_HOME, not to whatever directory the CLI was
@@ -3426,7 +5488,7 @@ async function runTurnInner({ runtime, ledger, text, conversationId, debug = fal
     force: process.env.ADVISERS_FORCE === '1',
     confirm,
     effort: process.env.ADVISERS_THINKING_EFFORT,
-    onTool: (name) => { if (debug || process.env.ADVISERS_PROGRESS !== '0') console.log(`[tool] ${name}`) },
+    onTool: (name) => { if (showProgress) console.log('[tool] ' + sanitizeConsoleText(name, { max: 120 })) },
     onToolAction: auditToolAction,
   })
   // 0.2.3 Wave 1: consume the structured warnings (they used to be discarded)
@@ -3445,20 +5507,30 @@ async function runTurnInner({ runtime, ledger, text, conversationId, debug = fal
   recordTurn(conversationId, 'user', text)
   recordTurn(conversationId, 'assistant', reply || '')
   await maybeSummarize(conversationId, { apiKey, baseUrl: process.env.ADVISERS_BASE_URL, model: process.env.ADVISERS_MODEL, ledger })
-  if (reply) console.log(reply)
+  if (reply) {
+    // 0.3.0 Wave 3: the REPL renders model output through the display kernel -
+    // strip terminal control/bidi from the model, then fold at the display width
+    // (CJK counts as two columns) so a long Chinese paragraph cannot mangle the
+    // terminal. chat/one-shot keeps its historical bytes (renderWidth is null).
+    if (Number.isInteger(renderWidth) && renderWidth > 0) {
+      const tuiKernel = await loadTui()
+      const display = tuiKernel.sanitizeDisplay(reply, { expandTabs: true })
+      for (const line of tuiKernel.wrap(display, renderWidth)) console.log(line)
+    } else console.log(reply)
+  }
   const uniqueArtifacts = [...new Set(artifacts)]
   if (uniqueArtifacts.length) {
     for (const file of uniqueArtifacts) {
       let bytes = 0
       try { bytes = statSync(file).size } catch {}
-      console.log(`[完成] ${text.replace(/\s+/g, ' ').slice(0, 48)} -> ${file}（${bytes} B）`)
+      console.log(`[完成] ${sanitizeConsoleText(text.replace(/\s+/g, ' ').slice(0, 48), { max: 48 })} -> ${sanitizeConsoleText(file, { max: 240 })}（${bytes} B）`)
     }
     const structural = toolLog.filter((t) => t.name === 'office_build' || t.name === 'office_template')
     if (structural.length && structural.every((t) => t.ok && !(t.payload?.missing?.length))) console.log('校验：结构通过（内容未逐字核对）')
     else if (structural.length) console.log('校验：未通过，文件保留但未记成完成')
     else console.log('校验：文本已保存')
     console.log('下一步：打开确认；要改哪段直接说')
-    for (const file of uniqueArtifacts) console.log(`[file] ${file}`)
+    for (const file of uniqueArtifacts) console.log('[file] ' + sanitizeConsoleText(file, { max: 240 }))
   }
   if (artifacts.length) {
     try {
@@ -3545,6 +5617,9 @@ async function chat(args) {
 }
 
 async function repl({ allowPaths = [] } = {}) {
+  const tuiKernel = await loadTui()
+  const policy = await getOutputPolicy()
+  const width = tuiKernel.clampColumns(process.stdout.columns)
   const readline = await import('node:readline/promises')
   const rl = readline.createInterface({ input: process.stdin, output: process.stdout, historySize: 100 })
   const ledger = loadLedger()
@@ -3553,16 +5628,37 @@ async function repl({ allowPaths = [] } = {}) {
   let debug = process.env.ADVISERS_DEBUG === '1'
   let pendingFiles = []
   let lastTask
-  console.log('advisers · local')
-  if (process.env.ADVISERS_DEBUG === '1') {
-    console.log(`model: ${modelLabel()}`)
-    console.log(`home:  ${HOME}`)
+  // 0.3.0 Wave 3 (plan 26 §4.4/§6.1): one status line from the render kernel
+  // replaces the "advisers · local" banner. Counts come from the already-loaded
+  // ledger, so the status line costs no extra store read.
+  const nowMs = Date.now()
+  const today = localDayOf(nowMs)
+  let dueToday = 0
+  let overdueCount = 0
+  for (const commitment of ledger.openCommitments()) {
+    if (!commitment.dueAt) continue
+    const ms = Date.parse(commitment.dueAt)
+    if (Number.isNaN(ms)) continue
+    const day = localDayOf(ms)
+    if (ms < nowMs && day !== today) overdueCount += 1
+    else if (day === today) dueToday += 1
+  }
+  const localMode = !process.env.ADVISERS_API_KEY || process.env.ADVISERS_NO_MODEL === '1'
+  console.log(tuiKernel.renderStatus({
+    kind: 'idle',
+    today: { due: dueToday, overdue: overdueCount },
+    local: localMode,
+    model: localMode ? null : (process.env.ADVISERS_MODEL || 'deepseek-flash'),
+    hint: '/help',
+  }, { width, color: policy.color, accessible: policy.accessible }))
+  if (debug) {
+    console.log('model: ' + sanitizeConsoleText(modelLabel(), { max: 240 }))
+    console.log('home:  ' + sanitizeConsoleText(HOME, { max: 240 }))
   }
   try {
     const latest = dbStore()?.listSessions(1)[0]
     await printOpening(latest?.conversationId ?? conversationId)
   } catch {}
-  console.log('/help for commands, /quit to leave')
 
   const runTask = async (taskText, files = [], { skipPlan = false } = {}) => {
     const brief = runtime.brief(taskText)
@@ -3577,7 +5673,7 @@ async function repl({ allowPaths = [] } = {}) {
     }
     lastTask = { text: taskText, files: [...files] }
     try {
-      const question = await runTurn({ runtime, ledger, text: taskText, conversationId, debug, confirm, attachments: files, allowPaths })
+      const question = await runTurn({ runtime, ledger, text: taskText, conversationId, debug, confirm, attachments: files, allowPaths, renderWidth: width })
       saveLedger(ledger)
       pendingFiles = []
       if (question) {
@@ -3588,13 +5684,21 @@ async function repl({ allowPaths = [] } = {}) {
           return
         }
         if (answer.trim()) {
-          await runTurn({ runtime, ledger, text: `${taskText}\n补充：${answer.trim()}`, conversationId, debug, confirm, attachments: files, allowPaths })
+          await runTurn({ runtime, ledger, text: `${taskText}\n补充：${answer.trim()}`, conversationId, debug, confirm, attachments: files, allowPaths, renderWidth: width })
           saveLedger(ledger)
         }
       }
     } catch (error) {
-      console.error(`[没做成] ${error.message}`)
-      console.error('已保留：任务和会话；没有丢文件。下一步：/retry 重试。')
+      // 0.3.0 Wave 3: the failure block goes through the render kernel so it has
+      // the stable prefix/code shape, is sanitised and wraps at the display width.
+      const lines = tuiKernel.renderError({
+        title: '任务失败',
+        reason: friendlyError(error),
+        kept: '任务和会话；没有丢文件',
+        next: '/retry 重试',
+        code: typeof error?.code === 'string' ? error.code : undefined,
+      }, { width, color: policy.color, accessible: policy.accessible })
+      for (const line of lines) console.error(line)
     }
   }
 
@@ -3912,11 +6016,42 @@ async function exportLedger(all = false, options = {}) {
     store = readStoreOrExit()
     ledger = store.read(() => store.load())
   }
+  // 0.3.0 P0-L2: `export --all` carries a top-level audit anchor so an exported
+  // snapshot can be compared against the live audit tail later. The anchor is a
+  // local HMAC checkpoint (never third-party attestation) and is built from the
+  // same read snapshot the export uses.
+  let builtAnchor = null
+  if (all && mode !== 'json' && store) {
+    try {
+      const anchorLib = await loadAuditAnchor()
+      builtAnchor = anchorLib.buildAuditAnchorForStore({ store, home: HOME, generator: `advisers/${VERSION}` })
+      if (!builtAnchor.ok) {
+        const detail = (builtAnchor.errors ?? []).join('; ')
+        if (options.out) console.error(`warning: audit anchor unavailable for this export (${builtAnchor.code ?? 'unknown'}): ${detail}`)
+      }
+    } catch (error) {
+      if (options.out) console.error(`warning: audit anchor unavailable for this export: ${error?.message ?? error}`)
+    }
+  }
   const payload = all ? (() => {
-    const tables = ['sessions', 'turns', 'session_summaries', 'summary_versions', 'deliveries', 'nudges', 'task_runs', 'audit', 'memory_candidates', 'permit_consumed']
-    const data = {}
-    for (const table of tables) data[table] = store ? store.db.prepare(`SELECT * FROM ${table}`).all() : []
-    return { version: VERSION, exportedAt: now(), ledger, data }
+    // 0.3.0: DATA_TABLES is the single, store-owned list (the v21 customer
+    // tables included). Do not hand-maintain a second list here: a table that
+    // was missing from this list used to be invisible until an import dropped
+    // it, which is exactly the "export succeeds, import loses data" bug.
+    const data = store && typeof store.exportDataTables === 'function'
+      ? store.exportDataTables()
+      : Object.fromEntries(DATA_TABLES.map((table) => [table, []]))
+    return {
+      version: VERSION,
+      // Additive 0.3.0: physical schema of the source database. import --replace
+      // refuses an export written by a newer CLI (fail closed) instead of
+      // dropping columns it does not understand; legacy exports omit the key.
+      ...(store ? { schemaVersion: store.schemaVersion() } : {}),
+      exportedAt: now(),
+      ledger,
+      data,
+      auditAnchor: builtAnchor?.ok ? builtAnchor.anchor : null,
+    }
   })() : ledger
   let text = JSON.stringify(payload, null, 2)
   if (options.encrypted) {
@@ -3937,8 +6072,167 @@ async function exportLedger(all = false, options = {}) {
       return
     }
     store?.appendAudit({ actor: 'local', action: options.encrypted ? 'export.encrypted' : 'export', allowed: true, reason: basename(options.out) })
-    console.log(`wrote ${options.out}${options.encrypted ? ' (AES-256-GCM)' : ''}`)
-  } else console.log(text)
+    // Refresh $ADVISERS_HOME/audit-anchor.json after the extra audit row (P0-L2).
+    if (all && mode !== 'json' && store) {
+      try {
+        const anchorLib = await loadAuditAnchor()
+        const written = anchorLib.writeAuditAnchor({ home: HOME, store, generator: `advisers/${VERSION}` })
+        if (!written.ok) console.error(`warning: could not refresh the audit anchor (${written.code ?? 'unknown'})`)
+      } catch (error) { console.error(`warning: could not refresh the audit anchor: ${error?.message ?? error}`) }
+    }
+    console.log(`wrote ${options.out}${options.encrypted ? ' (AES-256-GCM)' : ''}${all && builtAnchor?.ok ? ' + audit anchor' : ''}`)
+  } else {
+    console.log(text)
+    // `export --all` also refreshes the local anchor baseline (stdout stays pure
+    // JSON); a failure is reported only for the file variant above.
+    if (all && builtAnchor?.ok) {
+      try {
+        const anchorLib = await loadAuditAnchor()
+        anchorLib.writeAuditAnchor({ home: HOME, head: builtAnchor.head, generator: `advisers/${VERSION}` })
+      } catch {}
+    }
+  }
+}
+
+/* ---------------------------------------------------------------------------
+ * 0.3.0 import --replace parity for the SQLite-only customer tables.
+ *
+ * export --all carries clients/projects/client_notes; import restores them in
+ * the SAME transaction as the ledger, so a failed import changes nothing. The
+ * matter ownership (which already travels in the wire snapshot) and the restored
+ * entities are validated against each other, and any delivery lineage snapshot
+ * that would dangle is re-pointed or cleared and counted. The audit table is
+ * deliberately NOT replaced: the local hash chain is signed with this HOME's
+ * audit key, so importing another HOME's rows would fail verification.
+ * ------------------------------------------------------------------------- */
+const CUSTOMER_IMPORT_TABLES = ['clients', 'projects', 'client_notes']
+const CUSTOMER_IMPORT_MAX_ROWS = 20000
+
+function importDataError(message) {
+  return customerError('E_JSON_INVALID', message)
+}
+
+/** Validate the shape of payload.data before any write happens. */
+function prepareCustomerImport(payloadData) {
+  if (!payloadData || typeof payloadData !== 'object' || Array.isArray(payloadData)) return null
+  const present = CUSTOMER_IMPORT_TABLES.filter((table) => Object.prototype.hasOwnProperty.call(payloadData, table))
+  if (!present.length) return null
+  const tables = {}
+  for (const table of CUSTOMER_IMPORT_TABLES) {
+    const rows = Object.prototype.hasOwnProperty.call(payloadData, table) ? payloadData[table] : []
+    if (!Array.isArray(rows)) throw importDataError('import data.' + table + ' must be an array')
+    if (rows.length > CUSTOMER_IMPORT_MAX_ROWS) throw importDataError('import data.' + table + ' has too many rows (max ' + CUSTOMER_IMPORT_MAX_ROWS + ')')
+    for (let index = 0; index < rows.length; index += 1) {
+      const row = rows[index]
+      if (!row || typeof row !== 'object' || Array.isArray(row)) throw importDataError('import data.' + table + '[' + index + '] must be an object')
+    }
+    tables[table] = rows
+  }
+  return tables
+}
+
+/** Column metadata of one table (the table name comes from a fixed list). */
+function customerTableColumns(store, table) {
+  return store.db.prepare('PRAGMA table_info(' + table + ')').all().map((row) => ({
+    name: row.name,
+    notnull: Number(row.notnull) === 1,
+    hasDefault: row.dflt_value !== null,
+    pk: Number(row.pk) > 0,
+  }))
+}
+
+/** Wholesale replace one customer table: strict container, no unknown columns. */
+function replaceCustomerTable(store, table, rows) {
+  const columns = customerTableColumns(store, table)
+  const allowed = new Map(columns.map((column) => [column.name, column]))
+  const required = columns.filter((column) => column.notnull && !column.hasDefault && !column.pk).map((column) => column.name)
+  store.db.prepare('DELETE FROM ' + table).run()
+  for (let index = 0; index < rows.length; index += 1) {
+    const row = rows[index]
+    const names = []
+    for (const name of Object.keys(row)) {
+      if (!allowed.has(name)) throw importDataError('import data.' + table + '[' + index + '] has unknown column ' + name)
+      names.push(name)
+    }
+    for (const name of required) {
+      if (!Object.prototype.hasOwnProperty.call(row, name)) throw importDataError('import data.' + table + '[' + index + '] is missing column ' + name)
+    }
+    if (!names.length) throw importDataError('import data.' + table + '[' + index + '] has no columns')
+    store.db.prepare('INSERT INTO ' + table + ' (' + names.join(',') + ') VALUES (' + names.map(() => '?').join(',') + ')')
+      .run(...names.map((name) => row[name] === undefined ? null : row[name]))
+  }
+  return rows.length
+}
+
+/**
+ * Restore the customer tables and keep the database referentially coherent.
+ * Runs INSIDE the import transaction: any throw rolls the ledger + tables back.
+ */
+function applyCustomerImport(store, tables) {
+  const clientCount = replaceCustomerTable(store, 'clients', tables.clients)
+  const projectCount = replaceCustomerTable(store, 'projects', tables.projects)
+  const noteCount = replaceCustomerTable(store, 'client_notes', tables.client_notes)
+  const clientRows = new Map(store.db.prepare('SELECT id FROM clients').all().map((row) => [row.id, true]))
+  const projectRows = new Map(store.db.prepare('SELECT id, client_id FROM projects').all().map((row) => [row.id, row]))
+  const matterRows = new Map(store.db.prepare('SELECT id, client_id, project_id FROM matters').all().map((row) => [row.id, row]))
+  for (const project of projectRows.values()) {
+    if (!clientRows.has(project.client_id)) throw importDataError('import data.projects references a missing client: ' + String(project.client_id))
+  }
+  for (const matter of matterRows.values()) {
+    if (matter.client_id !== null && matter.client_id !== undefined && !clientRows.has(matter.client_id)) {
+      throw importDataError('import ledger matter ' + matter.id + ' references a missing client')
+    }
+    if (matter.project_id !== null && matter.project_id !== undefined) {
+      const project = projectRows.get(matter.project_id)
+      if (!project) throw importDataError('import ledger matter ' + matter.id + ' references a missing project')
+      if (matter.client_id === null || matter.client_id === undefined || project.client_id !== matter.client_id) {
+        throw importDataError('import ledger matter ' + matter.id + ' belongs to a project of another client')
+      }
+    }
+  }
+  for (const note of store.db.prepare('SELECT id, client_id, project_id, matter_id FROM client_notes').all()) {
+    if (!clientRows.has(note.client_id)) throw importDataError('import data.client_notes references a missing client')
+    if (note.project_id !== null && note.project_id !== undefined) {
+      const project = projectRows.get(note.project_id)
+      if (!project || project.client_id !== note.client_id) throw importDataError('import data.client_notes references a project of another client')
+    }
+    if (note.matter_id !== null && note.matter_id !== undefined) {
+      const matter = matterRows.get(note.matter_id)
+      if (!matter) throw importDataError('import data.client_notes references a missing matter')
+      if (matter.client_id !== null && matter.client_id !== undefined && matter.client_id !== note.client_id) {
+        throw importDataError('import data.client_notes references a matter of another client')
+      }
+    }
+  }
+  // Delivery lineage snapshots may point at entities this HOME never had:
+  // re-point when a project/matter still resolves, otherwise clear the snapshot
+  // (never keep a dangling id) and report the reconciled row count.
+  let reconciledDeliveries = 0
+  for (const delivery of store.db.prepare('SELECT id, client_id, project_id, matter_id FROM deliveries').all()) {
+    let clientId = delivery.client_id ?? null
+    let projectId = delivery.project_id ?? null
+    const before = String(clientId) + ':' + String(projectId)
+    if (projectId !== null) {
+      const project = projectRows.get(projectId)
+      if (!project) { clientId = null; projectId = null }
+      else clientId = project.client_id
+    } else if (clientId !== null && !clientRows.has(clientId)) {
+      clientId = null
+    }
+    if (projectId === null && clientId === null && delivery.matter_id !== null && delivery.matter_id !== undefined) {
+      const matter = matterRows.get(delivery.matter_id)
+      if (matter && matter.client_id !== null && matter.client_id !== undefined && clientRows.has(matter.client_id)) {
+        clientId = matter.client_id
+        const project = matter.project_id === null || matter.project_id === undefined ? undefined : projectRows.get(matter.project_id)
+        if (project && project.client_id === clientId) projectId = project.id
+      }
+    }
+    if (before !== String(clientId) + ':' + String(projectId)) {
+      store.db.prepare('UPDATE deliveries SET client_id = ?, project_id = ? WHERE id = ?').run(clientId, projectId, delivery.id)
+      reconciledDeliveries += 1
+    }
+  }
+  return { clients: clientCount, projects: projectCount, clientNotes: noteCount, reconciledDeliveries: reconciledDeliveries }
 }
 
 async function importLedger(file, { replace = false } = {}) {
@@ -3956,8 +6250,50 @@ async function importLedger(file, { replace = false } = {}) {
   } catch (error) { console.error(`import failed: ${error.message}`); process.exitCode = 1; return }
   const data = payload?.ledger ?? payload
   if (!data || !Array.isArray(data.matters)) { console.error('import file does not contain an Advisers ledger'); process.exitCode = 1; return }
+  // 0.3.0: an export --all records its physical schema version. A newer database
+  // must be imported by a newer CLI (same fail-closed rule as E_SCHEMA_NEWER on
+  // open); a legacy export without the key is accepted exactly as before.
+  if (payload && typeof payload === 'object' && payload.schemaVersion !== undefined) {
+    const incomingSchema = payload.schemaVersion
+    if (!Number.isInteger(incomingSchema) || incomingSchema < 0) {
+      console.error('import failed: E_JSON_INVALID: export schemaVersion must be a non-negative integer')
+      process.exitCode = 1
+      return
+    }
+    if (incomingSchema > SCHEMA_VERSION) {
+      console.error('import failed: E_SCHEMA_NEWER: the export uses database schema v' + incomingSchema + ' but this CLI expects v' + SCHEMA_VERSION + '; upgrade advisers first. The ledger was NOT replaced.')
+      process.exitCode = 1
+      return
+    }
+  }
+  // Validate the customer-table payload shape BEFORE any write; the restore
+  // itself runs inside the import transaction and rolls back on a bad reference.
+  let customerImport = null
+  try { customerImport = prepareCustomerImport(payload?.data) } catch (error) {
+    console.error('import failed: ' + error.message)
+    process.exitCode = 1
+    return
+  }
   await requireTosReaccept({ scope: 'import', subject: basename(file), action: 'import --replace' })
   ensureHome()
+  // 0.3.0 Wave 3 (plan 26 §4.5/§10.5): --replace is the confirmation, so state
+  // the irreversible consequence and the recovery copy BEFORE any write happens.
+  const incoming = {
+    matters: data.matters.length,
+    commitments: Array.isArray(data.commitments) ? data.commitments.length : 0,
+    facts: Array.isArray(data.facts) ? data.facts.length : 0,
+    preferences: Array.isArray(data.preferences) ? data.preferences.length : 0,
+  }
+  if (customerImport) {
+    incoming.clients = customerImport.clients.length
+    incoming.projects = customerImport.projects.length
+    incoming.clientNotes = customerImport.client_notes.length
+  }
+  const importBackupFile = mode === 'sqlite' ? join(HOME, 'import-backup-' + Date.now() + '.db') : null
+  console.log('! 需要确认：整库替换本地账本（不是合并）')
+  console.log('  写入：' + incoming.matters + ' 个事项 / ' + incoming.commitments + ' 条承诺 / ' + incoming.facts + ' 条事实 / ' + incoming.preferences + ' 条偏好' + (customerImport ? ' / ' + incoming.clients + ' 个客户 / ' + incoming.projects + ' 个项目 / ' + incoming.clientNotes + ' 条客户备注' : ''))
+  console.log('  备份：' + (importBackupFile ?? '（JSON store：无数据库备份，旧 state.json 会被覆盖）'))
+  console.log('  不可撤销：替换后只能用上面的备份恢复；' + (customerImport ? '客户/项目/备注表按导出恢复，其余 SQLite-only 表不会合并。' : '未导入的 SQLite-only 表不会被保留。'))
   // import replaces the ledger wholesale; serialize it with every other store
   // user (P0-1) before copying the pre-import backup and writing.
   ensureInstanceLock()
@@ -3977,7 +6313,7 @@ async function importLedger(file, { replace = false } = {}) {
       // 0.2.3 Wave 1: the pre-import backup is plaintext data. Copy with retry
       // and fsync it; if the backup cannot be made, refuse to replace the ledger
       // (never proceed without a recovery copy).
-      const backupFile = join(HOME, `import-backup-${Date.now()}.db`)
+      const backupFile = importBackupFile ?? join(HOME, 'import-backup-' + Date.now() + '.db')
       copyFileWithRetrySync(DB, backupFile)
       fsyncFileSync(backupFile)
       try { chmodSync(backupFile, 0o600) } catch {}
@@ -3989,41 +6325,437 @@ async function importLedger(file, { replace = false } = {}) {
   }
   try {
     const ledger = Ledger.fromJSON(data, LOCAL_PORTS)
-    saveLedgerWithAudit(ledger, { actor: 'local', action: 'import.ledger', allowed: true, reason: basename(file) })
+    const audit = { actor: 'local', action: 'import.ledger', allowed: true, reason: basename(file) }
+    let customerReport = null
+    if (customerImport && mode === 'sqlite') {
+      // One transaction: the nine ledger tables, the three customer tables and
+      // their cross-reference validation. A bad reference throws and rolls the
+      // whole replace back; the pre-import backup remains as a second net.
+      openStore().saveWithAudit(ledger.toJSON(), audit, (innerStore) => {
+        customerReport = applyCustomerImport(innerStore, customerImport)
+      })
+    } else {
+      saveLedgerWithAudit(ledger, audit)
+    }
     console.log(`imported ${data.matters.length} matters, ${data.commitments?.length ?? 0} commitments`)
-    if (payload?.data) console.error('note: SQLite-only tables in the import were not merged; ledger was replaced.')
+    if (customerReport) {
+      console.log('restored clients=' + customerReport.clients + ' projects=' + customerReport.projects + ' client_notes=' + customerReport.clientNotes + (customerReport.reconciledDeliveries ? ' · delivery lineage reconciled=' + customerReport.reconciledDeliveries : ''))
+      console.error('note: ledger + customer tables were replaced; other SQLite-only tables in the export (sessions/turns/deliveries/nudges/audit/...) were not merged.')
+    } else if (payload?.data) {
+      console.error('note: SQLite-only tables in the import were not merged; ledger was replaced.')
+    }
   } catch (error) { console.error(`import failed: ${error.message}`); process.exitCode = 1 }
 }
 
-function backup(file) {
-  if (!file) { console.error('usage: advisers backup <path.db>'); process.exitCode = 1; return }
+/* ---------------------------------------------------------------------------
+ * 0.3.0 P0-D2: backup rotation, backup listing/verification and restore.
+ *
+ * `backup <path>` keeps the 0.2.x explicit-copy behaviour (that path is never
+ * rotated), while `backup` with no path writes a managed
+ * $ADVISERS_HOME/backups/state-<UTC>-<tag>.db with .sha256 + .anchor.json
+ * sidecars. Every copy is verified (quick_check/schema/audit head/sampled row
+ * counts) before it is installed. `backup --keep` plans a GFS rotation and
+ * deletes nothing unless --apply is passed; managed rotation only ever touches
+ * <HOME>/backups. `backups verify` re-checks every managed backup read-only.
+ * `restore` plans first (default) and only applies with --yes: safety
+ * pre-restore backup, atomic install of a verified copy, post-install
+ * verification with rollback, audit row `db.restore` and a fresh anchor.
+ * ------------------------------------------------------------------------- */
+
+/** Report a lib operation failure (backup/restore) with code + actionable hint. */
+async function reportBackupFailure(result, asJson, label) {
+  const lib = await loadBackup()
+  const code = result?.code ?? null
+  const hint = code ? lib.describeBackupCode(code) : null
+  if (asJson) {
+    console.log(JSON.stringify({ ok: false, label, code, errors: result?.errors ?? [], warnings: result?.warnings ?? [], hint: hint ?? undefined, originalIntact: result?.originalIntact, rolledBack: result?.rolledBack, preRestoreBackup: result?.preRestoreBackup ?? undefined }, null, 2))
+  } else {
+    console.error(`${label}: FAILED${code ? ' (' + code + ')' : ''}`)
+    for (const error of result?.errors ?? []) console.error(`  ${error}`)
+    if (hint) console.error(`  hint: ${hint}`)
+    if (result?.originalIntact === true) console.error('  the live database was not replaced.')
+    if (result?.rolledBack === true) console.error('  the pre-restore backup was rolled back.')
+    if (result?.preRestoreBackup) console.error(`  pre-restore backup kept at ${result.preRestoreBackup}`)
+  }
+  process.exitCode = 1
+}
+
+/**
+ * Refresh $ADVISERS_HOME/audit-anchor.json after a backup (P0-L2). The backup
+ * command deliberately writes no audit row of its own: the anchor then equals
+ * the just-created backup's audit head, so restoring that backup immediately is
+ * an anchor "match" (not a suspicious rollback). Audit rows are appended by
+ * commands that change the ledger (restore/doctor.repair/audit --rebuild-fts).
+ */
+async function refreshAuditAnchor(store) {
+  if (!store) return { ok: false, code: null, errors: ['no writable store'] }
+  try {
+    const anchorLib = await loadAuditAnchor()
+    return anchorLib.writeAuditAnchor({ home: HOME, store, generator: `advisers/${VERSION}` })
+  } catch (error) {
+    return { ok: false, code: error?.code ?? null, errors: [String(error?.message ?? error)] }
+  }
+}
+
+function printBackupCreated(created, asJson) {
+  const rotation = created.rotation
+  if (asJson) {
+    console.log(JSON.stringify({
+      ok: true,
+      path: created.path,
+      bytes: created.bytes,
+      sha256: created.sha256,
+      audit: created.audit ? { count: created.audit.count, lastSeq: created.audit.lastSeq, headHash: created.audit.headHash } : null,
+      sidecars: created.sidecars,
+      rotation: rotation ? { dryRun: rotation.dryRun, kept: rotation.kept, wouldDelete: rotation.wouldDelete, deleted: rotation.deleted, errors: rotation.errors } : null,
+      warnings: created.warnings ?? [],
+    }, null, 2))
+    return
+  }
+  console.log(`backup: ${created.path} (${formatBytes(created.bytes)}, sha256=${String(created.sha256 ?? '').slice(0, 12)}…)`)
+  if (created.audit) console.log(`backup: audit entries=${created.audit.count} head=${shortAuditHash(created.audit.headHash)}`)
+  console.log(`backup: sidecars sha256=${created.sidecars?.sha256 ? 'yes' : 'no'} anchor=${created.sidecars?.anchor ? 'yes' : 'no'}`)
+  for (const warning of created.warnings ?? []) console.log(`warning: ${warning}`)
+  if (rotation) {
+    if (rotation.dryRun) console.log(`rotation: dry-run would delete ${rotation.wouldDelete.length} backup(s)${rotation.wouldDelete.length ? ': ' + rotation.wouldDelete.map((file) => basename(file)).join(', ') : ''}`)
+    else console.log(`rotation: deleted ${rotation.deleted?.length ?? 0} backup(s)`)
+  }
+}
+
+/**
+ * `advisers backup` — explicit copy, managed backup, or a managed backup +
+ * GFS/keep-N rotation plan (dry-run unless --apply).
+ */
+async function backupCommand(args = []) {
+  const parsed = parseStrictFlags(args, {
+    booleans: ['dry-run', 'apply', 'json'],
+    values: ['out', 'tag', 'keep'],
+    positional: true,
+  })
+  if (!parsed.ok) return usageFail(parsed.error, BACKUP_USAGE)
+  const { flags, positional } = parsed
+  if (positional.length > 1) return usageFail('backup accepts at most one explicit path', BACKUP_USAGE)
+  if (positional.length === 1 && flags.out !== undefined) return usageFail('pass either an explicit path or --out, not both', BACKUP_USAGE)
+  if (flags.apply === true && flags['dry-run'] === true) return usageFail('--apply and --dry-run are mutually exclusive', BACKUP_USAGE)
+  if (flags.apply === true && flags.keep === undefined) return usageFail('--apply requires --keep (it only applies the rotation plan)', BACKUP_USAGE)
+  const asJson = flags.json === true
   const sealed = vaultSealedPath()
   if (sealed) {
-    console.error(`advisers: E_VAULT_SEALED — cannot back up a sealed database (${sealed}).`)
-    console.error('Run `advisers vault unseal` first; the sealed file itself is already an encrypted backup.')
+    if (asJson) console.log(JSON.stringify({ ok: false, code: 'E_VAULT_SEALED', errors: [`cannot back up a sealed database (${sealed}); run advisers vault unseal first`] }, null, 2))
+    else {
+      console.error(`advisers: E_VAULT_SEALED — cannot back up a sealed database (${sealed}).`)
+      console.error('Run `advisers vault unseal` first; the sealed file itself is already an encrypted backup.')
+    }
     process.exitCode = 1
     return
   }
-  const store = openStore()
-  const checkpoint = store.checkpoint()
-  if (checkpoint.busy) { console.error('backup failed: database is busy (another advisers process is writing); close it and retry'); process.exitCode = 1; return }
-  mkdirSync(dirname(file), { recursive: true, mode: 0o700 })
-  // 0.2.3 Wave 1: retry transient Windows locks and fsync the copy before
-  // reporting success (a crash right after a plain copy can lose the backup).
-  const existed = existsSync(file)
+  if (mode === 'json') return usageFail('backup requires the SQLite store (ADVISERS_STORE=sqlite)', BACKUP_USAGE)
+  const lib = await loadBackup()
+  if (flags.keep !== undefined) {
+    const normalized = lib.normalizeKeepPolicy(flags.keep)
+    if (!normalized.ok) return usageFail(`invalid --keep: ${normalized.error}`, BACKUP_USAGE)
+  }
+  if (flags.tag !== undefined) {
+    const tagCheck = lib.normalizeBackupTag(flags.tag)
+    if (!tagCheck.ok) return usageFail(`invalid --tag: ${tagCheck.error}`, BACKUP_USAGE)
+  }
+  const explicitPath = flags.out !== undefined ? String(flags.out) : positional[0]
+  if (explicitPath !== undefined && (flags.keep !== undefined || flags.apply === true)) {
+    return usageFail('an explicit backup path never participates in rotation; drop --keep/--apply or use a managed backup', BACKUP_USAGE)
+  }
+  ensureHome()
+  let store
+  try { store = openStore() } catch (error) { return reportMaintenanceFailure(error, asJson, 'backup') }
+  if (explicitPath !== undefined) {
+    const created = lib.createBackup({
+      dbPath: DB,
+      targetPath: explicitPath,
+      store,
+      checkpoint: true,
+      verify: true,
+      verifyChain: true,
+      writeSha256: true,
+      overwrite: true,
+    })
+    if (!created.ok) return reportBackupFailure(created, asJson, 'backup')
+    if (created.audit) {
+      const anchored = lib.writeBackupAnchorSidecar({ backupPath: created.path, head: created.audit, home: HOME })
+      if (anchored.ok) created.sidecars.anchor = anchored.anchorPath
+      else (created.warnings ??= []).push(anchored.errors?.[0] ?? 'could not write the audit anchor sidecar')
+    }
+    const anchor = await refreshAuditAnchor(store)
+    if (!anchor.ok) (created.warnings ??= []).push(`could not refresh the audit anchor (${anchor.code ?? 'unknown'})`)
+    printBackupCreated(created, asJson)
+    if (!asJson && created.warnings?.length) {
+      for (const warning of created.warnings.slice(-1)) console.log(`warning: ${warning}`)
+    }
+    if (!asJson) console.log(anchor.ok ? `anchor: refreshed (count=${anchor.anchor?.count ?? '?'})` : `warning: audit anchor not refreshed (${anchor.code ?? 'unknown'})`)
+    return
+  }
+  // Managed backup. Plain --dry-run (no --keep) is a read-only plan.
+  if (flags['dry-run'] === true && flags.keep === undefined) {
+    const target = lib.backupPathFor({ home: HOME, tag: flags.tag ?? null })
+    const listed = lib.listBackups({ home: HOME })
+    const rotation = lib.planBackupRotation({ entries: listed.entries ?? [], keep: undefined })
+    if (asJson) console.log(JSON.stringify({ ok: true, mode: 'dry-run', wouldCreate: target, rotation: { kept: rotation.kept?.map((entry) => entry.path), wouldDelete: rotation.wouldDelete } }, null, 2))
+    else {
+      console.log(`backup: dry-run would create ${target}`)
+      console.log(`rotation: dry-run would keep ${rotation.kept?.length ?? 0} backup(s), delete ${rotation.wouldDelete?.length ?? 0}`)
+    }
+    return
+  }
+  const created = lib.createManagedBackup({
+    home: HOME,
+    dbPath: DB,
+    store,
+    tag: flags.tag ?? null,
+    keep: flags.keep !== undefined ? flags.keep : null,
+    rotate: flags.keep !== undefined,
+    rotateDryRun: flags.apply !== true,
+    verifyChain: true,
+  })
+  if (!created.ok) return reportBackupFailure(created, asJson, 'backup')
+  const anchor = await refreshAuditAnchor(store)
+  if (!anchor.ok) (created.warnings ??= []).push(`could not refresh the audit anchor (${anchor.code ?? 'unknown'})`)
+  if (asJson) {
+    const payload = {
+      ok: true,
+      path: created.path,
+      bytes: created.bytes,
+      sha256: created.sha256,
+      audit: created.audit ? { count: created.audit.count, lastSeq: created.audit.lastSeq, headHash: created.audit.headHash } : null,
+      sidecars: created.sidecars,
+      rotation: created.rotation ? { dryRun: created.rotation.dryRun, wouldDelete: created.rotation.wouldDelete, deleted: created.rotation.deleted, errors: created.rotation.errors } : null,
+      warnings: created.warnings ?? [],
+      anchor: anchor.ok ? { ok: true, count: anchor.anchor?.count ?? null } : { ok: false, code: anchor.code ?? null },
+    }
+    console.log(JSON.stringify(payload, null, 2))
+    return
+  }
+  console.log(`backup: ${created.path} (${formatBytes(created.bytes)}, sha256=${String(created.sha256 ?? '').slice(0, 12)}…)`)
+  if (created.audit) console.log(`backup: audit entries=${created.audit.count} head=${shortAuditHash(created.audit.headHash)}`)
+  console.log(`backup: sidecars sha256=${created.sidecars?.sha256 ? 'yes' : 'no'} anchor=${created.sidecars?.anchor ? 'yes' : 'no'}`)
+  for (const warning of created.warnings ?? []) console.log(`warning: ${warning}`)
+  const rotation = created.rotation
+  if (rotation) {
+    if (rotation.dryRun) console.log(`rotation: dry-run would delete ${rotation.wouldDelete?.length ?? 0} backup(s)${rotation.wouldDelete?.length ? ': ' + rotation.wouldDelete.map((file) => basename(file)).join(', ') : ''} (pass --apply to delete)`)
+    else console.log(`rotation: deleted ${rotation.deleted?.length ?? 0} backup(s)`)
+    for (const error of rotation.errors ?? []) console.error(`rotation error: ${error}`)
+  }
+  console.log(anchor.ok ? `anchor: refreshed (count=${anchor.anchor?.count ?? '?'})` : `warning: audit anchor not refreshed (${anchor.code ?? 'unknown'})`)
+}
+
+/** `advisers backups ls|verify` — read-only inspection of <HOME>/backups. */
+async function backupsCommand(args = []) {
+  const sub = args[0]
+  const rest = args.slice(1)
+  if (!sub || sub === 'help' || sub === '--help') { console.log(BACKUPS_USAGE); if (!sub) process.exitCode = 1; return }
+  if (sub !== 'ls' && sub !== 'verify') return usageFail(`unknown backups subcommand: ${sub}`, BACKUPS_USAGE)
+  const parsed = parseStrictFlags(rest, { booleans: ['json'], values: ['limit'], positional: false })
+  if (!parsed.ok) return usageFail(parsed.error, BACKUPS_USAGE)
+  const { flags } = parsed
+  const asJson = flags.json === true
+  let limit = 100
+  if (flags.limit !== undefined) {
+    limit = Number(flags.limit)
+    if (!Number.isInteger(limit) || limit < 1) return usageFail('--limit requires a positive integer', BACKUPS_USAGE)
+  }
+  const lib = await loadBackup()
+  if (mode === 'json') return usageFail('backups requires the SQLite store (ADVISERS_STORE=sqlite)', BACKUPS_USAGE)
+  ensureHome()
+  if (sub === 'ls') {
+    const listed = lib.listBackups({ home: HOME })
+    if (!listed.ok) { console.error(`backups ls: FAILED (${listed.errors?.[0] ?? 'unknown'})`); process.exitCode = 1; return }
+    const entries = listed.entries.slice(0, limit)
+    if (asJson) {
+      console.log(JSON.stringify({ ok: true, dir: listed.dir, count: entries.length, total: listed.entries.length, entries: entries.map((entry) => ({ name: entry.name, path: entry.path, tag: entry.tag, createdAt: entry.createdAt, bytes: entry.size, sidecars: entry.sidecars })) }, null, 2))
+      return
+    }
+    if (!entries.length) { console.log(`backups: none in ${listed.dir}`); return }
+    console.log(`backups: ${listed.entries.length} in ${listed.dir} (newest first)`)
+    for (const entry of entries) {
+      console.log(`${entry.name}\t${formatBytes(entry.size)}\t${entry.createdAt}\tsha256=${entry.sidecars.sha256 ? 'yes' : 'no'}\tanchor=${entry.sidecars.anchor ? 'yes' : 'no'}`)
+    }
+    return
+  }
+  const verified = lib.verifyBackups({ home: HOME, limit })
+  if (asJson) {
+    console.log(JSON.stringify({
+      ok: verified.ok,
+      dir: verified.dir,
+      count: verified.count,
+      results: verified.results.map((row) => ({
+        name: row.name,
+        path: row.path,
+        ok: row.ok,
+        schemaVersion: row.inspection?.schemaVersion ?? null,
+        auditCount: row.inspection?.audit?.count ?? null,
+        errors: [...(row.inspection?.errors ?? []), ...(row.sidecars?.errors ?? [])],
+      })),
+      errors: verified.errors,
+      warnings: verified.warnings,
+    }, null, 2))
+  } else if (!verified.results.length) {
+    console.log(`backups: none in ${verified.dir}`)
+  } else {
+    for (const row of verified.results) {
+      const detail = row.ok
+        ? `schema=v${row.inspection?.schemaVersion ?? '?'} audit=${row.inspection?.audit?.count ?? '?'}`
+        : `${[...(row.inspection?.errors ?? []), ...(row.sidecars?.errors ?? [])][0] ?? 'failed'}`
+      console.log(`${row.ok ? 'PASS' : 'FAIL'}  ${row.name}  ${detail}`)
+    }
+    console.log(`backups: ${verified.results.length} checked, ${verified.results.filter((row) => !row.ok).length} failed`)
+  }
+  if (!verified.ok) process.exitCode = 1
+}
+
+/**
+ * `advisers restore <backup-file>` — plan by default, apply only with --yes.
+ * The whole flow is fail-safe: planRestore validates the backup + anchors
+ * before anything is touched; restoreBackup writes a pre-restore safety copy,
+ * installs the verified backup atomically, re-verifies and rolls back on
+ * failure. On success the store is reopened, `db.restore` is audited and a
+ * fresh anchor is written.
+ */
+async function restoreCommand(args = []) {
+  const parsed = parseStrictFlags(args, {
+    booleans: ['dry-run', 'yes', 'allow-anchor-behind', 'allow-broken-audit-chain', 'json'],
+    positional: true,
+  })
+  if (!parsed.ok) return usageFail(parsed.error, RESTORE_USAGE)
+  const { flags, positional } = parsed
+  if (positional.length !== 1) return usageFail('restore requires exactly one backup file', RESTORE_USAGE)
+  if (flags.yes === true && flags['dry-run'] === true) return usageFail('--yes and --dry-run are mutually exclusive', RESTORE_USAGE)
+  const asJson = flags.json === true
+  const sealed = vaultSealedPath()
+  if (sealed) {
+    if (asJson) console.log(JSON.stringify({ ok: false, code: 'E_VAULT_SEALED', errors: [`the ledger is sealed (${sealed}); run advisers vault unseal first`] }, null, 2))
+    else {
+      console.error(`advisers: E_VAULT_SEALED — cannot restore into a sealed home (${sealed}).`)
+      console.error('Run `advisers vault unseal` first, then retry the restore.')
+    }
+    process.exitCode = 1
+    return
+  }
+  if (mode === 'json') return usageFail('restore requires the SQLite store (ADVISERS_STORE=sqlite)', RESTORE_USAGE)
+  ensureHome()
+  let backupPath = positional[0]
+  if (!existsSync(backupPath) && !isAbsolute(backupPath)) {
+    const candidate = join(HOME, 'backups', backupPath)
+    if (existsSync(candidate)) backupPath = candidate
+  }
+  const lib = await loadBackup()
+  const options = {
+    allowAnchorBehind: flags['allow-anchor-behind'] === true,
+    allowBrokenAuditChain: flags['allow-broken-audit-chain'] === true,
+  }
+  const plan = lib.planRestore({ backupPath, dbPath: DB, home: HOME, key: undefined, ...options })
+  if (!plan.ok) {
+    if (asJson) {
+      const hint = plan.code ? lib.describeBackupCode(plan.code) : null
+      console.log(JSON.stringify({ ok: false, mode: 'dry-run', code: plan.code ?? null, codes: plan.codes ?? [], errors: plan.errors ?? [], warnings: plan.warnings ?? [], hint: hint ?? undefined }, null, 2))
+    } else {
+      console.error(`restore: plan FAILED${plan.code ? ' (' + plan.code + ')' : ''}`)
+      for (const error of plan.errors ?? []) console.error(`  ${error}`)
+      if (plan.code) console.error(`  hint: ${lib.describeBackupCode(plan.code)}`)
+      console.error('  nothing was changed.')
+    }
+    process.exitCode = 1
+    return
+  }
+  const backupInfo = plan.inspection
+  const anchor = plan.anchorVerification
+  const anchorLine = !plan.anchor
+    ? 'absent (yellow: no audit anchor found — the backup cannot be checked against a baseline)'
+    : anchor?.ok === false
+      ? `FAIL (${anchor.code})`
+      : anchor
+        ? `${anchor.status} (anchor count=${anchor.anchorCount ?? '?'} backup count=${anchor.count ?? '?'}${options.allowAnchorBehind ? ', anchor-behind allowed' : ''})`
+        : 'present (not comparable: the backup has no readable audit head)'
+  const apply = flags.yes === true
+  if (!apply) {
+    if (asJson) {
+      console.log(JSON.stringify({
+        ok: true,
+        mode: 'dry-run',
+        backup: { path: plan.path, bytes: backupInfo.size, schemaVersion: backupInfo.schemaVersion, schemaStatus: backupInfo.schemaStatus, audit: backupInfo.audit ? { count: backupInfo.audit.count, lastSeq: backupInfo.audit.lastSeq, headHash: backupInfo.audit.headHash } : null, chainVerified: backupInfo.chainVerified === true },
+        target: DB,
+        anchor: plan.anchor ? { present: true, status: anchor?.status ?? null, ok: anchor?.ok ?? null, code: anchor?.code ?? null } : { present: false, status: 'absent' },
+        sidecarAnchor: plan.sidecarAnchor ? { present: true, ok: plan.sidecarAnchor.verification?.ok === true } : { present: false },
+        steps: plan.steps,
+        warnings: plan.warnings,
+      }, null, 2))
+      return
+    }
+    console.log(`restore: dry-run (no changes) — ${basename(plan.path)}`)
+    console.log(`backup: ${formatBytes(backupInfo.size)} schema=v${backupInfo.schemaVersion ?? '?'} (${backupInfo.schemaStatus}) audit=${backupInfo.audit ? backupInfo.audit.count + ' entries, chain=' + (backupInfo.chainVerified ? 'verified' : 'not verified') : 'no audit table'}`)
+    console.log(`anchor: ${anchorLine}`)
+    if (plan.sidecarAnchor) console.log(`sidecar: ${basename(lib.backupAnchorPath(plan.path))} ${plan.sidecarAnchor.verification?.ok === true ? 'match' : 'mismatch'}`)
+    for (const step of plan.steps) console.log(`step: ${step}`)
+    for (const warning of plan.warnings) console.log(`warning: ${warning}`)
+    console.log('next: advisers restore ' + basename(plan.path) + ' --yes')
+    return
+  }
+  let lock
+  try { lock = ensureInstanceLock() } catch (error) { return reportMaintenanceFailure(error, asJson, 'restore') }
+  let store = null
+  if (existsSync(DB)) {
+    try { store = openStore() } catch (error) { return reportMaintenanceFailure(error, asJson, 'restore') }
+  }
+  const restored = lib.restoreBackup({ plan, dbPath: DB, store, home: HOME, key: undefined, ...options })
+  if (!restored.ok) {
+    activeStore = undefined
+    try { releaseInstanceLock() } catch {}
+    return reportBackupFailure(restored, asJson, 'restore')
+  }
+  // Reopen the restored database and record the restore (the library never
+  // writes audit rows itself; the caller owns the post-restore audit/anchor).
+  activeStore = undefined
+  let auditRow = null
+  let anchorWrite = null
+  let reopened = null
   try {
-    copyFileWithRetrySync(DB, file)
-    fsyncFileSync(file)
-    chmodSync(file, 0o600)
+    reopened = openStore()
+    auditRow = reopened.appendAudit({
+      actor: 'local',
+      action: 'db.restore',
+      allowed: true,
+      reason: `from=${basename(restored.restoredFrom)};preRestore=${restored.preRestoreBackup ? basename(restored.preRestoreBackup) : 'none'};allowAnchorBehind=${options.allowAnchorBehind ? 1 : 0};schema=v${restored.schemaVersion ?? '?'};auditCount=${restored.audit?.count ?? '?'}`,
+    })
+    const anchorLib = await loadAuditAnchor()
+    anchorWrite = anchorLib.writeAuditAnchor({ home: HOME, store: reopened, generator: `advisers/${VERSION}` })
   } catch (error) {
-    // Only remove the target when this command created it: a pre-existing
-    // backup must never be destroyed just because a new copy failed.
-    if (!existed) { try { rmWithRetrySync(file) } catch {} }
-    console.error(`backup failed: ${describeFsError(error, { action: 'copying the database to', target: file })}`)
+    if (asJson) console.log(JSON.stringify({ ok: false, mode: 'apply', restored: true, code: error?.code ?? null, errors: [`the backup was installed but reopening/recording it failed: ${error?.message ?? error}`], preRestoreBackup: restored.preRestoreBackup ?? null }, null, 2))
+    else {
+      console.error(`advisers: the backup was installed but reopening/recording it failed: ${error?.message ?? error}`)
+      console.error(`  Next: run 'advisers doctor --check-db'; the pre-restore backup is at ${restored.preRestoreBackup ?? '(none)'}.`)
+    }
     process.exitCode = 1
     return
   }
-  console.log(`backup: ${file}`)
+  if (asJson) {
+    console.log(JSON.stringify({
+      ok: true,
+      mode: 'apply',
+      restoredFrom: restored.restoredFrom,
+      preRestoreBackup: restored.preRestoreBackup,
+      schemaVersion: restored.schemaVersion,
+      audit: restored.audit ? { count: restored.audit.count, lastSeq: restored.audit.lastSeq, headHash: restored.audit.headHash } : null,
+      auditRow: auditRow ? { seq: auditRow.seq, action: auditRow.action } : null,
+      anchor: anchorWrite ? { ok: anchorWrite.ok === true, code: anchorWrite.code ?? null, count: anchorWrite.anchor?.count ?? null } : null,
+      steps: restored.steps,
+      warnings: restored.warnings,
+    }, null, 2))
+    return
+  }
+  console.log(`restore: done — ${basename(restored.restoredFrom)} -> ${DB}`)
+  console.log(`restore: pre-restore backup ${restored.preRestoreBackup ? basename(restored.preRestoreBackup) : '(none: fresh install)'}`)
+  console.log(`restore: schema=v${restored.schemaVersion ?? '?'} audit=${restored.audit?.count ?? '?'} entries`)
+  if (auditRow) console.log(`audit: db.restore seq ${auditRow.seq}`)
+  if (anchorWrite?.ok) console.log(`audit: anchor refreshed (count=${anchorWrite.anchor?.count ?? '?'})`)
+  else if (anchorWrite) console.error(`warning: the restore succeeded but the audit anchor failed (${anchorWrite.code ?? 'unknown'})`)
+  for (const warning of restored.warnings ?? []) console.log(`warning: ${warning}`)
+  console.log('next: advisers doctor --check-db')
 }
 
 async function brief(text, deep = false) {
@@ -4832,6 +7564,14 @@ async function templateQuoteOrProposal(name, dataFile, outFile, flags) {
         validation: ext + ((content && content.ok === false) ? ':content-warn' : ':ok'),
         audit: { actor: 'local', action: 'template.record', allowed: true, reason: name },
         matterId: typeof flags.matter === 'string' ? flags.matter : undefined,
+        // 0.3.0 delivery lineage: the template version/quote number/data hash are
+        // known at generation time; the store snapshots client/project from the
+        // delivery's matter. A receipt generated later reads this row instead of
+        // recomputing (or worse, guessing) the lineage.
+        templateName: name,
+        templateVersion: QUOTE_TEMPLATE_VERSION,
+        quoteNo: normalized.data.quoteNo,
+        dataSha256: dataSha256,
       })
       try { deliveryId = dbStore()?.listDeliveries(1)?.[0]?.id } catch {}
     }
@@ -5191,13 +7931,13 @@ async function captureFromImap(flags) {
       sinceDays: Math.max(1, Number(flags['since-days']) || 30),
       limit: Math.max(1, Math.min(100, Number(flags.limit) || 20)),
     })
-  } catch (error) { console.error(`imap failed: ${error.message}`); process.exitCode = 1; return }
+  } catch (error) { console.error(sanitizeConsoleText('imap failed: ' + (error?.message ?? error), { max: 2000 })); process.exitCode = 1; return }
   let seen = 0, skipped = 0, failed = 0
   const created = []
   for (const msg of messages) {
     seen++
     let parsed
-    try { parsed = parseEml(msg.raw.toString('utf8')) } catch (error) { failed++; console.error(`imap message ${msg.uid}: ${error.message}`); continue }
+    try { parsed = parseEml(msg.raw.toString('utf8')) } catch (error) { failed++; console.error(sanitizeConsoleText('imap message ' + msg.uid + ': ' + (error?.message ?? error), { max: 2000 })); continue }
     const key = dedupeKey('email', parsed)
     if (store.hasSeen('import', 'imap', key, 30)) { skipped++; continue }
     const input = toCaptureInput(parsed, { source: 'email' })
@@ -5206,7 +7946,7 @@ async function captureFromImap(flags) {
       const result = await proposeCaptureText({ text: input.text, source: 'email', date: parseEmailDate(parsed.date), matterId, store, json: flags.json === true, meta: { type: 'mail', channel: 'imap', uid: msg.uid, messageId: parsed.messageId, subject: parsed.subject, from: parsed.from } })
       created.push(...result.candidates)
       store.markSeen('import', 'imap', key)
-    } catch (error) { failed++; console.error(`imap message ${msg.uid}: ${error.message}`) }
+    } catch (error) { failed++; console.error(sanitizeConsoleText('imap message ' + msg.uid + ': ' + (error?.message ?? error), { max: 2000 })) }
   }
   store.appendAudit({ actor: 'local', action: 'import.imap', allowed: true, reason: `${seen} seen, ${created.length} candidates, ${failed} failed` })
   if (flags.json) {
@@ -5250,12 +7990,23 @@ async function calendarImport(args) {
 async function calendarOccurrencesToday() {
   const store = dbStore()
   const localDay = localDayOf(Date.now())
-  if (!store) return { localDay, occurrences: [] }
+  if (!store) return { localDay, occurrences: [], degraded: [] }
   const { expandRrule } = await loadIcal()
   const occurrences = []
+  const degraded = []
   for (const row of store.listCalendarEvents()) {
+    // Same TZID rule as agenda: lib/ical.js has no time-zone database, so a
+    // non-Shanghai row is skipped and reported, never shown at a guessed +08:00
+    // time (13-mail-calendar C5).
+    if (!calendarTzidSupported(row)) {
+      degraded.push({ source: 'calendar', code: 'E_CALENDAR_SKIP', id: row.uid ?? null, reason: 'unsupported tzid: ' + calendarTzidOf(row) })
+      continue
+    }
     let instances
-    try { instances = expandRrule(row, { from: localDay, to: localDay }) } catch { instances = [] }
+    try { instances = expandRrule(row, { from: localDay, to: localDay }) } catch (error) {
+      degraded.push({ source: 'calendar', code: 'E_CALENDAR_SKIP', id: row.uid ?? null, reason: String(error?.message ?? error) })
+      continue
+    }
     for (const instance of instances) {
       occurrences.push({
         uid: instance.uid,
@@ -5270,17 +8021,20 @@ async function calendarOccurrencesToday() {
     }
   }
   occurrences.sort((a, b) => (a.startsAt < b.startsAt ? -1 : a.startsAt > b.startsAt ? 1 : String(a.summary).localeCompare(String(b.summary))))
-  return { localDay, occurrences }
+  return { localDay, occurrences, degraded }
 }
 
 async function printCalendarToday() {
-  const { localDay, occurrences } = await calendarOccurrencesToday()
-  if (!occurrences.length) { console.log('日历：今天没有本地导入的会议。'); return }
-  console.log(`日历（本地只读，${localDay}）：`)
-  for (const e of occurrences) {
-    const time = e.allDay ? '全天' : e.startsAt.slice(11, 16)
-    console.log(`  ${time}  ${e.summary}${e.recurring ? '（循环）' : ''}${e.location ? ` · ${e.location}` : ''}`)
+  const { localDay, occurrences, degraded } = await calendarOccurrencesToday()
+  if (!occurrences.length) console.log('日历：今天没有本地导入的会议。')
+  else {
+    console.log('日历（本地只读，' + localDay + '）：')
+    for (const e of occurrences) {
+      const time = e.allDay ? '全天' : e.startsAt.slice(11, 16)
+      console.log('  ' + time + '  ' + sanitizeConsoleText(e.summary, { max: 200 }) + (e.recurring ? '（循环）' : '') + (e.location ? ' · ' + sanitizeConsoleText(e.location, { max: 120 }) : ''))
+    }
   }
+  if (degraded.length) console.log('日历降级：' + degraded.length + ' 条（非 Asia/Shanghai 时区或无法展开，已跳过）')
 }
 
 /** Host header allowlist for the local read-only UI (DNS-rebinding hardening, SEC2-07). */
@@ -5441,9 +8195,14 @@ async function remind(args) {
     if (flags.deliver) recordReminderRun(scheduler, { count: 0, channel: 'log' })
     return
   }
-  for (const r of reminders) console.log('[' + r.level + '/' + r.bucket + '] ' + r.action + (r.dueAt ? ' · ' + r.dueAt.slice(0, 16) : ''))
+  for (const r of reminders) console.log('[' + r.level + '/' + r.bucket + '] ' + sanitizeConsoleText(r.action, { max: 2000 }) + (r.dueAt ? ' · ' + String(r.dueAt).slice(0, 16) : ''))
   if (flags.deliver) {
-    const line = new Date().toISOString() + '\t' + reminders.length + '\t' + reminders.map((r) => r.action).join('；') + '\n'
+    // 0.3.0 Wave 3: reminders.log is one line per run. The action text is ledger
+    // data (it can arrive through import or a model turn), so strip CR/LF and
+    // control characters before appending; otherwise one entry could forge log
+    // lines in the user's reminder history.
+    const actions = reminders.map((r) => sanitizeConsoleText(r.action, { max: 2000 }))
+    const line = new Date().toISOString() + '\t' + reminders.length + '\t' + actions.join('；') + '\n'
     writeFileSync(join(HOME, 'reminders.log'), line, { flag: 'a', mode: 0o600 })
     let channel = 'log'
     if (flags.notify) {
@@ -5452,7 +8211,7 @@ async function remind(args) {
       channel = local.sent ? local.channel : 'log-only'
       const webhook = await notify.sendWebhookNotification(reminders)
       if (webhook.sent) channel = channel === 'log-only' ? 'webhook' : channel + '+webhook'
-      else if (webhook.configured) console.error('webhook 未发送：' + (webhook.error ?? 'unknown') + (webhook.detail ? '（' + webhook.detail + '）' : ''))
+      else if (webhook.configured) console.error(sanitizeConsoleText('webhook 未发送：' + (webhook.error ?? 'unknown') + (webhook.detail ? '（' + webhook.detail + '）' : ''), { max: 2000 }))
     }
     store?.appendAudit({ actor: 'local', action: 'notify.delivered', allowed: true, reason: reminders.length + ' reminders channel=' + channel })
     recordReminderRun(scheduler, { count: reminders.length, channel })
@@ -5948,50 +8707,157 @@ async function timestampCommand(args) {
   } catch (error) { console.error(`timestamp failed: ${error.message}`); process.exitCode = 1 }
 }
 
-async function tui(args) {
-  const once = args.includes('--once')
+const TUI_USAGE = [
+  'usage: advisers tui [--once] [--json] [--width <40..200>] [--plain|--accessible] [--color auto|always|never]',
+  '  --once      print the read-only snapshot once (default when stdin/stdout is a pipe)',
+  '  --json      print the same snapshot as one JSON document (pure stdout, no ANSI)',
+  '  --width n   wrap/truncate at n columns (default: terminal width or 80; 40..200)',
+  '  --plain / --accessible / --color: global output policy (docs/TUI.md §6)',
+].join(String.fromCharCode(10))
+
+/**
+ * Read-only TUI snapshot data.
+ *
+ * 0.2.3 §4.8: no writer lock; each refresh reads the current committed snapshot.
+ * 0.3.0 P0-T2: one narrow projection feeds both the open list and the reminder
+ * planner (all non-done rows incl. undated open commitments). The same data
+ * object feeds the human snapshot, the --json projection and the dashboard so
+ * the three can never disagree (plan 26 §6.4).
+ */
+async function tuiSnapshotData() {
   const { buildReminders } = await loadRemind()
-  const render = () => {
-    // 0.2.3 §4.8: no writer lock; each refresh reads the current committed snapshot.
-    // 0.3.0 P0-T2: one narrow projection feeds both the open list and the
-    // reminder planner (all non-done rows incl. undated open commitments).
-    const store = readStoreOrExit()
-    const rows = mode === 'json' || !store
-      ? loadJson().listCommitments()
-      : store.read(() => store.projectCommitmentsForReminders({ includeUndated: true }))
-    const open = rows.filter((c) => c.status === 'open')
-    const localDay = localDayOf(Date.now())
-    const due = open.filter((c) => c.dueAt && c.dueAt.slice(0, 10) <= localDay)
-    const reminders = buildReminders(reminderLedgerFromRows(rows), { now: new Date() })
-    const deliveries = store?.listDeliveries(3) ?? []
-    const lines = [
-      'Advisers TUI (read-only)',
-      `today ${localDay} · open ${open.length} · due ${due.length} · reminders ${reminders.length}`,
-      '',
-      'reminders:',
-      ...(reminders.length ? reminders.slice(0, 8).map((r) => `  [${r.level}/${r.bucket}] ${r.action}${r.dueAt ? ` · ${r.dueAt.slice(0, 16)}` : ''}`) : ['  (none)']),
-      '',
-      'open commitments:',
-      ...(open.length ? open.slice(0, 8).map((c) => `  ${c.id}  ${c.creditor} · ${c.action}${c.dueAt ? ` · ${c.dueAt.slice(0, 10)}` : ''}`) : ['  (none)']),
-      '',
-      'recent deliveries:',
-      ...(deliveries.length ? deliveries.map((d) => `  ${d.createdAt.slice(0, 16)}  ${d.title ?? d.tool ?? d.id}`) : ['  (none)']),
-    ]
-    return lines.join(String.fromCharCode(10))
+  const store = readStoreOrExit()
+  const rows = mode === 'json' || !store
+    ? loadJson().listCommitments()
+    : store.read(() => store.projectCommitmentsForReminders({ includeUndated: true }))
+  const open = rows.filter((c) => c.status === 'open')
+  const localDay = localDayOf(Date.now())
+  const due = open.filter((c) => c.dueAt && c.dueAt.slice(0, 10) <= localDay)
+  const reminders = buildReminders(reminderLedgerFromRows(rows), { now: new Date() })
+  const deliveries = store?.listDeliveries(3) ?? []
+  return { localDay, open, due, reminders, deliveries }
+}
+
+/** Column budget for the snapshot: --width, then ADVISERS_SHELL_WIDTH, then stdout. */
+function tuiOutputWidth(tuiKernel, explicitWidth) {
+  const override = explicitWidth !== undefined ? Number(explicitWidth) : Number(process.env.ADVISERS_SHELL_WIDTH)
+  return Number.isFinite(override) && override > 0
+    ? tuiKernel.clampColumns(override)
+    : tuiKernel.clampColumns(process.stdout.columns)
+}
+
+/**
+ * Human snapshot lines through the render kernel. Every line is sanitised
+ * (ledger/model text is untrusted display data), CJK-width wrapped and kept
+ * within the column budget; the section headings stay compatible with the
+ * 0.2.x dashboard (`Advisers TUI`, `open commitments`).
+ */
+function tuiSnapshotLines(tuiKernel, data, width) {
+  const reminders = data.reminders.length
+    ? data.reminders.slice(0, 8).map((r) => '[' + r.level + '/' + r.bucket + '] ' + r.action + (r.dueAt ? ' · ' + r.dueAt.slice(0, 16) : ''))
+    : ['(none)']
+  const commitments = data.open.length
+    ? data.open.slice(0, 8).map((c) => c.id + '  ' + c.creditor + ' · ' + c.action + (c.dueAt ? ' · ' + c.dueAt.slice(0, 10) : ''))
+    : ['(none)']
+  const deliveries = data.deliveries.length
+    ? data.deliveries.map((d) => String(d.createdAt ?? '').slice(0, 16) + '  ' + (d.title ?? d.tool ?? d.id))
+    : ['(none)']
+  return tuiKernel.renderSnapshot({
+    title: 'Advisers TUI (read-only)',
+    sections: [
+      { lines: [data.localDay + ' · open ' + data.open.length + ' · due ' + data.due.length + ' · reminders ' + data.reminders.length] },
+      { heading: 'reminders:', lines: reminders },
+      { heading: 'open commitments:', lines: commitments },
+      { heading: 'recent deliveries:', lines: deliveries },
+    ],
+  }, { width, color: false })
+}
+
+/**
+ * Pure --json projection of the snapshot (plan 26 §5.2/§6.5). Display strings go
+ * through jsonSafe() so the stream can never carry ANSI/C1/bidi into a terminal;
+ * ids, timestamps and counts stay structured values.
+ */
+function tuiSnapshotPayload(tuiKernel, data) {
+  return tuiKernel.jsonSafe({
+    ok: true,
+    command: 'tui',
+    mode: 'snapshot',
+    generatedAt: new Date().toISOString(),
+    localDay: data.localDay,
+    counts: {
+      open: data.open.length,
+      due: data.due.length,
+      reminders: data.reminders.length,
+      deliveries: data.deliveries.length,
+    },
+    reminders: data.reminders.slice(0, 50).map((r) => ({
+      commitmentId: r.commitmentId ?? null,
+      level: r.level ?? null,
+      bucket: r.bucket ?? null,
+      action: r.action ?? '',
+      dueAt: r.dueAt ?? null,
+    })),
+    commitments: data.open.slice(0, 50).map((c) => ({
+      id: c.id ?? null,
+      creditor: c.creditor ?? null,
+      action: c.action ?? '',
+      dueAt: c.dueAt ?? null,
+      status: c.status ?? null,
+    })),
+    deliveries: data.deliveries.map((d) => ({
+      id: d.id ?? null,
+      createdAt: d.createdAt ?? null,
+      title: d.title ?? null,
+      tool: d.tool ?? null,
+    })),
+  })
+}
+
+async function tui(args) {
+  const parsed = parseStrictFlags(args, { booleans: ['once', 'json', 'help'], values: ['width'] })
+  if (!parsed.ok) { usageFail(parsed.error, TUI_USAGE); return }
+  if (parsed.positional.length) { usageFail('unexpected argument ' + parsed.positional[0], TUI_USAGE); return }
+  if (parsed.flags.help === true) { console.log(TUI_USAGE); return }
+  if (parsed.flags.width !== undefined && !/^[0-9]+$/.test(String(parsed.flags.width))) { usageFail('--width must be an integer 40..200', TUI_USAGE); return }
+  const tuiKernel = await loadTui()
+  const policy = await getOutputPolicy()
+  const width = tuiOutputWidth(tuiKernel, parsed.flags.width)
+  const data = await tuiSnapshotData()
+  if (parsed.flags.json === true) {
+    // --json is a pure single document on stdout; nothing human is printed first.
+    console.log(tuiKernel.stringifyJson(tuiSnapshotPayload(tuiKernel, data)))
+    return
   }
-  if (once) { console.log(render()); return }
+  const lines = tuiSnapshotLines(tuiKernel, data, width)
+  // 0.3.0 M10 gate (plan 26 §6.1/§10.3): the interactive dashboard only runs
+  // when stdin is a terminal AND the output policy allows cursor control. Pipes,
+  // CI, --plain and --accessible get one plain snapshot and exit instead of
+  // issuing a clear-screen or entering a readline loop that could wait forever.
+  if (parsed.flags.once === true || !policy.interactive || !policy.cursorControl) {
+    console.log(lines.join(String.fromCharCode(10)))
+    return
+  }
   const readline = await import('node:readline')
   const rl = readline.createInterface({ input: process.stdin, output: process.stdout })
-  const draw = () => { process.stdout.write('\x1b[2J\x1b[H' + render() + '\n\n[r] refresh  [q] quit\n') }
+  const clear = String.fromCharCode(27) + '[2J' + String.fromCharCode(27) + '[H'
+  let current = data
+  const draw = () => { process.stdout.write(clear + tuiSnapshotLines(tuiKernel, current, width).join(String.fromCharCode(10)) + String.fromCharCode(10, 10) + '[r] refresh  [q] quit' + String.fromCharCode(10)) }
   draw()
+  let finish = () => {}
   await new Promise((resolve) => {
-    const onKey = (str, key) => {
-      if (key?.name === 'q' || str === 'q') { rl.close(); resolve() }
-      else if (key?.name === 'r' || str === 'r') draw()
+    const onKey = async (str, key) => {
+      if (key?.name === 'q' || str === 'q') { finish(); return }
+      if (key?.name === 'r' || str === 'r') {
+        try { current = await tuiSnapshotData() } catch {}
+        draw()
+      }
     }
+    finish = () => { process.stdin.off('keypress', onKey); rl.close(); resolve() }
     process.stdin.on('keypress', onKey)
-    rl.on('close', resolve)
+    rl.on('close', () => { process.stdin.off('keypress', onKey); resolve() })
   })
+  finish()
 }
 
 function syncPass() {
@@ -6170,9 +9036,18 @@ async function printEvidence(args) {
   if (positional[0] === 'verify') {
     const dir = positional[1] ?? (typeof flags.dir === 'string' ? flags.dir : undefined)
     if (!dir) { console.error('usage: advisers evidence verify <dir>'); process.exitCode = 1; return }
-    const { verifyReceiptPackDir } = await loadReceiptVerify()
+    const { verifyReceiptPackDir, RECEIPT_LIMIT_CODE } = await loadReceiptVerify()
+    // The verifier caps entries/depth/file size/total size/SHA256SUMS/manifest
+    // for an untrusted pack (lib/receipt-verify.js). A pack that trips a cap is
+    // reported with the stable code and exits 1; stdout stays one pure JSON
+    // document (the code is also in the JSON), the human hint goes to stderr.
     const result = verifyReceiptPackDir(dir)
     console.log(JSON.stringify(result, null, 2))
+    if (result.code === RECEIPT_LIMIT_CODE) {
+      const violation = result.limitViolation ?? {}
+      console.error(sanitizeConsoleText(RECEIPT_LIMIT_CODE + ': receipt pack ' + (violation.limit ?? 'limit') + ' exceeded ' + (violation.max ?? '?') + ' (actual ' + (violation.actual ?? '?') + '); refusing to verify a pack that could exhaust memory or time.', { max: 2000 }))
+      console.error('hint: inspect the directory before retrying; a legitimate pack is far below these limits.')
+    }
     process.exitCode = result.ok ? 0 : 1
     return
   }
@@ -6533,8 +9408,9 @@ async function receiptPack(args) {
       },
     })
   } catch {}
-  const { verifyReceiptPackDir } = await loadReceiptVerify()
+  const { verifyReceiptPackDir, RECEIPT_LIMIT_CODE } = await loadReceiptVerify()
   const verification = verifyReceiptPackDir(summary.outDir)
+  if (verification.code === RECEIPT_LIMIT_CODE) console.error(sanitizeConsoleText(RECEIPT_LIMIT_CODE + ': the receipt pack just written exceeds a resource limit; do not trust it until inspected.', { max: 2000 }))
   console.log(JSON.stringify({
     ok: verification.ok,
     format: summary.format,
@@ -7060,7 +9936,7 @@ async function soul(sub, file) {
  */
 const TOS_EXEMPT_COMMANDS = new Set([
   'help', '--help', '-h', 'version', '--version', '-v', 'status', 'doctor', 'init', 'tos',
-  'privacy', 'export', 'audit', 'purge',
+  'privacy', 'export', 'audit', 'purge', 'backups',
 ])
 /** Known commands. Unknown commands keep the plain "unknown command" error, not the gate. */
 const KNOWN_COMMANDS = new Set([
@@ -7068,9 +9944,12 @@ const KNOWN_COMMANDS = new Set([
   'deliver', 'timestamp', 'tui', 'ocr', 'evidence', 'receipt', 'deliveries', 'learn', 'commit', 'diff',
   'undo', 'compact', 'search', 'nudge', 'risks', 'pet-brief', 'today', 'tick', 'ui', 'remind', 'calendar',
   'who', 'memory', 'digest', 'week', 'prefs', 'privacy', 'audit', 'purge', 'decay', 'correct', 'ls', 'why',
-  'forget', 'sync', 'vault', 'export', 'import', 'backup', 'brief', 'review', 'research', 'capture', 'policy',
+  'forget', 'sync', 'vault', 'export', 'import', 'backup', 'backups', 'restore', 'brief', 'review', 'research', 'capture', 'policy',
   'office-edit', 'office-read', 'verify', 'office', 'routine', 'template', 'link', 'bridge', 'soul', 'tos',
   'matter', 'agenda', 'morning',
+  // 0.3.0 customer entities: reads and writes both go through the L1/TOS gate
+  // (they touch the local ledger); there is no exempt customer command.
+  'client', 'project',
 ])
 
 /** Append a TOS audit row; audit is best-effort (JSON store has no audit chain). */
@@ -7117,6 +9996,38 @@ async function maybeSourceModifiedNotice(tos) {
   } catch {}
 }
 
+let tosEnvOverrideAudited = false
+
+/**
+ * Resolve TOS facts from the packaged manifest (0.3.0 P0-S3).
+ *
+ * lib/tos keeps an ADVISERS_TOS_VERSION override for debugging, but the consent
+ * gate and the acceptance record must never follow it: an env variable could
+ * otherwise write a fake version into tos.json and the audit chain. bin/
+ * therefore always passes the manifest version explicitly (the DSH read facade
+ * does the same in lib/ledger-read.js), records one
+ * `tos.env_override_ignored` audit row per process when the env is set, and
+ * surfaces it as a warning in `tos status`. `tos show --as-version <v>` stays
+ * available as an explicit, display-only debug switch.
+ */
+function resolveTosFacts(tos) {
+  const manifest = tos.readManifest()
+  const info = tos.currentTos({ version: manifest.version })
+  const raw = typeof process.env.ADVISERS_TOS_VERSION === 'string' ? process.env.ADVISERS_TOS_VERSION.trim() : ''
+  const envOverride = raw
+    ? { set: true, ignored: true, requestedVersion: raw, manifestVersion: manifest.version }
+    : { set: false, ignored: false, requestedVersion: null, manifestVersion: manifest.version }
+  if (raw && !tosEnvOverrideAudited) {
+    tosEnvOverrideAudited = true
+    // Audit once per process, and only when an audit chain already exists so a
+    // read-only `tos status` never creates a database just to record this.
+    if (mode === 'sqlite' && existsSync(DB)) {
+      tosAudit('tos.env_override_ignored', false, `event=TOS_ENV_OVERRIDE_IGNORED;envVersion=${safeAuditToken(raw, 'redacted')};manifestVersion=${manifest.version};scope=app`)
+    }
+  }
+  return { info, envOverride }
+}
+
 /** L1 gate: run before dispatch; exits the process on block/reject (exit 3 / exit 1). */
 async function tosGate() {
   const isTTY = Boolean(process.stdin.isTTY)
@@ -7126,7 +10037,7 @@ async function tosGate() {
   else if (command === 'evidence' && args[0] === 'verify') return
   else if (TOS_EXEMPT_COMMANDS.has(command) || !KNOWN_COMMANDS.has(command)) return
   const tos = await loadTos()
-  const info = tos.currentTos()
+  const { info } = resolveTosFacts(tos)
   const status = tos.acceptanceStatus({ home: HOME, version: info.version, sha256: info.sha256 })
   if (status.accepted) { await maybeSourceModifiedNotice(tos); return }
   const explicit = tos.resolveConsent({ flag: acceptTosFlag, env: process.env.ADVISERS_ACCEPT_TOS, version: info.version, isTTY })
@@ -7156,7 +10067,7 @@ async function tosGate() {
 /** L2 gate: per-modification re-confirmation (TOS §2.3). Returns true when allowed. */
 async function requireTosReaccept({ scope, subject = '', action }) {
   const tos = await loadTos()
-  const info = tos.currentTos()
+  const { info } = resolveTosFacts(tos)
   const isTTY = Boolean(process.stdin.isTTY)
   const extra = `;scope=${scope}${subject ? `;subject=${subject}` : ''};action=${action ?? '-'}`
   const explicit = tos.resolveConsent({ flag: acceptTosFlag, env: process.env.ADVISERS_ACCEPT_TOS, version: info.version, isTTY })
@@ -7204,11 +10115,12 @@ function tosAuditState() {
   }
 }
 
-function tosStatusFacts(tos, info, status) {
+function tosStatusFacts(tos, info, status, envOverride = null) {
   const record = status.record
   return {
     version: info.version,
     manifestVersion: info.manifestVersion,
+    envOverride: envOverride ?? { set: false, ignored: false, requestedVersion: null, manifestVersion: info.manifestVersion },
     effectiveFrom: info.effectiveFrom,
     textSha256: info.sha256,
     canonical: info.canonical,
@@ -7230,8 +10142,8 @@ function tosStatusFacts(tos, info, status) {
   }
 }
 
-function printTosStatus(tos, info, status, asJson) {
-  const facts = tosStatusFacts(tos, info, status)
+function printTosStatus(tos, info, status, asJson, envOverride = null) {
+  const facts = tosStatusFacts(tos, info, status, envOverride)
   if (asJson) { console.log(JSON.stringify(facts, null, 2)); return }
   const record = facts.acceptance
   console.log(`version   ${facts.version}（生效 ${facts.effectiveFrom}；manifest ${facts.manifestVersion}）`)
@@ -7245,6 +10157,9 @@ function printTosStatus(tos, info, status, asJson) {
   console.log(`terms     ${facts.termsPath}`)
   console.log(`url       ${facts.url}`)
   console.log(`store     ${facts.store.type}${facts.store.path ? ` (${facts.store.path})` : ''}`)
+  if (facts.envOverride?.set) {
+    console.log(`warning   ADVISERS_TOS_VERSION=${facts.envOverride.requestedVersion} 已被忽略：同意记录与门禁只认 manifest v${facts.envOverride.manifestVersion}（调试用 'advisers tos show --as-version <v>'）`)
+  }
   if (facts.audit.available) {
     const c = facts.audit.counts
     console.log(`audit     ${facts.audit.verified ? 'verified' : `BROKEN at seq ${facts.audit.brokenAt}`} · ${facts.audit.count} entries · tos.accept=${c.accept} tos.block=${c.block} tos.reaccept=${c.reaccept} tos.revoke=${c.revoke}`)
@@ -7265,18 +10180,26 @@ function tosUsage(version = '') {
 async function tosCommand(argv) {
   const tos = await loadTos()
   const sub = argv[0]
-  const info = tos.currentTos()
+  const { info, envOverride } = resolveTosFacts(tos)
   if (!sub || sub === 'help' || sub === '--help') { tosUsage(info.version); return }
   const status = tos.acceptanceStatus({ home: HOME, version: info.version, sha256: info.sha256 })
   if (sub === 'show') {
-    console.log(`Advisers 使用条款 v${info.version}（生效 ${info.effectiveFrom}）`)
-    console.log(`文本 SHA-256：${info.sha256}`)
-    console.log(`规范文本：${info.canonical}；随包副本：${info.termsPath}；在线：${info.url}`)
+    let showInfo = info
+    const asVersionIndex = argv.indexOf('--as-version')
+    if (asVersionIndex !== -1) {
+      const requested = argv[asVersionIndex + 1]
+      if (!requested) { console.error('usage: advisers tos show [--as-version <version>]'); process.exitCode = 1; return }
+      showInfo = tos.currentTos({ version: requested })
+      console.error(`advisers: debug view only — showing v${requested} (manifest v${info.version}); the consent gate and record are not affected.`)
+    }
+    console.log(`Advisers 使用条款 v${showInfo.version}（生效 ${showInfo.effectiveFrom}）`)
+    console.log(`文本 SHA-256：${showInfo.sha256}`)
+    console.log(`规范文本：${showInfo.canonical}；随包副本：${showInfo.termsPath}；在线：${showInfo.url}`)
     console.log('---')
-    process.stdout.write(readFileSync(info.termsPath, 'utf8'))
+    process.stdout.write(readFileSync(showInfo.termsPath, 'utf8'))
     return
   }
-  if (sub === 'status') { printTosStatus(tos, info, status, argv.includes('--json')); return }
+  if (sub === 'status') { printTosStatus(tos, info, status, argv.includes('--json'), envOverride); return }
   if (sub === 'accept') {
     if (status.accepted) {
       console.log(`已接受使用条款 v${info.version}（channel=${status.record.channel}，${status.record.acceptedAt}）；撤回：advisers tos revoke。`)
@@ -7287,7 +10210,7 @@ async function tosCommand(argv) {
     if (explicit?.error) { console.error(`advisers: ${explicit.error}`); process.exitCode = 1; return }
     if (explicit?.ok) {
       await recordTosAcceptance(tos, info, { channel: explicit.channel, nonInteractive: true })
-      console.log(`已接受使用条款 v${info.version}（channel=${explicit.channel}，nonInteractive=1）；已写入本地审计链。`)
+      console.log(`已接受使用条款 v${info.version}（channel=${explicit.channel}，nonInteractive=1）；已写入本地审计链。${envOverride?.set ? ` ADVISERS_TOS_VERSION=${envOverride.requestedVersion} 已忽略。` : ''}`)
       return
     }
     if (!isTTY) {
@@ -7348,7 +10271,9 @@ if (!command) {
 } else if (command === 'chat') {
   await chat(args)
 } else if (command === 'status') {
-  printStatus(args.includes('--json'))
+  const parsed = parseStrictFlags(args, { booleans: ['json'], positional: false })
+  if (!parsed.ok) usageFail(parsed.error, 'usage: advisers status [--json]')
+  else printStatus(parsed.flags.json === true)
 } else if (command === 'doctor') {
   await doctor(args)
 } else if (command === 'init') {
@@ -7566,6 +10491,12 @@ if (!command) {
         console.log(`done: ${id}`)
       } catch (error) { reportCommandFailure(error) }
     }
+  } else if (flags.json === true) {
+    // 0.3.0 JSON contract (plan 26 §5.4): a failed --json invocation must not
+    // print human prose on stdout. Unknown subcommands (e.g. `commit show`) get
+    // the error envelope on stderr, an empty stdout and exit 1.
+    console.error(JSON.stringify({ error: { code: 'E_USAGE', message: 'unknown commit subcommand: ' + String(sub ?? ''), hint: 'usage: advisers commit add|edit|ls|done|snooze [--json]' } }))
+    process.exitCode = 1
   } else { console.error('usage: advisers commit add|edit|ls|done|snooze'); process.exitCode = 1 }
 } else if (command === 'diff') {
   const { diffLatest } = await loadUndo()
@@ -7741,6 +10672,10 @@ if (!command) {
   else printMemory(loadReadLedger({ preferences: {}, commitments: {}, routines: {} }))
 } else if (command === 'matter') {
   await matterCommand(args)
+} else if (command === 'client') {
+  clientCommand(args)
+} else if (command === 'project') {
+  projectCommand(args)
 } else if (command === 'agenda') {
   await agendaCommand(args)
 } else if (command === 'morning') {
@@ -7763,14 +10698,18 @@ if (!command) {
   console.log(buildDigest({ period, turns, commitments, deliveries }))
   }
 } else if (command === 'week') {
-  if (mode === 'json') printWeek(loadJson())
-  else printWeek(loadReadLedger({ commitments: {} }))
+  // --json is the output flag; `mode` is the store (sqlite|json) and must not
+  // decide the output format (0.2.4 bug: `advisers week --json` printed Chinese
+  // human text even in SQLite mode).
+  const weekJson = args.includes('--json')
+  const weekLedger = mode === 'json' ? loadJson() : loadReadLedger({ commitments: {} })
+  printWeek(weekLedger, weekJson)
 } else if (command === 'prefs') {
   printPreferences()
 } else if (command === 'privacy') {
-  printPrivacy(args)
+  await printPrivacy(args)
 } else if (command === 'audit') {
-  printAudit(args)
+  await auditCommand(args)
 } else if (command === 'purge') {
   purgeMatter(args[0], args.includes('--yes'))
 } else if (command === 'decay') {
@@ -7851,12 +10790,17 @@ if (!command) {
   else if (sub === 'status' || !sub) vaultStatus()
   else { console.error('usage: advisers vault seal [--out file] [--remove] | unseal [file] | status'); process.exitCode = 1 }
 } else if (command === 'export') {
-  const { flags } = parseFlags(args)
-  await exportLedger(flags.all === true || args.includes('--all'), { encrypted: args.includes('--encrypted'), out: typeof flags.out === 'string' ? flags.out : undefined })
+  const parsed = parseStrictFlags(args, { booleans: ['all', 'encrypted'], values: ['out'], positional: false })
+  if (!parsed.ok) usageFail(parsed.error, 'usage: advisers export [--all] [--out <file>] [--encrypted]')
+  else await exportLedger(parsed.flags.all === true, { encrypted: parsed.flags.encrypted === true, out: typeof parsed.flags.out === 'string' ? parsed.flags.out : undefined })
 } else if (command === 'import') {
   await importLedger(args.find((a) => !a.startsWith('--')), { replace: args.includes('--replace') })
 } else if (command === 'backup') {
-  backup(args[0])
+  await backupCommand(args)
+} else if (command === 'backups') {
+  await backupsCommand(args)
+} else if (command === 'restore') {
+  await restoreCommand(args)
 } else if (command === 'brief') {
   await brief(args.filter((a) => a !== '--deep').join(' ').trim(), args.includes('--deep'))
 } else if (command === 'review') {

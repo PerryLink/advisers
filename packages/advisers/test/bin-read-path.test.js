@@ -7,7 +7,8 @@ import { fileURLToPath, pathToFileURL } from 'node:url'
 import test from 'node:test'
 import { DatabaseSync } from 'node:sqlite'
 import { tosEnv } from './tos-fixture.js'
-import { SqliteStore, instanceLockPath } from '../lib/sqlite.js'
+import { downgradeToV19 } from './schema-fixtures.js'
+import { SCHEMA_VERSION, SqliteStore, instanceLockPath } from '../lib/sqlite.js'
 
 // 0.2.3 Wave 2b: the CLI read path through openReadStore().
 //  - a stale (v19) database is migrated under a short writer lock, then read;
@@ -54,19 +55,6 @@ function raw(dbPath) {
   const db = new DatabaseSync(dbPath)
   try { return db } catch (error) { db.close(); throw error }
 }
-function downgradeToV19(dbPath) {
-  const db = new DatabaseSync(dbPath)
-  try {
-    db.exec('DROP INDEX IF EXISTS idx_turns_seq')
-    db.exec('DROP INDEX IF EXISTS idx_facts_identity')
-    db.exec('DROP INDEX IF EXISTS idx_memory_candidates_status')
-    db.exec('DROP TABLE IF EXISTS schema_migrations')
-    for (const key of ['schema_migrated_from', 'schema_migrated_at', 'schema_migrated_app', 'schema_migration_backup']) {
-      db.prepare('DELETE FROM meta WHERE key = ?').run(key)
-    }
-    db.prepare("UPDATE meta SET value = '19' WHERE key = 'schema_version'").run()
-  } finally { db.close() }
-}
 function schemaVersion(dbPath) {
   const db = new DatabaseSync(dbPath, { readOnly: true })
   try { return db.prepare("SELECT value FROM meta WHERE key = 'schema_version'").get()?.value } finally { db.close() }
@@ -91,7 +79,7 @@ test('a stale v19 database is migrated under a short writer lock, then read succ
     assert.equal(schemaVersion(dbPath), '19')
     const today = cliOk(home, ['today'])
     assert.match(today.stdout, /今天：/)
-    assert.equal(schemaVersion(dbPath), '20', 'the read path must finish the migration it found')
+    assert.equal(schemaVersion(dbPath), String(SCHEMA_VERSION), 'the read path must finish the migration it found')
     assert.equal(existsSync(instanceLockPath(home)), false, 'the short maintenance lock must be released')
     assert.ok(readdirSync(home).some((name) => name.includes('before-migrate')), 'the migration keeps its verified backup')
     // Subsequent reads take the fast lock-free path.
@@ -105,11 +93,11 @@ test('a newer schema fails closed with E_SCHEMA_NEWER and is never downgraded by
     const dbPath = join(home, 'state.db')
     seed(dbPath)
     const db = new DatabaseSync(dbPath)
-    try { db.prepare("UPDATE meta SET value = '21' WHERE key = 'schema_version'").run() } finally { db.close() }
+    try { db.prepare("UPDATE meta SET value = ? WHERE key = 'schema_version'").run(String(SCHEMA_VERSION + 1)) } finally { db.close() }
     const result = cli(home, ['today'])
     assert.equal(result.status, 1)
     assert.match(result.stderr, /newer than this CLI/)
-    assert.equal(schemaVersion(dbPath), '21', 'a read command must never touch a newer schema')
+    assert.equal(schemaVersion(dbPath), String(SCHEMA_VERSION + 1), 'a read command must never touch a newer schema')
   } finally { rmSync(root, { recursive: true, force: true }) }
 })
 

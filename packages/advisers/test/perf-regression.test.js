@@ -335,11 +335,11 @@ test('opening a database adds the secondary indexes without a schema bump from t
       assert.match(plan('SELECT * FROM nudges WHERE commitment_id = ? ORDER BY at DESC LIMIT 3', 'cm_1'), /USING INDEX idx_nudges_commitment_at/)
       assert.match(plan('SELECT * FROM deliveries ORDER BY created_at DESC LIMIT 20'), /idx_deliveries_created/)
       assert.equal(reopened.getMeta('schema_version'), String(SCHEMA_VERSION))
-      // v20 is the persistence-v2 migration (schema_migrations ledger + the
-      // three new indexes, see test/migration-v20.test.js); the pre-existing
-      // secondary indexes are still layout only and are not the reason for the
-      // bump -- recreating them without a version change stays supported.
-      assert.equal(SCHEMA_VERSION, 20, 'the v20 bump is the migration ledger, not the indexes')
+      // v21 adds the customer entities/ownership columns and their indexes
+      // (see test/migration-v20.test.js); every pre-existing secondary index is
+      // still layout only and is not the reason for the bump -- recreating one
+      // without a version change stays supported.
+      assert.equal(SCHEMA_VERSION, 21, 'the v21 bump is the customer entity layout, not an index')
       assert.ok(matter.id)
     } finally {
       reopened.close()

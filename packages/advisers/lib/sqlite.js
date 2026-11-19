@@ -24,10 +24,19 @@ import { copyFileWithRetrySync, fsyncDirSync, fsyncFileSync, rmWithRetrySync } f
  *
  * v20 (0.2.3 persistence v2): adds the schema_migrations ledger, the
  * idx_turns_seq / idx_facts_identity / idx_memory_candidates_status indexes,
- * and turns migrate() into a per-version step table. This is NOT the wire
+ * and turns migrate() into a per-version step table.
+ *
+ * v21 (0.3.0 customer entities): adds clients / projects / client_notes,
+ * matters.client_id/project_id (nullable ownership; the single source of
+ * truth for who a matter belongs to), commitments.created_at (the derived
+ * customer timeline needs the moment a commitment was recorded, not its due
+ * date), and the deliveries lineage columns (client_id/project_id snapshot +
+ * template_name/template_version/quote_no/data_sha256). There is no event
+ * table and no stored counter: the timeline and the client views are derived
+ * from these rows by packages/core/src/customer.ts. This is NOT the wire
  * format: LedgerSnapshot.version stays 1 (see core/src/ledger.ts).
  */
-export const SCHEMA_VERSION = 20
+export const SCHEMA_VERSION = 21
 /** The last schema built by the single-block legacy migration (0.2.2). */
 const LEGACY_SCHEMA_VERSION = 19
 const DEFAULT_BUSY_TIMEOUT_MS = 5000
@@ -439,7 +448,8 @@ const SCHEMA = `
 CREATE TABLE IF NOT EXISTS matters (
   id TEXT PRIMARY KEY, title TEXT NOT NULL, status TEXT NOT NULL, domain TEXT NOT NULL,
   secrecy INTEGER NOT NULL, summary TEXT, participants TEXT NOT NULL, deadlines TEXT NOT NULL,
-  open_questions TEXT NOT NULL, created_at TEXT NOT NULL, updated_at TEXT NOT NULL
+  open_questions TEXT NOT NULL, created_at TEXT NOT NULL, updated_at TEXT NOT NULL,
+  client_id TEXT, project_id TEXT
 );
 CREATE TABLE IF NOT EXISTS facts (
   id TEXT PRIMARY KEY, matter_id TEXT, subject TEXT NOT NULL, predicate TEXT NOT NULL,
@@ -451,7 +461,8 @@ CREATE TABLE IF NOT EXISTS facts (
 CREATE TABLE IF NOT EXISTS commitments (
   id TEXT PRIMARY KEY, matter_id TEXT NOT NULL, debtor TEXT NOT NULL, creditor TEXT NOT NULL,
   action TEXT NOT NULL, due_at TEXT, timezone TEXT NOT NULL, status TEXT NOT NULL,
-  evidence TEXT NOT NULL, capability TEXT NOT NULL, done_at TEXT, reminder_offsets TEXT
+  evidence TEXT NOT NULL, capability TEXT NOT NULL, done_at TEXT, reminder_offsets TEXT,
+  created_at TEXT
 );
 CREATE TABLE IF NOT EXISTS preferences (
   id TEXT PRIMARY KEY, kind TEXT NOT NULL, statement TEXT NOT NULL, scope TEXT NOT NULL,
@@ -507,7 +518,9 @@ CREATE TABLE IF NOT EXISTS sessions (
 );
 CREATE TABLE IF NOT EXISTS deliveries (
   id TEXT PRIMARY KEY, matter_id TEXT NOT NULL, conversation_id TEXT NOT NULL,
-  files TEXT NOT NULL, tool TEXT, title TEXT, validation TEXT, created_at TEXT NOT NULL
+  files TEXT NOT NULL, tool TEXT, title TEXT, validation TEXT, created_at TEXT NOT NULL,
+  client_id TEXT, project_id TEXT, template_name TEXT, template_version TEXT,
+  quote_no TEXT, data_sha256 TEXT
 );
 CREATE TABLE IF NOT EXISTS audit (
   seq INTEGER PRIMARY KEY AUTOINCREMENT, at TEXT NOT NULL, actor TEXT NOT NULL,
@@ -540,6 +553,27 @@ CREATE TABLE IF NOT EXISTS calendar_events (
   uid TEXT PRIMARY KEY, summary TEXT NOT NULL, starts_at TEXT, ends_at TEXT,
   all_day INTEGER NOT NULL DEFAULT 0, tzid TEXT, location TEXT, rrule TEXT,
   source TEXT, imported_at TEXT NOT NULL
+);
+-- 0.3.0 (schema v21) customer entities. display name + name_norm (application
+-- normalisation: NFKC, zero-width stripped, whitespace folded, lowercase) is
+-- what the partial unique index enforces among active rows, so an archived or
+-- merged client's name can be reused. notes is short operator prose, never a
+-- file path; nothing here is a fourth ledger (see docs/ARCHITECTURE.md).
+CREATE TABLE IF NOT EXISTS clients (
+  id TEXT PRIMARY KEY, name TEXT NOT NULL, name_norm TEXT NOT NULL,
+  aliases TEXT NOT NULL DEFAULT '[]', status TEXT NOT NULL DEFAULT 'active',
+  tags TEXT NOT NULL DEFAULT '[]', secrecy_default INTEGER NOT NULL DEFAULT 0,
+  notes TEXT, created_at TEXT NOT NULL, updated_at TEXT NOT NULL, deleted_at TEXT
+);
+CREATE TABLE IF NOT EXISTS projects (
+  id TEXT PRIMARY KEY, client_id TEXT NOT NULL, name TEXT NOT NULL, name_norm TEXT NOT NULL,
+  status TEXT NOT NULL DEFAULT 'active', started_at TEXT, due_at TEXT, default_matter_id TEXT,
+  notes TEXT, created_at TEXT NOT NULL, updated_at TEXT NOT NULL, deleted_at TEXT
+);
+CREATE TABLE IF NOT EXISTS client_notes (
+  id TEXT PRIMARY KEY, client_id TEXT NOT NULL, project_id TEXT, matter_id TEXT,
+  kind TEXT NOT NULL, at TEXT NOT NULL, summary TEXT NOT NULL, source TEXT,
+  created_at TEXT NOT NULL, deleted_at TEXT
 );
 CREATE TABLE IF NOT EXISTS meta (key TEXT PRIMARY KEY, value TEXT NOT NULL);
 ${SCHEMA_MIGRATIONS_DDL}`
@@ -628,6 +662,25 @@ CREATE INDEX IF NOT EXISTS idx_memory_candidates_status ON memory_candidates(sta
 `
 
 /**
+ * v21 (customer entities) layout: the partial unique indexes are what makes
+ * duplicate active client/project names impossible even under a racing writer,
+ * while an archived/merged row may keep its old name so it can be reused. The
+ * ownership/lineage indexes serve the derived timeline and the client views;
+ * like every secondary index they are layout only (IF NOT EXISTS on open) and
+ * do not themselves bump the schema version.
+ */
+const V21_INDEXES = `
+CREATE UNIQUE INDEX IF NOT EXISTS idx_clients_name_norm_active ON clients(name_norm) WHERE status = 'active' AND deleted_at IS NULL;
+CREATE INDEX IF NOT EXISTS idx_clients_status ON clients(status);
+CREATE INDEX IF NOT EXISTS idx_projects_client_status ON projects(client_id, status);
+CREATE UNIQUE INDEX IF NOT EXISTS idx_projects_client_name_active ON projects(client_id, name_norm) WHERE status = 'active' AND deleted_at IS NULL;
+CREATE INDEX IF NOT EXISTS idx_client_notes_client_at ON client_notes(client_id, at DESC);
+CREATE INDEX IF NOT EXISTS idx_matters_client ON matters(client_id, status);
+CREATE INDEX IF NOT EXISTS idx_matters_project ON matters(project_id, status);
+CREATE INDEX IF NOT EXISTS idx_commitments_matter ON commitments(matter_id);
+CREATE INDEX IF NOT EXISTS idx_deliveries_matter ON deliveries(matter_id, created_at);
+`
+/**
  * 0.3.0 P0-T2 (2026-11-20): two more layout-only indexes for the pet-brief read
  * projection. Both replace a full facts scan + TEMP B-TREE on every pet-brief:
  *  - (status, confidence) serves the top-N facts by confidence query
@@ -652,8 +705,26 @@ CREATE INDEX IF NOT EXISTS idx_deliveries_created ON deliveries(created_at);
 CREATE INDEX IF NOT EXISTS idx_task_runs_created ON task_runs(created_at);
 CREATE INDEX IF NOT EXISTS idx_sessions_updated ON sessions(updated_at);
 CREATE INDEX IF NOT EXISTS idx_model_calls_created ON model_calls(created_at);
-${V20_INDEXES}`
+${V20_INDEXES}
+${V21_INDEXES}`
 
+
+/**
+ * Per-version migration steps (schema v20+). Each step must be idempotent
+ * (IF NOT EXISTS / INSERT OR REPLACE) because it can be retried after a crash
+ * that rolled the transaction back. migrate() runs every step with
+ * version > current inside one BEGIN IMMEDIATE, records name/duration/backup
+ * in schema_migrations, and only then bumps meta.schema_version.
+ */
+/**
+ * Idempotent ALTER TABLE ... ADD COLUMN guard shared by the version steps.
+ * SQLite has no ADD COLUMN IF NOT EXISTS, and a step must be retryable after a
+ * crash rolled its transaction back (the column is then absent again).
+ */
+function addColumnIfMissing(db, table, column, type) {
+  const columns = db.prepare('PRAGMA table_info(' + table + ')').all().map((row) => row.name)
+  if (!columns.includes(column)) db.exec('ALTER TABLE ' + table + ' ADD COLUMN ' + column + ' ' + type)
+}
 
 /**
  * Per-version migration steps (schema v20+). Each step must be idempotent
@@ -671,12 +742,308 @@ const MIGRATIONS = [
       store.db.exec(V20_INDEXES)
     },
   },
+  {
+    version: 21,
+    name: 'client-project-entities-delivery-lineage',
+    up(store) {
+      // The three new tables are part of SCHEMA and created with IF NOT EXISTS
+      // before this step runs (in initializeSchema's transaction), so a fresh
+      // database and an upgraded one converge on one layout; CREATE TABLE IF
+      // NOT EXISTS cannot add columns to an existing table, so the ownership /
+      // lineage columns are added here. All checks are idempotent.
+      addColumnIfMissing(store.db, 'matters', 'client_id', 'TEXT')
+      addColumnIfMissing(store.db, 'matters', 'project_id', 'TEXT')
+      // The derived timeline places a commitment at its creation instant; old
+      // rows keep NULL and the derivation reports them as degraded instead of
+      // pretending a due date is a historical event.
+      addColumnIfMissing(store.db, 'commitments', 'created_at', 'TEXT')
+      for (const [column, type] of [
+        ['client_id', 'TEXT'], ['project_id', 'TEXT'],
+        ['template_name', 'TEXT'], ['template_version', 'TEXT'],
+        ['quote_no', 'TEXT'], ['data_sha256', 'TEXT'],
+      ]) addColumnIfMissing(store.db, 'deliveries', column, type)
+    },
+  },
 ]
 const json = (v) => JSON.stringify(v ?? [])
 const parse = (v, fallback = []) => {
   if (v == null) return fallback
   try { return JSON.parse(v) } catch { return fallback }
 }
+
+// ---------------------------------------------------------------------------
+// Customer entity helpers (schema v21, 0.3.0).
+//
+// clients/projects/client_notes are SQLite-only rows: they never enter the wire
+// LedgerSnapshot, so the store is the single gate that validates them (bin and
+// every future caller share this path):
+// - a name is stored twice: name (display, verbatim) and name_norm (the
+//   duplicate key produced by normalizeClientName());
+// - nothing is hard-deleted: deleted_at is the tombstone and the partial unique
+//   indexes only cover active, non-deleted rows, so a name can be reused after
+//   an archive/merge;
+// - notes/summaries are short operator prose; a note source id that looks like
+//   an absolute path is refused so an exported customer view cannot carry the
+//   home directory with it.
+// ---------------------------------------------------------------------------
+
+/** Allowed client/project statuses (archived rows are tombstones). */
+export const CLIENT_STATUSES = ['active', 'archived']
+export const PROJECT_STATUSES = ['active', 'archived']
+/** Allowed client_notes kinds. */
+export const CLIENT_NOTE_KINDS = ['note', 'call', 'meeting', 'decision', 'email-summary']
+/** Allowed client note source kinds (lineage only, never a file copy). */
+export const CLIENT_NOTE_SOURCE_KINDS = ['delivery', 'matter', 'manual']
+
+/**
+ * Tables that a full export --all carries next to the nine-table ledger
+ * snapshot. The three v21 customer tables are appended so an export/import
+ * round-trip cannot silently drop them; this constant is the single list the
+ * CLI should read instead of hard-coding its own (bin wiring is a separate
+ * 0.3.0 task).
+ */
+export const DATA_TABLES = Object.freeze([
+  'sessions', 'turns', 'session_summaries', 'summary_versions', 'deliveries', 'nudges',
+  'task_runs', 'audit', 'memory_candidates', 'permit_consumed',
+  'clients', 'projects', 'client_notes',
+])
+
+/** A business error with a stable code (message keeps the code for stderr). */
+export function entityError(code, message, hint) {
+  const error = new Error(code + ': ' + message + (hint ? ' (hint: ' + hint + ')' : ''))
+  error.code = code
+  if (hint) error.hint = hint
+  return error
+}
+
+/**
+ * Duplicate-detection key for a client/project display name.
+ *
+ * NFKC folds compatibility forms (full-width A -> A), zero-width characters are
+ * removed, whitespace is folded/trimmed and lowercasing makes Latin matching
+ * case-insensitive (CJK is unchanged). Pure and deterministic so the unique
+ * index and the CLI agree byte for byte. Deliberately no fuzzy matching: two
+ * different spellings are never guessed to be one customer.
+ */
+export function normalizeClientName(value) {
+  if (typeof value !== 'string') throw new TypeError('name must be a string')
+  return value
+    .normalize('NFKC')
+    .replace(/[\u200B-\u200D\u2060\uFEFF]/g, '')
+    .trim()
+    .replace(/\s+/gu, ' ')
+    .toLowerCase()
+}
+
+const ABSOLUTE_PATH_RE = /^(?:[A-Za-z]:[\\/]|\/|\\\\)/
+
+function invalidKind(kind) {
+  return kind === 'client' ? 'E_CLIENT_INVALID' : kind === 'project' ? 'E_PROJECT_INVALID' : 'E_CLIENT_NOTE_INVALID'
+}
+
+function validateDisplayName(kind, value, { max = 200 } = {}) {
+  if (typeof value !== 'string') throw entityError(invalidKind(kind), kind + ' name is required')
+  const name = value.normalize('NFKC').replace(/[\u200B-\u200D\u2060\uFEFF]/g, '').trim()
+  if (!name) throw entityError(invalidKind(kind), kind + ' name is required')
+  if (name.length > max) throw entityError(invalidKind(kind), kind + ' name is longer than ' + max + ' characters')
+  return name
+}
+
+function validateEntityStatus(kind, value) {
+  const allowed = kind === 'client' ? CLIENT_STATUSES : PROJECT_STATUSES
+  if (value === undefined || value === null) return 'active'
+  if (!allowed.includes(value)) {
+    throw entityError(invalidKind(kind), 'unknown ' + kind + ' status: ' + String(value), 'use one of ' + allowed.join(', '))
+  }
+  return value
+}
+
+function validateStringList(kind, field, value, { max = 100, itemMax = 200 } = {}) {
+  if (value === undefined || value === null) return []
+  if (!Array.isArray(value)) throw entityError(invalidKind(kind), field + ' must be an array of strings')
+  if (value.length > max) throw entityError(invalidKind(kind), field + ' has more than ' + max + ' entries')
+  const seen = new Set()
+  const list = []
+  for (const entry of value) {
+    if (typeof entry !== 'string') throw entityError(invalidKind(kind), field + ' must be an array of strings')
+    const text = entry.trim()
+    if (!text) throw entityError(invalidKind(kind), field + ' entries must not be empty')
+    if (text.length > itemMax) throw entityError(invalidKind(kind), field + ' entries must be at most ' + itemMax + ' characters')
+    if (seen.has(text)) continue
+    seen.add(text)
+    list.push(text)
+  }
+  return list
+}
+
+function validateSecrecy(value) {
+  if (value === undefined || value === null) return 0
+  const number = Number(value)
+  if (!Number.isInteger(number) || number < 0 || number > 3) {
+    throw entityError('E_CLIENT_INVALID', 'secrecyDefault must be an integer 0..3')
+  }
+  return number
+}
+
+/** Validate an optional date/date-time field and keep the caller text. */
+function normalizeOptionalDate(kind, field, value) {
+  if (value === undefined || value === null) return null
+  if (typeof value !== 'string') throw entityError(invalidKind(kind), field + ' must be a YYYY-MM-DD date or an ISO timestamp')
+  const text = value.trim()
+  if (!text) return null
+  if (!/^\d{4}-\d{2}-\d{2}(?:[T ]\d{2}:\d{2}(?::\d{2}(?:\.\d{1,3})?)?(?:Z|[+-]\d{2}:\d{2})?)?$/.test(text) || !Number.isFinite(Date.parse(text))) {
+    throw entityError(invalidKind(kind), field + ' must be a YYYY-MM-DD date or an ISO timestamp')
+  }
+  return text
+}
+
+/** Validate an optional free-text field (notes) and keep the caller text. */
+function normalizeOptionalText(kind, field, value, max) {
+  if (value === undefined || value === null) return null
+  if (typeof value !== 'string') throw entityError(invalidKind(kind), field + ' must be a string')
+  const text = value.trim()
+  if (!text) return null
+  if (text.length > max) throw entityError(invalidKind(kind), field + ' must be at most ' + max + ' characters')
+  return text
+}
+
+/** Clamp a requested row limit into [1, max]. */
+function normalizeRowLimit(value, { def = 100, max = 1000 } = {}) {
+  const number = Number(value)
+  if (!Number.isFinite(number) || number <= 0) return def
+  return Math.min(Math.floor(number), max)
+}
+
+/** Client-note event time: normalized to ISO UTC so ordering is unambiguous. */
+function normalizeNoteInstant(value) {
+  if (value === undefined || value === null) return new Date().toISOString()
+  const text = String(value).trim()
+  const ms = text ? Date.parse(text) : Number.NaN
+  if (!Number.isFinite(ms)) throw entityError('E_CLIENT_NOTE_INVALID', 'at must be an ISO timestamp')
+  return new Date(ms).toISOString()
+}
+
+/** Validate the optional lineage JSON of a client note. */
+function validateNoteSource(value) {
+  if (value === undefined || value === null) return null
+  if (typeof value !== 'object' || Array.isArray(value)) throw entityError('E_CLIENT_NOTE_INVALID', 'source must be an object')
+  const source = {}
+  if (value.kind !== undefined) {
+    if (!CLIENT_NOTE_SOURCE_KINDS.includes(value.kind)) {
+      throw entityError('E_CLIENT_NOTE_INVALID', 'unknown note source kind: ' + String(value.kind), 'use one of ' + CLIENT_NOTE_SOURCE_KINDS.join(', '))
+    }
+    source.kind = value.kind
+  }
+  if (value.id !== undefined) {
+    if (typeof value.id !== 'string' || !value.id.trim() || value.id.length > 200) {
+      throw entityError('E_CLIENT_NOTE_INVALID', 'source.id must be a short id string')
+    }
+    if (ABSOLUTE_PATH_RE.test(value.id.trim())) throw entityError('E_CLIENT_NOTE_INVALID', 'source.id must be an id, not a file path')
+    source.id = value.id.trim()
+  }
+  if (value.quote !== undefined) {
+    if (typeof value.quote !== 'string' || value.quote.length > 500) throw entityError('E_CLIENT_NOTE_INVALID', 'source.quote must be a string of at most 500 characters')
+    source.quote = value.quote
+  }
+  if (source.kind !== undefined && source.kind !== 'manual' && !source.id) {
+    throw entityError('E_CLIENT_NOTE_INVALID', 'source.id is required for a ' + source.kind + ' source')
+  }
+  return JSON.stringify(source)
+}
+
+/** Validate the optional delivery template lineage columns (v21). */
+function normalizeDeliveryLineage({ clientId, projectId, templateName, templateVersion, quoteNo, dataSha256 } = {}) {
+  const shortText = (field, value, max) => {
+    if (value === undefined || value === null) return null
+    if (typeof value !== 'string') throw entityError('E_DELIVERY_INVALID', field + ' must be a string')
+    const text = value.trim()
+    if (!text) return null
+    if (text.length > max) throw entityError('E_DELIVERY_INVALID', field + ' must be at most ' + max + ' characters')
+    if (ABSOLUTE_PATH_RE.test(text)) throw entityError('E_DELIVERY_INVALID', field + ' must not be a file path')
+    return text
+  }
+  const idOf = (field, value) => {
+    if (value === undefined || value === null) return null
+    if (typeof value !== 'string' || !value.trim() || value.length > 200) throw entityError('E_DELIVERY_INVALID', field + ' must be an id string')
+    return value.trim()
+  }
+  const sha = dataSha256 === undefined || dataSha256 === null ? null : String(dataSha256).trim().toLowerCase()
+  if (sha !== null && !/^[0-9a-f]{64}$/.test(sha)) {
+    throw entityError('E_DELIVERY_INVALID', 'dataSha256 must be 64 lowercase hex characters', 'pass the SHA-256 of the canonical template data')
+  }
+  return {
+    clientId: idOf('clientId', clientId),
+    projectId: idOf('projectId', projectId),
+    templateName: shortText('templateName', templateName, 40),
+    templateVersion: shortText('templateVersion', templateVersion, 40),
+    quoteNo: shortText('quoteNo', quoteNo, 40),
+    dataSha256: sha,
+  }
+}
+
+const mapClientRow = (row) => ({
+  id: row.id,
+  name: row.name,
+  nameNorm: row.name_norm,
+  aliases: parse(row.aliases),
+  status: row.status,
+  tags: parse(row.tags),
+  secrecyDefault: Number(row.secrecy_default),
+  notes: row.notes ?? undefined,
+  createdAt: row.created_at,
+  updatedAt: row.updated_at,
+  ...(row.deleted_at == null ? {} : { deletedAt: row.deleted_at }),
+})
+
+const mapProjectRow = (row) => ({
+  id: row.id,
+  clientId: row.client_id,
+  name: row.name,
+  nameNorm: row.name_norm,
+  status: row.status,
+  startedAt: row.started_at ?? undefined,
+  dueAt: row.due_at ?? undefined,
+  defaultMatterId: row.default_matter_id ?? undefined,
+  notes: row.notes ?? undefined,
+  createdAt: row.created_at,
+  updatedAt: row.updated_at,
+  ...(row.deleted_at == null ? {} : { deletedAt: row.deleted_at }),
+})
+
+const mapClientNoteRow = (row) => ({
+  id: row.id,
+  clientId: row.client_id,
+  projectId: row.project_id ?? undefined,
+  matterId: row.matter_id ?? undefined,
+  kind: row.kind,
+  at: row.at,
+  summary: row.summary,
+  source: row.source ? parse(row.source, undefined) : undefined,
+  createdAt: row.created_at,
+  ...(row.deleted_at == null ? {} : { deletedAt: row.deleted_at }),
+})
+
+/**
+ * Delivery row + template lineage. Rows written before v21 have no lineage
+ * columns, so the new keys are omitted entirely (the pre-v21 JSON shape is
+ * byte-identical for old rows).
+ */
+const mapDeliveryRow = (row) => ({
+  id: row.id,
+  matterId: row.matter_id,
+  conversationId: row.conversation_id,
+  files: parse(row.files),
+  tool: row.tool ?? undefined,
+  title: row.title ?? undefined,
+  validation: row.validation ?? undefined,
+  createdAt: row.created_at,
+  ...(row.client_id == null ? {} : { clientId: row.client_id }),
+  ...(row.project_id == null ? {} : { projectId: row.project_id }),
+  ...(row.template_name == null ? {} : { templateName: row.template_name }),
+  ...(row.template_version == null ? {} : { templateVersion: row.template_version }),
+  ...(row.quote_no == null ? {} : { quoteNo: row.quote_no }),
+  ...(row.data_sha256 == null ? {} : { dataSha256: row.data_sha256 }),
+})
 
 // ---------------------------------------------------------------------------
 // Ledger row mappers + table registry (P1-2, 0.2.2).
@@ -693,6 +1060,9 @@ const mapMatterRow = (r) => ({
   id: r.id, title: r.title, status: r.status, domain: r.domain, secrecy: r.secrecy,
   summary: r.summary ?? undefined, participants: parse(r.participants), deadlines: parse(r.deadlines),
   openQuestions: parse(r.open_questions), createdAt: r.created_at, updatedAt: r.updated_at,
+  // v21 ownership is additive: pre-v21 rows (NULL) keep their exact old shape.
+  ...(r.client_id == null ? {} : { clientId: r.client_id }),
+  ...(r.project_id == null ? {} : { projectId: r.project_id }),
 })
 
 const mapFactRow = (r) => ({
@@ -717,6 +1087,8 @@ const mapCommitmentRow = (r) => {
     id: r.id, matterId: r.matter_id, debtor: r.debtor, creditor: r.creditor, action: r.action,
     dueAt: r.due_at ?? undefined, timezone: r.timezone, status: r.status,
     evidence: parse(r.evidence), capability: r.capability, doneAt: r.done_at ?? undefined,
+    // v21: additive (rows written before v21 have NULL here).
+    ...(r.created_at == null ? {} : { createdAt: r.created_at }),
     ...(reminderOffsets === undefined ? {} : { reminderOffsets }),
   }
 }
@@ -807,6 +1179,7 @@ const ENTITY_SPECS = {
       secrecy: ['secrecy', 'int'], summary: ['summary', 'text'], participants: ['participants', 'json'],
       deadlines: ['deadlines', 'json'], openQuestions: ['open_questions', 'json'],
       createdAt: ['created_at', 'text'], updatedAt: ['updated_at', 'text'],
+      clientId: ['client_id', 'text'], projectId: ['project_id', 'text'],
     },
   },
   facts: {
@@ -831,7 +1204,7 @@ const ENTITY_SPECS = {
       id: ['id', 'text'], matterId: ['matter_id', 'text'], debtor: ['debtor', 'text'], creditor: ['creditor', 'text'],
       action: ['action', 'text'], dueAt: ['due_at', 'text'], timezone: ['timezone', 'text'], status: ['status', 'text'],
       evidence: ['evidence', 'json'], capability: ['capability', 'text'], doneAt: ['done_at', 'text'],
-      reminderOffsets: ['reminder_offsets', 'reminder'],
+      reminderOffsets: ['reminder_offsets', 'reminder'], createdAt: ['created_at', 'text'],
     },
   },
   preferences: {
@@ -853,8 +1226,13 @@ function encodeEntityValue(codec, value) {
   return encode(value)
 }
 
-/** Tables whose row counts are sampled to verify a pre-migration backup. */
-const BACKUP_SAMPLE_TABLES = ['matters', 'facts', 'commitments', 'preferences', 'audit']
+/**
+ * Tables whose row counts are sampled to verify a pre-migration backup. The
+ * v21 customer tables are included so a future migration's backup verification
+ * also proves the customer entities were copied (they are absent in older
+ * databases and are then skipped by _sampleTableCounts).
+ */
+const BACKUP_SAMPLE_TABLES = ['matters', 'facts', 'commitments', 'preferences', 'audit', 'clients', 'projects', 'client_notes']
 // ---------------------------------------------------------------------------
 // WAL status / recovery (robustness audit 2026-11-17 P1-6).
 //
@@ -1858,17 +2236,61 @@ CREATE TABLE IF NOT EXISTS task_runs (
     return r ? { conversationId: r.conversation_id, matterId: r.matter_id, title: r.title, createdAt: r.created_at, updatedAt: r.updated_at } : undefined
   }
 
-  addDelivery({ matterId, conversationId, files, tool, title, validation }) {
+  /**
+   * Record one delivery row.
+   *
+   * v21 lineage (0.3.0): the optional client/project/template fields snapshot
+   * WHO and WHICH template a delivery belonged to at generation time, so a
+   * later matter re-link does not rewrite an already-generated receipt. When
+   * the caller omits clientId/projectId they are filled from the matter the
+   * delivery is filed under (the historical CLI path), and explicitly passed
+   * ids are validated against the client/project rows. Every new argument is
+   * optional: the pre-v21 call shape keeps working and old rows stay NULL.
+   */
+  addDelivery({ matterId, conversationId, files, tool, title, validation, clientId, projectId, templateName, templateVersion, quoteNo, dataSha256 } = {}) {
     this._assertWritable('addDelivery')
-    const id = `del_${randomUUID().replace(/-/g, '').slice(0, 16)}`
-    this.db.prepare('INSERT INTO deliveries(id,matter_id,conversation_id,files,tool,title,validation,created_at) VALUES(?,?,?,?,?,?,?,?)')
-      .run(id, matterId, conversationId, JSON.stringify(files ?? []), tool ?? null, title ?? null, validation ?? null, new Date().toISOString())
+    const lineage = normalizeDeliveryLineage({ clientId, projectId, templateName, templateVersion, quoteNo, dataSha256 })
+    let resolvedClientId = lineage.clientId
+    let resolvedProjectId = lineage.projectId
+    if (resolvedProjectId !== null) {
+      const project = this.getProject(resolvedProjectId)
+      if (!project) throw entityError('E_PROJECT_NOT_FOUND', 'unknown project: ' + resolvedProjectId)
+      if (resolvedClientId === null) resolvedClientId = project.clientId
+      else if (project.clientId !== resolvedClientId) throw entityError('E_PROJECT_CLIENT_MISMATCH', 'project ' + resolvedProjectId + ' belongs to client ' + project.clientId)
+    }
+    if (resolvedClientId !== null && !this.getClient(resolvedClientId)) {
+      throw entityError('E_CLIENT_NOT_FOUND', 'unknown client: ' + resolvedClientId)
+    }
+    if ((resolvedClientId === null || resolvedProjectId === null) && matterId) {
+      const matter = this.getMatter(String(matterId))
+      if (matter) {
+        if (resolvedClientId === null) resolvedClientId = matter.clientId ?? null
+        if (resolvedProjectId === null && (matter.clientId ?? null) === resolvedClientId) resolvedProjectId = matter.projectId ?? null
+      }
+    }
+    const id = 'del_' + randomUUID().replace(/-/g, '').slice(0, 16)
+    this.db.prepare('INSERT INTO deliveries(id,matter_id,conversation_id,files,tool,title,validation,created_at,client_id,project_id,template_name,template_version,quote_no,data_sha256) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?)')
+      .run(id, matterId, conversationId, JSON.stringify(files ?? []), tool ?? null, title ?? null, validation ?? null, new Date().toISOString(),
+        resolvedClientId, resolvedProjectId, lineage.templateName, lineage.templateVersion, lineage.quoteNo, lineage.dataSha256)
     return id
   }
 
-  listDeliveries(limit = 20) {
-    return this.db.prepare('SELECT * FROM deliveries ORDER BY created_at DESC LIMIT ?').all(limit)
-      .map((r) => ({ id: r.id, matterId: r.matter_id, conversationId: r.conversation_id, files: parse(r.files), tool: r.tool ?? undefined, title: r.title ?? undefined, validation: r.validation ?? undefined, createdAt: r.created_at }))
+  /**
+   * Newest delivery rows, optionally scoped.
+   *
+   * The second argument is additive: listDeliveries(limit) keeps its historical
+   * result. clientId/projectId filter the generation-time snapshot columns
+   * (receipt scope); matterId filters row ownership. The rowid tie-break keeps
+   * same-millisecond rows in insertion order, as before.
+   */
+  listDeliveries(limit = 20, { clientId, projectId, matterId } = {}) {
+    const where = []
+    const params = []
+    if (clientId !== undefined && clientId !== null) { where.push('client_id = ?'); params.push(clientId) }
+    if (projectId !== undefined && projectId !== null) { where.push('project_id = ?'); params.push(projectId) }
+    if (matterId !== undefined && matterId !== null) { where.push('matter_id = ?'); params.push(matterId) }
+    const sql = 'SELECT * FROM deliveries' + (where.length ? ' WHERE ' + where.join(' AND ') : '') + ' ORDER BY created_at DESC, rowid DESC LIMIT ?'
+    return this.db.prepare(sql).all(...params, limit).map(mapDeliveryRow)
   }
 
   getMeta(key) {
@@ -2525,6 +2947,609 @@ CREATE TABLE IF NOT EXISTS task_runs (
     })
   }
   // -------------------------------------------------------------------------
+  // Customer / project entities (schema v21, 0.3.0).
+  //
+  // clients/projects/client_notes are SQLite-only rows: they never enter the
+  // wire LedgerSnapshot, so they are written with directed INSERT/UPDATE
+  // statements (a caller that needs an audit row wraps them in mutate(fn,
+  // audit), exactly like the other directed writes) and read back through the
+  // CRUD methods below. A matter keeps the ownership (client_id/project_id) as
+  // the single source of truth; the client timeline is derived from the rows
+  // clientTimelineSources() returns, and there is no event table and no stored
+  // counter that could disagree with them. Nothing is hard-deleted: archiving
+  // sets status='archived' + deleted_at, so past work stays answerable.
+  // -------------------------------------------------------------------------
+
+  /** A live (active, non-deleted) client row for a write, or a stable E_*. */
+  _clientForWrite(clientId, operation = 'client') {
+    const id = typeof clientId === 'string' ? clientId.trim() : ''
+    const row = id ? this.db.prepare('SELECT * FROM clients WHERE id = ?').get(id) : undefined
+    if (!row) throw entityError('E_CLIENT_NOT_FOUND', 'unknown client: ' + String(clientId), 'advisers client add "<name>"')
+    if (row.deleted_at != null || row.status !== 'active') {
+      throw entityError('E_CLIENT_ARCHIVED', 'client is archived: ' + row.id + ' (' + operation + ')', 'advisers client ls')
+    }
+    return row
+  }
+
+  /** Active client identity keys (name + aliases) other than exceptId. */
+  _activeClientIdentities(exceptId = null) {
+    const rows = this.db.prepare("SELECT id, name, aliases FROM clients WHERE status = 'active' AND deleted_at IS NULL").all()
+    const result = []
+    for (const row of rows) {
+      if (exceptId != null && row.id === exceptId) continue
+      const norms = new Map()
+      norms.set(normalizeClientName(row.name), 'name')
+      for (const alias of parse(row.aliases)) {
+        if (typeof alias !== 'string') continue
+        const norm = normalizeClientName(alias)
+        if (norm && !norms.has(norm)) norms.set(norm, 'alias')
+      }
+      result.push({ id: row.id, name: row.name, norms: norms })
+    }
+    return result
+  }
+
+  /**
+   * Refuse a client name/alias that another live client already owns. The
+   * partial unique index enforces the name half even under a racing writer;
+   * aliases are checked here because they live inside a JSON column.
+   */
+  _assertClientIdentityFree({ nameNorm, aliases = [] }, exceptId = null) {
+    const identities = this._activeClientIdentities(exceptId)
+    for (const identity of identities) {
+      if (identity.norms.has(nameNorm)) {
+        throw entityError('E_CLIENT_DUPLICATE', 'an active client named ' + identity.name + ' already exists (' + identity.id + ')', 'advisers client alias add ' + identity.id + ' <alias>')
+      }
+    }
+    for (const alias of aliases) {
+      const norm = normalizeClientName(alias)
+      for (const identity of identities) {
+        if (identity.norms.has(norm)) {
+          throw entityError('E_CLIENT_ALIAS_CONFLICT', 'alias ' + alias + ' is already used by ' + identity.name + ' (' + identity.id + ')', 'advisers client alias add ' + identity.id + ' <alias>')
+        }
+      }
+    }
+  }
+
+  /** Create a client. Same-name active client -> E_CLIENT_DUPLICATE. */
+  addClient({ name, aliases, tags, secrecyDefault, notes, status, id } = {}) {
+    this._assertWritable('addClient')
+    const displayName = validateDisplayName('client', name)
+    const nameNorm = normalizeClientName(displayName)
+    const aliasList = validateStringList('client', 'aliases', aliases)
+    const tagList = validateStringList('client', 'tags', tags, { max: 20, itemMax: 40 })
+    const secrecy = validateSecrecy(secrecyDefault)
+    const clientStatus = validateEntityStatus('client', status)
+    const clientId = id === undefined || id === null ? 'cl_' + randomUUID().replace(/-/g, '').slice(0, 16) : String(id).trim()
+    if (!clientId) throw entityError('E_CLIENT_INVALID', 'client id must not be empty')
+    if (this.getClient(clientId)) throw entityError('E_CLIENT_DUPLICATE', 'client id already exists: ' + clientId)
+    if (clientStatus === 'active') this._assertClientIdentityFree({ nameNorm, aliases: aliasList })
+    const now = new Date().toISOString()
+    try {
+      this.db.prepare('INSERT INTO clients(id,name,name_norm,aliases,status,tags,secrecy_default,notes,created_at,updated_at,deleted_at) VALUES(?,?,?,?,?,?,?,?,?,?,?)')
+        .run(clientId, displayName, nameNorm, json(aliasList), clientStatus, json(tagList), secrecy, normalizeOptionalText('client', 'notes', notes, 4000), now, now, clientStatus === 'archived' ? now : null)
+    } catch (error) {
+      if (/UNIQUE constraint failed/i.test(String(error?.message ?? error))) {
+        throw entityError('E_CLIENT_DUPLICATE', 'an active client with this name already exists', 'advisers client ls')
+      }
+      throw error
+    }
+    return this.getClient(clientId)
+  }
+
+  /** One client by id (archived included; undefined when absent). */
+  getClient(id) {
+    const row = this.db.prepare('SELECT * FROM clients WHERE id = ?').get(String(id))
+    return row ? mapClientRow(row) : undefined
+  }
+
+  /** First live client whose name or alias normalises to the given name. */
+  findClientByName(name) {
+    const nameNorm = normalizeClientName(validateDisplayName('client', name))
+    const rows = this.db.prepare("SELECT * FROM clients WHERE status = 'active' AND deleted_at IS NULL ORDER BY created_at, id").all()
+    for (const row of rows) {
+      if (row.name_norm === nameNorm) return mapClientRow(row)
+      for (const alias of parse(row.aliases)) {
+        if (typeof alias === 'string' && normalizeClientName(alias) === nameNorm) return mapClientRow(row)
+      }
+    }
+    return undefined
+  }
+
+  /**
+   * List clients. Default is the live (active, non-deleted) list; pass
+   * status:'archived' with includeDeleted:true for tombstones, status:'all'
+   * for every status. Ordered by name_norm then id (deterministic).
+   */
+  listClients({ status = 'active', includeDeleted = false, limit = 100 } = {}) {
+    const where = []
+    const params = []
+    if (includeDeleted !== true) where.push('deleted_at IS NULL')
+    if (status !== 'all') {
+      const wanted = validateEntityStatus('client', status)
+      where.push('status = ?')
+      params.push(wanted)
+    }
+    const sql = 'SELECT * FROM clients' + (where.length ? ' WHERE ' + where.join(' AND ') : '') + ' ORDER BY name_norm ASC, id ASC LIMIT ?'
+    return this.db.prepare(sql).all(...params, normalizeRowLimit(limit, { def: 100, max: 1000 })).map(mapClientRow)
+  }
+
+  /**
+   * Update the mutable client fields. Renames re-check the active identity
+   * uniqueness; status:'archived' stamps deleted_at, status:'active' restores
+   * (and fails closed if the name was reused meanwhile).
+   */
+  updateClient(id, patch = {}) {
+    this._assertWritable('updateClient')
+    const current = this.getClient(id)
+    if (!current) throw entityError('E_CLIENT_NOT_FOUND', 'unknown client: ' + String(id))
+    const allowed = ['name', 'aliases', 'tags', 'secrecyDefault', 'notes', 'status']
+    for (const field of Object.keys(patch)) {
+      if (!allowed.includes(field)) throw new Error('unknown client field: ' + field)
+    }
+    const name = patch.name === undefined ? current.name : validateDisplayName('client', patch.name)
+    const nameNorm = normalizeClientName(name)
+    const aliases = patch.aliases === undefined ? current.aliases : validateStringList('client', 'aliases', patch.aliases)
+    const tags = patch.tags === undefined ? current.tags : validateStringList('client', 'tags', patch.tags, { max: 20, itemMax: 40 })
+    const secrecy = patch.secrecyDefault === undefined ? current.secrecyDefault : validateSecrecy(patch.secrecyDefault)
+    const notes = patch.notes === undefined ? (current.notes ?? null) : normalizeOptionalText('client', 'notes', patch.notes, 4000)
+    const status = patch.status === undefined ? current.status : validateEntityStatus('client', patch.status)
+    const now = new Date().toISOString()
+    let deletedAt = current.deletedAt ?? null
+    if (status === 'archived' && deletedAt === null) deletedAt = now
+    if (status === 'active' && deletedAt !== null) deletedAt = null
+    if (status === 'active') this._assertClientIdentityFree({ nameNorm, aliases }, current.id)
+    try {
+      this.db.prepare('UPDATE clients SET name = ?, name_norm = ?, aliases = ?, status = ?, tags = ?, secrecy_default = ?, notes = ?, updated_at = ?, deleted_at = ? WHERE id = ?')
+        .run(name, nameNorm, json(aliases), status, json(tags), secrecy, notes, now, deletedAt, current.id)
+    } catch (error) {
+      if (/UNIQUE constraint failed/i.test(String(error?.message ?? error))) {
+        throw entityError('E_CLIENT_DUPLICATE', 'an active client with this name already exists', 'advisers client ls')
+      }
+      throw error
+    }
+    return this.getClient(current.id)
+  }
+
+  /** Soft-delete one client (status archived + tombstone); idempotent. */
+  archiveClient(id, { now } = {}) {
+    this._assertWritable('archiveClient')
+    const current = this.getClient(id)
+    if (!current) throw entityError('E_CLIENT_NOT_FOUND', 'unknown client: ' + String(id))
+    const at = now === undefined || now === null ? new Date().toISOString() : String(now)
+    this.db.prepare("UPDATE clients SET status = 'archived', deleted_at = COALESCE(deleted_at, ?), updated_at = ? WHERE id = ?").run(at, at, current.id)
+    return this.getClient(current.id)
+  }
+
+  /** Restore an archived client; fails closed when its name was reused. */
+  restoreClient(id) {
+    this._assertWritable('restoreClient')
+    const current = this.getClient(id)
+    if (!current) throw entityError('E_CLIENT_NOT_FOUND', 'unknown client: ' + String(id))
+    this._assertClientIdentityFree({ nameNorm: current.nameNorm, aliases: current.aliases }, current.id)
+    const now = new Date().toISOString()
+    this.db.prepare("UPDATE clients SET status = 'active', deleted_at = NULL, updated_at = ? WHERE id = ?").run(now, current.id)
+    return this.getClient(current.id)
+  }
+
+  /** Append one alias; alias conflicts with another live client are refused. */
+  addClientAlias(id, alias) {
+    this._assertWritable('addClientAlias')
+    const current = this.getClient(id)
+    if (!current) throw entityError('E_CLIENT_NOT_FOUND', 'unknown client: ' + String(id))
+    const text = validateDisplayName('client', alias)
+    const norm = normalizeClientName(text)
+    if (norm === current.nameNorm || current.aliases.some((entry) => typeof entry === 'string' && normalizeClientName(entry) === norm)) return current
+    this._assertClientIdentityFree({ nameNorm: current.nameNorm, aliases: [text] }, current.id)
+    const aliases = [...current.aliases, text]
+    this.db.prepare('UPDATE clients SET aliases = ?, updated_at = ? WHERE id = ?').run(json(aliases), new Date().toISOString(), current.id)
+    return this.getClient(current.id)
+  }
+
+  /** Remove one alias (normalised match); unknown alias -> E_CLIENT_ALIAS_NOT_FOUND. */
+  removeClientAlias(id, alias) {
+    this._assertWritable('removeClientAlias')
+    const current = this.getClient(id)
+    if (!current) throw entityError('E_CLIENT_NOT_FOUND', 'unknown client: ' + String(id))
+    const norm = normalizeClientName(validateDisplayName('client', alias))
+    const aliases = current.aliases.filter((entry) => !(typeof entry === 'string' && normalizeClientName(entry) === norm))
+    if (aliases.length === current.aliases.length) throw entityError('E_CLIENT_ALIAS_NOT_FOUND', 'unknown alias: ' + String(alias))
+    this.db.prepare('UPDATE clients SET aliases = ?, updated_at = ? WHERE id = ?').run(json(aliases), new Date().toISOString(), current.id)
+    return this.getClient(current.id)
+  }
+
+  /**
+   * Merge one client into another (explicit user intent; no fuzzy matching).
+   *
+   * Everything source-owned moves to the target: projects with a name clash are
+   * merged onto the target project, the remaining projects/matters/notes and
+   * delivery snapshots are re-pointed, the source is archived (never deleted),
+   * and its name/aliases become target aliases when no third live client owns
+   * them. One transaction: a merge can never half-happen.
+   */
+  mergeClients(fromId, intoId, { now } = {}) {
+    this._assertWritable('mergeClients')
+    if (String(fromId) === String(intoId)) throw entityError('E_CLIENT_MERGE_SELF', 'cannot merge a client into itself')
+    const source = this.getClient(fromId)
+    if (!source) throw entityError('E_CLIENT_NOT_FOUND', 'unknown client: ' + String(fromId))
+    const target = this._clientForWrite(intoId, 'mergeClients')
+    const targetRow = this.getClient(target.id)
+    const at = now === undefined || now === null ? new Date().toISOString() : String(now)
+    return this._transaction('IMMEDIATE', () => {
+      const sourceProjects = this.db.prepare('SELECT * FROM projects WHERE client_id = ? ORDER BY name_norm, id').all(source.id).map(mapProjectRow)
+      const targetProjects = this.db.prepare("SELECT * FROM projects WHERE client_id = ? AND status = 'active' AND deleted_at IS NULL").all(target.id).map(mapProjectRow)
+      const byName = new Map(targetProjects.map((project) => [project.nameNorm, project]))
+      let movedProjects = 0
+      let mergedProjects = 0
+      for (const project of sourceProjects) {
+        const existing = byName.get(project.nameNorm)
+        if (!existing) {
+          this.db.prepare('UPDATE projects SET client_id = ?, updated_at = ? WHERE id = ?').run(target.id, at, project.id)
+          movedProjects++
+        } else {
+          this.db.prepare('UPDATE matters SET project_id = ? WHERE project_id = ?').run(existing.id, project.id)
+          this.db.prepare('UPDATE client_notes SET project_id = ? WHERE project_id = ?').run(existing.id, project.id)
+          this.db.prepare("UPDATE projects SET status = 'archived', deleted_at = ?, updated_at = ? WHERE id = ?").run(at, at, project.id)
+          mergedProjects++
+        }
+      }
+      const movedMatters = Number(this.db.prepare('UPDATE matters SET client_id = ?, updated_at = ? WHERE client_id = ?').run(target.id, at, source.id).changes)
+      const movedNotes = Number(this.db.prepare('UPDATE client_notes SET client_id = ? WHERE client_id = ?').run(target.id, source.id).changes)
+      const movedDeliveries = Number(this.db.prepare('UPDATE deliveries SET client_id = ? WHERE client_id = ?').run(target.id, source.id).changes)
+      this.db.prepare("UPDATE clients SET status = 'archived', deleted_at = COALESCE(deleted_at, ?), updated_at = ? WHERE id = ?").run(at, at, source.id)
+      const taken = new Set()
+      for (const identity of this._activeClientIdentities(target.id)) for (const norm of identity.norms.keys()) taken.add(norm)
+      const aliases = targetRow.aliases.slice()
+      const seen = new Set(aliases.map((entry) => normalizeClientName(String(entry))))
+      let carriedAliases = 0
+      for (const name of [source.name, ...source.aliases]) {
+        if (typeof name !== 'string') continue
+        const norm = normalizeClientName(name)
+        if (!norm || norm === targetRow.nameNorm || seen.has(norm) || taken.has(norm)) continue
+        aliases.push(name)
+        seen.add(norm)
+        carriedAliases++
+      }
+      if (carriedAliases) this.db.prepare('UPDATE clients SET aliases = ?, updated_at = ? WHERE id = ?').run(json(aliases), at, target.id)
+      return {
+        client: this.getClient(target.id),
+        mergedFrom: source.id,
+        movedMatters,
+        movedProjects,
+        mergedProjects,
+        movedNotes,
+        movedDeliveries,
+        carriedAliases,
+      }
+    })
+  }
+
+  // -------------------------------------------------------------------------
+  // Projects (one client per project; a cross-client job is two projects).
+  // -------------------------------------------------------------------------
+
+  /** Create a project under one live client. */
+  addProject({ clientId, name, startedAt, dueAt, defaultMatterId, notes, status, id } = {}) {
+    this._assertWritable('addProject')
+    const client = this._clientForWrite(clientId, 'addProject')
+    const displayName = validateDisplayName('project', name)
+    const nameNorm = normalizeClientName(displayName)
+    const projectStatus = validateEntityStatus('project', status)
+    const projectId = id === undefined || id === null ? 'prj_' + randomUUID().replace(/-/g, '').slice(0, 16) : String(id).trim()
+    if (!projectId) throw entityError('E_PROJECT_INVALID', 'project id must not be empty')
+    if (this.getProject(projectId)) throw entityError('E_PROJECT_DUPLICATE', 'project id already exists: ' + projectId)
+    let matterId = null
+    if (defaultMatterId !== undefined && defaultMatterId !== null) {
+      const matter = this.getMatter(String(defaultMatterId))
+      if (!matter) throw entityError('E_MATTER_NOT_FOUND', 'unknown matter: ' + String(defaultMatterId), 'advisers matter ls')
+      matterId = matter.id
+    }
+    const starts = normalizeOptionalDate('project', 'startedAt', startedAt)
+    const ends = normalizeOptionalDate('project', 'dueAt', dueAt)
+    const now = new Date().toISOString()
+    try {
+      this.db.prepare('INSERT INTO projects(id,client_id,name,name_norm,status,started_at,due_at,default_matter_id,notes,created_at,updated_at,deleted_at) VALUES(?,?,?,?,?,?,?,?,?,?,?,?)')
+        .run(projectId, client.id, displayName, nameNorm, projectStatus, starts, ends, matterId, normalizeOptionalText('project', 'notes', notes, 4000), now, now, projectStatus === 'archived' ? now : null)
+    } catch (error) {
+      if (/UNIQUE constraint failed/i.test(String(error?.message ?? error))) {
+        throw entityError('E_PROJECT_DUPLICATE', 'this client already has an active project with this name', 'advisers project ls --client ' + client.id)
+      }
+      throw error
+    }
+    return this.getProject(projectId)
+  }
+
+  /** One project by id (archived included; undefined when absent). */
+  getProject(id) {
+    const row = this.db.prepare('SELECT * FROM projects WHERE id = ?').get(String(id))
+    return row ? mapProjectRow(row) : undefined
+  }
+
+  /** Deterministic name lookup inside one client (active projects only). */
+  findProjectByName(clientId, name) {
+    const nameNorm = normalizeClientName(validateDisplayName('project', name))
+    const row = this.db.prepare("SELECT * FROM projects WHERE client_id = ? AND name_norm = ? AND status = 'active' AND deleted_at IS NULL ORDER BY id LIMIT 1").get(String(clientId), nameNorm)
+    return row ? mapProjectRow(row) : undefined
+  }
+
+  /** List projects, optionally scoped to one client. */
+  listProjects({ clientId, status = 'active', includeDeleted = false, limit = 100 } = {}) {
+    const where = []
+    const params = []
+    if (includeDeleted !== true) where.push('deleted_at IS NULL')
+    if (clientId !== undefined && clientId !== null) { where.push('client_id = ?'); params.push(String(clientId)) }
+    if (status !== 'all') {
+      const wanted = validateEntityStatus('project', status)
+      where.push('status = ?')
+      params.push(wanted)
+    }
+    const sql = 'SELECT * FROM projects' + (where.length ? ' WHERE ' + where.join(' AND ') : '') + ' ORDER BY client_id ASC, name_norm ASC, id ASC LIMIT ?'
+    return this.db.prepare(sql).all(...params, normalizeRowLimit(limit, { def: 100, max: 1000 })).map(mapProjectRow)
+  }
+
+  /** Update mutable project fields (rename re-checks the per-client uniqueness). */
+  updateProject(id, patch = {}) {
+    this._assertWritable('updateProject')
+    const current = this.getProject(id)
+    if (!current) throw entityError('E_PROJECT_NOT_FOUND', 'unknown project: ' + String(id))
+    const allowed = ['name', 'status', 'startedAt', 'dueAt', 'defaultMatterId', 'notes']
+    for (const field of Object.keys(patch)) {
+      if (!allowed.includes(field)) throw new Error('unknown project field: ' + field)
+    }
+    const name = patch.name === undefined ? current.name : validateDisplayName('project', patch.name)
+    const nameNorm = normalizeClientName(name)
+    const status = patch.status === undefined ? current.status : validateEntityStatus('project', patch.status)
+    const starts = patch.startedAt === undefined ? (current.startedAt ?? null) : normalizeOptionalDate('project', 'startedAt', patch.startedAt)
+    const ends = patch.dueAt === undefined ? (current.dueAt ?? null) : normalizeOptionalDate('project', 'dueAt', patch.dueAt)
+    const notes = patch.notes === undefined ? (current.notes ?? null) : normalizeOptionalText('project', 'notes', patch.notes, 4000)
+    let matterId = current.defaultMatterId ?? null
+    if (patch.defaultMatterId !== undefined) {
+      matterId = patch.defaultMatterId === null ? null : String(patch.defaultMatterId)
+      if (matterId !== null && !this.getMatter(matterId)) throw entityError('E_MATTER_NOT_FOUND', 'unknown matter: ' + matterId, 'advisers matter ls')
+    }
+    const now = new Date().toISOString()
+    let deletedAt = current.deletedAt ?? null
+    if (status === 'archived' && deletedAt === null) deletedAt = now
+    if (status === 'active' && deletedAt !== null) deletedAt = null
+    try {
+      this.db.prepare('UPDATE projects SET name = ?, name_norm = ?, status = ?, started_at = ?, due_at = ?, default_matter_id = ?, notes = ?, updated_at = ?, deleted_at = ? WHERE id = ?')
+        .run(name, nameNorm, status, starts, ends, matterId, notes, now, deletedAt, current.id)
+    } catch (error) {
+      if (/UNIQUE constraint failed/i.test(String(error?.message ?? error))) {
+        throw entityError('E_PROJECT_DUPLICATE', 'this client already has an active project with this name', 'advisers project ls --client ' + current.clientId)
+      }
+      throw error
+    }
+    return this.getProject(current.id)
+  }
+
+  /** Soft-delete one project (idempotent). */
+  archiveProject(id, { now } = {}) {
+    this._assertWritable('archiveProject')
+    const current = this.getProject(id)
+    if (!current) throw entityError('E_PROJECT_NOT_FOUND', 'unknown project: ' + String(id))
+    const at = now === undefined || now === null ? new Date().toISOString() : String(now)
+    this.db.prepare("UPDATE projects SET status = 'archived', deleted_at = COALESCE(deleted_at, ?), updated_at = ? WHERE id = ?").run(at, at, current.id)
+    return this.getProject(current.id)
+  }
+
+  // -------------------------------------------------------------------------
+  // Client notes (the manual source of the derived timeline).
+  // -------------------------------------------------------------------------
+
+  /** Resolve a project that must belong to the given client. */
+  _projectForClient(projectId, clientId) {
+    const project = this.getProject(String(projectId))
+    if (!project) throw entityError('E_PROJECT_NOT_FOUND', 'unknown project: ' + String(projectId), 'advisers project ls')
+    if (project.clientId !== clientId) throw entityError('E_PROJECT_CLIENT_MISMATCH', 'project ' + project.id + ' belongs to client ' + project.clientId)
+    return project
+  }
+
+  /**
+   * Record one client note (phone call, meeting, decision, ...). The summary is
+   * operator prose (<= 2000 chars); source is lineage only (kind/id/quote), so a
+   * note can point at a delivery or matter without copying a file or a path.
+   */
+  addClientNote({ clientId, projectId, matterId, kind, at, summary, source, id } = {}) {
+    this._assertWritable('addClientNote')
+    const client = this._clientForWrite(clientId, 'addClientNote')
+    const noteKind = kind === undefined || kind === null ? 'note' : String(kind)
+    if (!CLIENT_NOTE_KINDS.includes(noteKind)) {
+      throw entityError('E_CLIENT_NOTE_INVALID', 'unknown note kind: ' + noteKind, 'use one of ' + CLIENT_NOTE_KINDS.join(', '))
+    }
+    let resolvedProjectId = null
+    if (projectId !== undefined && projectId !== null) resolvedProjectId = this._projectForClient(projectId, client.id).id
+    let resolvedMatterId = null
+    if (matterId !== undefined && matterId !== null) {
+      const matter = this.getMatter(String(matterId))
+      if (!matter) throw entityError('E_MATTER_NOT_FOUND', 'unknown matter: ' + String(matterId), 'advisers matter ls')
+      if (matter.clientId != null && matter.clientId !== client.id) {
+        throw entityError('E_MATTER_CLIENT_MISMATCH', 'matter ' + matter.id + ' belongs to client ' + matter.clientId)
+      }
+      resolvedMatterId = matter.id
+      if (resolvedProjectId === null && matter.projectId != null) resolvedProjectId = matter.projectId
+    }
+    if (typeof summary !== 'string' || !summary.trim()) throw entityError('E_CLIENT_NOTE_INVALID', 'summary is required')
+    const text = summary.trim()
+    if (text.length > 2000) throw entityError('E_CLIENT_NOTE_INVALID', 'summary must be at most 2000 characters')
+    const noteAt = normalizeNoteInstant(at)
+    const noteSource = validateNoteSource(source)
+    const noteId = id === undefined || id === null ? 'note_' + randomUUID().replace(/-/g, '').slice(0, 16) : String(id).trim()
+    if (!noteId) throw entityError('E_CLIENT_NOTE_INVALID', 'note id must not be empty')
+    if (this.getClientNote(noteId)) throw entityError('E_CLIENT_NOTE_INVALID', 'note id already exists: ' + noteId)
+    this.db.prepare('INSERT INTO client_notes(id,client_id,project_id,matter_id,kind,at,summary,source,created_at,deleted_at) VALUES(?,?,?,?,?,?,?,?,?,?)')
+      .run(noteId, client.id, resolvedProjectId, resolvedMatterId, noteKind, noteAt, text, noteSource, new Date().toISOString(), null)
+    return this.getClientNote(noteId)
+  }
+
+  /** One note by id (deleted notes included; undefined when absent). */
+  getClientNote(id) {
+    const row = this.db.prepare('SELECT * FROM client_notes WHERE id = ?').get(String(id))
+    return row ? mapClientNoteRow(row) : undefined
+  }
+
+  /**
+   * Notes of one client, newest event first (at DESC, then rowid DESC so notes
+   * written in one batch keep their order). Soft-deleted notes are hidden by
+   * default.
+   */
+  listClientNotes({ clientId, projectId, matterId, includeDeleted = false, limit = 50 } = {}) {
+    const where = []
+    const params = []
+    if (clientId !== undefined && clientId !== null) { where.push('client_id = ?'); params.push(String(clientId)) }
+    if (projectId !== undefined && projectId !== null) { where.push('project_id = ?'); params.push(String(projectId)) }
+    if (matterId !== undefined && matterId !== null) { where.push('matter_id = ?'); params.push(String(matterId)) }
+    if (includeDeleted !== true) where.push('deleted_at IS NULL')
+    const sql = 'SELECT * FROM client_notes' + (where.length ? ' WHERE ' + where.join(' AND ') : '') + ' ORDER BY at DESC, rowid DESC LIMIT ?'
+    return this.db.prepare(sql).all(...params, normalizeRowLimit(limit, { def: 50, max: 500 })).map(mapClientNoteRow)
+  }
+
+  /** Update one note; the client ownership cannot be changed, the project can. */
+  updateClientNote(id, patch = {}) {
+    this._assertWritable('updateClientNote')
+    const current = this.getClientNote(id)
+    if (!current) throw entityError('E_CLIENT_NOTE_NOT_FOUND', 'unknown note: ' + String(id))
+    const allowed = ['kind', 'at', 'summary', 'projectId', 'matterId']
+    for (const field of Object.keys(patch)) {
+      if (!allowed.includes(field)) throw new Error('unknown client note field: ' + field)
+    }
+    const kind = patch.kind === undefined ? current.kind : String(patch.kind)
+    if (!CLIENT_NOTE_KINDS.includes(kind)) throw entityError('E_CLIENT_NOTE_INVALID', 'unknown note kind: ' + kind, 'use one of ' + CLIENT_NOTE_KINDS.join(', '))
+    const at = patch.at === undefined ? current.at : normalizeNoteInstant(patch.at)
+    let summary = current.summary
+    if (patch.summary !== undefined) {
+      if (typeof patch.summary !== 'string' || !patch.summary.trim()) throw entityError('E_CLIENT_NOTE_INVALID', 'summary is required')
+      summary = patch.summary.trim()
+      if (summary.length > 2000) throw entityError('E_CLIENT_NOTE_INVALID', 'summary must be at most 2000 characters')
+    }
+    let projectId = current.projectId ?? null
+    if (patch.projectId !== undefined) projectId = patch.projectId === null ? null : this._projectForClient(patch.projectId, current.clientId).id
+    let matterId = current.matterId ?? null
+    if (patch.matterId !== undefined) {
+      if (patch.matterId === null) matterId = null
+      else {
+        const matter = this.getMatter(String(patch.matterId))
+        if (!matter) throw entityError('E_MATTER_NOT_FOUND', 'unknown matter: ' + String(patch.matterId), 'advisers matter ls')
+        if (matter.clientId != null && matter.clientId !== current.clientId) throw entityError('E_MATTER_CLIENT_MISMATCH', 'matter ' + matter.id + ' belongs to client ' + matter.clientId)
+        matterId = matter.id
+      }
+    }
+    this.db.prepare('UPDATE client_notes SET kind = ?, at = ?, summary = ?, project_id = ?, matter_id = ? WHERE id = ?').run(kind, at, summary, projectId, matterId, current.id)
+    return this.getClientNote(current.id)
+  }
+
+  /** Soft-delete one note (idempotent; never a hard delete of user data). */
+  deleteClientNote(id, { now } = {}) {
+    this._assertWritable('deleteClientNote')
+    const current = this.getClientNote(id)
+    if (!current) throw entityError('E_CLIENT_NOTE_NOT_FOUND', 'unknown note: ' + String(id))
+    if (current.deletedAt) return current
+    const at = now === undefined || now === null ? new Date().toISOString() : String(now)
+    this.db.prepare('UPDATE client_notes SET deleted_at = ? WHERE id = ?').run(at, current.id)
+    return this.getClientNote(current.id)
+  }
+
+  // -------------------------------------------------------------------------
+  // Matter ownership (client/project) + the derived timeline sources.
+  // -------------------------------------------------------------------------
+
+  /**
+   * Point one matter at a client (and optionally one of that client's
+   * projects), or unlink it with both null. Only this column pair is written:
+   * commitments/facts stay matter-scoped, so re-linking can never leave two
+   * copies of the truth behind.
+   */
+  setMatterClient(matterId, { clientId, projectId } = {}) {
+    this._assertWritable('setMatterClient')
+    const matter = this.getMatter(String(matterId))
+    if (!matter) throw entityError('E_MATTER_NOT_FOUND', 'unknown matter: ' + String(matterId), 'advisers matter ls')
+    let resolvedClientId = clientId === undefined || clientId === null ? null : clientId
+    let resolvedProjectId = projectId === undefined || projectId === null ? null : projectId
+    if (resolvedClientId === null && resolvedProjectId !== null) {
+      throw entityError('E_PROJECT_CLIENT_MISMATCH', 'projectId requires clientId; a project belongs to exactly one client')
+    }
+    if (resolvedClientId !== null) {
+      const client = this._clientForWrite(resolvedClientId, 'setMatterClient')
+      resolvedClientId = client.id
+      if (resolvedProjectId !== null) {
+        const project = this._projectForClient(resolvedProjectId, resolvedClientId)
+        if (project.status !== 'active' || project.deletedAt) throw entityError('E_PROJECT_ARCHIVED', 'project is archived: ' + project.id, 'advisers project ls')
+        resolvedProjectId = project.id
+      }
+    }
+    this.db.prepare('UPDATE matters SET client_id = ?, project_id = ?, updated_at = ? WHERE id = ?')
+      .run(resolvedClientId, resolvedProjectId, new Date().toISOString(), matter.id)
+    return this.getMatter(matter.id)
+  }
+
+  /** Every matter owned by one client, in insertion order (archived included). */
+  listMattersByClient(clientId, { status } = {}) {
+    const where = ['client_id = ?']
+    const params = [String(clientId)]
+    if (status !== undefined && status !== null) { where.push('status = ?'); params.push(String(status)) }
+    return this.db.prepare('SELECT * FROM matters WHERE ' + where.join(' AND ') + ' ORDER BY rowid').all(...params).map(mapMatterRow)
+  }
+
+  /** Every matter owned by one project, in insertion order. */
+  listMattersByProject(projectId, { status } = {}) {
+    const where = ['project_id = ?']
+    const params = [String(projectId)]
+    if (status !== undefined && status !== null) { where.push('status = ?'); params.push(String(status)) }
+    return this.db.prepare('SELECT * FROM matters WHERE ' + where.join(' AND ') + ' ORDER BY rowid').all(...params).map(mapMatterRow)
+  }
+
+  /** Matters that are not linked to any client (the honest "unclassified" view). */
+  listUnclassifiedMatters({ limit = 100 } = {}) {
+    return this.db.prepare('SELECT * FROM matters WHERE client_id IS NULL ORDER BY rowid LIMIT ?').all(normalizeRowLimit(limit, { def: 100, max: 1000 })).map(mapMatterRow)
+  }
+
+  /**
+   * One read snapshot of everything a customer timeline is derived from.
+   *
+   * The caller merges these rows with packages/core/src/customer.ts
+   * (deriveClientTimeline). Every query is scoped by the client's own matters,
+   * so two clients can never see each other's rows: no full-table read followed
+   * by an in-memory filter happens in this path. Limits bound each source (the
+   * derivation applies the display limit afterwards).
+   */
+  clientTimelineSources(clientId, { limit = 200 } = {}) {
+    const client = this.getClient(String(clientId))
+    if (!client) throw entityError('E_CLIENT_NOT_FOUND', 'unknown client: ' + String(clientId), 'advisers client ls')
+    const rowLimit = normalizeRowLimit(limit, { def: 200, max: 500 })
+    const matters = this.db.prepare('SELECT * FROM matters WHERE client_id = ? ORDER BY rowid').all(client.id).map(mapMatterRow)
+    const projects = this.db.prepare('SELECT * FROM projects WHERE client_id = ? ORDER BY name_norm ASC, id ASC').all(client.id).map(mapProjectRow)
+    const matterIds = matters.map((matter) => matter.id)
+    let commitments = []
+    let deliveries = []
+    if (matterIds.length) {
+      const placeholders = matterIds.map(() => '?').join(',')
+      commitments = this.db.prepare('SELECT * FROM commitments WHERE matter_id IN (' + placeholders + ') ORDER BY rowid DESC LIMIT ?')
+        .all(...matterIds, rowLimit).map(mapCommitmentRow)
+      deliveries = this.db.prepare('SELECT * FROM deliveries WHERE matter_id IN (' + placeholders + ') ORDER BY created_at DESC, rowid DESC LIMIT ?')
+        .all(...matterIds, rowLimit).map(mapDeliveryRow)
+    }
+    const notes = this.db.prepare('SELECT * FROM client_notes WHERE client_id = ? AND deleted_at IS NULL ORDER BY at DESC, rowid DESC LIMIT ?')
+      .all(client.id, rowLimit).map(mapClientNoteRow)
+    return { client: client, projects: projects, matters: matters, commitments: commitments, deliveries: deliveries, notes: notes, limit: rowLimit }
+  }
+
+  /**
+   * Raw rows of the SQLite-only tables carried next to a ledger export.
+   *
+   * The snake_case raw row shape matches what export --all has always written,
+   * and DATA_TABLES is the single list of tables so an export/import helper
+   * cannot silently drop the v21 customer entities.
+   */
+  exportDataTables(tables = DATA_TABLES) {
+    const data = {}
+    for (const table of tables) {
+      if (!DATA_TABLES.includes(table)) throw new Error('unknown export table: ' + table)
+      data[table] = this.db.prepare('SELECT * FROM ' + table).all()
+    }
+    return data
+  }
+
+  // -------------------------------------------------------------------------
   // Partial loading (P1-2, 0.2.2)
   //
   // Read commands no longer pay for the whole 9-table snapshot: they call the
@@ -2932,22 +3957,22 @@ CREATE TABLE IF NOT EXISTS task_runs (
         // direct library use (e.g. importing or seeding a ledger).
         for (const [table] of LEDGER_TABLES) db.exec(`DELETE FROM ${table}`)
       }
-      const m = db.prepare('INSERT OR REPLACE INTO matters VALUES (?,?,?,?,?,?,?,?,?,?,?)')
+      const m = db.prepare('INSERT OR REPLACE INTO matters(id,title,status,domain,secrecy,summary,participants,deadlines,open_questions,created_at,updated_at,client_id,project_id) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)')
       for (const x of snapshot.matters ?? []) {
-        m.run(x.id, x.title, x.status, x.domain, x.secrecy, x.summary ?? null, json(x.participants), json(x.deadlines), json(x.openQuestions), x.createdAt, x.updatedAt)
+        m.run(x.id, x.title, x.status, x.domain, x.secrecy, x.summary ?? null, json(x.participants), json(x.deadlines), json(x.openQuestions), x.createdAt, x.updatedAt, x.clientId ?? null, x.projectId ?? null)
       }
       const f = db.prepare(`INSERT OR REPLACE INTO facts(id,matter_id,subject,predicate,object,recorded_at,expired_at,authority,confidence,source,evidence,status,valid_from,valid_to,supersedes,superseded_by,shadowed_by,last_seen_at,deleted_at,deleted_reason)
         VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`)
       for (const x of snapshot.facts ?? []) {
         f.run(x.id, x.matterId ?? null, x.subject, x.predicate, x.object, x.recordedAt, x.expiredAt ?? null, x.authority, x.confidence, x.source ? json(x.source) : null, x.evidence ? json(x.evidence) : null, x.status, x.validFrom ?? null, x.validTo ?? null, x.supersedes ?? null, x.supersededBy ?? null, x.shadowedBy ?? null, x.lastSeenAt ?? null, x.deletedAt ?? null, x.deletedReason ?? null)
       }
-      const c = db.prepare(`INSERT OR REPLACE INTO commitments(id,matter_id,debtor,creditor,action,due_at,timezone,status,evidence,capability,done_at,reminder_offsets)
-        VALUES (?,?,?,?,?,?,?,?,?,?,?,?)`)
+      const c = db.prepare(`INSERT OR REPLACE INTO commitments(id,matter_id,debtor,creditor,action,due_at,timezone,status,evidence,capability,done_at,reminder_offsets,created_at)
+        VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)`)
       for (const x of snapshot.commitments ?? []) {
         // A missing/undefined list stays NULL so a round-trip keeps the pre-0.2.0
         // "no field" shape; an explicit [] is preserved as its own value.
         const reminderOffsets = Array.isArray(x.reminderOffsets) ? JSON.stringify(x.reminderOffsets) : null
-        c.run(x.id, x.matterId, x.debtor, x.creditor, x.action, x.dueAt ?? null, x.timezone, x.status, json(x.evidence), x.capability, x.doneAt ?? null, reminderOffsets)
+        c.run(x.id, x.matterId, x.debtor, x.creditor, x.action, x.dueAt ?? null, x.timezone, x.status, json(x.evidence), x.capability, x.doneAt ?? null, reminderOffsets, x.createdAt ?? null)
       }
       const p = db.prepare('INSERT OR REPLACE INTO preferences VALUES (?,?,?,?,?,?,?,?,?,?,?,?)')
       for (const x of snapshot.preferences ?? []) {

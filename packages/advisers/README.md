@@ -7,7 +7,7 @@ routines.
 ## Install
 
 ```sh
-# 0.2.4 is a release candidate; npm @latest is still 0.2.3:
+# 0.3.0 is a release candidate; npm @latest is still 0.2.3:
 #   npm i -g --registry=https://registry.npmjs.org advisers@latest advisers-office@latest
 # From checkout:
 #   corepack pnpm install && corepack pnpm -r build
@@ -28,7 +28,7 @@ advisers export
 > AI-generated content only with the required labels. Minors need guardian consent.
 > Software licence: PolyForm Noncommercial 1.0.0 (source-available, not OSI open source;
 > commercial use requires a separate licence). Terms:
-> <https://github.com/PerryLink/advisers/blob/main/docs/TOS.md> (v2026.11.2) · Disclaimer:
+> <https://github.com/PerryLink/advisers/blob/main/docs/TOS.md> (v2026.11.3) · Disclaimer:
 > <https://github.com/PerryLink/advisers/blob/main/docs/DISCLAIMER.md> · Safety:
 > <https://github.com/PerryLink/advisers/blob/main/docs/SAFETY.md> · Privacy & data-flow:
 > <https://github.com/PerryLink/advisers/blob/main/docs/PRIVACY.md>. The local database is
@@ -43,12 +43,19 @@ turn natural language into commitments or artifacts.
 
 ## Status
 
-`0.2.4` is a release candidate (2026-11-19; npm `latest` is still `0.2.3`, published
-2026-11-18). 0.2.4 is a provenance/tooling patch with no user-facing functional or
-behavioural change; it becomes installable only after the account owner approves the
-CI-staged Trusted-Publishing build:
+`0.3.0` is a release candidate (2026-11-20; npm `latest` is still `0.2.3`, published
+2026-11-18). It is the "trustworthy delivery" minor: per-item secrecy clearance on every
+egress surface, a local audit tail anchor, backup rotation/verified restore and
+`doctor --repair`, 200k-row read paths without the TEMP B-TREE write amplification, MCP
+output caps plus legacy protocol negotiation, a read-only ledger facade for the DSH
+adapter, machine-readable contracts, a deterministic no-key eval suite and an SBOM gate.
+The 0.2.4 candidate it supersedes was never published. 0.3.0 becomes installable only
+after the account owner approves the CI-staged Trusted-Publishing build, and may only be
+called provenance-signed once all six packages show non-empty `dist.attestations`.
+Interactive TUI shell, client/project CLI, mail entry, PolicyGrant and MCP modern are not
+in 0.3.0; see the repository CHANGELOG for the full not-delivered list.
 
-- SQLite ledger at `~/.advisers/state.db` (JSON fallback with `ADVISERS_STORE=json`; schema v20, lock-free read snapshot, incremental writes);
+- SQLite ledger at `~/.advisers/state.db` (JSON fallback with `ADVISERS_STORE=json`; schema v21 — v21 adds the additive customer/project entities — lock-free read snapshot, incremental writes);
 - soul at `~/.advisers/soul.md`, human-owned;
 - local REPL, `chat`, `office`, `template`, `routine`, `link`, `bridge`, `soul`, `ls`, `why`, `forget`, `export`;
 - IntentBrief + clarification policy + readback;

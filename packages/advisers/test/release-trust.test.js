@@ -292,12 +292,14 @@ test('verify-release skips an unpublished version only with --allow-unpublished'
   const { server, port } = await startRegistry(() => ({ name: 'advisers', versions: {}, 'dist-tags': {} }))
   try {
     const registry = 'http://127.0.0.1:' + port
-    const skipped = await runAsync(verifyReleaseScript, ['--version', '0.2.4', '--registry', registry, '--skip-git', '--allow-unpublished', '--skip-install'])
+    // The checkout is on the 0.3.0 release candidate; the fixtures below verify the
+    // older published-version semantics, so version drift is expected and explicit.
+    const skipped = await runAsync(verifyReleaseScript, ['--version', '0.2.4', '--registry', registry, '--skip-git', '--allow-version-drift', '--allow-unpublished', '--skip-install'])
     assert.equal(skipped.status, 0, skipped.stdout + skipped.stderr)
     assert.match(skipped.stdout, /SKIP release verification for 0\.2\.4/)
     assert.match(skipped.stdout, /none of the requested packages is published/)
 
-    const strict = await runAsync(verifyReleaseScript, ['--version', '0.2.4', '--registry', registry, '--skip-git', '--skip-install'])
+    const strict = await runAsync(verifyReleaseScript, ['--version', '0.2.4', '--registry', registry, '--skip-git', '--allow-version-drift', '--skip-install'])
     assert.equal(strict.status, 1)
     assert.match(strict.stdout, /FAIL release verification/)
     assert.match(strict.stdout, /registry reports it is not published/)
@@ -344,6 +346,7 @@ test('verify-release checks attestations, gitHead, tag commit, and SBOM metadata
       '--skip-git',
       '--skip-install',
       '--metadata-only',
+      '--allow-version-drift',
     ]
     const args = [...baseArgs, '--sbom', sbomFile, '--json']
     const passed = await runAsync(verifyReleaseScript, args)
@@ -383,7 +386,7 @@ test('verify-release requires the tag/commit agreement when the local tag exists
   }
   const { server, port } = await startRegistry(() => ({ name: 'advisers', versions: {}, 'dist-tags': {} }))
   try {
-    const result = await runAsync(verifyReleaseScript, ['--version', '0.2.4', '--registry', 'http://127.0.0.1:' + port, '--allow-unpublished', '--skip-install'])
+    const result = await runAsync(verifyReleaseScript, ['--version', '0.2.4', '--registry', 'http://127.0.0.1:' + port, '--allow-version-drift', '--allow-unpublished', '--skip-install'])
     assert.equal(result.status, 0, result.stdout + result.stderr)
     assert.match(result.stdout, /PASS git :: tag v0\.2\.4 exists and resolves to a commit/)
   } finally {

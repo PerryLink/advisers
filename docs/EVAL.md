@@ -1,16 +1,16 @@
 # Deterministic eval suite (`pnpm eval:det`)
 
-> Status: introduced for the 0.3.0 development line. This tree is still
-> `advisers@0.2.4`; the suite is a release gate for the deterministic contract,
+> Status: introduced for the 0.3.0 release-candidate line. This tree is
+> `advisers@0.3.0`; the suite is a release gate for the deterministic contract,
 > not a claim about model quality.
 
 `eval/` also contains the older **manual, real-model** runners
 (`eval/run-*.mjs`, see [eval/README.md](../eval/README.md)). Those need a
 provider key, cost tokens, and are not CI gates. This page documents the other
 half: `eval:det`, a no-key / no-network suite that is intended to be green in
-CI and in the release evidence. Wiring it as a required CI step belongs to the
-0.3.0 release work; until then run `pnpm eval:det` explicitly (and in the
-release checklist).
+CI and in the release evidence. It is **wired as a required CI step** (the `test`
+job runs `pnpm eval:det` after the workspace build) and remains a release-gate
+input; also run it explicitly when cutting a release candidate.
 
 ## Quick start
 
@@ -117,7 +117,7 @@ checks this).
   "durationMs": 20123,
   "filters": ["determinism", "mcp", "json", "exit", "tty"],
   "baseline": { "file": "eval/det/baseline.json", "fixture": "morning-ledger-v1", "recordedAt": "2026-11-19T15:58:00.000Z" },
-  "cli": { "version": "0.2.4", "commit": "35a51c3", "node": "v24.22.1", "os": "linux" },
+  "cli": { "version": "0.3.0", "commit": "e1af67a", "node": "v24.22.1", "os": "linux" },
   "environment": { "timezone": "Asia/Shanghai", "home": "<TMP>/home", "noModel": true, "apiKeys": "stripped", "networkBlock": "preload" },
   "totals": { "cases": 19, "passed": 19, "failed": 0, "checks": 166, "checksFailed": 0 },
   "network": { "attempts": 0, "kinds": {} },
@@ -148,14 +148,16 @@ Hard rules for the result file:
   a model-quality result.
 - **Interactive TUI behaviour** (PTY snapshots, state machine): owned by the TUI
   work line and its `test/*` suites. The one 0.3.0 must-have that touches this
-  repo's det suite is the interactive non-TTY guard — it lives in the **opt-in**
-  `tui` suite (`pnpm eval:det --suite tui`) and is expected to be red until the
-  bin wiring for the TUI output kernel lands. The release gate runs it after
-  that wiring; it is reported as red, not silently skipped.
+  repo's det suite is the non-TTY/interactive guard — it lives in the **opt-in**
+  `tui` suite (`pnpm eval:det --suite tui`), which the release gate runs after the
+  TUI/output-kernel bin wiring. It is reported as red, not silently skipped.
 - **Fault injection / security suites**: `pnpm test:security`, `pnpm test:fault`.
-- **Windows-specific filesystem behaviour**: covered by the Windows smoke job;
-  `eval:det` itself is platform-neutral (temp HOME, TZ, no shell) but CI runs it
-  on Linux.
+- **Windows-specific filesystem behaviour**: covered by the Windows smoke job,
+  which now exercises the durable-write commands (`backup`, `export --out`,
+  `import --replace`, `vault seal/unseal`) in addition to the minimal CLI flow;
+  `eval:det` itself is platform-neutral (temp HOME, TZ, no shell) and CI runs it
+  on Linux. The full Windows test suite and the real-machine E13 run are still
+  pending.
 
 ## Adding or changing a case
 

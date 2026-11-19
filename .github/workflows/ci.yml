@@ -33,6 +33,21 @@ jobs:
       - run: pnpm install --frozen-lockfile
       - run: pnpm -r --if-present run build
       - run: pnpm -r --if-present run typecheck
+      # 0.3.0 deterministic gates (no model key, no network), run after the
+      # workspace build because they exercise the built CLI/dist:
+      #   - eval:det is the deterministic eval contract (docs/EVAL.md);
+      #   - check-contracts validates the machine-readable contracts under
+      #     contracts/ against the real CLI/MCP (docs/CONTRACTS.md);
+      #   - sbom regenerates the lockfile-derived CycloneDX artifact and
+      #     check:sbom validates it (docs/SBOM.md). Use `pnpm run sbom`, not
+      #     `pnpm sbom`: pnpm resolves its built-in sbom command before a
+      #     script of the same name.
+      - name: Deterministic eval suite
+        run: pnpm eval:det
+      - name: Interface contracts gate
+        run: node scripts/check-contracts.mjs
+      - name: SBOM generate and check
+        run: pnpm run sbom && pnpm run check:sbom
       # Static checks for the production JS under packages/* (syntax via
       # node --check, forbidden eval/Function and shell exec, hardcoded secret
       # material). Fast and dependency-free; see scripts/check-js.mjs.

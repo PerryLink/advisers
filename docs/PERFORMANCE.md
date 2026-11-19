@@ -1,14 +1,19 @@
 # Performance
 
-> Status: measured for the published `0.2.3` release (2026-11-18), which is still npm
-> `latest`. `0.2.4` is a release candidate with no runtime or behavioural change, so
-> these numbers describe it too. The `0.2.2`, `0.2.1` and `0.2.0` trees are the "before"
-> baselines where a comparison says so below.
+> Status: `0.2.3` (2026-11-18) is the published npm `latest`; the repository is at
+> package version `0.3.0`, a **release candidate — not released** (2026-11-20). The
+> earlier `0.2.4` was an unpublished candidate that 0.3.0 supersedes. The numbers below
+> are marked with the tree they were measured on; the 0.3.0 section is candidate
+> evidence, not a release claim. `0.2.2`, `0.2.1` and `0.2.0` are "before" baselines
+> where a comparison says so.
 
 How Advisers performs on the hot paths, how to reproduce the numbers, and which
 behaviour the regression tests pin. This is a developer/operator reference, not
-a service-level guarantee: the numbers below are one machine's measurements and
-move with CPU, disk and background load.
+a service-level guarantee: **the numbers below are one shared host's measurements**
+and move with CPU, disk, WSL/9p mounts and background load (±10–20% run-to-run is
+normal). Treat medians as a rough instrument; only same-host, same-ledger,
+one-process-at-a-time A/B comparisons are meaningful. CI pins behaviour and budgets,
+never wall-clock thresholds.
 
 ## Measuring
 
@@ -40,6 +45,161 @@ To compare two builds on identical data, generate the data once with
 `--keep`, then run the benchmark twice against that directory with `--home`
 and a different `--bin` (one process at a time; concurrent runs distort each
 other).
+
+### The 200k read benchmark (0.3.0)
+
+`scripts/bench-read-200k.mjs` is the reproducible 200k-ledger read benchmark used for
+the 0.3.0 T1/T2 targets. It seeds the same synthetic shape the 0.3 planning research
+used (200k facts, 100k commitments, 20k preferences, 10k deliveries, 10k model calls,
+20 sessions; **no turns**; `state.db` ≈124 MB in the recorded runs), then measures
+`status/today/today --json/remind/remind --json/tui --once/digest day/digest week/
+pet-brief/pet-brief --json` plus the MCP first-call surface.
+
+Two numbers per scenario:
+
+- `wallMs` — fresh CLI child process, median of `--reps` runs (includes Node startup;
+  the method `scripts/bench.mjs` uses);
+- `writeBytes` — the child's `write_bytes` from `/proc/<pid>/io` (max sample across
+  reps): SQLite WAL + temp spill + DB writes, not stdout. **This is the T1 acceptance
+  metric** (target <1 MiB per read command). Windows has no `/proc`; there the check
+  is functional only.
+
+```sh
+# 一次性播种（约 200k facts / 100k commitments；写 /tmp 或本地 ext4，别用 9p/网络盘）
+node scripts/bench-read-200k.mjs --home /tmp/advisers-bench --seed
+# 同一 home、一次一个进程；3 次中位
+node scripts/bench-read-200k.mjs --home /tmp/advisers-bench --reps 3
+node scripts/bench-read-200k.mjs --home /tmp/advisers-bench --reps 3 --json > bench.json
+# A/B：--bin 指向另一棵树（同一 home、同一 session、交替跑）
+node scripts/bench-read-200k.mjs --home /tmp/advisers-bench --reps 3 \
+  --bin /tmp/advisers-baseline/packages/advisers/bin/advisers.js --no-mcp
+```
+
+Caveats that matter for every number in the 0.3.0 section: the bench ran on a **shared
+host** (other jobs on the same machine), the recorded A/B is **interleaved baseline /
+current rounds of 3 fresh children per scenario** (so it is a small-sample median, not a
+distribution), and the synthetic ledger has **no FTS/turns content** — this section
+measures read-model/SQL cost, not search.
+
+## 0.3.0 (release candidate, 2026-11-20): 200k read A/B and the T1 write-amplification fix
+
+Two changes on the 0.3.0 release-candidate tree are measured here. `0.3.0` is **not
+released**; these are development evidence, and the numbers are subject to the shared-host
+caveats above.
+
+### T1: remove the TEMP B-TREE spill behind read-command write amplification
+
+The 0.2.x partial loaders appended `ORDER BY rowid` after a status predicate. The v20
+status-leading indexes (`idx_facts_status_deleted`, `idx_commitments_status_due`) cannot
+satisfy that order, so SQLite sorted every matching row into a TEMP B-TREE and spilled it
+to disk: at 200k rows `pet-brief` wrote ~29 MB and `today` ~5.6 MB **per run** (reads
+that were supposed to be read-only were writing tens of MB). 0.3.0 changes:
+
+- `lib/sqlite.js` `loadFacts({validOnly})` — `expired_at IS NULL AND deleted_at IS NULL`
+  as an index-key prefix so rowid order comes from the index (no sort/spill);
+- `lib/sqlite.js` `loadCommitments({order})` — `'rowid'` (default, historical) /
+  `'natural'` (index order, no sort) / `'table'` (`NOT INDEXED`, sequential scan in
+  insertion order; cheapest when a predicate matches a large fraction of the table);
+- the hot call sites (`today`, `today --json`, `remind`, `tui`, `digest`, `pet-brief`)
+  moved to these loaders or to the projections below. The default `order` is unchanged,
+  so load/export order is preserved;
+- two **layout-only** indexes for the pet-brief projection
+  (`idx_facts_status_confidence`, `idx_facts_valid_subject`, created `IF NOT EXISTS` on
+  open). The read-path change itself adds **no migration**: the 0.3.0 tree is on schema
+  **v21** (the additive customer-entity step), and the measured queries/indexes are
+  unchanged.
+
+The acceptance metric is process writes, not wall time: every read command must stay
+<1 MiB of `write_bytes` (Linux). `test/perf-no-spill.test.js` seeds 60k facts / 20k open
+commitments and asserts every measured read command stays under that budget (it skips on
+Windows, which has no `/proc`); wall-clock thresholds are deliberately not asserted in CI.
+
+### T2: narrow read-model projections
+
+The view builders used to load whole entities (mapping evidence/reminder JSON,
+defaults, sortable objects) for a handful of displayed columns. 0.3.0 adds narrow,
+read-only SQL projections in `lib/sqlite.js` (`_project` uses
+`setReturnArrays(true)` where available) and makes the view builders consume them:
+
+| Projection | Used by |
+|---|---|
+| `projectOpenCommitmentsForToday` | `today` (human view) |
+| `projectCommitmentsForReminders` | `remind`, `tui --once` |
+| `projectCommitmentsForDigest` | `digest` |
+| `projectCommitmentsForPetBrief` / `projectFactsForPetBrief` / `projectFactSubjectCandidates` / `projectCommitmentCreditorCandidates` | `pet-brief` |
+
+Only status predicates move into SQL; **due-date comparisons stay in JS** because
+`due_at` is text with mixed formats and SQL `julianday()` semantics differ from the
+existing `Date.parse` behaviour. The projections return the same rows/columns in the
+same historical (rowid) order, and `test/read-model-projections.test.js` pins
+byte-identical view output plus plans without a TEMP B-TREE.
+
+`today --json` keeps the full entities its JSON contract requires; it only avoids the
+status-index + `ORDER BY rowid` sort (`order: 'table'`), so its **writes** collapse while
+its wall time stays dominated by serializing ~27 MB of JSON to stdout.
+
+### Measured A/B (200k synthetic ledger)
+
+Baseline = the 0.2.4 tree (`35a51c3`). Current = the 0.3.0 release-candidate tree
+(`e1af67a`, 2026-11-20). Same `/tmp/advisers-bench-home` synthetic ledger (≈124 MB,
+shape above), one process at a time, **medians of 3 fresh CLI children per scenario per
+round, two interleaved rounds**, shared host. "Writes" = child `/proc/<pid>/io`
+`write_bytes`, max sample.
+
+| Scenario | 0.2.4 median | 0.3.0 dev median | Writes 0.2.4 → 0.3.0 |
+|---|---:|---:|---:|
+| `status --json` | 62 ms | 61 ms | 28 KB → 28 KB |
+| `today` | 230 ms | 151 ms | 5.8 MB → 32 KB |
+| `today --json` | 737 ms | 751 ms | 10.8 MB → 28 KB |
+| `remind` | 1,041 ms | 335 ms | 28 KB → 32 KB |
+| `remind --json` | 1,107 ms | 296 ms | 32 KB → 28 KB |
+| `tui --once` | 972 ms | 216 ms | 32 KB → 28 KB |
+| `digest day` | 551 ms | 226 ms | 32 KB → 28 KB |
+| `pet-brief` | 2,171 ms | 399 ms † | 31.8 MB → 32 KB |
+| `pet-brief --json` | 2,504 ms | 506 ms | 31.8 MB → 28 KB |
+
+† `pet-brief` was re-measured in a second dedicated series: 3 interleaved baseline
+rounds and 3 current rounds of 3 fresh children each (same host/ledger). Baseline median
+2,171 ms → current median 399 ms; the other interleaved round measured 588 ms. The spread
+(377–588 ms across rounds) is why 399 ms must not be read as "met".
+
+MCP first-call surface (same ledger, `initialize` + first call per tool):
+
+| Probe | 0.2.4 (35a51c3) | 0.3.0 dev |
+|---|---:|---:|
+| `initialize` | 81 ms, `protocolVersion: 2024-11-05` | 72 ms, `protocolVersion: 2025-11-25` (negotiated) |
+| first `advisers_today` | 550 ms, **isError: true** (CONTENT_BLOCKED) | 573 ms, `isError: false`, 3.3 KB payload |
+| first `advisers_commit_ls` | 56 ms, **isError: true** | 29 ms, `isError: false`, 8.6 KB |
+| first `advisers_remind` | 485 ms, **isError: true** | 156 ms, `isError: false`, 4.5 KB |
+
+The usability failure (`CONTENT_BLOCKED` on a 200k ledger) is fixed by the output caps
+(docs/MCP.md §3.1); the MCP **first-call latency target (≤300 ms)** is still missed for
+`advisers_today` because the first call still resolves the commitment+matters ledger
+before the read model runs.
+
+### 0.3.0 target status (engineering targets, not an SLA)
+
+Targets are the 0.3.0 exit table (planning report 25 §5.3): same-host A/B at 200k,
+median of 3, `write_bytes` for the write budget.
+
+| Metric | Target | 0.3.0 dev measured | Status |
+|---|---:|---:|---|
+| `today` | ≤150 ms, <1 MB write | 151–158 ms median (min 131–138 ms), 32 KB | **borderline** (at target; not a clean pass) |
+| `today --json` | ≤400 ms, <1 MB write | 751 ms, 28 KB | write met, **latency not met** (output-bound) |
+| `remind --json` | ≤400 ms, <1 MB write | 296 ms, 28 KB | met |
+| `digest day` | ≤200 ms | 226 ms (min 145–184 ms) | **borderline** |
+| `tui --once` | ≤400 ms | 216 ms | met |
+| `pet-brief` | ≤400 ms, <1 MB write | 399 ms (one round 588 ms), 32 KB | write met, **latency borderline** |
+| MCP first call | ≤300 ms + usable | today 573 ms but usable (`isError:false`) | usability fixed, **latency not met** |
+| write commands | ≤200 ms, WAL ≤1 MB (no regression) | 0.2.3 levels (not re-measured in this round) | not re-measured |
+| `--version` | ≤100 ms (no regression) | not re-measured | not re-measured |
+
+Read the table as: **T1 is delivered** (every measured read command writes ≤32 KB instead
+of 5.8–31.8 MB), and the read-model work moved `remind`/`tui`/`digest` inside/near
+target, but `today`/`pet-brief` are at the boundary and `today --json` remains
+output-bound. Do not advertise the 0.3.0 performance table as fully met. No v21
+(`due_ms`) migration was part of this change; the read-model work adds no migration
+(the 0.3.0 tree's v21 adds customer entities, not `due_ms`).
 
 ## 0.2.3 vs the 0.2.2 baseline
 
@@ -260,23 +420,56 @@ given generation time beyond those two info entries.
   the per-row semantics, and the bounded outcome read stays index-bounded with a
   200k-row nudge history (< 50 ms for 500 candidates).
 
+0.3.0 adds two Linux-focused read-path suites (no wall-clock assertions; CI stays
+stable on shared runners):
+
+- `packages/advisers/test/perf-no-spill.test.js` — seeds 60k facts / 20k open
+  commitments and asserts every measured read command's `/proc/<pid>/io`
+  `write_bytes` stays <1 MiB (the T1 acceptance). Skips on Windows (no `/proc`).
+- `packages/advisers/test/read-model-projections.test.js` — the narrow projections
+  return the rows/columns the views used to see, in historical rowid order, with no
+  `USE TEMP B-TREE FOR ORDER BY`, and `buildReminders`/`buildPetBrief`/`buildDigest`
+  produce byte-identical output from projected rows (including the pet-brief v0.2
+  vectors).
+
+```sh
+cd packages/advisers
+node --experimental-strip-types --test test/perf-no-spill.test.js
+node --experimental-strip-types --test test/read-model-projections.test.js
+node --experimental-strip-types --test test/perf-regression.test.js
+```
+
+Note for future changes: the **write-byte budget is the regression signal**, not wall
+time. If a new read path reintroduces `ORDER BY rowid` after a status predicate, the
+no-spill suite fails even when a fast machine hides the cost.
+
 ## Known limits
 
-- Synthetic data: the generator mirrors the audit ledger shape (facts,
+- Synthetic data: the generators mirror the audit ledger shape (facts,
   commitments, preferences, turns, deliveries, model calls) but not a real
-  user's attachment layout, FTS content or matter distribution.
+  user's attachment layout, FTS content or matter distribution. The 200k read
+  benchmark deliberately seeds **no turns**, so it does not measure FTS/search.
 - Peak RSS is the child's `maxRSS`, sampled once per process; it includes the
   loader/Node baseline and is not a heap profile.
 - Timing medians move with host load (the recorded runs varied by roughly
-  ±10–20% on a shared machine). Compare two builds on the same host, in the same
-  session, one at a time.
+  ±10–20% on a shared machine), and the 0.3.0 A/B is a small-sample median of
+  interleaved rounds. Compare two builds on the same host, in the same session,
+  one at a time; the margins around `today`/`pet-brief` are inside that noise band.
 - Partial loading covers the read commands (`status`, `today`, `who`, `week`,
   `receipt`, `deliveries`, and since 0.2.3 also `ls`, `memory search`, `evidence show`,
   `tui`, `remind`, `digest`, `pet-brief`, the MCP first call and the read-only `ui`
   snapshot); `tick`, `export`/`import` and delivery packs still need the whole ledger.
-- The 0.2.3 targets that are still missed at 200k rows are `today` (317 ms vs ≤150 ms) and
-  the remaining full-ledger read commands `remind` (972 ms), `digest` (641 ms), `tui`
-  (814 ms) and `pet-brief` (1,809 ms) against the ≤400 ms target. They are 0.3 work;
-  do not advertise the 0.2.3 read targets as fully met.
-- `memory search` and `pet-brief` write several MB during a run at 200k rows (`pet-brief`
-  ~21 MB); large-ledger IO for these paths is part of the 0.3 performance backlog.
+- 0.3.0 read-model work is **not a schema change**: the tree is schema v21 from the
+  additive customer-entity migration, and the measured queries/indexes are unchanged;
+  the planned v21 `commitments.due_ms` time-window migration is not part of this
+  change, so date filtering still runs in JS for `today`/`remind`/`agenda`.
+- Still open at 200k rows after 0.3.0 Wave 1: `today --json` wall time (output-bound:
+  ~27 MB stdout, write side fixed), MCP first-call latency for `advisers_today`
+  (~573 ms vs ≤300 ms target), and borderline `today`/`pet-brief` medians. Do not
+  advertise the 0.3.0 performance targets as fully met.
+- `pet-brief`'s 29–32 MB write amplification is fixed (now ~32 KB/run). `memory search`
+  still writes several MB during a run at 200k rows; that path was not part of T1 and
+  large-ledger FTS IO remains backlog.
+- The write-command numbers in the 0.2.3 section were not re-measured on the 0.3.0
+  tree in this round; the incremental-write design is unchanged, so they are expected
+  to hold, but a release re-measurement is required before any release claim.

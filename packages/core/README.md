@@ -12,12 +12,14 @@ SQLite/FTS persistence lives in the `advisers` distribution; this package has no
 
 ## Status
 
-`0.2.4` is a release candidate (2026-11-19; npm `latest` is still `0.2.3`, published
-2026-11-18). 0.2.4 is a provenance/tooling patch with no runtime change; the 0.2.3 release
+`0.3.0` is a release candidate (2026-11-20; npm `latest` is still `0.2.3`, published
+2026-11-18); the 0.2.4 candidate it supersedes was never published. The 0.2.3 baseline
 added pure ledger operations (`ops.ts`: commit add/edit/done/snooze, correct, decay,
 forget, memory accept/reject) and a partial-snapshot contract so the CLI can write
-incrementally and read only the tables it needs. `0.2.2`/`0.2.1`/`0.2.0` remain
-installable by pinning. The API is stabilizing but may change before 0.3.
+incrementally and read only the tables it needs; 0.3.0 keeps those contracts additive and
+shares the read-model, error-code-registry and contract artifacts documented in the
+`advisers` package. `0.2.2`/`0.2.1`/`0.2.0` remain installable by pinning. The API is
+stabilizing but may still change within 0.x.
 
 ## License
 

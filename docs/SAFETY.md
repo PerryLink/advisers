@@ -3,8 +3,8 @@
 | 项目 | 内容 |
 |---|---|
 | 适用对象 | Advisers 用户、集成方与扩展开发者 |
-| 文档版本 | 2026.11.2（与 [docs/TOS.md](https://github.com/PerryLink/advisers/blob/main/docs/TOS.md) 同版本） |
-| 最后更新 | 2026-11-17 |
+| 文档版本 | 2026.11.3（与 [docs/TOS.md](https://github.com/PerryLink/advisers/blob/main/docs/TOS.md) 同版本） |
+| 最后更新 | 2026-11-20 |
 | 范围 | 本软件自带的内容安全辅助机制、其能力边界、用户责任与申诉方式 |
 | 性质 | 本文是解释性技术说明，不单独创设法律义务；与 TOS 冲突时以 TOS 为准 |
 
@@ -90,12 +90,13 @@ Advisers 包含（或按版本逐步接入）本地内容安全规则、可选�
 
 ## 11. 与 TOS / 免责声明 / 隐私说明的关系
 
-- 本说明是 [docs/TOS.md](https://github.com/PerryLink/advisers/blob/main/docs/TOS.md)（v2026.11.2）、[docs/DISCLAIMER.md](https://github.com/PerryLink/advisers/blob/main/docs/DISCLAIMER.md) 与 [docs/PRIVACY.md](https://github.com/PerryLink/advisers/blob/main/docs/PRIVACY.md) 的补充说明，不构成独立法律承诺。
+- 本说明是 [docs/TOS.md](https://github.com/PerryLink/advisers/blob/main/docs/TOS.md)（v2026.11.3）、[docs/DISCLAIMER.md](https://github.com/PerryLink/advisers/blob/main/docs/DISCLAIMER.md) 与 [docs/PRIVACY.md](https://github.com/PerryLink/advisers/blob/main/docs/PRIVACY.md) 的补充说明，不构成独立法律承诺。
 - 若本说明与 TOS 冲突，以 TOS 为准；TOS 与仓库许可证冲突时，许可证就相应代码/文档的授权优先。
 
 ## 12. 变更记录
 
 | 版本 | 日期 | 变更 |
 |---|---|---|
+| 2026.11.3 | 2026-11-20 | 与 TOS/PRIVACY 同步版本：补充 bridge（Hermes 文件网关）出网披露；本文内容未作实质变更 |
 | 2026.11.2 | 2026-11-17 | 定稿：删除审阅标记、写明 0.2.0 规则层接入范围以发布说明为准、出网清单与隐私说明对齐、标识义务按义务主体分层、申诉渠道与时限确定、TTS/深度合成口径具体化 |
 | 2026.11.1 | 2026-11-17 | 首版：诚实口径、机制与边界、数据出网、健康使用、未成年人、AI 标识、TTS/深度合成、申诉渠道 |

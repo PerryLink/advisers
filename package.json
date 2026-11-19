@@ -22,7 +22,10 @@
     "verify:release": "node scripts/verify-release.mjs",
     "test:security": "node scripts/security-suite.mjs",
     "test:fault": "node scripts/fault-injection.mjs",
-    "eval:det": "node scripts/eval-det.mjs"
+    "eval:det": "node scripts/eval-det.mjs",
+    "check:contracts": "node scripts/check-contracts.mjs",
+    "sbom": "node scripts/sbom.mjs",
+    "check:sbom": "node scripts/check-sbom.mjs"
   },
   "devDependencies": {
     "@types/node": "^22.20.5",

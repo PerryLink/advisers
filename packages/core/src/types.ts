@@ -22,6 +22,13 @@ export interface Matter {
   openQuestions: string[]
   createdAt: IsoDate
   updatedAt: IsoDate
+  /**
+   * 0.3.0 (schema v21) ownership: a SQLite-only clients/projects reference.
+   * Optional and additive — the wire snapshot stays version 1, and a matter
+   * written before v21 simply omits both fields (unclassified).
+   */
+  clientId?: Id
+  projectId?: Id
 }
 
 export type Authority = 'user' | 'tool' | 'inferred' | 'import'
@@ -78,6 +85,13 @@ export interface Commitment {
   capability: Capability
   supersedes?: Id
   doneAt?: IsoDate
+  /**
+   * 0.3.0 (schema v21): the instant the commitment was recorded. The customer
+   * timeline places a commitment here, never at its due date. Optional because
+   * commitments written before v21 have no creation instant (their rows keep
+   * NULL and the derived timeline reports them as degraded).
+   */
+  createdAt?: IsoDate
   /**
    * Opt-in reminder offsets for this commitment, e.g. `['-1d', '-2h',
    * '+0d09:00']`. The core only carries the strings; the advisers `remind`

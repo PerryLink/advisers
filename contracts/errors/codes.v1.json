@@ -579,6 +579,136 @@
       "remedy": "A calendar entry was skipped (unsupported TZID or invalid time). It is listed in agenda().degraded[]; the rest of the window is still valid."
     },
     {
+      "code": "E_CLIENT_ALIAS_CONFLICT",
+      "category": "state",
+      "exit": 1,
+      "surfaces": [
+        "cli",
+        "lib"
+      ],
+      "since": "0.3.0",
+      "stable": true,
+      "remedy": "Client alias already belongs to another client; choose a unique alias or merge the clients.",
+      "doc": "docs/CLIENTS.md"
+    },
+    {
+      "code": "E_CLIENT_ALIAS_NOT_FOUND",
+      "category": "state",
+      "exit": 1,
+      "surfaces": [
+        "cli",
+        "lib"
+      ],
+      "since": "0.3.0",
+      "stable": true,
+      "remedy": "The requested client alias does not exist; run `advisers client show <id>` to inspect aliases.",
+      "doc": "docs/CLIENTS.md"
+    },
+    {
+      "code": "E_CLIENT_ARCHIVED",
+      "category": "state",
+      "exit": 1,
+      "surfaces": [
+        "cli",
+        "lib"
+      ],
+      "since": "0.3.0",
+      "stable": true,
+      "remedy": "The client is archived; restore it first or choose an active client.",
+      "doc": "docs/CLIENTS.md"
+    },
+    {
+      "code": "E_CLIENT_DUPLICATE",
+      "category": "state",
+      "exit": 1,
+      "surfaces": [
+        "cli",
+        "lib"
+      ],
+      "since": "0.3.0",
+      "stable": true,
+      "remedy": "An active client with the same normalized name exists; use `client show` or merge explicitly.",
+      "doc": "docs/CLIENTS.md"
+    },
+    {
+      "code": "E_CLIENT_HAS_ACTIVE_PROJECTS",
+      "category": "state",
+      "exit": 1,
+      "surfaces": [
+        "cli",
+        "lib"
+      ],
+      "since": "0.3.0",
+      "stable": true,
+      "remedy": "The client still has active projects; archive/close them first (or use --dry-run to list them).",
+      "doc": "docs/CLIENTS.md"
+    },
+    {
+      "code": "E_CLIENT_INVALID",
+      "category": "usage",
+      "exit": 1,
+      "surfaces": [
+        "cli",
+        "lib"
+      ],
+      "since": "0.3.0",
+      "stable": true,
+      "remedy": "Invalid client fields; check --name, --alias, --secrecy and --note.",
+      "doc": "docs/CLIENTS.md"
+    },
+    {
+      "code": "E_CLIENT_MERGE_SELF",
+      "category": "usage",
+      "exit": 1,
+      "surfaces": [
+        "cli",
+        "lib"
+      ],
+      "since": "0.3.0",
+      "stable": true,
+      "remedy": "Cannot merge a client into itself; pass a different source/target id.",
+      "doc": "docs/CLIENTS.md"
+    },
+    {
+      "code": "E_CLIENT_NOTE_INVALID",
+      "category": "usage",
+      "exit": 1,
+      "surfaces": [
+        "cli",
+        "lib"
+      ],
+      "since": "0.3.0",
+      "stable": true,
+      "remedy": "Invalid client note; check --summary, --kind and the optional project/matter ids.",
+      "doc": "docs/CLIENTS.md"
+    },
+    {
+      "code": "E_CLIENT_NOTE_NOT_FOUND",
+      "category": "state",
+      "exit": 1,
+      "surfaces": [
+        "cli",
+        "lib"
+      ],
+      "since": "0.3.0",
+      "stable": true,
+      "remedy": "The client note id does not exist or was deleted.",
+      "doc": "docs/CLIENTS.md"
+    },
+    {
+      "code": "E_CLIENT_NOT_FOUND",
+      "category": "state",
+      "exit": 1,
+      "surfaces": [
+        "cli",
+        "lib"
+      ],
+      "since": "0.3.0",
+      "stable": true,
+      "remedy": "The client id does not exist; use `advisers client list`.",
+      "doc": "docs/CLIENTS.md"
+    },
+    {
       "code": "E_CONFIDENCE",
       "category": "schema",
       "exit": 1,
@@ -625,6 +755,19 @@
       "since": "0.2.x",
       "stable": true,
       "remedy": "Another advisers writer holds the instance lock. Close it or wait and retry; ADVISERS_LOCK_TIMEOUT_MS controls the wait."
+    },
+    {
+      "code": "E_DELIVERY_INVALID",
+      "category": "usage",
+      "exit": 1,
+      "surfaces": [
+        "cli",
+        "lib"
+      ],
+      "since": "0.3.0",
+      "stable": true,
+      "remedy": "Invalid delivery lineage or template metadata; check the client/project and template fields.",
+      "doc": "docs/CLIENTS.md"
     },
     {
       "code": "E_DISPLAY_POLICY",
@@ -820,6 +963,19 @@
       "doc": "docs/CLI-JSON.md"
     },
     {
+      "code": "E_MATTER_CLIENT_MISMATCH",
+      "category": "usage",
+      "exit": 1,
+      "surfaces": [
+        "cli",
+        "lib"
+      ],
+      "since": "0.3.0",
+      "stable": true,
+      "remedy": "The matter belongs to a different client; pick a matter owned by the target client.",
+      "doc": "docs/CLIENTS.md"
+    },
+    {
       "code": "E_MATTER_NOT_FOUND",
       "category": "usage",
       "exit": 1,
@@ -889,6 +1045,71 @@
       "stable": true,
       "remedy": "Not enough disk space. Free space and retry; the temp file was removed and no truncated file was installed.",
       "doc": "docs/FAULT-INJECTION.md"
+    },
+    {
+      "code": "E_PROJECT_ARCHIVED",
+      "category": "state",
+      "exit": 1,
+      "surfaces": [
+        "cli",
+        "lib"
+      ],
+      "since": "0.3.0",
+      "stable": true,
+      "remedy": "The project is archived; restore it or choose an active project.",
+      "doc": "docs/CLIENTS.md"
+    },
+    {
+      "code": "E_PROJECT_CLIENT_MISMATCH",
+      "category": "usage",
+      "exit": 1,
+      "surfaces": [
+        "cli",
+        "lib"
+      ],
+      "since": "0.3.0",
+      "stable": true,
+      "remedy": "The project belongs to a different client; use the project's client.",
+      "doc": "docs/CLIENTS.md"
+    },
+    {
+      "code": "E_PROJECT_DUPLICATE",
+      "category": "state",
+      "exit": 1,
+      "surfaces": [
+        "cli",
+        "lib"
+      ],
+      "since": "0.3.0",
+      "stable": true,
+      "remedy": "An active project with the same normalized name exists for this client.",
+      "doc": "docs/CLIENTS.md"
+    },
+    {
+      "code": "E_PROJECT_INVALID",
+      "category": "usage",
+      "exit": 1,
+      "surfaces": [
+        "cli",
+        "lib"
+      ],
+      "since": "0.3.0",
+      "stable": true,
+      "remedy": "Invalid project fields; check --name, --client and dates.",
+      "doc": "docs/CLIENTS.md"
+    },
+    {
+      "code": "E_PROJECT_NOT_FOUND",
+      "category": "state",
+      "exit": 1,
+      "surfaces": [
+        "cli",
+        "lib"
+      ],
+      "since": "0.3.0",
+      "stable": true,
+      "remedy": "The project id does not exist; use `advisers project list`.",
+      "doc": "docs/CLIENTS.md"
     },
     {
       "code": "E_READ",

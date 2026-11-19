@@ -11,6 +11,6 @@ dependency closure of the published packages ("pnpm list --prod --depth 100";
 devDependencies and workspace packages excluded). Do not edit by hand; CI runs
 "node scripts/check-licenses.mjs".
 
-This file is shipped with the advisers-bridge-hermes@0.2.4 npm package and covers the third-party production dependencies of that package only. Each dependency keeps its own license.
+This file is shipped with the advisers-bridge-hermes@0.3.0 npm package and covers the third-party production dependencies of that package only. Each dependency keeps its own license.
 
 No third-party production dependencies were found for this scope.

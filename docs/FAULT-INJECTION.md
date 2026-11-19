@@ -62,8 +62,8 @@ schema and audit chain.
 |---|---|---|
 | `crash-before-commit` | `SIGKILL` after `BEGIN IMMEDIATE` of a `commit add` write transaction (before `COMMIT`) | uncommitted row is not visible, commitment and audit counts unchanged, `quick_check` ok, `doctor --check-db` passes, no corrupt-file residue, next write commits |
 | `crash-after-commit` | `SIGKILL` after `COMMIT` but before checkpoint/clean close | committed row and its audit row survive WAL recovery, `quick_check` ok, `doctor --check-db` passes |
-| `migration-interrupted` | `SIGKILL` inside a schema v19 -> v20 migration transaction | schema stays 19 (no partial migration), `quick_check` ok, verified `"state.db.before-migrate-v19-*"` backup (schema 19 + same row counts), retry migrates to 20 with rows intact |
-| `migration-failure-rollback` | injected error in the v20 migration step | command fails with the error surfaced, transaction rolls back to v19, verified pre-migration backup, retry succeeds |
+| `migration-interrupted` | `SIGKILL` inside a schema v19 -> v21 migration transaction | schema stays 19 (no partial migration), `quick_check` ok, verified `"state.db.before-migrate-v19-*"` backup (schema 19 + same row counts), retry migrates to 21 with rows intact |
+| `migration-failure-rollback` | injected error in the v20 step of the v19→v21 migration | command fails with the error surfaced, transaction rolls back to v19, verified pre-migration backup, retry succeeds |
 | `wal-invalid-header` | committed WAL with a zeroed header | `E_WAL_CORRUPT` warning, exact corrupt bytes preserved as `state.db-wal.corrupt-<ts>`, WAL quarantined, database and audit still verify |
 | `wal-truncated` | committed WAL with a torn (partial) frame | `E_WAL_TRUNCATED` warning, WAL preserved as evidence, valid prefix recovered, database and audit still verify |
 | `fts-desynchronised` | FTS sync trigger dropped + a row inserted directly | `doctor --check-db` reports `db-fts` FAIL with `state=inconsistent`; `search` still returns the row through the `LIKE` fallback with a warning instead of silently dropping hits |

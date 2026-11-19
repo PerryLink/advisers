@@ -6,7 +6,7 @@
   "description": "Contract version manifest and the frozen payload of the `status --json` contracts discovery field. One call tells a consumer which contract versions this CLI implements.",
   "discovery": {
     "field": "status.contracts",
-    "status": "pending-integration-wave",
+    "status": "wired-in-0.3.0",
     "expected": {
       "cliJson": 1,
       "errors": 1,

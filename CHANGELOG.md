@@ -1,5 +1,236 @@
 # Changelog
 
+## 0.3.0 (release candidate, 2026-11-20)
+
+"Trustworthy delivery" minor release: evidence that resolves or is honestly marked
+missing/unverifiable, data that can be recovered (audit anchor, backup rotation and
+verified restore, `doctor --repair`), a ledger that stays usable at 200k rows, MCP
+output that no longer fails closed on a large ledger, and a release whose provenance can
+be checked against the registry. It absorbs the unpublished 0.2.4 Windows-durable-fsync
+and per-item secrecy/evidence-clearance work as its base; the 0.2.4 tag remains an
+unpublished release candidate superseded by 0.3.0.
+
+The eight workspace packages are lockstep at `0.3.0`, the eight internal workspace pins,
+the three version constants and `pnpm-lock.yaml` follow, and the six per-package
+`THIRD-PARTY-NOTICES.md` files were regenerated (version line only; the dependency list
+is unchanged). The packaged and public legal texts are now **v2026.11.3 (2026-11-20)**.
+
+Status: **release candidate, not published**. npm `latest`/`next` remain `0.2.3`;
+0.2.4 was never published and is superseded by 0.3.0. Until the npm account owner
+approves CI-staged builds and the six packages show non-empty `dist.attestations` in
+the registry, no document or release note may call 0.3.0 provenance-signed, installable,
+or a published release.
+
+### Security and privacy
+
+- **Per-item secrecy clearance on every egress surface**: pack/receipt export now reads
+  each record's matter secrecy instead of one global "active matter" gate. Batch
+  `deliveries --pack/--receipt` excludes protected items and reports only the count
+  (`protectedExcluded`); an explicit `--ids` selection that hits a protected item fails
+  as a whole with `E_SECRECY_BLOCKED` instead of silently returning a shorter pack. The
+  same rule is applied to the MCP read tools/resources (server-side `clearance`, default
+  `0`, never a tool argument), the DSH adapter (`clearance 0`), the bridge/model and
+  Pet Brief projections. Every path filters **before** counting or truncating and never
+  emits protected titles, quotes or bodies; audit rows record counts/codes only.
+- **`ADVISERS_TOS_VERSION` can no longer forge a consent record**: acceptance records and
+  the consent gate always use the packaged manifest version (`2026.11.3`); the
+  environment variable is debug display only, is reported as ignored in
+  `tos status --json`, and is audited once as `TOS_ENV_OVERRIDE_IGNORED`.
+  `tos show --as-version` is the explicit, audited debug path.
+- **Receipt verifier resource limits**: a receipt pack is a counterparty artifact, so
+  `evidence verify` now caps entries, directory depth, per-file size, total bytes,
+  `SHA256SUMS` and manifest size, hashes in chunks, and fails with the stable
+  `E_RECEIPT_LIMIT` code (`{limit,max,actual,file}`) instead of risking a DoS.
+  Normal v1/v1.1 packs are unaffected.
+- **Remote text is sanitised before it reaches a terminal or log**: the new
+  `lib/text-safe.js` strips ANSI/OSC/CSI, C0/C1 controls, bidi overrides, folds newlines
+  and caps length; webhook responses keep only status/stable codes (body dropped) and
+  IMAP only phase/status tokens, so `reminders.log` cannot be log-injected.
+- Evidence: forged quotes remain `missing(quote_mismatch)` (0.2.4 base, regression
+  tests kept); per-item clearance is covered by `pack-secrecy`, `mcp-clearance`,
+  `mcp-output-caps`, `receipt-limits` and the DSH matrix tests.
+
+### Performance at 200k rows (T1/T2)
+
+- **T1 write amplification fixed**: the hot read paths stop forcing a SQLite TEMP B-TREE
+  sort — `loadFacts` gained `validOnly`, `loadCommitments` gained `order:'natural'|'table'`,
+  and the hot call sites use narrow queries plus explicit ordering. On the 200k
+  synthetic ledger the measured writes dropped from 5.8–31.8 MB per command to
+  **≤32 KB**: `today` 5.8 MB → 32 KB, `today --json` 10.8 MB → 28 KB, `pet-brief`
+  31.8 MB → 32 KB. Wall time: `remind` 1,041 → 335 ms, `tui --once` 972 → 216 ms,
+  `digest day` 551 → 226 ms, `pet-brief` 2,171 → 399 ms (one interleaved round 588 ms),
+  `today` 230 → 151 ms; `today --json` writes collapse but stays output-bound at
+  ~751 ms.
+- **T2 read-model/SQL projections**: `status`/`today`/`remind`/`digest`/`tui`/`pet-brief`
+  read paths use store-level SQL projections that return the same rows in the same
+  historical order; `test/read-model-projections.test.js` pins byte-identical view
+  output and query plans without `USE TEMP B-TREE FOR ORDER BY`. The projection work
+  adds no migration (the 0.3.0 tree is on schema **v21**, from the additive
+  customer-entity step below); no `due_ms`/`rev` column migration is part of 0.3.0.
+- **Honest target status**: T1 is delivered (every measured read command writes ≤32 KB);
+  `remind --json`, `tui --once` and the write budget are met; `today`, `digest day` and
+  `pet-brief` sit at the target boundary and `today --json` misses the latency target
+  (output-bound). See [docs/PERFORMANCE.md](docs/PERFORMANCE.md) for the A/B table; do
+  not advertise the 0.3.0 performance table as fully met.
+
+### MCP
+
+- **Output caps with true counts**: list-shaped tools/resources apply per-item clearance,
+  then cap, then count, and return additive `total`/`truncated` (and
+  `mineTotal`/`waitingTotal` for `who`) plus `clearance`/`protectedExcluded`. A 200k
+  ledger no longer returns `CONTENT_BLOCKED/INPUT_TRUNCATED` for
+  `advisers_today`/`advisers_commit_ls`/`advisers_remind`; small-ledger responses are
+  unchanged. First-call latency is still above the ≤300 ms target for
+  `advisers_today` (usability fixed, latency not met).
+- **Legacy protocol negotiation**: `initialize` echoes the client's requested version
+  when it is one of `2024-11-05` / `2025-06-18` / `2025-11-25`, and falls back to
+  `2024-11-05` for a missing/unknown version. The stateless modern revision
+  `2026-07-28` is **not** implemented and `server/discover` is not advertised.
+
+### Data, recovery and operations
+
+- **Read-only ledger facade**: `advisers/lib/ledger-read.js` is a published subpath and
+  the single read-policy entry point for non-writer consumers — read-only connection,
+  no HOME write lock, no migration, no HOME creation, no DB writes, TOS-acceptance gate
+  and per-item clearance. `dsh-advisers` now reads the **real local ledger** read-only
+  for `advisers_today`/`advisers_who`/`advisers_evidence` (narrow commitment index
+  projections and primary-key lookups, no full ledger load); the old empty preview is
+  kept only as an explicit `preview:true` / `source:"preview-no-ledger"` fallback when
+  there is no ledger or the facade is unavailable (TOS/vault/schema/busy failures are
+  structured errors, not empty data).
+- **Audit tail anchor (local only)**: `audit-anchor.json` (0600, HMAC-keyed when
+  `audit.key` exists) records `dbId/count/lastSeq/headHash`; `audit --write-anchor`,
+  `audit --expect-count`, `audit --expect-head` make tail deletion and rollback
+  detectable; export/backup/sync/restore and `doctor` keep the anchor coherent.
+  This is a **local** checkpoint, not a third-party attestation or timestamp: the same
+  user can rewrite anchor and database, and documentation must not call it
+  tamper-proof.
+- **Backup rotation and verified restore**: `backup --keep <N|daily=..,weekly=..,monthly=..>`
+  with dry-run-by-default rotation, `backups ls|verify`, and `restore <file>` — plan by
+  default, `--yes` applies: pre-restore safety backup, verified copy, atomic install,
+  post-install verification with rollback on failure, `db.restore` audit row and a
+  fresh anchor. A `restore-drill` test suite covers the failure matrix (Linux; Windows
+  smoke covers the durable-write paths).
+- **`doctor --repair` and strict flags**: `doctor --repair` plans by default
+  (`--dry-run` explicit, `--yes` applies, `--only lock,temp,wal,fts`), writes a safety
+  backup, repairs, re-verifies and audits each item; `audit --rebuild-fts` now does what
+  the reader warning says instead of silently exiting 0. The operational commands
+  (`audit`, `doctor`, `backup`, `backups`, `restore`, `status`, `export`) parse an
+  explicit allowlist and fail closed with `E_USAGE` on an unknown flag (Wave-2), so a
+  typo like `--yse` can no longer look like success. Older commands keep their lenient
+  parsing; v1's known gaps record this.
+- **Small fixes from the audits**: `week` uses a local-day window, `today --calendar`
+  shares the agenda TZID handling, and the optional webhook payload carries an
+  HMAC signature + timestamp + id (mismatch/expiry rejected). `backups ls` and
+  `restore` respect a sealed vault.
+
+- **Customer/project entities (schema v21, additive)**: the ledger adds `clients`,
+  `projects` and `client_notes`, nullable `matters.client_id`/`project_id` ownership,
+  `commitments.created_at` (the derived customer timeline needs when a commitment was
+  recorded) and snapshot lineage columns on deliveries (`client_id`/`project_id` plus
+  `template_name`/`template_version`/`quote_no`/`data_sha256`). The v20→v21 migration
+  is a normal backed-up per-version step. A first CLI surface ships with it:
+  `client add|list|show|timeline|archive|merge|note`, `project add|list|show|archive`,
+  `matter add --client/--project` and `matter ls --client|--project|--unclassified`;
+  `client/project show` include a derived timeline, and `status --json` gains additive
+  `clients`/`projects` counts. `export --all` and `import --replace` carry the three new
+  tables in the same transaction (projects→clients, matter ownership and note references
+  are checked; a newer `schemaVersion` is refused), while the JSON wire format
+  (`LedgerSnapshot.version`) intentionally stays 1. Receipt `--client` filtering,
+  client-scoped MCP tools and client manifest v2 are **not** in 0.3.0. See
+  [docs/CLIENTS.md](docs/CLIENTS.md).
+
+### Contracts, evaluation and release trust
+
+- **Machine-readable contracts under `contracts/`** (v1, frozen 2026-11-20): CLI JSON
+  read models, commands, errors and exit codes; MCP tools/resources/protocol/responses
+  and vectors; `status --json` now carries the additive `contracts` discovery object
+  (wired in Wave 2, equal to `contracts/versions-v1.json`). `scripts/check-contracts.mjs`
+  validates the artifacts against the real CLI and stdio MCP server (vectors, error
+  envelopes, discovery, docs consistency) and runs in CI; consumers are registered in
+  `contracts/CONSUMERS.json`.
+- **Single-source error-code registry**: `lib/error-codes.js` + generated
+  `docs/ERROR-CODES.md` and `contracts/errors/codes.v1.json` (50 frozen 0.2.x codes +
+  additive 0.3.0 codes); `check-contracts --errors` fails on an unregistered code.
+- **Deterministic eval suite** (`pnpm eval:det`, no API key, no network, ~20 s): morning
+  `dataSha256` determinism across processes/days, MCP surface, JSON purity, exit codes
+  0/1/3 and non-TTY output; results are redacted machine evidence under
+  `eval/det/results/` (gitignored). It is a CI step and a release-gate input, not a
+  model-quality claim. See [docs/EVAL.md](docs/EVAL.md).
+- **SBOM artifact and gate**: `scripts/sbom.mjs` generates a CycloneDX 1.7 SBOM from
+  `pnpm-lock.yaml` offline (workspace coverage + path scrubbing), `check-sbom.mjs`
+  validates it, and CI runs generate + check. See [docs/SBOM.md](docs/SBOM.md).
+- **Release trust**: `verify-release.mjs` now asserts non-empty `dist.attestations`, the
+  attestation subject vs registry tarball integrity, and the tag/commit/source match;
+  `check-provenance.mjs` runs the same checks standalone and is self-tested offline;
+  the `publish.yml` staging path is documented honestly. 0.3.0 is the **first intended**
+  Trusted-Publishing/provenance release; nothing is claimed until the registry shows it.
+
+### Terminal output kernel
+
+- **0.3.0 output kernel** (library `lib/tui/` + `lib/text-safe.js`): display width with
+  CJK/emoji/grapheme awareness, wrapping/truncation/padding, ANSI/OSC/bidi/control
+  stripping, `NO_COLOR`/`--color`/plain/accessible policy, pure block renderers
+  (status/result/error/confirmation), JSON-purity guards, BOM-aware text-file reads and
+  atomic BOM-less writes. It is wired into the `tui` command and the REPL: a non-TTY
+  `tui` prints one plain snapshot (no ESC/clear, no hang), `tui --json` is a single pure
+  JSON document, REPL status/error blocks and CJK wrapping use the renderers, and
+  `[tool]`/`[attach]`/`[compact]` internal steps are hidden unless `ADVISERS_PROGRESS=1`.
+  Webhook/IMAP remote text is sanitised before terminals/logs. The full interactive
+  shell/state machine remains 0.3.1 work (see [docs/TUI.md](docs/TUI.md)).
+
+### Legal texts (TOS v2026.11.3)
+
+- **TOS/PRIVACY/DISCLAIMER/SAFETY v2026.11.3 (2026-11-20)** — a substantive revision:
+  it adds the bridge/Hermes egress disclosure (TOS §9.3(h), PRIVACY §4 and the bridge
+  scope note) that the shipped bridge channel had been missing. The version/effective
+  date and manifest hashes were bumped; packaged copies in `lib/tos/` and
+  `templates/legal-notice-code-template.md` were synced, **an existing consent for
+  v2026.11.2 is not treated as valid for v2026.11.3** (re-acceptance is required on the
+  next gated command), and `check-tos --release` now fails if the bridge/Hermes rows
+  disappear. `ADVISERS_TOS_VERSION` cannot fake the record (see Security above).
+
+### Compatibility
+
+- Schema is **v21** (additive customer entities over v20); exit codes stay **0/1/3**
+  (4/5/6 remain reserved and inactive);
+  evidence/receipt pack formats stay v1/v1.1 (new verifier limits reject malformed or
+  oversized packs, normal packs are unchanged); MCP clients that only know the legacy
+  handshake keep working; all new JSON fields are additive.
+
+### Known issues and not delivered in 0.3.0
+
+- **0.3.0 is a release candidate, not a published release.** npm `latest`/`next` are
+  `0.2.3`; provenance may only be claimed after the six packages show non-empty
+  `dist.attestations` on registry.npmjs.org.
+- **No real-Windows E13 evidence yet**: the Windows CI smoke job covers the durable-write
+  commands (backup, export `--out`, import `--replace`, vault seal/unseal) and the
+  docs/release gates, but a real Windows 11 machine run of backup/restore/import/unseal/
+  export/sync/migration, and the full `pnpm -r test` on Windows, are still pending.
+  Do not present Windows support as fully verified.
+- **Interactive TUI shell** (full screen/shell state machine) is deferred to 0.3.1; only
+  the output kernel is in 0.3.0.
+- **Receipt `--client` filtering, client-scoped MCP tools/manifest v2, the customer
+  status pack, knowledge base and the mail/IMAP entry point are not in 0.3.0.** The
+  client/project CLI, derived timeline and export/import parity that ship are listed
+  above; there is no client-filtered receipt or MCP client tool yet.
+- **PolicyGrant / taint state machine / confirm digest / exit codes 4–6 / full policy
+  engine** are 0.4 work; 0.3.0 ships the per-item clearance matrix + error-code registry
+  only and must not be described as a unified policy engine.
+- **MCP modern (2026-07-28)** is not implemented; only legacy negotiation up to
+  2025-11-25.
+- **vault envelope v2** (AAD-bound KDF parameters, higher default scrypt strength) is not
+  in 0.3.0; the existing v1 envelope behaviour is unchanged.
+- **Performance targets are not all met** (see the performance section): T1 write
+  amplification is fixed, but `today --json` latency, the MCP first-call target and the
+  `today`/`digest`/`pet-brief` boundaries are still open.
+- **DSH remains honest-preview on fallback**: the real read-only ledger is used when a
+  ledger and a valid TOS acceptance exist; otherwise the adapter returns the marked
+  preview. There is no DSH write path.
+- **Audit anchor is local-only** (no TSA/OTS/third-party notarisation) and **no
+  provenance/SBOM/reproducibility is claimed for 0.2.3 or earlier**; 0.2.4 was never
+  published and has nothing to verify.
+
 ## 0.2.4 (release candidate, 2026-11-19)
 
 Provenance/tooling patch on the 0.2.x stable line. The eight workspace packages are

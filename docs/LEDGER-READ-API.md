@@ -49,7 +49,11 @@ import {
    and text hash is required (`E_TOS_REQUIRED`, with a `reason`). The facade
    never records acceptance for the user and ignores the `ADVISERS_TOS_VERSION`
    environment override when deciding (an env var must not be able to fake
-   consent).
+   consent). The packaged version on the 0.3.0 tree is **TOS v2026.11.3
+   (2026-11-20)** (the legal-text version bump that adds the bridge/Hermes egress
+   disclosure); an acceptance record for an older version/text triggers
+   `E_TOS_REQUIRED` until the user re-accepts in the CLI, and the read-only
+   consumers never accept on the user's behalf.
 6. **Short-lived connection**: each call opens and closes its own connection so
    a `vault unseal` / `sync pull` inode replacement or a concurrent writer does
    not leave a stale long-lived reader.
@@ -200,3 +204,17 @@ Errors are `LedgerReadError` instances: `{ code, message, hint?, cause?, schemaV
   fallback, real ledger today/who/evidence (CLI parity), TOS errors, sealed /
   stale / newer, preview kill switch, unavailable facade, WAL concurrency,
   JSON store, read-only side effects.
+
+```sh
+cd packages/advisers
+node --experimental-strip-types --test test/ledger-read.test.js
+cd ../dsh-advisers
+node --test test/ledger-read.test.js test/preview.test.js test/schema.test.js
+```
+
+Consumer-side acceptance (DSH real read, no write path): point `home` at a real
+TOS-accepted ledger and call `advisers_today`/`advisers_who`/`advisers_evidence`; every
+payload carries `preview: false` + `source: "ledger-readonly"` + `clearance: 0` (with
+`backend`/`warnings`/`protectedExcluded` where applicable), and no `~/.advisers` file or
+lock is created or modified. A TOS-missing ledger returns `{ ok: false, error:
+{ code: "LEDGER_TOS_REQUIRED", ... } }`, never empty data.

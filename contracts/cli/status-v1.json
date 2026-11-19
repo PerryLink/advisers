@@ -16,7 +16,7 @@
   "schemaRef": "read-models-v1.schema.json#/$defs/StatusPayload",
   "discovery": {
     "field": "contracts",
-    "status": "pending-integration-wave",
+    "status": "wired-in-0.3.0",
     "expected": "versions-v1.json#/discovery/expected",
     "schemaRef": "read-models-v1.schema.json#/$defs/ContractsDiscovery",
     "rule": "Additive optional object. When present, every key must equal versions-v1.json discovery.expected (mcpProtocol may be any version listed in mcp/versions-v1.json supportedProtocolVersions). Consumers that do not see it must assume the v1 defaults.",

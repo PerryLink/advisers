@@ -4,6 +4,14 @@
 not CI tests: CI has no model key and a meaningful run costs real model tokens.
 Every script fails fast (exit 1, one line on stderr) when no key is configured.
 
+> **Deterministic half.** `pnpm eval:det` is a separate no-key / no-network
+> suite that *does* run in CI after the workspace build; it is documented in
+> [docs/EVAL.md](../docs/EVAL.md) and [`eval/det/README.md`](det/README.md). The
+> runners on this page are the manual, real-model half and are never CI gates.
+> Other model-free 0.3.0 CI gates: `node scripts/check-contracts.mjs`
+> ([docs/CONTRACTS.md](../docs/CONTRACTS.md)) and
+> `pnpm run sbom && pnpm run check:sbom` ([docs/SBOM.md](../docs/SBOM.md)).
+
 ## Requirements
 
 - Node >= 22.16 (`node:sqlite` with FTS5). Repo dependencies installed (`pnpm install`).

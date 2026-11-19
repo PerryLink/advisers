@@ -24,6 +24,7 @@ import {
   isExemptCommand,
   modificationNotice,
   readAcceptance,
+  readManifest,
   readSourceFingerprint,
   resolveConsent,
   revokeAcceptance,
@@ -37,6 +38,9 @@ import {
 
 const bin = fileURLToPath(new URL('../bin/advisers.js', import.meta.url))
 const isWindows = process.platform === 'win32'
+// Never hardcode the legal-text version here: bumping lib/tos/manifest.json must
+// not leave the consent tests stale (0.3.0 bumped TOS to 2026.11.3).
+const MANIFEST_VERSION = readManifest().version
 
 function baseEnv(home) {
   const env = { ...process.env, ADVISERS_HOME: home, ADVISERS_CORE_LOCAL: '1', ADVISERS_OFFICE_LOCAL: '1', ADVISERS_NO_MODEL: '1', ADVISERS_STORE: 'sqlite' }
@@ -202,7 +206,7 @@ test('TOS-T3: --accept-tos (global flag, before or after the command) records ch
       const result = run(mismatched.home, ['--accept-tos=2099.1.1', 'commit', 'ls'])
       assert.equal(result.status, 1)
       assert.equal(result.stdout, '')
-      assert.match(result.stderr, /does not match the current TOS version 2026\.11\.2/)
+      assert.match(result.stderr, new RegExp('does not match the current TOS version ' + MANIFEST_VERSION.replace(/\./g, '\\.')))
       assert.equal(existsSync(join(mismatched.home, 'tos.json')), false)
     } finally {
       rmSync(mismatched.root, { recursive: true, force: true })
@@ -268,32 +272,51 @@ test('TOS-T5: tos revoke marks the record revoked, adds tos.revoke and re-blocks
   }
 })
 
-test('TOS-T6: a version change re-requires acceptance; accepting the new version overwrites the record', () => {
+test('TOS-T6: ADVISERS_TOS_VERSION cannot fake consent or change the recorded version (P0-S3)', () => {
   const { root, home } = setup('version-change')
   try {
     runOk(home, ['commit', 'ls'], { ADVISERS_ACCEPT_TOS: '1' })
-    assert.equal(readTosRecord(home).version, '2026.11.2')
+    assert.equal(readTosRecord(home).version, MANIFEST_VERSION)
 
+    // The env override must neither invalidate nor rewrite the real record; it
+    // is reported as ignored and audited once per process.
+    const forged = JSON.parse(runOk(home, ['tos', 'status', '--json'], { ADVISERS_TOS_VERSION: '2099.1.1' }).stdout)
+    assert.equal(forged.accepted, true)
+    assert.equal(forged.version, MANIFEST_VERSION)
+    assert.equal(forged.manifestVersion, MANIFEST_VERSION)
+    assert.equal(forged.acceptance.version, MANIFEST_VERSION)
+    assert.deepEqual(forged.envOverride, {
+      set: true,
+      ignored: true,
+      requestedVersion: '2099.1.1',
+      manifestVersion: MANIFEST_VERSION,
+    })
+    const real = JSON.parse(runOk(home, ['tos', 'status', '--json']).stdout)
+    assert.equal(real.accepted, true)
+    assert.equal(real.envOverride.set, false)
+
+    const ignored = auditFor(home, 'tos.env_override_ignored')
+    assert.ok(ignored.length >= 1, 'the ignored override must be audited')
+    assert.equal(ignored[ignored.length - 1].allowed, 0)
+    assert.match(ignored[ignored.length - 1].reason, /TOS_ENV_OVERRIDE_IGNORED/)
+    assert.match(ignored[ignored.length - 1].reason, new RegExp('manifestVersion=' + MANIFEST_VERSION.replace(/\./g, '\\.')))
+
+    // Revoked + forged env only: still blocked (an env variable is not consent).
+    runOk(home, ['tos', 'revoke', '--yes'])
     const blocked = run(home, ['commit', 'ls'], { ADVISERS_TOS_VERSION: '2099.1.1' })
     assert.equal(blocked.status, 3)
     assert.equal(blocked.stdout, '')
-    assert.match(blocked.stderr, /2099\.1\.1/)
     assert.match(blocked.stderr, /E_TOS_REQUIRED/)
 
+    // An explicit acceptance records the packaged version, never the env value.
     runOk(home, ['commit', 'ls'], { ADVISERS_TOS_VERSION: '2099.1.1', ADVISERS_ACCEPT_TOS: '1' })
     const record = readTosRecord(home)
-    assert.equal(record.version, '2099.1.1')
+    assert.equal(record.version, MANIFEST_VERSION)
     assert.equal(record.channel, 'env')
     const accepts = auditFor(home, 'tos.accept')
     assert.equal(accepts.length, 2)
-    assert.match(accepts[1].reason, /version=2099\.1\.1/)
-
-    const status = JSON.parse(runOk(home, ['tos', 'status', '--json'], { ADVISERS_TOS_VERSION: '2099.1.1' }).stdout)
-    assert.equal(status.accepted, true)
-    assert.equal(status.acceptance.version, '2099.1.1')
-    const stale = JSON.parse(runOk(home, ['tos', 'status', '--json']).stdout)
-    assert.equal(stale.accepted, false)
-    assert.equal(stale.reason, 'version-changed')
+    assert.match(accepts[1].reason, new RegExp('version=' + MANIFEST_VERSION.replace(/\./g, '\\.')))
+    assert.doesNotMatch(accepts[1].reason, /2099\.1\.1/)
   } finally {
     rmSync(root, { recursive: true, force: true })
   }

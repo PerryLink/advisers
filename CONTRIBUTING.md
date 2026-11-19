@@ -10,7 +10,7 @@ Advisers extensions must carry the legal-notice block from
 must not remove or bypass the content-safety review, the local audit chain, or
 AI-generated-content labels. Third-party extensions/DLC must declare author, licence,
 `tosVersion`, permissions, and a content-safety statement in their manifest; see the
-[Terms of Service](docs/TOS.md) (v2026.11.2),
+[Terms of Service](docs/TOS.md) (v2026.11.3),
 [Safety & content review](docs/SAFETY.md) and
 [Privacy & data-flow notice](docs/PRIVACY.md).
 

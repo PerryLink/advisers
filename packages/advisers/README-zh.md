@@ -5,7 +5,7 @@
 ## 安装
 
 ```sh
-# 0.2.4 是 release candidate；npm @latest 仍为 0.2.3（稳定渠道 = 默认 `latest`）：
+# 0.3.0 是 release candidate；npm @latest 仍为 0.2.3（稳定渠道 = 默认 `latest`）：
 #   npm i -g --registry=https://registry.npmjs.org advisers@latest advisers-office@latest
 # 从 checkout 运行：
 #   corepack pnpm install && corepack pnpm -r build
@@ -24,7 +24,7 @@ advisers export
 > 金融等专业意见；AI 输出可能出错，使用前请自行核验。禁止用于违法、侵权、欺诈、骚扰、
 > 伪造或未标识合成内容等用途；未成年人须经监护人同意。
 > 软件许可：PolyForm Noncommercial 1.0.0（源码可见、非 OSI 开源；商业使用须另行取得许可）。
-> 使用前请阅读[服务条款](https://github.com/PerryLink/advisers/blob/main/docs/TOS.md)（v2026.11.2）、
+> 使用前请阅读[服务条款](https://github.com/PerryLink/advisers/blob/main/docs/TOS.md)（v2026.11.3）、
 > [免责声明](https://github.com/PerryLink/advisers/blob/main/docs/DISCLAIMER.md)、
 > [安全与内容审核说明](https://github.com/PerryLink/advisers/blob/main/docs/SAFETY.md) 与
 > [隐私与数据流说明](https://github.com/PerryLink/advisers/blob/main/docs/PRIVACY.md)。
@@ -36,10 +36,14 @@ CLI 是**本地秘书运行时**：一个 REPL、用户账/承诺账/流程账�
 
 ## 状态
 
-`0.2.4` 是 release candidate（2026-11-19；npm `latest` 仍为 `0.2.3`，2026-11-18 发布）。
-0.2.4 为 provenance/工具链补丁，无用户功能或行为变更；须待账号所有者 OTP 批准 CI staged 构建后才可安装：
+`0.3.0` 是 release candidate（2026-11-20；npm `latest` 仍为 `0.2.3`，2026-11-18 发布）。
+0.3.0 是「可信交付」minor：所有出网面逐 item secrecy clearance、本地审计尾锚、备份轮换/可验证恢复与
+`doctor --repair`、200k 读路径消除 TEMP B-TREE 写放大、MCP 输出上限 + legacy 协议协商、DSH 只读账本门面、
+机器可读契约、无 key 的确定性评测套件与 SBOM 门禁；被它取代的 0.2.4 candidate 从未发布。0.3.0 须待账号所有者
+OTP 批准 CI staged 构建后才可安装，且只有在 6 个包 `dist.attestations` 非空后才能称为 provenance-signed。
+完整 TUI 壳、客户/项目 CLI、邮件入口、PolicyGrant 与 MCP modern 不在 0.3.0；未交付清单见仓库 CHANGELOG。
 
-- SQLite 账本 `~/.advisers/state.db`（JSON fallback；schema v20、无锁只读快照、增量写）；
+- SQLite 账本 `~/.advisers/state.db`（JSON fallback；schema v21 —— v21 增量加入客户/项目实体、无锁只读快照、增量写）；
 - soul 位于 `~/.advisers/soul.md`，人类独占；
 - turns + 摘要 + FTS 检索；开场协议；`/resume`；
 - 承诺账 + `commit add/ls/done`、`tick`、`snooze`、nudge outcome；

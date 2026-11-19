@@ -4,8 +4,13 @@
 > shell boundary (section 10). The kernel is pure library code under
 > `packages/advisers/lib/tui/` plus the console/log sanitizer
 > `packages/advisers/lib/text-safe.js`; it performs no I/O, reads no environment
-> variables at import time, owns no command and is not wired into `bin/advisers.js`
-> yet (Wave 2 integration and the 0.3.1 shell consume it).
+> variables at import time and owns no command. **Status on the 0.3.0 release candidate
+> (2026-11-20): the kernel is delivered, unit-tested and wired into `bin/advisers.js`** —
+> the global output policy (`--plain`/`--accessible`/`--color`, env flags), the `tui`
+> snapshot/JSON paths, and the REPL reply wrapping, status line and failure blocks render
+> through it (the one-shot `advisers chat` reply print path keeps its existing bytes);
+> webhook/IMAP remote text and bin error/log lines go through `sanitizeConsoleText`.
+> The interactive 0.3.1 shell is still out of scope (see §10/§12).
 
 ## 1. Why this exists
 
@@ -260,9 +265,12 @@ redirect emits a UTF-16LE BOM (`FF FE`). Node then reads the BOM as a character 
 UTF-16BE BOM at the read boundary (`readTextFile`/`readJsonFile`) and writes UTF-8
 without a BOM atomically through `lib/fs-safe.js` (`writeTextFile`/`writeJsonFile`,
 0600, durable). BOM removal affects parsing only; the original bytes and their
-hashes are never rewritten. The Wave-2 CLI wiring routes user-editable reads
-(import/template/state/office-edit/sync/vault) through these helpers; kernel tests
-cover all BOM variants and the no-BOM write contract.
+hashes are never rewritten. The output-side wiring is in place on the 0.3.0 tree, but
+the **file-read side is still a follow-up**: routing user-editable reads
+(import/template/state/office-edit/sync/vault) through these helpers is not part of the
+0.3.0 bin wiring yet, so the helpers are exercised by kernel tests but not called from
+`bin/advisers.js` today. Kernel tests cover all BOM variants and the no-BOM write
+contract.
 
 ## 9. Testing and gates
 
@@ -281,6 +289,10 @@ node --experimental-strip-types --test test/tui-*.test.js
 | `test/tui-json.test.js` | purity checking, `JsonPurityError`, sanitize option, failure envelope |
 | `test/tui-text-file.test.js` | UTF-8/UTF-16 BOM reads, BOM-less 0600 atomic writes, error mapping |
 | `test/tui-golden.test.js` | the 22 human-output goldens, bounded/safe/deterministic |
+| `test/bin-tui-wiring.test.js` | call-site wiring: global `--plain`/`--accessible`/`--color` handling, `resolveOutputPolicy` for `tui`/REPL, `tui </dev/null` plain snapshot, no clear-screen on a pipe |
+| `test/bin-json-contracts.test.js` | `tui --json` / `--once` JSON stream purity and the CLI JSON envelopes through the kernel |
+| `test/console-safe-wiring.test.js` | webhook detail + IMAP greeting/status are sanitised; bin error/log lines go through `sanitizeConsoleText` |
+| `test/bin-receipt-limits.test.js` | receipt-verifier resource limits at the CLI surface (`E_RECEIPT_LIMIT`) |
 
 Launch-time cost: the kernel is plain ESM with no dependency graph beyond Node
 built-ins. A cold import of `lib/tui/index.js` measured about 15 ms from a native
@@ -289,18 +301,24 @@ renders in well under 5 ms (1000 renders of a small block measured about 50 ms
 total). The 0.3.0 progress report target is a first prompt under 300 ms, so the
 kernel must not add a heavy dependency - it adds none.
 
-M10 mapping: non-TTY no ANSI (policy + render tests), CJK width correctness (fixture +
-property tests), BOM JSON readable (text-file tests), `tui </dev/null` does not hang -
-the guard itself is one `interactive`/`plain` check at the Wave-2 call site, not a
-shell: the kernel's contract is that non-TTY output is plain and no prompt path may
-be entered when `interactive` is false.
+M10 mapping on the 0.3.0 tree: the *kernel* enforces plain/accessible policy, CJK width
+is fixture/property-tested, and BOM JSON reads are covered by text-file tests. The
+**call-site** half is now wired: `bin/advisers.js` computes `resolveOutputPolicy` once
+from argv/env/TTY state for `tui` and the REPL, `tui`/`tui --once`/`tui --json` render
+through the kernel, and a pipe gets one plain snapshot — verified by
+`test/bin-tui-wiring.test.js`, `test/bin-json-contracts.test.js` and the `tty` +
+opt-in `tui` groups of `pnpm eval:det` (`pnpm eval:det --suite tui`: 2/2). The remaining
+0.3.x items are the 0.3.1 interactive shell and routing BOM-prone file reads through
+`lib/tui/text-file.js`; windowing/refresh logic must not be added to the kernel.
 
 ## 10. 0.3.0 kernel vs 0.3.1 shell boundary
 
 In 0.3.0 this module set is the **output kernel only**. It is deliberately
 headless: it renders data and decides capabilities, but does not read stdin, own
-readline, keep history, dispatch slash commands, persist shell history or replace
-the existing `advisers tui --once` dashboard text.
+readline, keep history, dispatch slash commands or persist shell history, and it does
+not own the command surface. `tui --once` keeps its headings and assertion semantics,
+but its sections now render through `renderSnapshot` (CJK width-wrapped, sanitised,
+width-capped).
 
 | Capability | 0.3.0 kernel | 0.3.1 shell (planned) |
 |---|---|---|
@@ -315,7 +333,9 @@ the existing `advisers tui --once` dashboard text.
 | `tui` command deprecation / `tui --once` re-wiring | no | yes |
 | PTY semantic snapshot tooling (node-pty/@xterm/headless, dev-only) | no | yes |
 
-Wave-2 CLI integration (a different owner; do not fork the kernel):
+The 0.3.0 tree already performs this integration for `tui` and the REPL (global flag
+stripping + one policy object per process); the 0.3.1 shell must reuse the same entry
+point rather than fork the kernel. Sketch of the wiring now in `bin/advisers.js`:
 
 ```js
 import { resolveOutputPolicy, renderStatus, renderResult, renderError, renderConfirm, clampColumns } from './lib/tui/index.js'
@@ -361,10 +381,13 @@ checks; changing ledger/policy/network behaviour from the UI layer.
   preserve them.
 - Real Windows IME behaviour in raw mode and old-conhost VT behaviour remain
   manual/D-level checks for the 0.3.1 shell; `--plain` is the escape hatch.
-- In this Wave-1 change the kernel is not yet wired into `bin/advisers.js`, and
-  `lib/notify.js`/`lib/imap.js` do not yet call `sanitizeConsoleText` (Webhook/IMAP
-  wiring is assigned to the Wave-2 integration owner because those files are outside
-  this change's write scope).
+- The output-side wiring is done on the 0.3.0 release candidate: `bin/advisers.js`
+  uses `resolveOutputPolicy` globally and renders `tui`/`tui --once`/`tui --json` and the
+  REPL result/status/error blocks through the kernel, while `lib/notify.js` (webhook
+  failure detail) and `lib/imap.js` (greeting/status) call `sanitizeConsoleText`.
+  Remaining follow-ups are (a) routing user-editable file reads through the BOM helpers
+  (`lib/tui/text-file.js`) and (b) the 0.3.1 interactive shell; the call-site tests above
+  are the enforcement for the wired paths.
 
 ## 13. References
 

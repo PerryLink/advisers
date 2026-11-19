@@ -16,6 +16,10 @@
  */
 import net from 'node:net'
 import tls from 'node:tls'
+// 0.3.0 Wave 3 (docs/TUI.md §4): the server greeting and tagged status lines are
+// remote text. They must never reach stderr with ANSI/OSC/bidi or a second line,
+// so every message that embeds one is sanitised here (bin only prefixes it).
+import { sanitizeConsoleText } from './text-safe.js'
 
 const CRLF = '\r\n'
 const MONTHS = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec']
@@ -148,12 +152,12 @@ export async function fetchImapMessages({
     const t = tag()
     socket.write(`${t} ${text}${CRLF}`)
     const r = await reader.response(t)
-    if (!/^OK/i.test(r.status.split(' ').slice(1).join(' '))) throw new Error(`IMAP ${text.split(' ')[0]} failed: ${r.status}`)
+    if (!/^OK/i.test(r.status.split(' ').slice(1).join(' '))) throw new Error(`IMAP ${text.split(' ')[0]} failed: ${sanitizeConsoleText(r.status, { max: 500 })}`)
     return r
   }
   try {
     const greeting = await reader.readLine()
-    if (!/^\* (OK|PREAUTH)/i.test(greeting)) throw new Error(`IMAP greeting failed: ${greeting}`)
+    if (!/^\* (OK|PREAUTH)/i.test(greeting)) throw new Error(`IMAP greeting failed: ${sanitizeConsoleText(greeting, { max: 500 })}`)
     await command(`LOGIN ${imapQuote(user)} ${imapQuote(pass)}`)
     const selected = await command(`EXAMINE ${imapQuote(mailbox)}`)
     const exists = selected.untagged.find((l) => /^\* \d+ EXISTS/i.test(l))

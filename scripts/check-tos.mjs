@@ -34,7 +34,7 @@ import { fileURLToPath } from 'node:url'
 
 const root = fileURLToPath(new URL('..', import.meta.url))
 const RELEASE = process.argv.includes('--release')
-const FINAL_EFFECTIVE = '2026-11-17'
+const FINAL_EFFECTIVE = '2026-11-20'
 
 const failures = []
 const warnings = []
@@ -223,7 +223,7 @@ for (const [name, needle] of Object.entries(REQUIRED_CLAUSES)) {
 }
 
 // The egress list must be complete (lead decision E, 2026-11-17).
-const REQUIRED_EGRESS = ['api.deepseek.com', 'chat', 'capture', 'review', 'brief --deep', 'learn review', 'research', 'IMAP', 'webhook', 'sync', 'MCP', 'DSH', '桌宠', '遥测']
+const REQUIRED_EGRESS = ['api.deepseek.com', 'chat', 'capture', 'review', 'brief --deep', 'learn review', 'research', 'IMAP', 'webhook', 'sync', 'MCP', 'DSH', '桌宠', '遥测', 'bridge', 'Hermes', 'inbox', 'outbox']
 for (const needle of REQUIRED_EGRESS) {
   check(`docs/TOS.md data clause lists egress: ${needle}`, tosText.includes(needle))
 }
@@ -241,8 +241,10 @@ for (const [name, needle] of Object.entries({
   'liability limit': '责任',
   'not a compliance certification': '不构成合规认证',
   'privacy notice reference': 'PRIVACY.md',
+  'bridge / Hermes egress': /bridge[^\n]*Hermes/,
 })) {
-  check(`docs/DISCLAIMER.md has ${name}`, disclaimerText.includes(needle), `missing "${needle}"`)
+  const ok = typeof needle === 'string' ? disclaimerText.includes(needle) : needle.test(disclaimerText)
+  check(`docs/DISCLAIMER.md has ${name}`, ok, `missing "${String(needle)}"`)
 }
 
 // ---------------------------------------------------------------------------
@@ -272,6 +274,7 @@ const REQUIRED_PRIVACY = {
   'MCP egress': 'MCP',
   'DSH egress': 'DSH',
   'desktop-pet egress': '桌宠',
+  'bridge / Hermes egress': /bridge[^\n]*Hermes/,
   'minors 18 / 14 rules': /未满 18|18 周岁/,
   'under-14 rule': '14 周岁',
   'withdrawal': '撤回',
@@ -280,6 +283,62 @@ const REQUIRED_PRIVACY = {
 for (const [name, needle] of Object.entries(REQUIRED_PRIVACY)) {
   const ok = typeof needle === 'string' ? privacyText.includes(needle) : needle.test(privacyText)
   check(`docs/PRIVACY.md covers ${name}`, ok, `missing ${String(needle)}`)
+}
+
+// ---------------------------------------------------------------------------
+// 6b. Egress surfaces ↔ legal disclosures (anti-false-green).
+//
+// docs/TOS.md §9.3 and docs/PRIVACY.md §4 are the canonical complete egress
+// lists. The `privacy` command lists the same surfaces from the code base, so
+// the gate maps every surface it prints to a disclosure row: adding a new
+// egress surface without updating the legal texts must FAIL, and deleting the
+// bridge/Hermes row while the words survive elsewhere must FAIL too.
+// ---------------------------------------------------------------------------
+const BIN = 'packages/advisers/bin/advisers.js'
+const binText = read(BIN)
+const egressBlock = /const egressSurfaces = \[([\s\S]*?)\n  \]/.exec(binText)
+check('privacy command egress-surface list is parseable', Boolean(egressBlock), `const egressSurfaces = [ ... ] not found in ${BIN}`)
+const privacySurfaces = []
+if (egressBlock) for (const match of egressBlock[1].matchAll(/'([^']+)'/g)) privacySurfaces.push(match[1])
+check('privacy command lists egress surfaces', privacySurfaces.length >= 6, `${privacySurfaces.length} parsed`)
+
+// Key = the part before the em dash in the `privacy` egress line. Each key must
+// be disclosed by at least these needles in TOS §9.3 / PRIVACY §4.
+const EGRESS_DISCLOSURE = {
+  'model provider': { tos: ['模型调用', 'api.deepseek.com'], privacy: ['模型调用', 'api.deepseek.com'] },
+  'research --web|--url': { tos: ['网页研究'], privacy: ['网页研究'] },
+  'capture --from-imap': { tos: ['邮件导入'], privacy: ['邮件导入'] },
+  'remind --deliver --notify': { tos: ['通知'], privacy: ['webhook'] },
+  'sync push|pull': { tos: ['同步'], privacy: ['同步'] },
+  bridge: { tos: ['桥接', 'Hermes'], privacy: ['桥接', 'Hermes'] },
+  'MCP --stdio / DSH host tools / pet-brief': { tos: ['MCP', 'DSH', '桌宠'], privacy: ['MCP', 'DSH', '桌宠'] },
+  'ocr / timestamp': { tos: ['OCR'], privacy: ['OCR'] },
+}
+const surfaceKeys = new Set()
+for (const surface of privacySurfaces) {
+  const key = surface.split(' — ')[0].trim()
+  surfaceKeys.add(key)
+  const disclosure = EGRESS_DISCLOSURE[key]
+  check(`privacy egress surface is mapped to a legal disclosure: ${key}`, Boolean(disclosure), 'add the surface to docs/TOS.md §9.3 + docs/PRIVACY.md §4 and to EGRESS_DISCLOSURE')
+  if (!disclosure) continue
+  for (const needle of disclosure.tos) check(`docs/TOS.md §9.3 discloses "${key}" (${needle})`, tosText.includes(needle))
+  for (const needle of disclosure.privacy) check(`docs/PRIVACY.md §4 discloses "${key}" (${needle})`, privacyText.includes(needle))
+}
+for (const key of Object.keys(EGRESS_DISCLOSURE)) {
+  check(`legal egress map has no stale entry: ${key}`, surfaceKeys.has(key), 'remove it from EGRESS_DISCLOSURE')
+}
+
+// Row-scoped checks: deleting the bridge row/clause must fail even if the words
+// "bridge"/"Hermes" still occur elsewhere in the document.
+const bridgePrivacyRow = privacyText.split(/\r?\n/).find((line) => /^\|\s*\d+\s*\|[^\n]*bridge/i.test(line))
+check('docs/PRIVACY.md §4 has a bridge/Hermes table row', Boolean(bridgePrivacyRow), 'no "| N | ... bridge ... |" row')
+for (const needle of ['Hermes', 'inbox', 'outbox', '模型', '0700', '0600', '同步盘', '明文']) {
+  check(`docs/PRIVACY.md bridge row discloses ${needle}`, Boolean(bridgePrivacyRow) && bridgePrivacyRow.includes(needle))
+}
+const bridgeTosClause = tosText.split(/\r?\n/).find((line) => /^（h）[^\n]*bridge/i.test(line))
+check('docs/TOS.md §9.3 has a bridge (h) clause', Boolean(bridgeTosClause), 'no "（h）... bridge ..." clause')
+for (const needle of ['Hermes', 'inbox', 'outbox', '模型服务商', '0700', '0600', '同步盘', '明文']) {
+  check(`docs/TOS.md bridge clause discloses ${needle}`, Boolean(bridgeTosClause) && bridgeTosClause.includes(needle))
 }
 
 // ---------------------------------------------------------------------------

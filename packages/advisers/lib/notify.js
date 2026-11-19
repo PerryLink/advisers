@@ -10,6 +10,10 @@
 import { existsSync } from 'node:fs'
 import { spawn } from 'node:child_process'
 import { localDay } from './remind.js'
+// 0.3.0 Wave 3 (docs/TUI.md §4): webhook/notifier failure detail is remote text
+// and reaches stderr through bin's `webhook 未发送:` line. Sanitise at the library
+// boundary so no caller can leak ANSI/C1/bidi or a second log line.
+import { sanitizeConsoleText } from './text-safe.js'
 
 /**
  * Environment for the notification subprocess: an explicit allowlist.
@@ -43,7 +47,9 @@ function run(cmd, args, timeoutMs = 5000) {
     let err = ''
     child.stderr.on('data', (b) => { err += b.toString('utf8') })
     child.on('error', reject)
-    child.on('close', (code) => code === 0 ? resolve() : reject(new Error(`${cmd} exited ${code}: ${err.trim().slice(0, 200)}`)))
+    // A local notifier's stderr is untrusted text (it may include the reminder
+    // title the caller passed); keep it to one sanitised line.
+    child.on('close', (code) => code === 0 ? resolve() : reject(new Error(`${cmd} exited ${code}: ${sanitizeConsoleText(err.trim(), { max: 200 })}`)))
   })
 }
 
@@ -109,9 +115,13 @@ function resolveWebhookTarget(options) {
   }
 }
 
+/**
+ * One sanitised console line for a remote failure detail (webhook response body,
+ * fetch/abort message). ANSI/OSC/C1/bidi and line breaks are removed before the
+ * value can reach stderr, and the result is capped at `limit` code points.
+ */
 function truncateDetail(value, limit = 200) {
-  const text = typeof value === 'string' ? value : String(value ?? '')
-  return text.length > limit ? text.slice(0, limit) : text
+  return sanitizeConsoleText(value, { max: limit })
 }
 
 /**

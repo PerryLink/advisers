@@ -34,7 +34,7 @@ const check = await validateOffice(buffer, 'docx')
 
 ```sh
 # stable channel: advisers@latest / advisers-office@latest (currently 0.2.3, published 2026-11-18;
-#   0.2.4 is a release candidate pending the owner's approval)
+#   0.3.0 is a release candidate pending the owner's approval)
 # pre-release channel: advisers@next / advisers-office@next (currently also 0.2.3)
 npm i -g advisers@latest advisers-office@latest
 advisers office docx spec.json out.docx
@@ -49,9 +49,9 @@ templates. CJK fonts default to Microsoft YaHei, with a system fallback.
 
 ## Status
 
-`0.2.4` is a release candidate (2026-11-19; npm `latest` is still `0.2.3`, published
-2026-11-18); it is a provenance/tooling patch with no runtime change, and `0.2.2`/`0.2.1`/`0.2.0`
-remain installable by pinning. Builders: DOCX/XLSX/PPTX/Mermaid/draw.io/XMind; 7 templates; `readOffice`/`editOffice`/`verifyOffice`; the CLI adds deterministic quote/proposal templates on top of these builders. The recalculation subprocess (`ADVISERS_VERIFY_RECALC_CMD`) now runs with an explicit OS-basics environment allowlist. Structural verification only (no Word/WPS/LibreOffice application layer in this package).
+`0.3.0` is a release candidate (2026-11-20; npm `latest` is still `0.2.3`, published
+2026-11-18); the 0.2.4 candidate it supersedes was never published, and
+`0.2.2`/`0.2.1`/`0.2.0` remain installable by pinning. Builders: DOCX/XLSX/PPTX/Mermaid/draw.io/XMind; 7 templates; `readOffice`/`editOffice`/`verifyOffice`; the CLI adds deterministic quote/proposal templates on top of these builders. The recalculation subprocess (`ADVISERS_VERIFY_RECALC_CMD`) now runs with an explicit OS-basics environment allowlist. Structural verification only (no Word/WPS/LibreOffice application layer in this package).
 
 ## License
 

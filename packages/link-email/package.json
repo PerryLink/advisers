@@ -1,6 +1,6 @@
 {
   "name": "advisers-link-email",
-  "version": "0.2.4",
+  "version": "0.3.0",
   "private": true,
   "description": "Email Link provider for Advisers: the zero-permission universal adapter.",
   "type": "module",

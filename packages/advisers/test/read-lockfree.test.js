@@ -6,7 +6,8 @@ import { join } from 'node:path'
 import { fileURLToPath, pathToFileURL } from 'node:url'
 import test from 'node:test'
 import { DatabaseSync } from 'node:sqlite'
-import { openReadStore, SqliteStore } from '../lib/sqlite.js'
+import { downgradeToV19 } from './schema-fixtures.js'
+import { openReadStore, SCHEMA_VERSION, SqliteStore } from '../lib/sqlite.js'
 
 // 0.2.3 read path (03-design-persistence-v2.md §4): a read-only store runs no
 // DDL/migration, takes no HOME instance lock, reads a committed WAL snapshot
@@ -33,19 +34,6 @@ function seed(dbPath) {
   } finally { store.close() }
 }
 
-function downgradeToV19(dbPath) {
-  const raw = new DatabaseSync(dbPath);
-  try {
-    raw.exec('DROP INDEX IF EXISTS idx_turns_seq');
-    raw.exec('DROP INDEX IF EXISTS idx_facts_identity');
-    raw.exec('DROP INDEX IF EXISTS idx_memory_candidates_status');
-    raw.exec('DROP TABLE IF EXISTS schema_migrations');
-    for (const key of ['schema_migrated_from', 'schema_migrated_at', 'schema_migrated_app', 'schema_migration_backup']) {
-      raw.prepare('DELETE FROM meta WHERE key = ?').run(key);
-    }
-    raw.prepare("UPDATE meta SET value = '19' WHERE key = 'schema_version'").run();
-  } finally { raw.close() }
-}
 
 function rawHasTable(dbPath, table) {
   const raw = new DatabaseSync(dbPath, { readOnly: true });
@@ -61,8 +49,8 @@ test('a read-only store runs no DDL/migration and refuses every write with E_REA
     const store = new SqliteStore(db, { readOnly: true });
     try {
       assert.equal(store.readOnly, true);
-      assert.equal(store.schemaVersion(), 20);
-      assert.equal(store.assertSchemaCurrent(), 20);
+      assert.equal(store.schemaVersion(), SCHEMA_VERSION);
+      assert.equal(store.assertSchemaCurrent(), SCHEMA_VERSION);
       assert.equal(store.countCommitments(), 1);
       assert.equal(store.read(() => store.countMatters() + store.countCommitments()), 2);
       assert.equal(store.load().commitments.length, 1);
@@ -138,9 +126,9 @@ test('a stale v19 database opened read-only is not migrated and fails E_SCHEMA_S
     assert.throws(() => openReadStore(db), (error) => error.code === 'E_SCHEMA_STALE');
     // A writable command migrates it, after which the read path works.
     const migrated = new SqliteStore(db);
-    try { assert.equal(migrated.getMeta('schema_version'), '20') } finally { migrated.close() }
+    try { assert.equal(migrated.getMeta('schema_version'), String(SCHEMA_VERSION)) } finally { migrated.close() }
     const reader = openReadStore(db);
-    try { assert.equal(reader.schemaVersion(), 20) } finally { reader.close() }
+    try { assert.equal(reader.schemaVersion(), SCHEMA_VERSION) } finally { reader.close() }
   } finally { rmSync(root, { recursive: true, force: true }) }
 });
 
@@ -149,7 +137,7 @@ test('a newer schema opened read-only fails E_SCHEMA_NEWER', () => {
   try {
     seed(db);
     const raw = new DatabaseSync(db);
-    raw.prepare("UPDATE meta SET value = '21' WHERE key = 'schema_version'").run();
+    raw.prepare("UPDATE meta SET value = ? WHERE key = 'schema_version'").run(String(SCHEMA_VERSION + 1));
     raw.close();
     assert.throws(() => openReadStore(db), (error) => {
       assert.equal(error.code, 'E_SCHEMA_NEWER');
@@ -247,7 +235,7 @@ test('a read-only open recovers a WAL left by a SIGKILLed writer', async () => {
     assert.ok(existsSync(`${db}-wal`), 'SIGKILL leaves the WAL behind');
     const reader = openReadStore(db, { checkIntegrity: true });
     try {
-      assert.equal(reader.schemaVersion(), 20);
+      assert.equal(reader.schemaVersion(), SCHEMA_VERSION);
       assert.equal(reader.listTurns('c1').length, 1);
       assert.equal(reader.listTurns('c1')[0].content, 'kill -9 survives this row');
       assert.equal(reader.getMeta('writer'), 'killed');

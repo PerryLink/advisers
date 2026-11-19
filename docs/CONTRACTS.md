@@ -54,29 +54,35 @@ error envelope to stderr (stdout stays machine-free) and exit 1, or exit 3 for
 
 `contracts/cli/status-v1.json` freezes `advisers status --json` and the rule
 for the additive `contracts` discovery object. The expected payload is in
-`contracts/versions-v1.json` under `discovery.expected`. When the field is
-absent (current state), consumers must assume the v1 defaults below; when it is
-present it must equal the manifest.
+`contracts/versions-v1.json` under `discovery.expected`.
 
 ```json
 { "cliJson": 1, "errors": 1, "exitCodes": 1, "mcpTools": 1, "mcpResources": 1,
   "mcpProtocol": "2024-11-05", "dshTools": 1, "petBrief": 2 }
 ```
 
-Wiring `status.contracts` needs a `bin/advisers.js` change; that is part of
-the 0.3.0 integration wave (this contracts-only change does not edit `bin/`).
-The checker prints `INFO` while the field is absent and fails if it is present
-but inconsistent.
+**Wired in the 0.3.0 integration wave:** `advisers status --json` now carries the
+`contracts` object (the published npm package does not ship `contracts/`, so
+`bin/advisers.js` carries the frozen values and `check-contracts --status`
+asserts they equal the artifact tree). Consumers should treat the object as
+additive: older 0.2.x CLIs omit it, and the shims default to the v1 values above.
+The checker fails if the field is present but inconsistent with the manifest.
+
+> Resolved 2026-11-20: the free-text `discovery.status` label in
+> `contracts/versions-v1.json` and `contracts/cli/status-v1.json` is now
+> `wired-in-0.3.0`; the field is wired and gate-checked.
 
 ### Exit codes (v1 frozen; v2 not active)
 
 `contracts/cli/exit-codes-v1.json`: **0** success, **1** user/config/runtime
 error, **3** TOS consent required (`E_TOS_REQUIRED`). The offline `evidence
 verify` command is TOS-exempt. Exit codes 4/5/6 are reserved by
-`contracts/cli/exit-codes-v2.draft.json` and are **not active** in 0.2.4 or
-this change; scripts must read `error.code`. Known gap: unknown flags are
-currently ignored by some commands (the M7 hardening item will tighten this
-additively); v1 does not promise strict-flag exit 1 yet.
+`contracts/cli/exit-codes-v2.draft.json` and are **not active** in 0.3.0;
+scripts must read `error.code`. Strict option parsing landed in 0.3.0 for the
+operational commands (`status`, `export`, `audit`, `doctor`, `backup`, `backups`,
+`restore`): an unknown flag fails with `E_USAGE` and exit 1 instead of being
+ignored. Known gap: older commands such as `today` and `commit ls` still ignore
+unknown flags, so v1 does not promise strict-flag exit 1 for every command.
 
 ### Error codes (v1, additive)
 
@@ -133,9 +139,12 @@ node scripts/check-contracts.mjs --cli --status --exit --mcp
 node scripts/check-contracts.mjs --errors --update   # regenerate the 2 generated files
 ```
 
-The gate is offline (no credentials, no model, no network), uses a temporary
-`ADVISERS_HOME` under the OS temp directory, and removes it afterwards. The
-eight checks:
+The gate runs **in CI on every PR** (the `test` job, after build/typecheck; see
+`.github/workflows/ci.yml`), so a shape change that is not reflected in the frozen
+artifacts fails the PR. It is offline (no credentials, no model, no network), uses a
+temporary `ADVISERS_HOME` under the OS temp directory, and removes it afterwards.
+Current tree: **46 checks PASS** (2026-11-20 release-candidate tree, including the wired
+`status.contracts` field and the real stdio MCP catalogue). The eight checks:
 
 | Check | Enforces |
 |---|---|
@@ -163,15 +172,16 @@ eight checks:
 
 ## Known gaps and out of scope (honesty list)
 
-- `status.contracts` discovery field is **not wired yet** (needs `bin/`; Wave 2
-  integration). The checker reports `INFO` until then.
 - MCP legacy negotiation is **active-fallback** (supported versions are
   echoed, unknown versions fall back to the default); strict rejection of
   unknown versions, `server/discover` and the modern 2026-07-28 surface are
   out of 0.3.0 scope.
 - Exit codes **4/5/6 are not active** (policy engine, later); v2 is a draft.
-- Unknown flags are currently ignored by some commands (M7); v1 does not yet
-  guarantee strict-flag exit 1.
+- Strict flags were added in the 0.3.0 integration wave for the operational
+  commands (`status`, `export`, `audit`, `backup`, `backups`, `restore`, `doctor`,
+  `tos`, …): unknown options now exit 1 with `E_USAGE`. Older legacy commands still use
+  the historical lenient parser, so v1 does not yet guarantee strict-flag exit 1 for
+  **every** command.
 - The error-code registry freezes **committed** source. New codes in uncommitted
   work are reported as `INFO`; register them before/with the commit that adds
   them (the checker fails afterwards).
@@ -179,11 +189,18 @@ eight checks:
   artifacts carry `x-license: CC-BY-NC-SA-4.0` and `contracts/LICENSE` records
   the intended license; updating the legal scope text needs owner/legal
   confirmation and is outside this implementation.
-- DSH tools stay the 0.2.4 **preview** surface (`dshTools: 1`); full DSH
-  payload v2 (real read-only ledger) belongs to the DSH wave. Pet Brief stays
+- DSH bundle: on the 0.3.0 release candidate the three ledger read tools read the
+  **real local ledger read-only** through `advisers/lib/ledger-read.js` (TOS-gated,
+  clearance 0, no HOME lock, no migration, no writes) with a marked preview fallback;
+  the read payload keeps the 0.2.x field names and adds source/clearance/backend fields
+  (see `packages/dsh-advisers/README.md`). The discovery value stays `dshTools: 1`
+  (tool names/count contract), and the 5 external DSH error codes are preserved. A
+  larger "DSH payload v2" and any DSH write path remain future work. Pet Brief stays
   contract v0.2 (closed, unchanged).
-- This change does not edit `bin/`, `lib/mcp-server.js`, `package.json`
-  versions or the CHANGELOG; those integrations consume the frozen artifacts.
+- The contracts tree itself is documentation/data and is not edited by the 0.3.0
+  integration wave; the integration consumes the frozen artifacts (and wires
+  `status.contracts` in `bin/advisers.js`, asserted above). No package version bump or
+  CHANGELOG entry is part of the contracts work.
 
 ## Acceptance evidence
 

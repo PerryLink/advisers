@@ -299,7 +299,7 @@ test("instance lock: --version/help create neither the home directory nor a lock
     const home = join(root, "never-created")
     const version = spawnSync(process.execPath, [bin, "--version"], { env: { ...baseEnv, ADVISERS_HOME: home }, encoding: "utf8" })
     assert.equal(version.status, 0, version.stderr)
-    assert.match(version.stdout, /^0\.2\./)
+    assert.match(version.stdout, /^0\.3\./)
     assert.equal(existsSync(home), false, "--version must not create ADVISERS_HOME")
     const help = spawnSync(process.execPath, [bin, "help"], { env: { ...baseEnv, ADVISERS_HOME: home }, encoding: "utf8" })
     assert.equal(help.status, 0, help.stderr)

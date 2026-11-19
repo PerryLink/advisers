@@ -9,13 +9,13 @@ appear, existing keys keep their meaning.
 
 | Command | Shape (top-level) | Stable? |
 |---|---|---|
-| `advisers status --json` | `{version,node,office,home,store{type,path},model,matters,prefs,routines,links,sessions,deliveries,soul,modelUsage?}` | v1 |
+| `advisers status --json` | `{version,node,office,home,store{type,path},model,matters,prefs,routines,links,sessions,deliveries,clients,projects,soul,modelUsage?}` (clients/projects are 0.3.0 additive) | v1 |
 | `advisers tick --json` | `{now,localDay,due[]}` | v1 (existing) |
 | `advisers today --json [--calendar] [--sources]` | `{now,localDay,counts{today,overdue,week,waiting,noDue},overdue[],today[],week[],waiting[],noDue[],next,calendar?[],sources?[]}` | v1 |
 | `advisers remind --json` | `{now,reminders[]}` | v1 |
 | `advisers commit ls --json` | `Commitment[]` | v1 |
 | `advisers who --json` | `{mine[],waiting[]}` | v1 |
-| `advisers deliveries --json` | `Delivery[]` | v1 |
+| `advisers deliveries --json` | `Delivery[]` (+0.3.0 lineage keys `clientId/projectId/templateName/templateVersion/quoteNo/dataSha256` when present) | v1 |
 | `advisers deliveries --receipt` | receipt pack summary (below) — always JSON, even without `--json` | v1 |
 | `advisers deliveries --pack` | evidence-pack JSON `{out,files,receipt,verification}` | existing |
 | `advisers evidence show <id> --json` | `{commitment\|fact\|preference,sources[],missing[],unverifiable[],summary{byKind{observed,manual},missing,unverifiable,operatorEntered}}` | v1 (+0.2.3 additive fields) |
@@ -24,9 +24,10 @@ appear, existing keys keep their meaning.
 | `advisers memory candidates --json [--all]` | `Candidate[]` | v1 |
 | `advisers verify <file> --json [--content]` | office `VerifyResult`: `{ok,checks[],entries,bytes,layers,...}`; with `--content`: `{structure,content}` | existing/office |
 | `advisers privacy --json` | data/egress facts | v1 |
-| `advisers export [--all]` | ledger JSON / ledger+SQLite tables | existing |
+| `advisers export [--all]` | ledger JSON / `{version,schemaVersion?,exportedAt,ledger,data,auditAnchor}` with `data` = every `DATA_TABLES` table (clients/projects/client_notes included in 0.3.0) | existing (additive) |
+| `advisers client/project ... --json` | customer/project rows + derived timeline/counts (0.3.0, see below and [CLIENTS.md](CLIENTS.md)) | v1 (0.3.0 additive) |
 | `advisers office-edit ...` | `{ok,out,changes}` | existing |
-| `advisers matter add\|ls\|show\|rename\|archive\|use --json` | matter row / `{ok,command,matter,...}` (below) | v1 (0.2.3) |
+| `advisers matter add\|ls\|show\|rename\|archive\|use --json` | matter row / `{ok,command,matter,...}` (below; 0.3.0 adds real `clientId/projectId` + `--client/--project/--unclassified` filters) | v1 (0.2.3) |
 | `advisers agenda --json [--days 1..31] [--from] [--matter] [--no-calendar] [--include-done]` | agenda window (below) | v1 (0.2.3) |
 | `advisers morning --json` (alias `digest morning`) | deterministic brief payload (below) | v1 (0.2.3) |
 | `advisers template quote\|proposal <data.json> <out> --json` | generation result + totals + verification (below) | v1 (0.2.3) |
@@ -54,11 +55,16 @@ All shapes are additive and keep `--json` stdout machine-only (errors go to stde
 - `matter add <title> [--secrecy 0-3] [--domain d] [--summary s] --json` →
   `{ok:true, command:"matter add", matter}` where `matter` is the ledger `Matter`
   (`id,title,status,domain,secrecy,summary?,createdAt,updatedAt,...`).
-- `matter ls [--all] --json` → `MatterRow[]`:
-  `{id,title,status,domain,secrecy,clientId:null,projectId:null,openCommitments,nextDueAt}`.
-  Default is active matters only; `--all` adds paused/archived.
+- `matter ls [--all] [--client <id>] [--project <id>] [--unclassified] --json` → `MatterRow[]`:
+  `{id,title,status,domain,secrecy,clientId|null,projectId|null,openCommitments,nextDueAt}`.
+  Default is active matters only; `--all` adds paused/archived. 0.3.0 (schema v21) fills the
+  real ownership ids (they were hard-coded `null` before) and the filters are scoped by
+  that ownership; an unknown `--client`/`--project` fails with `E_CLIENT_NOT_FOUND` /
+  `E_PROJECT_NOT_FOUND` instead of returning an empty list. Unclassified (pre-v21 or
+  not-yet-linked) matters stay in the default list and `--unclassified` shows only them.
 - `matter show <id> --json` →
-  `{ok:true, command:"matter show", matter, counts{commitments,open,done}, open[{id,action,dueAt|null,debtor,creditor}], nextDueAt}`.
+  `{ok:true, command:"matter show", matter, client:{id,name,status}|null, project:{id,name,status,clientId}|null, counts{commitments,open,done}, open[{id,action,dueAt|null,debtor,creditor}], nextDueAt}`
+  (`client`/`project` are 0.3.0 additive resolved names; the raw ids stay on `matter`).
 - `matter rename <id> <title> --json` → `{ok:true, command:"matter rename", matter}`.
 - `matter archive <id> [--dry-run] --json` → `{ok:true, command:"matter archive", matter}`;
   with `--dry-run` the payload also has `dryRun:true` and nothing is written.
@@ -271,6 +277,44 @@ Re-checks the totals and the data SHA-256 against the supplied data file, offlin
 ledger, no network). Proposal uses `proposal.*` check ids. Exit 1 when any check fails
 (for example the document was generated from tampered data), and the failing check id plus
 `detail` says what mismatched.
+
+### `client` / `project --json` (0.3.0)
+
+Contract v1 additive commands for the customer/project dimension (schema v21); the
+full product contract is [CLIENTS.md](CLIENTS.md). Rows are SQLite-only (the legacy
+JSON store answers `E_STORE`), and every `--json` stdout is one pure JSON document.
+
+- `client list [--all] [--limit n] --json` → `ClientRow[]`:
+  `{id,name,nameNorm,aliases,status,tags,secrecyDefault,notes?,createdAt,updatedAt,deletedAt?,counts,nextDueAt,clearance,protectedExcluded}`.
+- `client show <id> [--timeline-limit n] [--clearance 0-3] --json` →
+  `{ok:true, command:"client show", client, projects[{…project,counts,nextDueAt}], matters[{id,title,status,secrecy,projectId,openCommitments,nextDueAt}], counts, open{mine[],waiting[]}, nextDueAt, timeline[], timelineTotal, timelineTruncated, nextCursor:null, clearance, protectedExcluded, degraded[]}`.
+- `client timeline <id> [--since 90d|ISO] [--kind delivery,note,commitment] [--limit n] [--clearance 0-3] --json` →
+  `{ok:true, command:"client timeline", clientId, client:{id,name}, items[], total, truncated, nextCursor:null, clearance, protectedExcluded, degraded[]}`.
+- `client add|archive|merge --json` → `{ok:true, command, …}`; merge adds
+  `mergedFrom, movedMatters, movedProjects, mergedProjects, movedNotes, movedDeliveries, carriedAliases`.
+  `--dry-run` adds `dryRun:true` and a `plan` (archive adds `activeProjects/wouldBlock`).
+- `client note add|list --json` → the note row / `NoteRow[]`.
+- `project list [--client <id>] [--all] [--limit n] --json` → `ProjectRow[]`;
+  `project show|add|archive --json` mirror the client shapes.
+- `counts` is `{matters,mattersArchived,deliveries,notes,commitments,openMine,openWaiting,overdue}`.
+- Timeline item: `{at,kind,title,ref:{kind,id},matterId?,projectId?,secrecy,status?,dueAt?,doneAt?,debtor?,creditor?,templateName?}`
+  ordered `at` DESC, then `delivery > note > commitment`, then id ASC (frozen; a commitment is
+  placed at its `createdAt`, never at its due date).
+- `--clearance N` is an opt-in per-item secrecy gate (default 3 = the local user sees
+  their own data). A matter whose effective secrecy `max(client.secrecyDefault, matter.secrecy)`
+  exceeds `N` is withheld together with its rows, and only `protectedExcluded` (a count) is
+  reported — no id/title/name/note/quote. The filter runs before counting/paging, so
+  `counts`/`total` never leak hidden rows. Visible items always carry their `secrecy` label.
+- Isolation: every read is scoped by the entity's own matter ids; client A's output must
+  never contain client B's id/name/title/quote (covered by `test/bin-clients.test.js`).
+- Errors (stderr `{error:{code,message,hint?}}`, exit 1; exit 3 when the TOS gate blocks):
+  `E_CLIENT_NOT_FOUND`/`E_CLIENT_ARCHIVED`/`E_CLIENT_DUPLICATE`/`E_CLIENT_ALIAS_CONFLICT`/`E_CLIENT_HAS_ACTIVE_PROJECTS`/`E_CLIENT_MERGE_SELF`/`E_CLIENT_INVALID`/`E_CLIENT_NOTE_INVALID`/`E_CLIENT_NOTE_NOT_FOUND`,
+  `E_PROJECT_NOT_FOUND`/`E_PROJECT_INVALID`/`E_PROJECT_DUPLICATE`/`E_PROJECT_CLIENT_MISMATCH`/`E_MATTER_CLIENT_MISMATCH`,
+  `E_STORE` (JSON store), `E_USAGE`, `E_TOS_REQUIRED` (exit 3), `E_SCHEMA_NEWER` (newer import).
+- `export --all` carries every `DATA_TABLES` table (including the three customer tables) plus an
+  additive `schemaVersion`; `import --replace` restores the ledger **and** the customer tables in one
+  transaction, refuses a newer `schemaVersion` before writing, and aborts atomically on a dangling
+  reference. See [CLIENTS.md §5](CLIENTS.md#5-export--import-parity).
 
 ## Exit codes
 

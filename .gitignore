@@ -6,6 +6,9 @@ dist/
 *.log
 .env
 
+# generated SBOM/release artifacts (regenerate with `pnpm run sbom`; see docs/SBOM.md)
+artifacts/
+
 # internal release/ops artifacts (kept outside the public tree)
 eval/results/
 docs/HANDOFF-*.md

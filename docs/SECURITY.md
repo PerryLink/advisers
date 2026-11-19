@@ -10,10 +10,11 @@ versions, how a release is built and published, what provenance exists today,
 and how to verify what you install. It describes the current state; "not yet
 implemented" is written as such.
 
-Status: 2026-11-20, covering the 0.2.x line and the unpublished 0.3.0 release
-candidate. npm `latest`/`next` are 0.2.3; the tagged 0.2.4 is an unpublished
-release candidate that 0.3.0 supersedes; 0.3.0 is not published yet (see
-sections 3 and 4).
+Status: 2026-11-20, covering the 0.2.x line and the 0.3.0 release candidate (the
+repository is lockstep at package version `0.3.0`). npm `latest`/`next` are 0.2.3;
+0.2.4 was tagged but never published and 0.3.0 supersedes it; 0.3.0 itself is **not
+published yet** (see sections 3 and 4). The legal texts are TOS/PRIVACY v2026.11.3
+(2026-11-20).
 
 ## 1. Reporting a vulnerability
 
@@ -128,18 +129,28 @@ provenance.** Until the owner creates the stages it is a plan, not a fact:
   it is missing, malformed, has no components, or contains absolute
   build-machine paths. Until that artifact exists, release notes must not claim
   an SBOM-verified or reproducible-build release.
-- The legal texts are unchanged by the release-trust tooling (TOS v2026.11.2).
+- The release-trust tooling does not change the legal texts; the packaged and public legal
+  texts are **v2026.11.3 (2026-11-20)** (the bridge/Hermes egress-disclosure revision — see
+  [TOS.md](TOS.md) §9.3(h) and [PRIVACY.md](PRIVACY.md) §4).
 
 ## 5. Automated gates in CI
 
 This is what actually runs on every push and pull request. It is a description
-of the current gates, not a security certification: the 0.3 target test matrix
-(evidence discipline, egress permits, TOS surfaces) is not implemented yet.
+of the current gates, not a security certification: the wider 0.3 target test matrix
+(evidence discipline, egress permits, TOS surfaces) is still partial — see section 5.3.
 
 | Job | Runner | What runs |
 |---|---|---|
-| `test` | ubuntu-latest, Node 22.16 and 24 | frozen install, build, typecheck, `scripts/check-js.mjs`, the full `pnpm -r test` suite, `scripts/pack-smoke.mjs`, docs/version consistency, license, TOS and release-lockstep checks, Office verification, `scripts/security-suite.mjs`, and a WARN-only dependency audit. On Node 22.16 only: `scripts/fault-injection.mjs`. |
-| `windows-smoke` | windows-latest, Node 22.16 | frozen install, build, `scripts/pack-smoke.mjs`, the docs/version and release-lockstep gates (`check-docs`, `check-release`, which exercises the `fileURLToPath` Windows fix), and a minimal CLI smoke on a fresh temporary `ADVISERS_HOME`: `advisers --version`, `init`, `status`, `commit add`, `commit ls`, `doctor`, `doctor --check-db`. It does not require Office/Word and does not run the full suite. |
+| `test` | ubuntu-latest, Node 22.16 and 24 | frozen install, build, typecheck; **0.3.0 deterministic gates**: `pnpm eval:det` (no key, no network), `node scripts/check-contracts.mjs` and `pnpm run sbom && pnpm run check:sbom`; `scripts/check-js.mjs`; the full `pnpm -r test` suite; `scripts/pack-smoke.mjs`; docs/version consistency, license, TOS and release-lockstep checks; Office verification; `scripts/security-suite.mjs`; and a WARN-only dependency audit. On Node 22.16 only: `scripts/fault-injection.mjs`. |
+| `windows-smoke` | windows-latest, Node 22.16 | frozen install, build, `scripts/pack-smoke.mjs`, the docs/version and release-lockstep gates (`check-docs`, `check-release`, which exercises the `fileURLToPath` Windows fix), and a CLI smoke on a fresh temporary `ADVISERS_HOME`: `--version`, `init`, `status`, `commit add`, `commit ls`, `doctor`, `doctor --check-db`, plus the **durable-write paths** that fsync a plaintext copy — `backup`, `export --out`, `import --replace`, `vault seal`/`vault unseal` — asserting non-empty outputs, the import/unseal recovery backups and no staged temp-file residue. This is the 0.2.4/0.3.0 Windows P0 regression gate. It does not require Office/Word and does not yet run the full suite on Windows. |
+
+The three 0.3.0 deterministic gates are release-gate inputs, not published claims:
+`eval:det` is the deterministic eval contract ([EVAL.md](EVAL.md)); `check-contracts`
+validates the frozen `contracts/**` artifacts against the real CLI and stdio MCP server
+([CONTRACTS.md](CONTRACTS.md)); `sbom`+`check:sbom` regenerates and validates the
+lockfile-derived CycloneDX SBOM ([SBOM.md](SBOM.md)). The Windows job remains a smoke
+job, so "Windows support" is not fully verified until the real-machine E13 run and the
+full Windows test suite land.
 
 Release-trust tooling is exercised by the regular test suite too: `packages/advisers/test/release-trust.test.js` runs `scripts/check-provenance.mjs --self-test` (offline checks that the publish workflow, release script and this page agree on the OIDC/provenance path), validates attestation and SBOM parsing against local fixtures, and covers the unpublished-version skip/fail semantics of `scripts/verify-release.mjs`. Those tests never publish, stage, or need npm credentials; fixture registries are loopback HTTP servers.
 
@@ -298,4 +309,17 @@ and check-js gates are blocking.
   `dist.attestations` / tag-commit-registry / SBOM checks to
   `scripts/verify-release.mjs`, and added `scripts/check-provenance.mjs` with
   an offline self-test. No runtime or legal-text change.
+- 2026-11-20 (0.3.0 release candidate): the CI gate set gained the deterministic
+  eval suite (`pnpm eval:det`), the interface contracts gate
+  (`node scripts/check-contracts.mjs`) and the SBOM generate/check pair
+  (`pnpm run sbom && pnpm run check:sbom`); the Windows smoke job now covers the
+  durable-write commands (backup, export `--out`, import `--replace`, vault
+  seal/unseal) as the 0.2.4/0.3.0 Windows P0 regression gate. The legal texts are
+  **TOS/PRIVACY/DISCLAIMER/SAFETY v2026.11.3 (2026-11-20)**, a substantive
+  revision adding the bridge/Hermes ongoing-egress disclosure; consent records for
+  v2026.11.2 are not valid for v2026.11.3 and trigger re-acceptance.
+  `ADVISERS_TOS_VERSION` no longer affects the record or the gate (it is debug
+  display only and audited as ignored), and `check-tos --release` now asserts the
+  bridge/Hermes rows. This is a release candidate: no 0.3.0 package is published
+  and no provenance is claimed.
 

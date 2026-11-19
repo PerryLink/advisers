@@ -137,7 +137,7 @@
   "knownGaps": [
     {
       "id": "strict-flags",
-      "note": "In 0.2.4 unknown flags are ignored on some commands (for example `status --json --bogus` exits 0). v1 does NOT guarantee strict-flag exit 1; the M7 hardening item will tighten this additively (documented in docs/CONTRACTS.md)."
+      "note": "Strict option parsing landed in 0.3.0 for the operational commands (status, export, audit, doctor, backup, backups, restore): an unknown flag fails with E_USAGE and exit 1. Older commands (for example `today --json --bogus` or `commit ls --json --bogus`) still ignore unknown flags, so v1 does NOT guarantee strict-flag exit 1 for every command (documented in docs/CONTRACTS.md)."
     }
   ]
 }
