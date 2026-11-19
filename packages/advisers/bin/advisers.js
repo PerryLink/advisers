@@ -1,4 +1,5 @@
 #!/usr/bin/env node
+import '../lib/node-warning-filter.js'
 import { spawnSync } from 'node:child_process'
 import { chmodSync, existsSync, mkdirSync, readdirSync, readFileSync, renameSync, rmSync, statSync, writeFileSync } from 'node:fs'
 import { homedir, hostname } from 'node:os'
