@@ -16,7 +16,8 @@
     "#/$defs/TodayResource",
     "#/$defs/ToolCallResult",
     "#/$defs/ToolsListResult",
-    "#/$defs/WhoResource"
+    "#/$defs/WhoResource",
+    "#/$defs/ClientsToolPayload"
   ],
   "cases": [
     {
@@ -891,6 +892,146 @@
         "mineTotal": 40,
         "waitingTotal": 3,
         "truncated": true
+      }
+    },
+    {
+      "id": "payload.clients.list.valid",
+      "target": "#/$defs/ClientsToolPayload",
+      "expect": "accept",
+      "why": "0.3.2 customer read projection: client rows with exact counts and no note bodies.",
+      "value": {
+        "clients": [
+          {
+            "id": "cl_mwnqdoen_233c7729_1",
+            "name": "王工",
+            "status": "active",
+            "aliases": [
+              "王总"
+            ],
+            "secrecyDefault": 0,
+            "tags": [
+              "报价"
+            ],
+            "counts": {
+              "matters": 1,
+              "mattersArchived": 0,
+              "deliveries": 1,
+              "notes": 1,
+              "commitments": 2,
+              "openMine": 1,
+              "openWaiting": 1,
+              "overdue": 0
+            },
+            "nextDueAt": "2026-12-01T10:00:00+08:00",
+            "clearance": 0,
+            "protectedExcluded": 0
+          }
+        ],
+        "total": 1,
+        "truncated": false,
+        "limit": 20,
+        "clearance": 0,
+        "protectedExcluded": 0
+      }
+    },
+    {
+      "id": "payload.clients.status.valid",
+      "target": "#/$defs/ClientsToolPayload",
+      "expect": "accept",
+      "why": "0.3.2 customer read projection: one client status with derived delivery/commitment timeline.",
+      "value": {
+        "client": {
+          "id": "cl_mwnqdoen_233c7729_1",
+          "name": "王工",
+          "status": "active",
+          "aliases": [
+            "王总"
+          ],
+          "tags": [
+            "报价"
+          ],
+          "secrecyDefault": 0
+        },
+        "projects": [
+          {
+            "id": "prj_mwnqdoen_233c7729",
+            "name": "官网改版",
+            "status": "active",
+            "counts": {
+              "matters": 1,
+              "mattersArchived": 0,
+              "deliveries": 1,
+              "notes": 1,
+              "commitments": 2,
+              "openMine": 1,
+              "openWaiting": 1,
+              "overdue": 0
+            },
+            "nextDueAt": "2026-12-01T10:00:00+08:00"
+          }
+        ],
+        "counts": {
+          "matters": 1,
+          "mattersArchived": 0,
+          "deliveries": 1,
+          "notes": 1,
+          "commitments": 2,
+          "openMine": 1,
+          "openWaiting": 1,
+          "overdue": 0
+        },
+        "open": {
+          "mine": [
+            {
+              "id": "cm_mwnqdoen_233c7729_1",
+              "action": "发报价单",
+              "debtor": "user",
+              "creditor": "王工",
+              "status": "open",
+              "dueAt": "2026-12-01T10:00:00+08:00",
+              "matterId": "matter_mwnqdo9b_232v52ef_1",
+              "secrecy": 0
+            }
+          ],
+          "waiting": [],
+          "mineTotal": 1,
+          "waitingTotal": 0
+        },
+        "nextDueAt": "2026-12-01T10:00:00+08:00",
+        "timeline": [
+          {
+            "at": "2026-11-19T15:54:35.087Z",
+            "kind": "delivery",
+            "title": "报价单.pdf",
+            "ref": {
+              "kind": "delivery",
+              "id": "del_mwnqdoen_233c7729"
+            },
+            "matterId": "matter_mwnqdo9b_232v52ef_1",
+            "secrecy": 0
+          }
+        ],
+        "timelineTotal": 1,
+        "timelineTruncated": false,
+        "clearance": 0,
+        "protectedExcluded": 0
+      }
+    },
+    {
+      "id": "payload.clients.list.reject-total-type",
+      "target": "#/$defs/ClientsToolPayload",
+      "expect": "reject",
+      "value": {
+        "clients": [
+          {
+            "id": "cl_x"
+          }
+        ],
+        "total": "1",
+        "truncated": false,
+        "limit": 20,
+        "clearance": 0,
+        "protectedExcluded": 0
       }
     }
   ]

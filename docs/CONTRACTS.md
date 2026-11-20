@@ -1,4 +1,4 @@
-# Interface contracts (0.3.0 minimal set; unchanged by the 0.3.1 release-metadata patch)
+# Interface contracts (0.3.0 minimal set; interface shapes unchanged by the 0.3.1 release-metadata patch, which only added the `dsh-famling` entry to `contracts/CONSUMERS.json`)
 
 Advisers is CLI-first and its consumers (scripts, CI, MCP clients, the DSH host,
 Famling) need a machine-readable, versioned interface instead of prose. This
@@ -58,7 +58,7 @@ for the additive `contracts` discovery object. The expected payload is in
 
 ```json
 { "cliJson": 1, "errors": 1, "exitCodes": 1, "mcpTools": 1, "mcpResources": 1,
-  "mcpProtocol": "2024-11-05", "dshTools": 1, "petBrief": 2 }
+  "mcpProtocol": "2024-11-05", "dshTools": 2, "petBrief": 2 }
 ```
 
 **Wired in the 0.3.0 integration wave:** `advisers status --json` now carries the
@@ -112,8 +112,8 @@ additive; never rename an existing code or change its meaning.
 
 ### MCP (v1, additive)
 
-`contracts/mcp/tools-v1.json` + `contracts/mcp/resources-v1.json` freeze the 7
-tools and 4 resources; `contracts/mcp/responses-v1.schema.json` freezes the
+`contracts/mcp/tools-v1.json` + `contracts/mcp/resources-v1.json` freeze the 8
+tools and 5 resources; `contracts/mcp/responses-v1.schema.json` freezes the
 JSON-RPC response envelopes and their payloads; `contracts/mcp/errors-v1.json`
 freezes the error vocabulary. `contracts/mcp/versions-v1.json` declares the
 supported legacy protocol versions (2024-11-05 / 2025-06-18 / 2025-11-25) and
@@ -128,7 +128,7 @@ legacy compatibility. The checker asserts the echo and the fallback; changing
 to strict rejection is a documented contract change.) List-shaped MCP payloads
 gained the additive cap fields `total`/`truncated`/`limit`/per-array totals
 (caps applied after clearance, before the egress classifier); the modern
-2026-07-28 era remains 0.3.2+.
+2026-07-28 era remains future work (post-0.3.2).
 
 ## How to validate
 
@@ -143,7 +143,7 @@ The gate runs **in CI on every PR** (the `test` job, after build/typecheck; see
 `.github/workflows/ci.yml`), so a shape change that is not reflected in the frozen
 artifacts fails the PR. It is offline (no credentials, no model, no network), uses a
 temporary `ADVISERS_HOME` under the OS temp directory, and removes it afterwards.
-Current tree: **46 checks PASS** (2026-11-20 0.3.1 tree, including the wired
+Current tree: **46 checks PASS** (2026-11-21 0.3.2 tree, including the wired
 `status.contracts` field and the real stdio MCP catalogue). The eight checks:
 
 | Check | Enforces |
@@ -193,7 +193,7 @@ Current tree: **46 checks PASS** (2026-11-20 0.3.1 tree, including the wired
   **real local ledger read-only** through `advisers/lib/ledger-read.js` (TOS-gated,
   clearance 0, no HOME lock, no migration, no writes) with a marked preview fallback;
   the read payload keeps the 0.2.x field names and adds source/clearance/backend fields
-  (see `packages/dsh-advisers/README.md`). The discovery value stays `dshTools: 1`
+  (see `packages/dsh-advisers/README.md`). The discovery value is `dshTools: 2`
   (tool names/count contract), and the 5 external DSH error codes are preserved. A
   larger "DSH payload v2" and any DSH write path remain future work. Pet Brief stays
   contract v0.2 (closed, unchanged).

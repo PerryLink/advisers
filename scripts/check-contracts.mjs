@@ -1264,7 +1264,7 @@ function checkDocs() {
   if (!mcpVersions.supportedProtocolVersions.includes(expected.mcpProtocol)) problems.push('discovery.mcpProtocol ' + expected.mcpProtocol + ' is not supported by mcp/versions-v1.json')
   if (expected.petBrief !== petBrief.properties?.schemaVersion?.const) problems.push('discovery.petBrief ' + expected.petBrief + ' != docs/pet-brief schemaVersion.const')
   if (expected.dshTools !== artifactVersion('dshTools')) problems.push('discovery.dshTools ' + expected.dshTools + ' != artifacts.dshTools.version ' + artifactVersion('dshTools'))
-  if (dshTools.size !== 5) problems.push('expected the frozen 5 DSH tools, found ' + dshTools.size + ' in packages/dsh-advisers/index.js')
+  if (dshTools.size !== 6) problems.push('expected the frozen 6 DSH tools, found ' + dshTools.size + ' in packages/dsh-advisers/index.js')
   const consumers = JSON.parse(readText(join(contractsDir, 'CONSUMERS.json')))
   if (!Array.isArray(consumers.consumers) || consumers.consumers.length === 0) problems.push('contracts/CONSUMERS.json has no consumers')
   if (problems.length) fail('docs.consistency', firstErrors(problems, 6))

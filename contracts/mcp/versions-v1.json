@@ -3,7 +3,7 @@
   "status": "frozen",
   "frozenAt": "2026-11-20",
   "sourceCommit": "35a51c3",
-  "description": "MCP protocol version matrix. 0.3.0 target = legacy negotiation between 2024-11-05 / 2025-06-18 / 2025-11-25 (the server echoes a supported requested version and rejects unknown ones instead of silently downgrading). Modern 2026-07-28 (stateless, per-request _meta, server/discover) is explicitly 0.3.1+, not part of this contract.",
+  "description": "MCP protocol version matrix. 0.3.0 target = legacy negotiation between 2024-11-05 / 2025-06-18 / 2025-11-25 (the server echoes a supported requested version and rejects unknown ones instead of silently downgrading). Modern 2026-07-28 (stateless, per-request _meta, server/discover) is explicitly out of scope for this frozen contract; the modern era remains post-0.3.2 work as tracked in docs/CONTRACTS.md.",
   "defaultProtocolVersion": "2024-11-05",
   "supportedProtocolVersions": [
     "2024-11-05",
@@ -37,7 +37,8 @@
   "lineLimitBytes": 1048576,
   "modernProtocol": {
     "version": "2026-07-28",
-    "status": "out-of-scope-0.3.1",
+    "status": "out-of-scope-0.3.2",
+    "targetEra": "post-0.3.2",
     "note": "Fallback target only: initialize with 2026-07-28 returns 2024-11-05 instead of an error (intentional legacy compatibility)."
   }
 }

@@ -163,6 +163,31 @@
       }
     },
     {
+      "id": "today.valid-limit",
+      "target": "#/$defs/TodayPayload",
+      "expect": "accept",
+      "why": "0.3.2 additive --limit: optional limit/truncated keys do not change the existing fields.",
+      "value": {
+        "now": "2026-11-20T15:54:36.110Z",
+        "localDay": "2026-11-20",
+        "counts": {
+          "today": 0,
+          "overdue": 0,
+          "week": 0,
+          "waiting": 0,
+          "noDue": 0
+        },
+        "overdue": [],
+        "today": [],
+        "week": [],
+        "waiting": [],
+        "noDue": [],
+        "next": null,
+        "limit": 10,
+        "truncated": false
+      }
+    },
+    {
       "id": "today.boundary-empty",
       "target": "#/$defs/TodayPayload",
       "expect": "accept",

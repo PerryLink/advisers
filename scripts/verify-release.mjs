@@ -11,9 +11,11 @@
  *
  * 0.3.0 release-trust additions:
  *   - every package must have non-empty `dist.attestations`; each attestation
- *     bundle is fetched and its SLSA provenance source repository/commit is
- *     checked against the `v<version>` tag, and each known statement subject is
- *     checked against the tarball's dist.integrity;
+ *     bundle is fetched and its SLSA provenance source repository/commit/build
+ *     ref is checked against the `v<version>` tag, and each known statement
+ *     subject is checked against the tarball's dist.integrity; a build ref of
+ *     `refs/heads/main` fails (0.3.0 defect) unless --allow-non-tag-provenance
+ *     is passed to audit a known historical release;
  *   - the local `v<version>` tag must exist and every package's registry
  *     `gitHead` must equal that tag commit (tag / commit / registry agreement);
  *   - an SBOM, when supplied (`--sbom`) or auto-discovered, must be CycloneDX
@@ -31,7 +33,7 @@
  *        [--sbom <file>] [--require-sbom]
  *        [--skip-install] [--metadata-only] [--skip-git] [--json]
  *        [--allow-unpublished] [--allow-missing-attestations]
- *        [--allow-version-drift]
+ *        [--allow-version-drift] [--allow-non-tag-provenance]
  *
  * --skip-install skips both network install phases (CLI smoke + per-package
  * import smoke) and keeps the registry metadata/tarball verification.
@@ -94,6 +96,7 @@ const jsonOut = bool('json')
 const allowUnpublished = bool('allow-unpublished')
 const allowMissingAttestations = bool('allow-missing-attestations')
 const allowVersionDrift = bool('allow-version-drift')
+const allowNonTagProvenance = bool('allow-non-tag-provenance')
 const requireSbom = bool('require-sbom')
 const resolvePath = (file) => (isAbsolute(file) ? file : join(root, file))
 
@@ -359,6 +362,7 @@ try {
       allowMissing: allowMissingAttestations,
       expectedRepo,
       expectedCommit: releaseTag.expectedCommit,
+      expectedRef: releaseTag.expectedCommit && !allowNonTagProvenance ? 'refs/tags/' + releaseTag.ref : '',
     })
     for (const item of attestations.checks) {
       if (item.skipped) skipCheck(name, item.detail)

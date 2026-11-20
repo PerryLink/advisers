@@ -11,12 +11,12 @@ appear, existing keys keep their meaning.
 |---|---|---|
 | `advisers status --json` | `{version,node,office,home,store{type,path},model,matters,prefs,routines,links,sessions,deliveries,clients,projects,soul,modelUsage?}` (clients/projects are 0.3.0 additive) | v1 |
 | `advisers tick --json` | `{now,localDay,due[]}` | v1 (existing) |
-| `advisers today --json [--calendar] [--sources]` | `{now,localDay,counts{today,overdue,week,waiting,noDue},overdue[],today[],week[],waiting[],noDue[],next,calendar?[],sources?[]}` | v1 |
+| `advisers today --json [--calendar] [--sources] [--limit n]` | `{now,localDay,counts{today,overdue,week,waiting,noDue},overdue[],today[],week[],waiting[],noDue[],next,calendar?[],sources?[],limit?,truncated?}` (0.3.2 additive `limit`/`truncated` only with `--limit`) | v1 |
 | `advisers remind --json` | `{now,reminders[]}` | v1 |
 | `advisers commit ls --json` | `Commitment[]` | v1 |
 | `advisers who --json` | `{mine[],waiting[]}` | v1 |
 | `advisers deliveries --json` | `Delivery[]` (+0.3.0 lineage keys `clientId/projectId/templateName/templateVersion/quoteNo/dataSha256` when present) | v1 |
-| `advisers deliveries --receipt` | receipt pack summary (below) — always JSON, even without `--json` | v1 |
+| `advisers deliveries --receipt [--client <id> [--project <id>]]` | receipt pack summary (below) — always JSON, even without `--json`; 0.3.2 adds `scope`/`subject`/`deliveriesTotal`/`deliveriesTruncated` | v1 (additive) |
 | `advisers deliveries --pack` | evidence-pack JSON `{out,files,receipt,verification}` | existing |
 | `advisers evidence show <id> --json` | `{commitment\|fact\|preference,sources[],missing[],unverifiable[],summary{byKind{observed,manual},missing,unverifiable,operatorEntered}}` | v1 (+0.2.3 additive fields) |
 | `advisers evidence verify <dir>` | `{ok,errors[],warnings[],dir,fileCount,checksumCount,files[],checksums{},manifest}` | v1 |
@@ -41,6 +41,12 @@ counted under `waiting`). Group arrays hold the full ledger `Commitment` rows.
 - `now`: ISO-8601 UTC timestamp of the run; `localDay`: the Asia/Shanghai day.
 - `counts`: `{today,overdue,week,waiting,noDue}` integers.
 - `next`: the earliest due commitment as `{id,action,dueAt}` or `null`.
+- `--limit N` (0.3.2, `--json` only; N=1..10000, cannot combine with
+  `--sources`): each group array keeps at most N **full Commitment entities**
+  (hydrated on demand), while `counts` and `next` stay the true totals. The
+  output gains `limit: N` and `truncated: boolean`; without the flag the output
+  is byte-identical to v1 (`today --json` remains output-bound on a 200k ledger —
+  use `--limit` for the bounded read path).
 - `calendar` (only with `--calendar`): `[{uid,summary,startsAt,endsAt,allDay,recurring,location,rrule}]`
   for the occurrences that start today (RRULE expanded locally; `startsAt` is
   `YYYY-MM-DD` for all-day and `YYYY-MM-DDTHH:MM:SS+08:00` for timed).
@@ -129,18 +135,24 @@ missing**:
 ### `deliveries --receipt`
 
 Two separate bundle commands exist; do not mix them:
-`deliveries --pack` is the v1 evidence pack, `deliveries --receipt` is the v1.1
-delivery receipt pack (delivered file copies + SHA256SUMS + receipt.docx).
+`deliveries --pack` is the v1 evidence pack, `deliveries --receipt` is the
+delivery receipt pack. 0.3.2 generates **manifest v2** (subject/scope/lineage);
+the verifier accepts v1 and v2 packs, so receipts written by 0.3.0/0.3.1 still
+verify.
 
 ```json
 {
   "ok": true,
   "format": "advisers-delivery-receipt-pack",
-  "version": 1,
+  "version": 2,
+  "scope": "subject",
+  "subject": { "kind": "client", "id": "cl_wang", "name": "王工" },
   "out": "/home/me/.advisers/receipts/receipt-2026-11-17T...",
   "replaced": null,
   "deliveryCount": 1,
-  "fileCount": 4,
+  "deliveriesTotal": 1,
+  "deliveriesTruncated": false,
+  "fileCount": 5,
   "verifyStatus": "passed",
   "anchored": false,
   "recipient": { "name": "王工", "email": "wang@example.com", "note": null },
@@ -149,10 +161,28 @@ delivery receipt pack (delivered file copies + SHA256SUMS + receipt.docx).
   "evidence": { "entryCount": 1, "counts": {...}, "sourceCount": 0, "missingCount": 1 },
   "files": [{ "path": "deliveries/<id>/quote.docx", "size": 10013, "sha256": "<sha256>" }],
   "skippedFiles": [],
-  "verification": { "ok": true, "errors": [], "warnings": ["..."], "checksumCount": 4 }
+  "verification": { "ok": true, "errors": [], "warnings": ["..."], "checksumCount": 5 }
 }
 ```
 
+- `--client <id> [--project <id>]` (0.3.2) scopes the pack to one subject: only
+  that client's/project's deliveries (current matter ownership **or** the
+  generation-time lineage snapshot) and the evidence under those matters are
+  copied. Global facts/preferences are excluded unless `--include-global`;
+  `--ids` cannot be combined with a subject. `scope` becomes `"subject"` and
+  the pack states it contains only that subject's data.
+- Without a subject the historical local-all pack is kept, but it is labelled
+  `scope: "local-all"` and README.txt/receipt.docx state that it contains every
+  local customer's data and must not be forwarded to a third party.
+- `deliveriesTotal`/`deliveriesTruncated` report the scoped delivery count
+  before the readable-file and `--limit` filters, so a bounded pack is never
+  mistaken for the whole set.
+- Secrecy: every delivery row is gated by `max(client.secrecyDefault,
+  matter.secrecy)` at clearance 0; protected rows are counted
+  (`deliveriesProtectedExcluded`) and never copied. A subject client whose
+  default secrecy is above 0 fails closed with `E_SECRECY_BLOCKED` instead of
+  producing an empty pack. The evidence section uses the same rule
+  (`evidenceClientDefaultExcluded`).
 - `files` lists every file covered by `SHA256SUMS` (manifest/README/receipt + delivery copies).
 - `verification` is a fresh offline `verifyReceiptPackDir(out)` run; `ok:false` sets exit 1.
 - `skippedFiles` names delivery files that no longer exist (they are not in the pack).
@@ -160,6 +190,9 @@ delivery receipt pack (delivered file copies + SHA256SUMS + receipt.docx).
   2000-entry default (`--ids` narrows, `--all` lifts the cap).
 - `--recipient` accepts `"Name <mail>"`, a bare address or a bare name; it is an
   operator-entered record, not a signed/legal receipt.
+- Compatibility: a pre-0.3.2 verifier rejects a v2 pack, but
+  `sha256sum -c SHA256SUMS` always works; use 0.3.2+ for full receipt
+  verification.
 
 ### `evidence verify <dir>`
 
@@ -311,6 +344,14 @@ JSON store answers `E_STORE`), and every `--json` stdout is one pure JSON docume
   `E_CLIENT_NOT_FOUND`/`E_CLIENT_ARCHIVED`/`E_CLIENT_DUPLICATE`/`E_CLIENT_ALIAS_CONFLICT`/`E_CLIENT_HAS_ACTIVE_PROJECTS`/`E_CLIENT_MERGE_SELF`/`E_CLIENT_INVALID`/`E_CLIENT_NOTE_INVALID`/`E_CLIENT_NOTE_NOT_FOUND`,
   `E_PROJECT_NOT_FOUND`/`E_PROJECT_INVALID`/`E_PROJECT_DUPLICATE`/`E_PROJECT_CLIENT_MISMATCH`/`E_MATTER_CLIENT_MISMATCH`,
   `E_STORE` (JSON store), `E_USAGE`, `E_TOS_REQUIRED` (exit 3), `E_SCHEMA_NEWER` (newer import).
+- `client export <id> [--format md|docx] [--out <file>] [--redact-names] --json` (0.3.2) →
+  `{ok:true, command:"client export", format, scope:"client", subject{kind,id,name}, out, bytes, sha256, generatedAt, clearance:0, protectedExcluded, counts, nextDueAt, timelineCount, timelineTotal, timelineTruncated, disclaimer:true}`.
+  Writes a deterministic, external-facing status sheet (markdown or DOCX, mode 0600):
+  client profile/counts, active projects, open buckets, recent delivery/commitment
+  timeline, fixed disclaimer. It never contains evidence quotes or note bodies;
+  protected matters are counted only; `--redact-names` replaces the client/project
+  display names (it is not an anonymizer for titles/notes). An audit row
+  `client.export` records the client id/format/size only.
 - `export --all` carries every `DATA_TABLES` table (including the three customer tables) plus an
   additive `schemaVersion`; `import --replace` restores the ledger **and** the customer tables in one
   transaction, refuses a newer `schemaVersion` before writing, and aborts atomically on a dangling

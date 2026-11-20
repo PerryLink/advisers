@@ -40,9 +40,19 @@
       "schemaRef": "responses-v1.schema.json#/$defs/EvidenceIndexResource",
       "stability": "stable",
       "readOnly": true
+    },
+    {
+      "uri": "advisers://clients",
+      "name": "clients",
+      "description": "Active client rows as compact read-only projections (exact counts and next due date; no note text or conversation bodies), capped with total/truncated/limit and clearance/protectedExcluded.",
+      "mimeType": "application/json",
+      "schemaRef": "responses-v1.schema.json#/$defs/ClientsResource",
+      "stability": "stable",
+      "readOnly": true
     }
   ],
   "additiveChanges": [
+    "0.3.2: added advisers://clients (clearance-filtered client rows, no note bodies or conversation text) with schemaRef responses-v1.schema.json#/$defs/ClientsResource.",
     "0.3.0: payloads gained optional cap fields (total/truncated/limit/mineTotal/waitingTotal/sourcesTotal/missingTotal); existing fields keep their meaning."
   ]
 }

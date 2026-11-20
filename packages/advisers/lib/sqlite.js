@@ -2293,6 +2293,63 @@ CREATE TABLE IF NOT EXISTS task_runs (
     return this.db.prepare(sql).all(...params, limit).map(mapDeliveryRow)
   }
 
+  /**
+   * Delivery rows for one receipt subject (0.3.2): row ownership by the
+   * subject's current matter ids OR the generation-time client/project
+   * snapshot columns. The union is deliberate — a delivery recorded for the
+   * client stays scoped to it even after the matter is re-linked, and a row
+   * whose lineage is missing is found through its matter.
+   *
+   * @param {{clientId?: string|null, projectId?: string|null, matterIds?: string[], limit?: number}} [scope]
+   */
+  listDeliveriesForScope({ clientId = null, projectId = null, matterIds = [], limit = 100 } = {}) {
+    const clauses = []
+    const params = []
+    const ids = Array.isArray(matterIds) ? matterIds.filter((id) => typeof id === 'string' && id) : []
+    if (ids.length) {
+      clauses.push('matter_id IN (' + ids.map(() => '?').join(',') + ')')
+      params.push(...ids)
+    }
+    if (clientId !== null && clientId !== undefined && clientId !== '') {
+      clauses.push('client_id = ?')
+      params.push(clientId)
+    }
+    if (projectId !== null && projectId !== undefined && projectId !== '') {
+      clauses.push('project_id = ?')
+      params.push(projectId)
+    }
+    if (!clauses.length) return []
+    const sql = 'SELECT * FROM deliveries WHERE (' + clauses.join(' OR ') + ') ORDER BY created_at DESC, rowid DESC LIMIT ?'
+    return this.db.prepare(sql).all(...params, limit).map(mapDeliveryRow)
+  }
+
+  /**
+   * Count delivery rows for one receipt subject without loading files.
+   * Mirrors listDeliveriesForScope's scope predicate; receipt packs themselves
+   * are excluded so a new receipt cannot count older receipt packs.
+   */
+  countDeliveriesForScope({ clientId = null, projectId = null, matterIds = [], excludeReceiptPacks = true } = {}) {
+    const scopeClauses = []
+    const params = []
+    const ids = Array.isArray(matterIds) ? matterIds.filter((id) => typeof id === 'string' && id) : []
+    if (ids.length) {
+      scopeClauses.push('matter_id IN (' + ids.map(() => '?').join(',') + ')')
+      params.push(...ids)
+    }
+    if (clientId !== null && clientId !== undefined && clientId !== '') {
+      scopeClauses.push('client_id = ?')
+      params.push(clientId)
+    }
+    if (projectId !== null && projectId !== undefined && projectId !== '') {
+      scopeClauses.push('project_id = ?')
+      params.push(projectId)
+    }
+    if (!scopeClauses.length) return 0
+    const clauses = ['(' + scopeClauses.join(' OR ') + ')']
+    if (excludeReceiptPacks) clauses.push("COALESCE(tool, '') != 'receipt-pack'")
+    return this.db.prepare('SELECT COUNT(*) AS n FROM deliveries WHERE ' + clauses.join(' AND ')).get(...params).n
+  }
+
   getMeta(key) {
     return this.db.prepare('SELECT value FROM meta WHERE key = ?').get(key)?.value
   }
@@ -3788,6 +3845,84 @@ CREATE TABLE IF NOT EXISTS task_runs (
   projectCommitmentCreditorCandidates() {
     return this._project('SELECT DISTINCT creditor FROM commitments', [], (row) => row[0])
   }
+
+  /**
+   * MCP narrow commitment read model (0.3.2 P2-1).
+   *
+   * The four MCP list tools (today / commit_ls / who / remind) previously mapped
+   * every commitment entity (`SELECT *` + JSON.parse per row + a Ledger Map) just
+   * to drop almost all rows before serialization. This projection selects only
+   * the eight columns those read models need and applies the per-item clearance
+   * gate here, in rowid (insertion) order:
+   *
+   * - `WHERE status = 'open'` when `all` is false; every status otherwise;
+   * - `NOT INDEXED` keeps the natural table/rowid order, which is exactly the
+   *   order `loadCommitments()` (+ its `ORDER BY rowid`) used to produce, so the
+   *   MCP output stays byte-identical;
+   * - `hidden = secrecy > clearance`. The secrecy rule mirrors
+   *   `lib/evidence.js` `evidenceRecordSecrecy()` exactly: no matter id -> 0, a
+   *   matter id missing from the matters table -> Infinity, a null/non-finite
+   *   matter secrecy -> 0/Infinity (fail closed);
+   * - `reminder_offsets` is parsed only when it is a JSON array, matching
+   *   `mapCommitmentRow` (remind needs the custom offsets).
+   *
+   * `total` is the number of scanned rows (visible + hidden); subtract
+   * `protectedExcluded` for the visible count. No write, no schema/index change.
+   *
+   * @param {{ all?: boolean, clearance?: number }} [options]
+   * @returns {{rows: Array<object>, total: number, protectedExcluded: number}}
+   */
+  projectCommitmentReadModel({ all = false, clearance = 0 } = {}) {
+    const sql = all
+      ? 'SELECT id, debtor, creditor, action, due_at, status, matter_id, reminder_offsets FROM commitments NOT INDEXED'
+      : "SELECT id, debtor, creditor, action, due_at, status, matter_id, reminder_offsets FROM commitments NOT INDEXED WHERE status = 'open'"
+    const statement = this.db.prepare(sql)
+    if (typeof statement.setReturnArrays === 'function') statement.setReturnArrays(true)
+    const raw = statement.all()
+    const matterRows = this.db.prepare('SELECT id, secrecy FROM matters').all()
+    const secrecyById = new Map()
+    for (const matter of matterRows) secrecyById.set(matter.id, matter.secrecy)
+    const numericClearance = Number(clearance)
+    const level = Number.isFinite(numericClearance) && numericClearance >= 0 ? numericClearance : 0
+    const rows = []
+    let protectedExcluded = 0
+    for (const row of raw) {
+      const matterId = row[6]
+      let secrecy = 0
+      if (typeof matterId === 'string' && matterId) {
+        if (!secrecyById.has(matterId)) {
+          secrecy = Number.POSITIVE_INFINITY
+        } else {
+          const matterLevel = Number(secrecyById.get(matterId))
+          secrecy = Number.isFinite(matterLevel) ? matterLevel : Number.POSITIVE_INFINITY
+        }
+      }
+      const hidden = secrecy > level
+      if (hidden) protectedExcluded += 1
+      let offsets
+      if (row[7] != null) {
+        try {
+          const parsed = JSON.parse(row[7])
+          if (Array.isArray(parsed)) offsets = parsed
+        } catch {
+          // Corrupt JSON degrades to "no custom offsets", exactly like mapCommitmentRow.
+        }
+      }
+      rows.push({
+        id: row[0],
+        debtor: row[1],
+        creditor: row[2],
+        action: row[3],
+        dueAt: row[4] ?? undefined,
+        status: row[5],
+        matterId: row[6] ?? undefined,
+        ...(offsets === undefined ? {} : { reminderOffsets: offsets }),
+        hidden,
+      })
+    }
+    return { rows, total: rows.length, protectedExcluded }
+  }
+
 
   loadPreferences({ status, kind } = {}) {
     const where = []

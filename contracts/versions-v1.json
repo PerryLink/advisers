@@ -14,7 +14,7 @@
       "mcpTools": 1,
       "mcpResources": 1,
       "mcpProtocol": "2024-11-05",
-      "dshTools": 1,
+      "dshTools": 2,
       "petBrief": 2
     },
     "note": "mcpProtocol is the negotiated/default legacy protocol; allowed values are listed in mcp/versions-v1.json supportedProtocolVersions. exitCodes stays 1 until exit-codes-v2.draft.json is activated with the policy engine."
@@ -104,10 +104,11 @@
       "consumer": "MCP clients"
     },
     "dshTools": {
-      "version": 1,
-      "status": "external-unchanged",
+      "version": 2,
+      "status": "additive",
       "source": "packages/dsh-advisers/index.js",
-      "note": "5 preview tools; error codes preserved in errors/codes.v1.json external section; full DSH payload v2 belongs to the DSH wave.",
+      "toolCount": 6,
+      "note": "6 tools (0.3.2 M3): today/who/evidence read the real ledger read-only through advisers/lib/ledger-read.js; brief/office are local; advisers_clients adds the read-only customer list/show projection. Error codes preserved in errors/codes.v1.json external section; the DSH output schemas stay additive.",
       "compat": "additive",
       "consumer": "DSH host"
     },

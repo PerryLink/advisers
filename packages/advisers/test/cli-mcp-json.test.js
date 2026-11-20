@@ -15,10 +15,11 @@ const TOOL_NAMES = [
   'advisers_who',
   'advisers_evidence',
   'advisers_remind',
+  'advisers_clients',
   'advisers_capture_candidate',
   'advisers_pack_verify',
 ]
-const RESOURCE_URIS = ['advisers://today', 'advisers://commitments', 'advisers://who', 'advisers://evidence']
+const RESOURCE_URIS = ['advisers://today', 'advisers://commitments', 'advisers://who', 'advisers://evidence', 'advisers://clients']
 
 function run(home, args, cwd) {
   return execFileSync(process.execPath, [bin, ...args], { cwd, encoding: 'utf8', env: CLI_ENV(home) })
@@ -60,7 +61,7 @@ test('E6: read-only commands expose stable JSON', () => {
   } finally { rmSync(root, { recursive: true, force: true }) }
 })
 
-test('E6-T2: MCP stdio initializes with 7 tools + 4 resources and serves read-only data', () => {
+test('E6-T2: MCP stdio initializes with 8 tools + 5 resources and serves read-only data', () => {
   const { root, home, work } = setup()
   try {
     run(home, ['commit', 'add', '发报价', '--quote', 'q'], work)
@@ -95,7 +96,7 @@ test('E6-T2: MCP stdio initializes with 7 tools + 4 resources and serves read-on
   } finally { rmSync(root, { recursive: true, force: true }) }
 })
 
-test('E6-T3: MCP resources/read serves the four read-only JSON views', () => {
+test('E6-T3: MCP resources/read serves the five read-only JSON views', () => {
   const { root, home, work } = setup()
   try {
     run(home, ['commit', 'add', '发报价', '--quote', '机密原话', '--due', '2026-12-01T10:00:00+08:00'], work)
@@ -116,6 +117,11 @@ test('E6-T3: MCP resources/read serves the four read-only JSON views', () => {
     const evidence = read(4, 'advisers://evidence')
     assert.ok(evidence.limits && Array.isArray(evidence.commitments) && Array.isArray(evidence.facts) && Array.isArray(evidence.preferences))
     assert.ok(!JSON.stringify(evidence).includes('机密原话'), 'the evidence index carries counts only, never quote text')
+    const clients = read(5, 'advisers://clients')
+    assert.ok(Array.isArray(clients.clients), 'the customer list is a JSON array')
+    assert.equal(clients.clients.length, 0, 'the fresh CLI home has no customer rows')
+    assert.equal(clients.limit, 20)
+    assert.equal(clients.clearance, 0)
   } finally { rmSync(root, { recursive: true, force: true }) }
 })
 

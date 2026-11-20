@@ -1,6 +1,6 @@
 {
   "name": "advisers-policy-strict",
-  "version": "0.3.1",
+  "version": "0.3.2",
   "private": false,
   "description": "Strict policy pack for Advisers: understanding allowed; companion/roleplay disabled.",
   "type": "module",
@@ -26,7 +26,7 @@
     "test": "node --experimental-strip-types --test test/*.test.ts"
   },
   "dependencies": {
-    "advisers-core": "0.3.1"
+    "advisers-core": "0.3.2"
   },
   "license": "PolyForm-Noncommercial-1.0.0",
   "repository": {

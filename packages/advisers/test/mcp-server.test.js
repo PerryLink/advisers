@@ -79,13 +79,13 @@ test('mcp: initialize advertises protocol 2024-11-05, tools and resources', asyn
   } finally { f.cleanup() }
 })
 
-test('mcp: tools/list exposes the 5 read-only tools plus 2 whitelisted tools', async () => {
+test('mcp: tools/list exposes the 6 read-only tools plus 2 whitelisted tools', async () => {
   const f = fixture()
   try {
     const response = await f.call('tools/list')
     const tools = response.result.tools
     assert.deepEqual(tools.map((tool) => tool.name), [...TOOL_NAMES])
-    assert.equal(tools.length, 7)
+    assert.equal(tools.length, 8)
     for (const tool of tools) {
       assert.equal(tool.inputSchema.type, 'object', tool.name + ' schema must be an object')
       assert.equal(typeof tool.description, 'string')
@@ -100,17 +100,17 @@ test('mcp: tools/list exposes the 5 read-only tools plus 2 whitelisted tools', a
     assert.equal(packVerify.annotations.readOnlyHint, true)
     assert.deepEqual(packVerify.inputSchema.required, ['dir'])
     const readOnly = tools.filter((tool) => tool.annotations.readOnlyHint === true).map((tool) => tool.name)
-    assert.equal(readOnly.length, 6)
+    assert.equal(readOnly.length, 7)
     assert.ok(!readOnly.includes('advisers_capture_candidate'))
   } finally { f.cleanup() }
 })
 
-test('mcp: resources/list and resources/read expose the four read-only JSON views', async () => {
+test('mcp: resources/list and resources/read expose the five read-only JSON views', async () => {
   const f = fixture()
   try {
     const list = await f.call('resources/list')
     assert.deepEqual(list.result.resources.map((entry) => entry.uri), [...RESOURCE_URIS])
-    assert.equal(list.result.resources.length, 4)
+    assert.equal(list.result.resources.length, 5)
     for (const resource of list.result.resources) {
       assert.equal(resource.mimeType, 'application/json')
       assert.equal(typeof resource.name, 'string')
@@ -363,7 +363,7 @@ test('mcp: stdio serve frames newline requests and enforces the line cap', async
     assert.equal(lines[1].error.code, -32600)
     assert.match(lines[1].error.message, /line limit/)
     assert.equal(lines[2].id, 2)
-    assert.equal(lines[2].result.tools.length, 7)
+    assert.equal(lines[2].result.tools.length, 8)
 
     const oversized = await f.server.handleLine('y'.repeat(MAX_LINE_BYTES + 1))
     assert.equal(oversized.error.code, -32600)
@@ -395,7 +395,7 @@ test('mcp: scripts/mcp-dev.mjs serves the library over real stdio', () => {
     const lines = out.stdout.trim().split('\n').map((line) => JSON.parse(line))
     const byId = new Map(lines.map((line) => [line.id, line]))
     assert.equal(byId.get(1).result.protocolVersion, '2024-11-05')
-    assert.equal(byId.get(2).result.tools.length, 7)
+    assert.equal(byId.get(2).result.tools.length, 8)
     assert.deepEqual(byId.get(3).result.resources.map((entry) => entry.uri), [...RESOURCE_URIS])
     assert.equal(JSON.parse(byId.get(4).result.contents[0].text).open, 0)
     const capture = byId.get(5)

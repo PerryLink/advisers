@@ -1,5 +1,5 @@
 /**
- * Offline verifier for Advisers delivery receipt packs (format v1.1).
+ * Offline verifier for Advisers delivery receipt packs (manifest v1 and v2).
  *
  * A receipt pack is a directory produced by buildReceiptPack in lib/evidence.js:
  *
@@ -43,9 +43,11 @@ import {
   MAX_QUOTE_CHARS,
   RECEIPT_DELIVERIES_PREFIX,
   RECEIPT_MANIFEST_FORMAT,
-  RECEIPT_MANIFEST_VERSION,
+  RECEIPT_MANIFEST_VERSIONS,
   RECEIPT_REQUIRED_FILES,
+  RECEIPT_SCOPES,
   RECEIPT_SHA256SUMS_FILE,
+  RECEIPT_SUBJECT_KINDS,
   isUnsafePackPath,
   sha256Hex,
 } from './evidence.js'
@@ -125,6 +127,10 @@ function isIsoDate(value) {
 
 function isNonNegativeInteger(value) {
   return Number.isInteger(value) && value >= 0
+}
+
+function isNonEmptyString(value) {
+  return typeof value === 'string' && value.length > 0
 }
 
 /**
@@ -292,7 +298,7 @@ function checkDocxStructure(file, limits) {
   return { zip, hasDocument, bytes }
 }
 
-// --- manifest schema (format v1; keep it in sync with buildReceiptPack) ------
+// --- manifest schema (format v1/v2; keep it in sync with buildReceiptPack) ----
 
 function validateGenerator(generator, errors) {
   if (!isPlainObject(generator)) {
@@ -327,12 +333,72 @@ function validateRecipient(recipient, errors) {
   }
 }
 
-function validateDelivery(delivery, index, sums, deliveryFiles, errors) {
+// --- manifest v2 additions (subject / scope / row-level lineage) -------------
+
+function validateSubject(subject, errors) {
+  const where = 'manifest.subject'
+  if (!isPlainObject(subject)) {
+    addError(errors, 'schema: ' + where + ' must be an object')
+    return
+  }
+  if (!RECEIPT_SUBJECT_KINDS.includes(subject.kind)) {
+    addError(errors, 'schema: ' + where + '.kind must be one of ' + RECEIPT_SUBJECT_KINDS.map((kind) => '"' + kind + '"').join(', '))
+  }
+  if (subject.kind === 'none') {
+    if ('id' in subject || 'name' in subject) {
+      addError(errors, "schema: " + where + " must not carry id/name when kind is 'none'")
+    }
+    return
+  }
+  for (const key of ['id', 'name']) {
+    if (key in subject && !isNonEmptyString(subject[key])) {
+      addError(errors, 'schema: ' + where + '.' + key + ' must be a non-empty string')
+    }
+  }
+  if (!isNonEmptyString(subject.id) && !isNonEmptyString(subject.name)) {
+    addError(errors, 'schema: ' + where + ' requires at least one of id/name')
+  }
+}
+
+function validateScope(scope, errors) {
+  if (!RECEIPT_SCOPES.includes(scope)) {
+    addError(errors, 'schema: manifest.scope must be one of ' + RECEIPT_SCOPES.map((value) => '"' + value + '"').join(', '))
+  }
+}
+
+/** v2-only row lineage. v1 rows keep their exact old validation. */
+function validateDeliveryLineage(delivery, where, errors) {
+  for (const key of ['clientId', 'projectId', 'matterId']) {
+    if (key in delivery && !isNonEmptyString(delivery[key])) {
+      addError(errors, 'schema: ' + where + '.' + key + ' must be a non-empty string')
+    }
+  }
+  if (!('template' in delivery)) return
+  const template = delivery.template
+  if (!isPlainObject(template)) {
+    addError(errors, 'schema: ' + where + '.template must be an object')
+    return
+  }
+  for (const key of ['name', 'version']) {
+    if (!isNonEmptyString(template[key])) {
+      addError(errors, 'schema: ' + where + '.template.' + key + ' must be a non-empty string')
+    }
+  }
+  if ('quoteNo' in template && !isNonEmptyString(template.quoteNo)) {
+    addError(errors, 'schema: ' + where + '.template.quoteNo must be a non-empty string')
+  }
+  if ('dataSha256' in template && !isSha256Hex(template.dataSha256)) {
+    addError(errors, 'schema: ' + where + '.template.dataSha256 must be 64 lowercase hex characters')
+  }
+}
+
+function validateDelivery(delivery, index, sums, deliveryFiles, errors, version) {
   const where = 'manifest.deliveries[' + index + ']'
   if (!isPlainObject(delivery)) {
     addError(errors, 'schema: ' + where + ' must be an object')
     return
   }
+  if (version === 2) validateDeliveryLineage(delivery, where, errors)
   if (typeof delivery.id !== 'string' || !delivery.id) addError(errors, 'schema: ' + where + '.id must be a non-empty string')
   if (!('title' in delivery) || !(delivery.title === null || typeof delivery.title === 'string')) {
     addError(errors, 'schema: ' + where + '.title must be a string or null')
@@ -550,12 +616,23 @@ function validateReceiptManifest(manifest, sums, errors, result) {
   if (manifest.format !== RECEIPT_MANIFEST_FORMAT) {
     addError(errors, 'schema: manifest.format must be ' + RECEIPT_MANIFEST_FORMAT)
   }
-  if (manifest.version !== RECEIPT_MANIFEST_VERSION) {
-    addError(errors, 'schema: manifest.version must be ' + RECEIPT_MANIFEST_VERSION)
+  // v1 packs were written by 0.2.x/0.3.x and must keep verifying exactly as
+  // before; v2 adds subject/scope/lineage checks below. Anything else is drift.
+  if (!RECEIPT_MANIFEST_VERSIONS.includes(manifest.version)) {
+    addError(
+      errors,
+      'schema: manifest.version must be ' + RECEIPT_MANIFEST_VERSIONS.join(' or ') + ' (got ' + JSON.stringify(manifest.version) + ')',
+    )
   }
   if (!isIsoDate(manifest.createdAt)) addError(errors, 'schema: manifest.createdAt must be an ISO-8601 UTC timestamp')
   validateGenerator(manifest.generator, errors)
   validateRecipient(manifest.recipient, errors)
+  const version = manifest.version
+  if (version === 2) {
+    if (!('scope' in manifest)) addError(errors, 'schema: manifest.scope is required for manifest version 2')
+    else validateScope(manifest.scope, errors)
+    if ('subject' in manifest) validateSubject(manifest.subject, errors)
+  }
 
   const deliveryFiles = new Map()
   if (!Array.isArray(manifest.deliveries) || manifest.deliveries.length === 0) {
@@ -567,7 +644,7 @@ function validateReceiptManifest(manifest, sums, errors, result) {
         if (ids.has(delivery.id)) addError(errors, 'schema: manifest.deliveries[' + index + '].id is duplicated: ' + delivery.id)
         else ids.add(delivery.id)
       }
-      validateDelivery(delivery, index, sums, deliveryFiles, errors)
+      validateDelivery(delivery, index, sums, deliveryFiles, errors, version)
     })
   }
 

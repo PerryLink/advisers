@@ -736,6 +736,35 @@ function loadOpenCommitmentRowsForToday() {
   return readProjection((store) => store.projectOpenCommitmentsForToday()) ?? []
 }
 
+/**
+ * 0.3.2: parse `today --json --limit N` (additive cap; N full Commitment rows
+ * per bucket, counts stay the true totals). Requires --json and is not
+ * combinable with --sources, which needs the full evidence rows.
+ */
+function parseTodayLimit(args) {
+  const index = args.indexOf('--limit')
+  if (index === -1) return { limit: null }
+  const raw = args[index + 1]
+  if (typeof raw !== 'string' || !/^[1-9][0-9]*$/.test(raw)) return { error: '--limit must be an integer 1..10000' }
+  const value = Number(raw)
+  if (value < 1 || value > 10000) return { error: '--limit must be an integer 1..10000' }
+  if (!args.includes('--json')) return { error: '--limit requires --json (the human view has its own cap)' }
+  if (args.includes('--sources')) return { error: '--limit cannot be combined with --sources (the source rows need full evidence)' }
+  return { limit: value }
+}
+
+/** Full Commitment entities for the capped today --json rows, id order preserved. */
+function hydrateCommitmentsForToday(ids) {
+  if (!Array.isArray(ids) || !ids.length) return []
+  const store = readStoreOrExit()
+  if (!store) return []
+  try {
+    return store.read(() => ids.map((id) => store.getCommitment(id)).filter(Boolean))
+  } catch {
+    return []
+  }
+}
+
 /** Narrow commitment rows for reminder planning (remind / tui). */
 function loadReminderRows({ includeUndated = false } = {}) {
   return readProjection((store) => store.projectCommitmentsForReminders({ includeUndated }))
@@ -1061,7 +1090,7 @@ const CONTRACTS_DISCOVERY = Object.freeze({
   mcpTools: 1,
   mcpResources: 1,
   mcpProtocol: '2024-11-05',
-  dshTools: 1,
+  dshTools: 2,
   petBrief: 2,
 })
 function friendlyError(error) {
@@ -1180,7 +1209,7 @@ Usage:
   advisers history            recent conversations
   advisers search <text>       full-text search old turns
   advisers compact ls|rollback summary versions
-  advisers today [--calendar] [--sources] [--json]
+  advisers today [--calendar] [--sources] [--json [--limit n]]
                               one-screen today/week/waiting view (+ local events)
   advisers remind [--json] [--ics [path]] [--deliver [--notify]]  due reminders + ICS/VALARM export
   advisers remind install|uninstall|status [--apply] [--schedule "0 9 * * *"]
@@ -1233,6 +1262,7 @@ Usage:
                       [--limit n] [--clearance 0-3] [--json]
   advisers client archive <id> [--dry-run] [--json]
   advisers client merge <from> <into> [--dry-run] [--json]
+  advisers client export <id> [--format md|docx] [--out <file>] [--redact-names] [--json]
   advisers client note add <id> "<summary>" [--kind k] [--at ISO] [--project id] [--matter id] [--json]
   advisers client note list <id> [--project id] [--limit n] [--json]
   advisers project add <client-id> "<name>" [--start YYYY-MM-DD] [--end YYYY-MM-DD]
@@ -1269,7 +1299,7 @@ Usage:
   advisers capture --from-transcript <file>      转写稿导入→候选（不录音/不入会）
   advisers capture --from-imap                   只读 IMAP 导入（EXAMINE/FETCH；env 凭据）
   advisers ui [--port n]                        本地只读视图（127.0.0.1，GET only）
-  advisers mcp --stdio                          MCP server（7 工具 + 4 resources；写入口仅 pending 候选/回执校验）
+  advisers mcp --stdio                          MCP server（8 工具 + 5 resources；写入口仅 pending 候选/回执校验）
   advisers evidence show <id> [--json]          承诺/事实/偏好→原文来源
   advisers deliver [--commit id] [--type confirmation|weekly|statement|ledger] [--format docx|xlsx|pdf] [--out f]  交付物
   advisers deliveries --pack [--out dir] [--ids ...] [--all]  证据包（manifest/README/SHA256SUMS + DOCX 回执；默认上限 2000）
@@ -1520,7 +1550,7 @@ function purgeMatter(id, confirmed) {
 function parseFlags(args) {
   const flags = {}
   const positional = []
-  const booleanFlags = new Set(['web', 'deep', 'all', 'yes', 'json', 'list', 'force', 'apply', 'quiet', 'help', 'content', 'ics', 'deliver', 'install', 'uninstall', 'status', 'calendar', 'sources', 'pack', 'receipt', 'from-imap', 'remove', 'force', 'notify', 'no-remind', 'dry-run', 'unclassified', 'no-calendar', 'include-done', 'record-delivery'])
+  const booleanFlags = new Set(['web', 'deep', 'all', 'yes', 'json', 'list', 'force', 'apply', 'quiet', 'help', 'content', 'ics', 'deliver', 'install', 'uninstall', 'status', 'calendar', 'sources', 'pack', 'receipt', 'from-imap', 'remove', 'force', 'notify', 'no-remind', 'dry-run', 'unclassified', 'no-calendar', 'include-done', 'record-delivery', 'include-global'])
   for (let i = 0; i < args.length; i++) {
     if (args[i].startsWith('--')) {
       const key = args[i].slice(2)
@@ -2216,6 +2246,7 @@ const CUSTOMER_USAGE = {
   projectList: 'usage: advisers project list [--client <id>] [--all] [--limit n] [--json]',
   projectShow: 'usage: advisers project show <id> [--timeline-limit n] [--clearance 0-3] [--json]',
   projectArchive: 'usage: advisers project archive <id> [--dry-run] [--json]',
+  export: 'usage: advisers client export <id> [--format md|docx] [--out <file>] [--redact-names] [--json]',
 }
 
 /** An application error with a stable E_* code and optional actionable hint. */
@@ -2687,6 +2718,7 @@ function clientUsage() {
   console.log('  ' + CUSTOMER_USAGE.merge)
   console.log('  ' + CUSTOMER_USAGE.note)
   console.log('  ' + CUSTOMER_USAGE.noteList)
+  console.log('  ' + CUSTOMER_USAGE.export)
   console.log('客户是归属维度：matter 通过 --client/--project 挂到客户；commitments/facts 仍只挂 matter。')
 }
 
@@ -3042,6 +3074,153 @@ function clientNoteList(rest) {
   } catch (error) { reportCustomerFailure(error) }
 }
 
+/**
+ * `advisers client export <id>`: deterministic, external-facing client status
+ * sheet (markdown or DOCX). It is written at clearance 0, never contains
+ * evidence quotes or note bodies, and states its own scope/limits: it is a
+ * status summary, not a statement of account, contract or legal advice.
+ *
+ * The file is created 0600 (directory 0700) and its SHA-256 is reported in the
+ * JSON summary so a recipient can verify the bytes out of band.
+ */
+async function clientExport(rest) {
+  const usage = CUSTOMER_USAGE.export
+  try {
+    const parsed = customerFlags(rest, { booleans: ['json', 'redact-names'], values: ['format', 'out'] }, usage)
+    const id = customerIdArg(parsed.positional, 0, 'a client id', usage)
+    const format = parsed.flags.format === undefined ? 'md' : String(parsed.flags.format).toLowerCase()
+    if (format !== 'md' && format !== 'docx') throw customerError('E_USAGE', '--format must be md or docx', usage)
+    if (parsed.flags.out !== undefined && (typeof parsed.flags.out !== 'string' || !parsed.flags.out.trim())) {
+      throw customerError('E_USAGE', '--out requires a file path', usage)
+    }
+    if (!customerStoreOrFail()) return
+    const store = readStoreOrExit()
+    const clearance = 0
+    const generatedAt = new Date().toISOString()
+    const data = store.read(() => {
+      const view = readClientView(store, id)
+      const filtered = clearCustomerView(view, clearance)
+      const counts = customerClientCounts(store, view, filtered, clearance)
+      const timeline = customerTimeline(view, filtered, { kinds: ['delivery', 'commitment'], limit: 20 })
+      const open = customerOpenBuckets(view, filtered)
+      const redact = parsed.flags['redact-names'] === true
+      const projectRows = view.projects
+        .filter((project) => project.status !== 'archived')
+        .map((project) => {
+          const summary = customerProjectOfClientCounts(store, view, filtered, project, clearance)
+          return {
+            id: project.id,
+            name: redact ? '（已隐去）' : project.name,
+            status: project.status,
+            counts: summary.counts,
+            nextDueAt: summary.nextDueAt,
+          }
+        })
+      return {
+        client: view.client,
+        displayName: redact ? '（已隐去）' : view.client.name,
+        aliases: redact ? [] : view.client.aliases,
+        projects: projectRows,
+        counts: counts,
+        open: {
+          mine: open.mine.map((row) => ({ id: row.id, action: row.action, dueAt: row.dueAt ?? null, projectId: row.projectId ?? null })),
+          waiting: open.waiting.map((row) => ({ id: row.id, action: row.action, dueAt: row.dueAt ?? null, projectId: row.projectId ?? null })),
+        },
+        nextDueAt: customerNextDueAt(filtered.open),
+        timeline: timeline.items.map((item) => ({ at: item.at, kind: item.kind, title: item.title, status: item.status ?? null })),
+        timelineTotal: timeline.total,
+        timelineTruncated: timeline.truncated,
+        protectedExcluded: filtered.protectedExcluded,
+      }
+    })
+    const disclaimer = '本文件是状态说明，不是对账单、合同、法律意见或送达证明；本地生成、无签名、未锚定（仅本地自证）。SHA-256 仅用于检测生成后的改动。'
+    const scopeLine = '范围：本文件只含客户 ' + data.client.id + '（' + data.displayName + '）的数据；其他客户数据、全局 facts/preferences、对话原文与备注正文不在本文件内。'
+    const sections = []
+    sections.push({ heading: '概况', paragraphs: [
+      '客户：' + data.displayName + ' (' + data.client.id + ') · 状态 ' + data.client.status + (data.aliases.length ? ' · 别名 ' + data.aliases.join('/') : ''),
+      '事项 ' + data.counts.matters + '（归档 ' + data.counts.mattersArchived + '） · 未完成 我方 ' + data.counts.openMine + ' / 等待对方 ' + data.counts.openWaiting + ' · 逾期 ' + data.counts.overdue + ' · 交付 ' + data.counts.deliveries + ' · 备注 ' + data.counts.notes + '（仅计数）',
+      '下一截止：' + (data.nextDueAt || '无'),
+      '受保护事项（clearance=0 不可见，仅计数）：' + data.protectedExcluded,
+    ] })
+    sections.push({ heading: '进行中的项目', paragraphs: data.projects.length
+      ? data.projects.map((project) => project.id + '  ' + project.name + '  ' + project.status + ' · 事项 ' + project.counts.matters + ' · 未完成 ' + (project.counts.openMine + project.counts.openWaiting) + ' · 下一截止 ' + (project.nextDueAt || '无'))
+      : ['（没有进行中的项目）'] })
+    const openLines = (title, rows) => {
+      const out = [title + '（' + rows.length + '）：']
+      if (!rows.length) out.push('（无）')
+      for (const row of rows.slice(0, 20)) out.push('- ' + (row.dueAt ? row.dueAt + ' ' : '') + row.action + (row.projectId ? ' [' + row.projectId + ']' : ''))
+      return out
+    }
+    sections.push({ heading: '待办', paragraphs: [...openLines('我方欠客户', data.open.mine), ...openLines('等待对方', data.open.waiting)] })
+    sections.push({ heading: '最近时间线', paragraphs: data.timeline.length
+      ? data.timeline.map((item) => String(item.at).replace('T', ' ').slice(0, 16) + '  ' + item.kind + '  ' + item.title + (item.status ? ' [' + item.status + ']' : ''))
+      : ['（没有可展示的时间线条目）'] })
+    sections.push({ heading: '边界与校验', paragraphs: [scopeLine, disclaimer, '生成时间：' + generatedAt + ' · advisers ' + VERSION + ' · clearance=0'] })
+    const markdown = ['# 客户状态包 · ' + data.displayName, '', '> ' + scopeLine, '> ' + disclaimer, '',
+      ...sections.flatMap((section) => ['## ' + section.heading, '', ...section.paragraphs, ''])].join('\n')
+    let buffer
+    if (format === 'docx') {
+      let buildDocx
+      try {
+        buildDocx = await loadOfficeOperation('docx', 'buildDocx')
+      } catch {}
+      if (typeof buildDocx !== 'function') {
+        throw customerError('E_USAGE', '--format docx 需要可选的 advisers-office 包（当前不可用）', 'advisers client export ' + data.client.id + ' --format md')
+      }
+      buffer = await buildDocx({ title: '客户状态包 · ' + data.displayName, sections: sections })
+    } else {
+      buffer = Buffer.from(markdown, 'utf8')
+    }
+    const out = typeof parsed.flags.out === 'string'
+      ? parsed.flags.out.trim()
+      : join(HOME, 'exports', 'client-' + data.client.id + '-' + generatedAt.replace(/[:.]/g, '-') + '.' + format)
+    const dir = dirname(out)
+    mkdirSync(dir, { recursive: true, mode: 0o700 })
+    try { chmodSync(dir, 0o700) } catch {}
+    writeFileSync(out, buffer, { mode: 0o600 })
+    try { chmodSync(out, 0o600) } catch {}
+    const sha256 = createHash('sha256').update(buffer).digest('hex')
+    // A client status sheet is an external-facing artifact: record the export
+    // (ids/counts only, no names) even though it does not mutate the ledger.
+    try {
+      const writeStore = dbStore()
+      if (writeStore) {
+        writeStore.appendAudit({
+          actor: 'local',
+          action: 'client.export',
+          allowed: true,
+          reason: 'client ' + data.client.id + ' format=' + format + ' bytes=' + buffer.length + ' protected=' + data.protectedExcluded,
+        })
+      }
+    } catch {}
+    const payload = {
+      ok: true,
+      command: 'client export',
+      format: format,
+      scope: 'client',
+      subject: { kind: 'client', id: data.client.id, name: data.displayName },
+      out: out,
+      bytes: buffer.length,
+      sha256: sha256,
+      generatedAt: generatedAt,
+      clearance: clearance,
+      protectedExcluded: data.protectedExcluded,
+      counts: data.counts,
+      nextDueAt: data.nextDueAt,
+      timelineCount: data.timeline.length,
+      timelineTotal: data.timelineTotal,
+      timelineTruncated: data.timelineTruncated,
+      disclaimer: true,
+    }
+    const human = [
+      '已生成客户状态包（' + format + '）：' + out,
+      '客户：' + data.displayName + ' (' + data.client.id + ') · 事项 ' + data.counts.matters + ' · 未完成 我方 ' + data.counts.openMine + ' / 等待对方 ' + data.counts.openWaiting,
+      'clearance=0 · 受保护事项仅计数：' + data.protectedExcluded + ' · sha256=' + sha256,
+      '边界：状态说明，不是对账单/合同/法律意见；不含对话原文与备注正文。',
+    ]
+    customerPrint(parsed.flags.json === true, payload, human)
+  } catch (error) { reportCustomerFailure(error) }
+}
 function clientCommand(rawArgs) {
   const sub = rawArgs[0]
   const rest = rawArgs.slice(1)
@@ -3050,6 +3229,7 @@ function clientCommand(rawArgs) {
   if (sub === 'list' || sub === 'ls') return clientList(rest)
   if (sub === 'show') return clientShow(rest)
   if (sub === 'timeline') return clientTimeline(rest)
+  if (sub === 'export') return clientExport(rest)
   if (sub === 'archive') return clientArchive(rest)
   if (sub === 'merge') return clientMerge(rest)
   if (sub === 'note') return clientNote(rest)
@@ -3802,7 +3982,7 @@ async function printSources(ledger) {
   for (const r of rows.slice(0, 20)) console.log(`  ${r.commitmentId}  ${r.action}  ← ${r.label} (${r.ref ?? '-'})  「${r.quote.slice(0, 80)}」`)
 }
 
-async function today(openRows, { calendar = false, sources = false, json = false, ledger = null } = {}) {
+async function today(openRows, { calendar = false, sources = false, json = false, ledger = null, limit = null, hydrate = null } = {}) {
   const nowMs = Date.now()
   const localDay = localDayOf(nowMs)
   const weekAhead = nowMs + 7 * 86400_000
@@ -3850,16 +4030,31 @@ async function today(openRows, { calendar = false, sources = false, json = false
   }
   if (json) {
     // JSON contract v1 (docs/CLI-JSON.md): same classification as the human view.
+    // 0.3.2 additive `--limit N`: each bucket keeps at most N full Commitment
+    // entities (hydrated on demand); `counts`/`next` stay the true totals. The
+    // flagless output is byte-identical to v1.
+    const capped = (list) => (limit === null ? list : list.slice(0, limit))
+    const materialize = (list) => {
+      const kept = capped(list)
+      if (limit === null || typeof hydrate !== 'function' || !kept.length) return kept
+      const hydrated = hydrate(kept.map((row) => row.id))
+      const byId = new Map((Array.isArray(hydrated) ? hydrated : []).map((row) => [row.id, row]))
+      return kept.map((row) => byId.get(row.id) ?? row)
+    }
     const payload = {
       now: new Date(nowMs).toISOString(),
       localDay,
       counts: { today: todayDue.length, overdue: overdue.length, week: week.length, waiting: waiting.length, noDue: noDue.length },
-      overdue,
-      today: todayDue,
-      week,
-      waiting,
-      noDue,
+      overdue: materialize(overdue),
+      today: materialize(todayDue),
+      week: materialize(week),
+      waiting: materialize(waiting),
+      noDue: materialize(noDue),
       next: next ? { id: next.id, action: next.action, dueAt: next.dueAt } : null,
+    }
+    if (limit !== null) {
+      payload.limit = limit
+      payload.truncated = [overdue, todayDue, week, waiting, noDue].some((list) => list.length > limit)
     }
     if (calendar) {
       const calendarToday = await calendarOccurrencesToday()
@@ -8378,7 +8573,7 @@ async function deliver(args) {
 /**
  * `advisers mcp --stdio`: the shipped stdio entry for the MCP server.
  *
- * The protocol surface lives in lib/mcp-server.js (7 tools incl. the pending-only
+ * The protocol surface lives in lib/mcp-server.js (8 tools incl. the pending-only
  * candidate write + read-only pack verification, 4 read-only resources, 1 MiB
  * line cap, -32601/-32602/-32002/-32700). This wiring only supplies process
  * state: the home, the store/ledger, the version and the audit sink. Every
@@ -8405,9 +8600,26 @@ async function mcpServer() {
     return Ledger.fromJSON(store.load(), LOCAL_PORTS)
   }
   const { createMcpServer } = await loadMcpServer()
+  // 0.3.2 P2-1: give the MCP read models the narrow commitment projection so the
+  // first tools/call does not map the whole ledger. Without a SQLite store (JSON
+  // mode) the options stay undefined and the server keeps the legacy path.
+  const narrowCommitments = typeof store?.projectCommitmentReadModel === 'function'
+    ? {
+        loadCommitmentView: (options) => store.read(() => store.projectCommitmentReadModel(options)),
+        loadCommitmentRecords: (ids) => store.read(() => {
+          const byId = new Map()
+          for (const id of ids) {
+            const record = store.getCommitment(id)
+            if (record) byId.set(id, record)
+          }
+          return byId
+        }),
+      }
+    : {}
   const server = createMcpServer({
     store,
     loadLedger: loadLedgerFor,
+    ...narrowCommitments,
     version: VERSION,
     audit: (entry) => store?.appendAudit(entry),
   })
@@ -9263,6 +9475,189 @@ async function verifyDeliveryArtifacts(files) {
  * --ids narrows/extends it). The old evidence-only path stays on
  * `deliveries --pack`.
  */
+/**
+ * Resolve the optional client/project scope of `deliveries --receipt`.
+ * Returns null when the pack is unscoped (historical local-all behaviour).
+ * Every lookup fails closed: an unknown id is E_CLIENT_NOT_FOUND /
+ * E_PROJECT_NOT_FOUND, and a project that belongs to another client is
+ * E_PROJECT_CLIENT_MISMATCH (the same codes as the client commands).
+ */
+function receiptSubjectOf(store, flags) {
+  if (flags.client === true || flags.project === true) {
+    throw customerError('E_USAGE', '--client/--project require an id', 'advisers deliveries --receipt --client <client-id>')
+  }
+  const clientId = typeof flags.client === 'string' ? flags.client.trim() : ''
+  const projectId = typeof flags.project === 'string' ? flags.project.trim() : ''
+  if (!clientId && !projectId) return null
+  let project = null
+  if (projectId) {
+    project = store.getProject(projectId)
+    if (!project) throw customerError('E_PROJECT_NOT_FOUND', 'unknown project: ' + projectId, 'advisers project list')
+  }
+  const resolvedClientId = clientId || project.clientId
+  const client = store.getClient(resolvedClientId)
+  if (!client) throw customerError('E_CLIENT_NOT_FOUND', 'unknown client: ' + resolvedClientId, 'advisers client list')
+  if (project && project.clientId !== client.id) {
+    throw customerError('E_PROJECT_CLIENT_MISMATCH', 'project ' + project.id + ' belongs to client ' + project.clientId, 'advisers project list --client ' + client.id)
+  }
+  const matters = project ? store.listMattersByProject(project.id) : store.listMattersByClient(client.id)
+  return {
+    kind: project ? 'project' : 'client',
+    id: project ? project.id : client.id,
+    name: project ? project.name : client.name,
+    client: client,
+    project: project,
+    matterIds: matters.map((matter) => matter.id),
+    matterIdSet: new Set(matters.map((matter) => matter.id)),
+  }
+}
+
+/**
+ * Effective secrecy of one delivery row: max(client.secrecyDefault, matter
+ * secrecy). A row with an unresolvable matter is treated as protected
+ * (Infinity), never guessed. This is the 0.3.2 receipt rule for local-all
+ * packs too: a client marked secret cannot leak through a receipt.
+ */
+function receiptRowSecrecy(store, ledger, row, clientById) {
+  let level = itemMatterSecrecy(ledger, row.matterId)
+  let clientId = row.clientId || null
+  if (!clientId && row.matterId) {
+    try { clientId = ledger.getMatter(row.matterId)?.clientId ?? null } catch { clientId = null }
+  }
+  if (clientId) {
+    let client = clientById.get(clientId)
+    if (client === undefined) {
+      try { client = store.getClient(clientId) ?? null } catch { client = null }
+      clientById.set(clientId, client)
+    }
+    if (client) level = Math.max(level, Number(client.secrecyDefault) || 0)
+  }
+  return level
+}
+
+/**
+ * Evidence ids for one receipt subject: only the subject's matters.
+ * Global facts/preferences (no matter association) are excluded unless
+ * --include-global is explicit; the count of excluded global rows is reported
+ * without their content.
+ */
+function receiptEvidenceIds(ledger, subject, includeGlobal) {
+  const ids = { commitments: [], facts: [], preferences: [] }
+  let excludedGlobal = 0
+  for (const row of ledger.listCommitments()) {
+    if (!subject.matterIdSet.has(row.matterId)) continue
+    if (itemMatterSecrecy(ledger, row.matterId) > 0) continue
+    ids.commitments.push(row.id)
+  }
+  for (const row of ledger.listFacts()) {
+    const matterId = typeof row.matterId === 'string' ? row.matterId : ''
+    if (matterId) {
+      if (!subject.matterIdSet.has(matterId)) continue
+      if (itemMatterSecrecy(ledger, matterId) > 0) continue
+    } else if (!includeGlobal) {
+      excludedGlobal += 1
+      continue
+    }
+    ids.facts.push(row.id)
+  }
+  for (const row of ledger.listPreferences({ includeCandidates: false })) {
+    const scope = row && row.scope
+    const matterId = scope && scope.level === 'matter' && typeof scope.value === 'string' ? scope.value : ''
+    if (matterId) {
+      if (!subject.matterIdSet.has(matterId)) continue
+      if (itemMatterSecrecy(ledger, matterId) > 0) continue
+    } else if (!includeGlobal) {
+      excludedGlobal += 1
+      continue
+    }
+    ids.preferences.push(row.id)
+  }
+  return { ids: ids, excludedGlobal: excludedGlobal }
+}
+
+/** Matter id of one evidence record ('' for a global record). */
+function receiptEvidenceMatterId(record, kind) {
+  if (!record || typeof record !== 'object') return ''
+  if (kind === 'preference') {
+    const scope = record.scope
+    return scope && scope.level === 'matter' && typeof scope.value === 'string' ? scope.value : ''
+  }
+  return typeof record.matterId === 'string' ? record.matterId : ''
+}
+
+/** Effective secrecy of one evidence record: max(client default, matter secrecy). */
+function receiptEvidenceRecordSecrecy(store, ledger, record, kind, clientById) {
+  const matterId = receiptEvidenceMatterId(record, kind)
+  if (!matterId) return 0
+  let level = itemMatterSecrecy(ledger, matterId)
+  let clientId = null
+  try { clientId = ledger.getMatter(matterId)?.clientId ?? null } catch { clientId = null }
+  if (clientId) {
+    let client = clientById.get(clientId)
+    if (client === undefined) {
+      try { client = store.getClient(clientId) ?? null } catch { client = null }
+      clientById.set(clientId, client)
+    }
+    if (client) level = Math.max(level, Number(client.secrecyDefault) || 0)
+  }
+  return level
+}
+
+/**
+ * Local-all receipt evidence: the same client-level secrecy rule as the
+ * delivery rows, so a client marked secret cannot leak through the evidence
+ * section while its deliveries are correctly excluded.
+ */
+function receiptGlobalEvidenceIds(store, ledger, clientById) {
+  const ids = { commitments: [], facts: [], preferences: [] }
+  // Matter-level secrecy stays with buildEvidencePack (it counts those rows as
+  // evidence.protectedExcluded, the historical A-1 behaviour). Only a
+  // client-level default above 0 is pre-filtered here, because the evidence
+  // builder cannot see client rows; those are reported separately so the two
+  // counts never double-count.
+  const keep = (row, kind, into) => {
+    const matterId = receiptEvidenceMatterId(row, kind)
+    const matterLevel = matterId ? itemMatterSecrecy(ledger, matterId) : 0
+    if (matterLevel > 0) { into.push(row.id); return }
+    if (matterId && receiptEvidenceRecordSecrecy(store, ledger, row, kind, clientById) > 0) {
+      protectedExcluded += 1
+      return
+    }
+    into.push(row.id)
+  }
+  let protectedExcluded = 0
+  for (const row of ledger.listCommitments()) keep(row, 'commitment', ids.commitments)
+  for (const row of ledger.listFacts()) keep(row, 'fact', ids.facts)
+  for (const row of ledger.listPreferences({ includeCandidates: false })) keep(row, 'preference', ids.preferences)
+  return { ids: ids, protectedExcluded: protectedExcluded }
+}
+
+/** Explicit --ids on a local-all receipt: fail closed when any id is protected. */
+function receiptExplicitEvidenceProtected(store, ledger, ids, clientById) {
+  const records = new Map()
+  for (const row of ledger.listCommitments()) records.set(row.id, { kind: 'commitment', record: row })
+  for (const row of ledger.listFacts()) records.set(row.id, { kind: 'fact', record: row })
+  for (const row of ledger.listPreferences({ includeCandidates: false })) records.set(row.id, { kind: 'preference', record: row })
+  let protectedCount = 0
+  for (const id of ids) {
+    const found = records.get(id)
+    if (!found) continue
+    if (receiptEvidenceRecordSecrecy(store, ledger, found.record, found.kind, clientById) > 0) protectedCount += 1
+  }
+  return protectedCount
+}
+
+/**
+ * `advisers deliveries --receipt`: build a delivery receipt pack.
+ *
+ * 0.3.2: the pack can be scoped to one client or project. A subject pack only
+ * copies that subject's delivered artifacts and evidence (global facts and
+ * preferences need --include-global), records `subject`/`scope` in the v2
+ * manifest, and states in README.txt/receipt.docx that it contains one
+ * subject's data. The unscoped historical form remains, but is now labelled
+ * scope=local-all: it contains every local customer's data and must not be
+ * forwarded to a third party.
+ */
 async function receiptPack(args) {
   const { flags } = parseFlags(args)
   ensureHome()
@@ -9271,25 +9666,73 @@ async function receiptPack(args) {
   const ledger = loadLedger()
   const denied = egressDeniedReason(ledger.getMatter(activeMatterId(ledger)), 'evidence')
   if (denied) { console.error(denied); process.exitCode = 1; return }
-  const ids = typeof flags.ids === 'string' ? flags.ids.split(',').map((item) => item.trim()).filter(Boolean) : undefined
-  if (ids && !ids.length) { console.error('--ids is empty'); process.exitCode = 1; return }
-  const deliveryLimit = Math.max(1, Math.min(2000, Number(flags.limit) || 100))
-  // A receipt pack records itself as a delivery for discoverability, but a new
-  // receipt must not recursively copy older receipt packs (unbounded growth).
-  const rows = store.listDeliveries(deliveryLimit).filter((row) => row.tool !== 'receipt-pack')
-  if (!rows.length) {
-    console.error('没有交付记录可生成回执包；先运行 `advisers deliver` / `advisers office` / `advisers template`。')
+  if ((flags.client !== undefined || flags.project !== undefined) && flags.ids !== undefined) {
+    console.error('E_USAGE: --ids cannot be combined with --client/--project (a subject pack derives its evidence scope from the subject)')
     process.exitCode = 1
     return
   }
-  // A-1 (0.2.5): a receipt copies the delivered artifacts and may span every
-  // matter in the ledger. A row from a protected matter is never copied/read;
-  // only a count is reported. Receipts have no per-delivery explicit selection
-  // (--ids names evidence ids), so this path is exclude-only.
+  const ids = typeof flags.ids === 'string' ? flags.ids.split(',').map((item) => item.trim()).filter(Boolean) : undefined
+  if (ids && !ids.length) { console.error('--ids is empty'); process.exitCode = 1; return }
+  const deliveryLimit = Math.max(1, Math.min(2000, Number(flags.limit) || 100))
+  let subject = null
+  try {
+    subject = receiptSubjectOf(store, flags)
+  } catch (error) {
+    console.error('error: ' + String(error?.message ?? error))
+    if (error?.hint) console.error('hint: ' + error.hint)
+    process.exitCode = 1
+    return
+  }
+  // A receipt pack is generated at clearance 0 and is meant to leave the
+  // machine; a client whose default secrecy is above 0 fails closed instead of
+  // producing an empty pack that looks successful.
+  if (subject && Number(subject.client?.secrecyDefault) > 0) {
+    console.error('E_SECRECY_BLOCKED: client ' + subject.client.id + ' has secrecyDefault ' + subject.client.secrecyDefault + ', but a receipt pack is generated at clearance 0')
+    console.error('hint: lower the client secrecy (advisers client ...), or use a local export instead of a shareable receipt')
+    process.exitCode = 1
+    return
+  }
+  // 0.3.2: how many scoped deliveries exist before the readable/limit filters,
+  // so a bounded pack is never mistaken for the whole set (the default limit is
+  // 100, max 2000, and older receipt packs are excluded).
+  let deliveriesTotal = null
+  try {
+    deliveriesTotal = subject
+      ? store.countDeliveriesForScope({
+          clientId: subject.kind === 'client' ? subject.client.id : null,
+          projectId: subject.kind === 'project' ? subject.project.id : null,
+          matterIds: subject.matterIds,
+        })
+      : store.db.prepare("SELECT COUNT(*) AS n FROM deliveries WHERE COALESCE(tool, '') != 'receipt-pack'").get().n
+  } catch { deliveriesTotal = null }
+  const rows = subject
+    ? store.listDeliveriesForScope({
+        clientId: subject.kind === 'client' ? subject.client.id : null,
+        projectId: subject.kind === 'project' ? subject.project.id : null,
+        matterIds: subject.matterIds,
+        limit: deliveryLimit,
+      })
+    : store.listDeliveries(deliveryLimit)
+  // A receipt pack records itself as a delivery for discoverability, but a new
+  // receipt must not recursively copy older receipt packs (unbounded growth).
+  const scopedRows = rows.filter((row) => row.tool !== 'receipt-pack')
+  const deliveriesTruncated = Number.isInteger(deliveriesTotal) ? deliveriesTotal > scopedRows.length : false
+  if (!scopedRows.length) {
+    console.error(subject
+      ? '没有该' + (subject.kind === 'client' ? '客户' : '项目') + '的交付记录可生成回执包；先运行 `advisers deliver` / `advisers office` / `advisers template`。'
+      : '没有交付记录可生成回执包；先运行 `advisers deliver` / `advisers office` / `advisers template`。')
+    process.exitCode = 1
+    return
+  }
+  // A receipt may span many matters. A row from a protected matter (or from a
+  // client with a protected default) is never copied/read; only a count is
+  // reported. Receipts have no per-delivery explicit selection (--ids names
+  // evidence ids), so this path is exclude-only.
+  const clientSecrecyCache = new Map()
   const visibleRows = []
   let protectedDeliveries = 0
-  for (const row of rows) {
-    if (itemMatterSecrecy(ledger, row.matterId) > 0) {
+  for (const row of scopedRows) {
+    if (receiptRowSecrecy(store, ledger, row, clientSecrecyCache) > 0) {
       protectedDeliveries += 1
       continue
     }
@@ -9312,38 +9755,72 @@ async function receiptPack(args) {
       tool: row.tool ?? null,
       createdAt: row.createdAt ?? null,
       validation: row.validation ?? null,
-      files,
+      files: files,
+      matterId: row.matterId ?? undefined,
+      clientId: row.clientId ?? undefined,
+      projectId: row.projectId ?? undefined,
+      templateName: row.templateName ?? undefined,
+      templateVersion: row.templateVersion ?? undefined,
+      quoteNo: row.quoteNo ?? undefined,
+      dataSha256: row.dataSha256 ?? undefined,
     })
   }
   if (!deliveries.length) {
     if (skippedFiles.length) console.error('没有仍存在的交付文件，无法生成回执包（文件可能已被移动或删除）。')
-    if (protectedDeliveries) console.error(`另有 ${protectedDeliveries} 条交付记录属于受保护事项（secrecy>0），已排除。`)
+    if (protectedDeliveries) console.error('另有 ' + protectedDeliveries + ' 条交付记录属于受保护事项或受保护客户（secrecy>0），已排除。')
     else if (!skippedFiles.length) console.error('没有仍存在的交付文件，无法生成回执包（文件可能已被移动或删除）。')
     if (skippedFiles.length) console.error('缺失：' + skippedFiles.slice(0, 5).join('; '))
     process.exitCode = 1
     return
   }
   if (skippedFiles.length) console.error('注意：' + skippedFiles.length + ' 个交付文件缺失，已跳过（回执只覆盖仍存在的文件）。')
-
   const verifyResults = await verifyDeliveryArtifacts(deliveries.flatMap((delivery) => delivery.files))
   const { buildEvidencePack, buildReceiptPack, EvidencePackLimitError } = await loadEvidence()
   let evidence
+  let evidenceGlobalExcluded = 0
+  let evidenceClientDefaultExcluded = 0
   try {
-    const targetIds = ids ?? {
-      commitments: ledger.listCommitments().map((row) => row.id),
-      facts: ledger.listFacts().map((row) => row.id),
-      preferences: ledger.listPreferences({ includeCandidates: false }).map((row) => row.id),
+    if (subject) {
+      const scoped = receiptEvidenceIds(ledger, subject, flags['include-global'] === true)
+      evidenceGlobalExcluded = scoped.excludedGlobal
+      evidence = buildEvidencePack({
+        store: store,
+        ledger: ledger,
+        ids: scoped.ids,
+        all: flags.all === true,
+        clearance: 0,
+        protectedPolicy: 'error',
+      })
+    } else {
+      // A-1 (0.2.5) + 0.3.2: per-item clearance is max(client default, matter
+      // secrecy) for the evidence section too, so the local-all pack cannot
+      // leak a client-protected record while its deliveries are excluded.
+      let targetIds
+      if (ids) {
+        const protectedCount = receiptExplicitEvidenceProtected(store, ledger, ids, clientSecrecyCache)
+        if (protectedCount > 0) {
+          console.error('E_SECRECY_BLOCKED: refusing to export ' + protectedCount + ' evidence item(s) selected by --ids: their matter or client secrecy is above the receipt clearance 0')
+          console.error('hint: remove those ids from --ids; protected records are never partially exported')
+          process.exitCode = 1
+          return
+        }
+        targetIds = ids
+      } else {
+        const scoped = receiptGlobalEvidenceIds(store, ledger, clientSecrecyCache)
+        targetIds = scoped.ids
+        evidenceClientDefaultExcluded = scoped.protectedExcluded
+      }
+      evidence = buildEvidencePack({
+        store: store,
+        ledger: ledger,
+        ids: targetIds,
+        all: flags.all === true,
+        clearance: 0,
+        // Explicit --ids fail closed (A-1); the bulk path excludes protected
+        // rows and reports them through evidence.protectedExcluded.
+        protectedPolicy: ids ? 'error' : 'exclude',
+      })
     }
-    // A-1 (0.2.5): per-item clearance for the embedded evidence entries too.
-    // Explicit --ids fail closed; the bulk path excludes protected rows.
-    evidence = buildEvidencePack({
-      store,
-      ledger,
-      ids: targetIds,
-      all: flags.all === true,
-      clearance: 0,
-      protectedPolicy: ids ? 'error' : 'exclude',
-    })
   } catch (error) {
     if (error instanceof EvidencePackLimitError || error?.code === 'EVIDENCE_PACK_TOO_LARGE') {
       console.error('error: ' + error.message)
@@ -9357,24 +9834,26 @@ async function receiptPack(args) {
   const out = typeof flags.out === 'string'
     ? flags.out
     : join(HOME, 'receipts', 'receipt-' + new Date().toISOString().replace(/[:.]/g, '-'))
-  // Generate receipt.docx with the office DOCX submodule when available (fast,
-  // nicer table) or the built-in deterministic writer otherwise.
   const docxModule = await importOfficeSubmodule('docx')
   const docxBuilder = typeof docxModule?.buildDocx === 'function'
     ? async (spec) => docxModule.buildDocx(spec)
     : false
+  const scope = subject ? 'subject' : 'local-all'
+  const command = 'advisers deliveries --receipt' + (subject ? ' --' + subject.kind + ' ' + subject.id : '')
   let pack
   try {
     pack = await buildReceiptPack({
-      deliveries,
-      evidence,
-      verifyResults,
-      docxBuilder,
+      deliveries: deliveries,
+      subject: subject ? { kind: subject.kind, id: subject.id, name: subject.name } : undefined,
+      scope: scope,
+      evidence: evidence,
+      verifyResults: verifyResults,
+      docxBuilder: docxBuilder,
       env: {
         advisersVersion: VERSION,
         nodeVersion: process.version,
         platform: process.platform,
-        command: 'advisers deliveries --receipt',
+        command: command,
       },
       recipient: parseReceiptRecipient(flags.recipient),
       anchors: [],
@@ -9388,13 +9867,13 @@ async function receiptPack(args) {
   }
   const summary = pack.summary
   const evidenceProtectedExcluded = Number.isInteger(evidence?.summary?.protectedExcluded) ? evidence.summary.protectedExcluded : 0
-  const protectedExcluded = protectedDeliveries + evidenceProtectedExcluded
+  const protectedExcluded = protectedDeliveries + evidenceProtectedExcluded + evidenceClientDefaultExcluded
   try {
     recordDeliveryWithAudit({
       files: [join(summary.outDir, 'manifest.json'), join(summary.outDir, 'README.txt'), join(summary.outDir, 'SHA256SUMS'), join(summary.outDir, 'receipt.docx')],
       tool: 'receipt-pack',
-      title: 'delivery receipt pack',
-      validation: 'receipt-pack-v1.1: ' + summary.verifyStatus,
+      title: subject ? 'delivery receipt pack (' + subject.kind + ' ' + subject.id + ')' : 'delivery receipt pack',
+      validation: 'receipt-pack-v2: ' + summary.verifyStatus,
       audit: {
         actor: 'local',
         action: 'receipt.pack',
@@ -9404,6 +9883,7 @@ async function receiptPack(args) {
           ' deliveries/' +
           summary.fileCount +
           ' files' +
+          (subject ? ', scope=' + subject.kind + ':' + subject.id : ', scope=local-all') +
           (protectedDeliveries ? ', ' + protectedDeliveries + ' protected deliveries excluded' : '') +
           (evidenceProtectedExcluded ? ', ' + evidenceProtectedExcluded + ' protected evidence excluded' : ''),
       },
@@ -9412,13 +9892,17 @@ async function receiptPack(args) {
   const { verifyReceiptPackDir, RECEIPT_LIMIT_CODE } = await loadReceiptVerify()
   const verification = verifyReceiptPackDir(summary.outDir)
   if (verification.code === RECEIPT_LIMIT_CODE) console.error(sanitizeConsoleText(RECEIPT_LIMIT_CODE + ': the receipt pack just written exceeds a resource limit; do not trust it until inspected.', { max: 2000 }))
-  console.log(JSON.stringify({
+  const payload = {
     ok: verification.ok,
     format: summary.format,
     version: summary.version,
+    scope: scope,
+    subject: subject ? { kind: subject.kind, id: subject.id, name: subject.name } : null,
     out: summary.outDir,
     replaced: summary.replaced ?? null,
     deliveryCount: summary.deliveryCount,
+    deliveriesTotal: deliveriesTotal,
+    deliveriesTruncated: deliveriesTruncated,
     fileCount: summary.fileCount,
     verifyStatus: summary.verifyStatus,
     anchored: summary.anchored,
@@ -9427,21 +9911,23 @@ async function receiptPack(args) {
     receiptSha256: summary.receiptSha256,
     evidence: summary.evidence,
     clearance: 0,
-    protectedExcluded,
+    protectedExcluded: protectedExcluded,
     deliveriesProtectedExcluded: protectedDeliveries,
-    evidenceProtectedExcluded,
-    files: summary.files,
-    skippedFiles,
-    verification: {
-      ok: verification.ok,
-      errors: verification.errors,
-      warnings: verification.warnings,
-      checksumCount: verification.checksumCount,
-    },
-  }, null, 2))
+    evidenceProtectedExcluded: evidenceProtectedExcluded,
+  }
+  if (subject) payload.evidenceGlobalExcluded = evidenceGlobalExcluded
+  if (evidenceClientDefaultExcluded > 0) payload.evidenceClientDefaultExcluded = evidenceClientDefaultExcluded
+  payload.files = summary.files
+  payload.skippedFiles = skippedFiles
+  payload.verification = {
+    ok: verification.ok,
+    errors: verification.errors,
+    warnings: verification.warnings,
+    checksumCount: verification.checksumCount,
+  }
+  console.log(JSON.stringify(payload, null, 2))
   if (!verification.ok) process.exitCode = 1
 }
-
 function link(sub, from, to, type) {
   const ledger = loadLedger()
   if (sub === 'ls' || !sub) {
@@ -10556,13 +11042,25 @@ if (!command) {
   // it through the lock-free store.
   const sources = args.includes('--sources')
   const asJson = args.includes('--json')
-  if (asJson || sources) {
+  const limitInfo = parseTodayLimit(args)
+  if (limitInfo.error) {
+    usageFail(limitInfo.error, 'usage: advisers today [--calendar] [--sources] [--json] [--limit n]')
+  } else if (asJson && limitInfo.limit !== null && !sources && mode === 'sqlite') {
+    // 0.3.2 fast path: classify the narrow projection, then hydrate only the
+    // capped bucket rows (full Commitment entities, same order).
+    await today(loadOpenCommitmentRowsForToday(), {
+      calendar: args.includes('--calendar'),
+      json: true,
+      limit: limitInfo.limit,
+      hydrate: hydrateCommitmentsForToday,
+    })
+  } else if (asJson || sources) {
     // The JSON contract and --sources need full commitment entities (evidence).
     // 0.3.0 P0-T1: 'table' reads the table without the status index, so the
     // historical rowid order is kept with no ORDER BY rowid TEMP B-TREE spill
     // (today --json used to write 10 MB per run at a 200k-row ledger).
     const ledger = readLedgerForCommand({ commitments: sources ? {} : { status: 'open', order: 'table' } })
-    await today(ledger.openCommitments(), { calendar: args.includes('--calendar'), sources, json: asJson, ledger })
+    await today(ledger.openCommitments(), { calendar: args.includes('--calendar'), sources, json: asJson, ledger, limit: limitInfo.limit })
   } else {
     // Human view: six columns + the cached classification (0.2.3 hot path).
     await today(loadOpenCommitmentRowsForToday(), { calendar: args.includes('--calendar') })

@@ -152,7 +152,15 @@ test('release-trust wiring self-test passes offline', () => {
   assert.equal(result.status, 0, result.stdout + result.stderr)
   assert.match(result.stdout, /PASS release-trust wiring self-test/)
   assert.match(result.stdout, /stage step requires confirm=yes and stage=yes/)
-  assert.match(result.stdout, /docs\/SECURITY\.md says 0\.3\.0 is not published yet/)
+  assert.match(result.stdout, /docs\/SECURITY\.md records the current published release/)
+  assert.match(result.stdout, /provenance build ref to be the release tag/)
+  assert.match(result.stdout, /publish\.yml requires the workflow ref to be the release tag/)
+})
+
+test('docs release-state gate self-test catches the 0.3.0 defect offline', () => {
+  const result = run(scriptPath('check-docs.mjs'), ['--self-test'])
+  assert.equal(result.status, 0, result.stdout + result.stderr)
+  assert.match(result.stdout, /PASS release-state self-test/)
 })
 
 test('provenance checks accept a linked SLSA bundle and reject empty/mismatched/foreign ones', async () => {
@@ -175,6 +183,22 @@ test('provenance checks accept a linked SLSA bundle and reject empty/mismatched/
   assert.equal(good.checks.filter((check) => !check.ok).length, 0)
   assert.match(JSON.stringify(good.checks), /subject sha512 equals the registry tarball integrity/)
   assert.match(JSON.stringify(good.checks), /source repository is PerryLink\/advisers/)
+
+  // 0.3.0 defect: provenance named refs/heads/main. The build ref must be the
+  // release tag when verify-release is asked to enforce it.
+  const rightRef = await checkPackageAttestations({
+    ...base,
+    expectedRef: 'refs/tags/v0.3.0',
+    fetchJson: async () => goodBundle,
+  })
+  assert.equal(rightRef.ok, true, JSON.stringify(rightRef.checks))
+  const wrongRef = await checkPackageAttestations({
+    ...base,
+    expectedRef: 'refs/tags/v0.3.1',
+    fetchJson: async () => goodBundle,
+  })
+  assert.equal(wrongRef.ok, false)
+  assert.match(JSON.stringify(wrongRef.checks), /SLSA build ref is refs\/tags\/v0\.3\.1/)
 
   const empty = await checkPackageAttestations({
     ...base,
@@ -292,8 +316,8 @@ test('verify-release skips an unpublished version only with --allow-unpublished'
   const { server, port } = await startRegistry(() => ({ name: 'advisers', versions: {}, 'dist-tags': {} }))
   try {
     const registry = 'http://127.0.0.1:' + port
-    // The checkout is on the 0.3.0 release candidate; the fixtures below verify the
-    // older published-version semantics, so version drift is expected and explicit.
+    // The fixtures below verify the older published-version semantics, so version
+    // drift against the current checkout is expected and explicit.
     const skipped = await runAsync(verifyReleaseScript, ['--version', '0.2.4', '--registry', registry, '--skip-git', '--allow-version-drift', '--allow-unpublished', '--skip-install'])
     assert.equal(skipped.status, 0, skipped.stdout + skipped.stderr)
     assert.match(skipped.stdout, /SKIP release verification for 0\.2\.4/)

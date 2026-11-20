@@ -1,13 +1,15 @@
 # Performance
 
-> Status: `0.3.1` (published 2026-11-20) is the current npm `latest` (`next` is also
-> `0.3.1`). The repository is at package version `0.3.1`. `0.3.1` is a release-metadata
-> patch over `0.3.0` with **no runtime changes**, so every measurement below applies to
-> the 0.3.1 tree unchanged; the earlier `0.2.4` was an unpublished candidate that the
-> 0.3.0 line supersedes. The numbers below are marked with the tree they were measured on;
-> the 0.3.0 section is release-time evidence from the published tree, not a service-level
-> guarantee. `0.2.2`, `0.2.1` and `0.2.0` are "before" baselines where a comparison says
-> so.
+> Status: `0.3.2` (published 2026-11-21) is the current npm `latest` (`next` is also
+> `0.3.2`). The repository is at package version `0.3.2`. `0.3.2` is a feature release
+> (customer loop + performance closeout) and adds the opt-in bounded paths
+> `today --json --limit` and the narrow MCP commitment read model — see "0.3.2" below.
+> The earlier `0.3.1` was a release-metadata patch over `0.3.0` with no runtime change,
+> so the 0.3.0 measurements apply to that tree; `0.2.4` was an unpublished candidate that
+> the 0.3.0 line supersedes. The numbers below are marked with the tree they were measured
+> on; the 0.3.0 section is release-time evidence from the published tree, not a
+> service-level guarantee. `0.2.2`, `0.2.1` and `0.2.0` are "before" baselines where a
+> comparison says so.
 
 How Advisers performs on the hot paths, how to reproduce the numbers, and which
 behaviour the regression tests pin. This is a developer/operator reference, not
@@ -444,6 +446,39 @@ Note for future changes: the **write-byte budget is the regression signal**, not
 time. If a new read path reintroduces `ORDER BY rowid` after a status predicate, the
 no-spill suite fails even when a fast machine hides the cost.
 
+## 0.3.2
+
+0.3.2 adds two opt-in bounded paths; the flagless CLI output stays v1-compatible.
+Measured 2026-11-20 on an ext4 copy of the tree (Node 24.22.1, shared host) against
+the 200k synthetic ledger seeded by `scripts/bench-read-200k.mjs --seed` (100k
+commitments / 66,667 open). The A/B base is the `v0.3.1` tree (`9fd2e35`), the fix
+is the 0.3.2 tree, one process at a time (the ±10–20% host caveat above applies):
+
+| Scenario | 0.3.1 | 0.3.2 | output |
+|---|---:|---:|---:|
+| MCP first call `advisers_today` | 461 ms | **97 ms** | 3,313 B (identical) |
+| MCP first call `advisers_who` | 439 ms | **108 ms** | 15,427 B (identical) |
+| MCP first call `advisers_commit_ls` | 416 ms | **158 ms** | 8,607 B (identical) |
+| MCP first call `advisers_remind` | 476 ms | **223 ms** | 4,542 B (identical) |
+| `today --json` (flagless) | 786–795 ms | 795 ms | 27,374,336 B (unchanged) |
+| `today --json --limit 100` | — | **152 ms** | 194,776 B |
+| `today --json --limit 50` | — | **148 ms** | 97,273 B |
+| `today --json --limit 1000` | — | **249 ms** | 1,750,638 B |
+
+- MCP: the four list tools read a narrow commitment projection
+  (`SqliteStore.projectCommitmentReadModel()`) on first use instead of mapping the
+  whole ledger into `Ledger` entities; `who` hydrates only its capped rows. Tool
+  payloads are byte-identical to 0.3.1 in the A/B run (same byte counts and
+  sha256). The first-call target (≤300 ms for today/who/commit_ls, ≤400 ms for
+  remind) is met on the measured host — an instrument, not an SLA.
+- `today --json --limit N`: classifies the narrow projection and hydrates only the
+  capped rows, the same way the human view already worked. `counts`/`next` stay
+  the full totals and the flagless bytes are unchanged. **A default cap is
+  intentionally not part of 0.3.2**: it would change the v1 meaning of the group
+  arrays (“arrays are complete”); that is a later (0.4) decision.
+- Both paths are read-only; `today --json` still writes only the ~28–32 KB
+  snapshot bytes (T1 fix unchanged). No schema/index/migration change.
+
 ## Known limits
 
 - Synthetic data: the generators mirror the audit ledger shape (facts,
@@ -464,10 +499,12 @@ no-spill suite fails even when a fast machine hides the cost.
   additive customer-entity migration, and the measured queries/indexes are unchanged;
   the planned v21 `commitments.due_ms` time-window migration is not part of this
   change, so date filtering still runs in JS for `today`/`remind`/`agenda`.
-- Still open at 200k rows after 0.3.0 Wave 1: `today --json` wall time (output-bound:
-  ~27 MB stdout, write side fixed), MCP first-call latency for `advisers_today`
-  (~573 ms vs ≤300 ms target), and borderline `today`/`pet-brief` medians. Do not
-  advertise the 0.3.0 performance targets as fully met.
+- After 0.3.2, the remaining 200k item is the **flagless** `today --json` wall time
+  (output-bound: ~27 MB stdout, write side fixed); use `--limit` for the bounded
+  path. The 0.3.2 MCP first-call target is met on the measured host (today 97 ms,
+  who 108 ms, commit_ls 158 ms, remind 223 ms vs 461/439/416/476 ms on 0.3.1),
+  and `today`/`pet-brief` medians remain near their targets. Do not advertise any
+  of these as a service-level guarantee.
 - `pet-brief`'s 29–32 MB write amplification is fixed (now ~32 KB/run). `memory search`
   still writes several MB during a run at 200k rows; that path was not part of T1 and
   large-ledger FTS IO remains backlog.

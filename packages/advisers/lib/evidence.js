@@ -1,5 +1,6 @@
 /**
- * E3: evidence chain, evidence pack (v1) and delivery receipt pack (v1.1).
+ * E3: evidence chain, evidence pack (v1) and delivery receipt pack
+ * (v1.1 / manifest v2).
  *
  * Every ledger row that claims something about the world must point back to the
  * conversation turn it came from. This module walks those pointers (a turn is
@@ -1141,7 +1142,7 @@ export function verifyPack(files) {
 }
 
 // ---------------------------------------------------------------------------
-// delivery receipt pack v1.1
+// delivery receipt pack v1.1 / manifest v2
 //
 // Competitive report 21-w2-delivery-trust.md §2.2 and hardening
 // 13-gap-inventory.md P1-2: the evidence pack above is an evidence pack; a
@@ -1155,7 +1156,20 @@ export function verifyPack(files) {
 // ---------------------------------------------------------------------------
 
 export const RECEIPT_MANIFEST_FORMAT = 'advisers-delivery-receipt-pack'
-export const RECEIPT_MANIFEST_VERSION = 1
+/**
+ * Current manifest version written by buildReceiptPack. v2 adds the optional
+ * top-level `subject` and the mandatory `scope`, plus optional row-level
+ * lineage (`clientId`/`projectId`/`matterId`/`template`). v1 packs stay
+ * verifiable: lib/receipt-verify.js accepts every version in
+ * RECEIPT_MANIFEST_VERSIONS.
+ */
+export const RECEIPT_MANIFEST_VERSION = 2
+/** Manifest versions the offline verifier accepts (v1 packs must keep verifying). */
+export const RECEIPT_MANIFEST_VERSIONS = Object.freeze([1, 2])
+/** Allowed manifest.subject.kind values (manifest v2). */
+export const RECEIPT_SUBJECT_KINDS = Object.freeze(['client', 'project', 'matter', 'none'])
+/** Allowed manifest.scope values (manifest v2). */
+export const RECEIPT_SCOPES = Object.freeze(['subject', 'local-all'])
 export const RECEIPT_SHA256SUMS_FILE = 'SHA256SUMS'
 /** Files every receipt pack must carry; SHA256SUMS covers all of them. */
 export const RECEIPT_REQUIRED_FILES = Object.freeze(['manifest.json', 'README.txt', 'receipt.docx'])
@@ -1292,6 +1306,65 @@ function normalizeDeliveryFile(file, deliveryId, fileIndex) {
   throw new TypeError('delivery ' + deliveryId + ' file #' + (fileIndex + 1) + ' must be a path string or an object')
 }
 
+// --- optional row-level lineage (manifest v2) --------------------------------
+
+/**
+ * Validate one optional delivery lineage id. Empty/null means "not recorded"
+ * and keeps the v1 manifest shape (the key is not written at all).
+ */
+function receiptLineageId(value, deliveryId, field) {
+  if (value === undefined || value === null || value === '') return null
+  if (typeof value !== 'string') {
+    throw new TypeError('delivery ' + deliveryId + ' ' + field + ' must be a non-empty string')
+  }
+  const text = value.trim()
+  if (!text) throw new TypeError('delivery ' + deliveryId + ' ' + field + ' must be a non-empty string')
+  return text
+}
+
+function receiptLineageString(value, deliveryId, field) {
+  if (value === undefined || value === null || value === '') return null
+  if (typeof value !== 'string' || !value.trim()) {
+    throw new TypeError('delivery ' + deliveryId + ' ' + field + ' must be a non-empty string')
+  }
+  return value.trim()
+}
+
+/**
+ * Row-level template lineage: flat templateName/templateVersion/quoteNo/
+ * dataSha256 inputs become one manifest.deliveries[].template object. Nothing is
+ * written when the row carries none of them. name+version identify a template,
+ * so a partial pair is rejected instead of silently recorded.
+ */
+function receiptDeliveryTemplate(delivery, deliveryId) {
+  const anyPresent = ['templateName', 'templateVersion', 'quoteNo', 'dataSha256'].some(
+    (key) => delivery[key] !== undefined && delivery[key] !== null && delivery[key] !== '',
+  )
+  if (!anyPresent) return null
+  const name = receiptLineageString(delivery.templateName, deliveryId, 'templateName')
+  const version = receiptLineageString(delivery.templateVersion, deliveryId, 'templateVersion')
+  if (name === null || version === null) {
+    throw new TypeError(
+      'delivery ' + deliveryId + ' template lineage requires both templateName and templateVersion' +
+        ' (quoteNo/dataSha256 are additional and optional)',
+    )
+  }
+  const template = { name, version }
+  const quoteNo = receiptLineageString(delivery.quoteNo, deliveryId, 'quoteNo')
+  if (quoteNo !== null) template.quoteNo = quoteNo
+  if (delivery.dataSha256 !== undefined && delivery.dataSha256 !== null && delivery.dataSha256 !== '') {
+    if (typeof delivery.dataSha256 !== 'string') {
+      throw new TypeError('delivery ' + deliveryId + ' dataSha256 must be 64 lowercase hex characters')
+    }
+    const dataSha256 = delivery.dataSha256.trim().toLowerCase()
+    if (!isSha256Hex(dataSha256)) {
+      throw new TypeError('delivery ' + deliveryId + ' dataSha256 must be 64 lowercase hex characters')
+    }
+    template.dataSha256 = dataSha256
+  }
+  return template
+}
+
 function normalizeReceiptDeliveries(deliveries) {
   const input = Array.isArray(deliveries) ? deliveries : deliveries ? [deliveries] : []
   if (!input.length) {
@@ -1341,6 +1414,11 @@ function normalizeReceiptDeliveries(deliveries) {
       tool: receiptText(delivery.tool),
       createdAt: receiptDateText(delivery.createdAt !== undefined ? delivery.createdAt : delivery.created_at, null),
       validation,
+      // Manifest v2 lineage: null means "not recorded" and is never written.
+      clientId: receiptLineageId(delivery.clientId, id, 'clientId'),
+      projectId: receiptLineageId(delivery.projectId, id, 'projectId'),
+      matterId: receiptLineageId(delivery.matterId, id, 'matterId'),
+      template: receiptDeliveryTemplate(delivery, id),
       files,
     }
   })
@@ -1622,6 +1700,73 @@ function normalizeReceiptAnchors(anchors) {
   })
 }
 
+// --- subject / scope (manifest v2) ------------------------------------------
+
+/**
+ * Normalize the optional manifest.subject.
+ *
+ * `{kind:'client'|'project'|'matter', id?, name?}` needs at least one of
+ * id/name; `{kind:'none'}` explicitly declares "no single subject" and must
+ * not carry id/name. Unknown kinds, wrong types and empty strings fail closed
+ * (returning `null` would silently drop a claim the caller asked to record).
+ *
+ * @returns {{kind: string, id?: string, name?: string}|null}
+ */
+function normalizeReceiptSubject(subject) {
+  if (subject === undefined || subject === null || subject === '') return null
+  if (typeof subject !== 'object' || Array.isArray(subject)) {
+    throw new TypeError('subject must be an object {kind, id?, name?}')
+  }
+  if (!RECEIPT_SUBJECT_KINDS.includes(subject.kind)) {
+    throw new TypeError(
+      'subject.kind must be one of ' + RECEIPT_SUBJECT_KINDS.map((kind) => "'" + kind + "'").join(', '),
+    )
+  }
+  const subjectField = (value, field) => {
+    if (value === undefined || value === null || value === '') return null
+    if (typeof value !== 'string' || !value.trim()) {
+      throw new TypeError('subject.' + field + ' must be a non-empty string')
+    }
+    return value.trim()
+  }
+  const id = subjectField(subject.id, 'id')
+  const name = subjectField(subject.name, 'name')
+  if (subject.kind === 'none') {
+    if (id !== null || name !== null) throw new TypeError("subject.kind 'none' must not carry id or name")
+    return { kind: 'none' }
+  }
+  if (id === null && name === null) {
+    throw new TypeError("subject.kind '" + subject.kind + "' requires subject.id or subject.name")
+  }
+  const out = { kind: subject.kind }
+  if (id !== null) out.id = id
+  if (name !== null) out.name = name
+  return out
+}
+
+/**
+ * Normalize manifest scope (v2 mandatory field).
+ *
+ * Default: a subject with kind client/project/matter means 'subject'; no
+ * subject (or `{kind:'none'}`) means 'local-all'. Contradictory explicit
+ * combinations fail closed instead of producing a pack whose warning lies.
+ */
+function normalizeReceiptScope(scope, subject) {
+  if (scope === undefined || scope === null || scope === '') {
+    return subject && subject.kind !== 'none' ? 'subject' : 'local-all'
+  }
+  if (scope !== 'subject' && scope !== 'local-all') {
+    throw new TypeError("scope must be 'subject' or 'local-all'")
+  }
+  if (scope === 'subject' && (!subject || subject.kind === 'none')) {
+    throw new TypeError("scope 'subject' requires a subject with kind 'client', 'project' or 'matter'")
+  }
+  if (scope === 'local-all' && subject && subject.kind !== 'none') {
+    throw new TypeError("scope 'local-all' cannot carry a subject with kind 'client', 'project' or 'matter'")
+  }
+  return scope
+}
+
 // --- minimal deterministic DOCX writer (fallback when advisers-office is not
 // --- installed; a DOCX is a ZIP with [Content_Types].xml + word/document.xml) ----
 
@@ -1790,6 +1935,39 @@ function receiptRecipientLabel(recipient) {
   return parts.length ? parts.join(' ') : 'recorded (see manifest.json)'
 }
 
+/** Human label for manifest.subject: "<kind> <name> (<id>)". */
+function receiptSubjectLabel(subject) {
+  if (!subject) return 'none'
+  const label = subject.name && subject.id ? subject.name + ' (' + subject.id + ')' : subject.name || subject.id || ''
+  return (subject.kind + ' ' + label).trim()
+}
+
+/**
+ * The one place that turns scope + subject into the Chinese/English warning
+ * printed by README.txt and receipt.docx. Keeping it here makes the two
+ * documents unable to disagree about what the pack contains.
+ */
+function receiptScopeLines(subject, scope) {
+  if (scope === 'subject' && subject && subject.kind !== 'none') {
+    const label = receiptSubjectLabel(subject)
+    return {
+      zh: '本包只含 ' + label + ' 的数据，全局 facts/preferences 默认不含。',
+      en: 'This pack contains only the data of ' + label + '; global facts/preferences are not included by default.',
+    }
+  }
+  return {
+    zh: '本包含本机全部客户数据，勿直接发给第三方。',
+    en: 'This pack contains all customer data on this machine; do not send it directly to a third party.',
+  }
+}
+
+function receiptScopeHeaderLine(subject, scope) {
+  if (scope === 'subject' && subject && subject.kind !== 'none') {
+    return 'subject (only ' + receiptSubjectLabel(subject) + '; global facts/preferences not included by default)'
+  }
+  return 'local-all (ALL customer data on this machine; do not send it to a third party)'
+}
+
 function receiptDocxSpec(input) {
   const {
     createdAt,
@@ -1802,7 +1980,10 @@ function receiptDocxSpec(input) {
     anchors,
     deliveryFiles,
     receiptSha256,
+    subject,
+    scope,
   } = input
+  const scopeLines = receiptScopeLines(subject, scope)
   const summary = [
     '包格式：' + RECEIPT_MANIFEST_FORMAT + ' v' + RECEIPT_MANIFEST_VERSION,
     '生成时间：' + createdAt,
@@ -1810,6 +1991,8 @@ function receiptDocxSpec(input) {
     '生成环境：Advisers ' + (generator.advisersVersion || 'unknown') + ' / Node ' + generator.nodeVersion + ' / ' + generator.platform,
     '模板：' + (generator.templateName ? generator.templateName + (generator.templateVersion ? '@' + generator.templateVersion : '') : '未记录'),
     '交付：' + deliveries.length + ' 项 / 文件 ' + deliveryFiles.length + ' 个',
+    '数据范围：' + scopeLines.zh,
+    'Scope: ' + scopeLines.en,
     '校验结果：' + (verifyStatus === 'passed' ? '通过' : verifyStatus === 'failed' ? '未通过' : '未记录'),
     '时间锚：' + (anchors.length ? anchors.length + ' 条（外部锚，需按适配器另行验证）' : '未锚定（仅本地自证）'),
   ]
@@ -1890,7 +2073,8 @@ function buildReceiptSums(fileContents) {
 }
 
 function buildReceiptReadme(input) {
-  const { createdAt, generator, recipient, deliveries, evidence, verifyResults, verifyStatus, anchors, manifestDigest } = input
+  const { createdAt, generator, recipient, deliveries, evidence, verifyResults, verifyStatus, anchors, manifestDigest, subject, scope } = input
+  const scopeLines = receiptScopeLines(subject, scope)
   const lines = [
     'Advisers delivery receipt pack',
     '==============================',
@@ -1902,6 +2086,8 @@ function buildReceiptReadme(input) {
     'template:    ' + (generator.templateName ? generator.templateName + (generator.templateVersion ? ' v' + generator.templateVersion : '') : 'not recorded'),
     'command:     ' + (generator.command || 'not recorded'),
     'deliveries:  ' + deliveries.length,
+    'subject:     ' + (subject ? receiptSubjectLabel(subject) : 'none'),
+    'scope:       ' + receiptScopeHeaderLine(subject, scope),
     'verification:' + ' ' + (verifyStatus === 'passed' ? 'passed' : verifyStatus === 'failed' ? 'FAILED' : 'not recorded') + (verifyResults.length ? ' (' + verifyResults.length + ' result(s))' : ''),
     'anchors:     ' + (anchors.length ? anchors.length + ' external anchor(s) recorded' : 'NONE - this pack is not externally anchored (local self-attestation only)'),
     '',
@@ -1943,6 +2129,11 @@ function buildReceiptReadme(input) {
     'not a trusted timestamp and not notarization: anyone able to rewrite the whole',
     'pack can recompute them. When the anchors line above says NONE, the pack only',
     'proves internal consistency, not when or by whom it was produced.',
+    '',
+    'Scope',
+    '-----',
+    scopeLines.zh,
+    scopeLines.en,
     '',
     'Privacy and scope',
     '-----------------',
@@ -2021,18 +2212,34 @@ function writeReceiptPackDir(targetDir, fileContents, { overwrite = false } = {}
 }
 
 /**
- * Build a delivery receipt pack (v1.1).
+ * Build a delivery receipt pack (manifest v2; v1.1 packs still verify offline).
  *
  * The manifest records the delivered files (relative path / size / SHA-256),
  * the generator environment, the verify results, optional recipient and
- * timestamp anchors, and the evidence entries. receipt.docx is generated and
- * both it and every delivered artifact are covered by SHA256SUMS, so
+ * timestamp anchors, and the evidence entries. Manifest v2 adds the optional
+ * `subject`, the mandatory `scope` ('subject' | 'local-all') and optional
+ * row-level lineage. receipt.docx and README.txt both print the scope warning,
+ * and both it and every delivered artifact are covered by SHA256SUMS, so
  * verifyReceiptPackDir can detect any edit or missing file offline.
+ *
+ * Backwards compatibility: callers that pass neither `subject` nor `scope`
+ * (e.g. the 0.3.1 CLI) still get a valid pack, now version 2 with
+ * scope 'local-all' and no subject key — the same manifest rows they got
+ * before, plus the all-customer-data warning.
  *
  * @param {object} options
  * @param {Array|object} options.deliveries delivery record(s): {id, title, tool,
- *        createdAt, validation, files}. Each file is a path string, a
- *        {sourcePath} object, or a {content, name} object with embedded bytes.
+ *        createdAt, validation, files, clientId?, projectId?, matterId?,
+ *        templateName?, templateVersion?, quoteNo?, dataSha256?}. Each file is
+ *        a path string, a {sourcePath} object, or a {content, name} object with
+ *        embedded bytes. Lineage fields are written only when present; a partial
+ *        template identity (name without version) is rejected.
+ * @param {{kind: 'client'|'project'|'matter'|'none', id?: string, name?: string}}
+ *        [options.subject] optional manifest.subject (v2). Written only when
+ *        passed; kind 'none' declares "no single subject" and forbids id/name.
+ * @param {'subject'|'local-all'} [options.scope] pack scope (v2). Defaults to
+ *        'subject' when a client/project/matter subject is given, otherwise
+ *        'local-all'; contradictory combinations are rejected.
  * @param {object|Array|string} [options.evidence] buildEvidencePack output,
  *        evidence entries, or an evidence manifest string.
  * @param {object|Array} [options.verifyResults] results with a boolean ok
@@ -2068,6 +2275,8 @@ export async function buildReceiptPack(options = {}) {
   const generator = normalizeReceiptGenerator(options.env)
   const recipient = normalizeReceiptRecipient(options.recipient)
   const anchors = normalizeReceiptAnchors(options.anchors)
+  const subject = normalizeReceiptSubject(options.subject)
+  const scope = normalizeReceiptScope(options.scope, subject)
   const deliveryFiles = []
   for (const delivery of deliveries) for (const file of delivery.files) deliveryFiles.push(file)
 
@@ -2086,6 +2295,8 @@ export async function buildReceiptPack(options = {}) {
     anchors,
     deliveryFiles,
     receiptSha256: 'see SHA256SUMS',
+    subject,
+    scope,
   })
   const receiptBytes =
     options.receiptDocx !== undefined
@@ -2120,12 +2331,20 @@ export async function buildReceiptPack(options = {}) {
       createdAt,
       generator,
       recipient,
+      // v2: scope is always written, subject only when the caller supplied one.
+      ...(subject ? { subject } : {}),
+      scope,
       deliveries: deliveries.map((delivery) => ({
         id: delivery.id,
         title: delivery.title,
         tool: delivery.tool,
         createdAt: delivery.createdAt,
         validation: delivery.validation,
+        // v2 lineage: absent keys keep the v1 row shape byte-clean.
+        ...(delivery.clientId ? { clientId: delivery.clientId } : {}),
+        ...(delivery.projectId ? { projectId: delivery.projectId } : {}),
+        ...(delivery.matterId ? { matterId: delivery.matterId } : {}),
+        ...(delivery.template ? { template: delivery.template } : {}),
         files: delivery.files.map((file) => ({ path: file.path, name: file.name, size: file.size, sha256: file.sha256 })),
       })),
       receipt: receiptFile,
@@ -2151,6 +2370,8 @@ export async function buildReceiptPack(options = {}) {
     verifyStatus,
     anchors,
     manifestDigest,
+    subject,
+    scope,
   })
   fileContents.set('README.txt', readme)
   // Everything except SHA256SUMS itself is covered by SHA256SUMS.
@@ -2162,6 +2383,9 @@ export async function buildReceiptPack(options = {}) {
     format: RECEIPT_MANIFEST_FORMAT,
     version: RECEIPT_MANIFEST_VERSION,
     createdAt,
+    // v2: null (not undefined) so JSON callers see an explicit "no subject".
+    subject: subject || null,
+    scope,
     deliveryCount: deliveries.length,
     fileCount,
     verifyStatus,

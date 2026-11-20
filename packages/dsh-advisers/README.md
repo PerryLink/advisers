@@ -7,7 +7,8 @@ DSH bundle for **Advisers**. It registers:
 - `advisers_office` — builds a DOCX/XLSX/PPTX/XMind/Mermaid/draw.io artifact **inside** the configured workspace;
 - `advisers_today` — read-only **real-ledger** view of the today/week/waiting ledger (counts, capped lists, earliest due item);
 - `advisers_who` — read-only **real-ledger** view of who owes whom (what I owe vs what I am waiting on);
-- `advisers_evidence` — read-only **real-ledger** evidence lookup (stored quotes/refs/sources) for a `cm_…`, `fact_…`, or `pref_…` id.
+- `advisers_evidence` — read-only **real-ledger** evidence lookup (stored quotes/refs/sources) for a `cm_…`, `fact_…`, or `pref_…` id;
+- `advisers_clients` — read-only **real-ledger** customer projection: `{action:"list"}` client rows or `{action:"show", id}` one client (projects, exact counts, open buckets, a delivery/commitment timeline). No note bodies, no conversation text.
 
 0.3.0 wires the three ledger read tools to the real local ledger through the
 controlled `advisers/lib/ledger-read.js` facade (see
@@ -28,10 +29,12 @@ The DSH adapter is a thin channel, not the full product.
 | `advisers_today` | read-only (real ledger) | none | `{ ok, data }` with `now`, `timezone`, `localDay`, `counts`, `overdue`, `today`, `week`, `waiting`, `noDue`, optional `next`, `truncated`, plus the source marker (`preview`, `source`, `note`) and, for real reads, `backend`, `clearance`, `protectedExcluded`, optional `warnings` |
 | `advisers_who` | read-only (real ledger) | none | `{ ok, data }` with `counts` (`mine`/`waiting`/`open`), `mine`, `waiting`, `truncated`, plus the same source marker/clearance fields |
 | `advisers_evidence` | read-only (real ledger) | `id` (string, required) | `{ ok, data }` with `id`, `kind`, `record`, `sources`, `missing`, `counts`, `verified: false`, `truncated`, plus the same source marker/clearance fields |
+| `advisers_clients` | read-only (real ledger) | `action` (`"list"`\|"show"`), optional `id`, `limit`, `timelineLimit` | list: `{ ok, data }` with `clients`, `total`, `truncated`, `limit`, `clearance`, `protectedExcluded`; show: client/projects/counts/open/timeline with `timelineTotal`, `timelineTruncated`. 0.3.2 reads the facade's `readClientList`/`readClientById` (SQLite customer tables; JSON store returns an empty list with `customerEntities:false`, never fake data). |
 
 Lists are capped (`today`: 10 per bucket, `who`: 50 per side, `evidence`: 20
-sources/missing entries); the `counts` fields carry the visible totals and
-`truncated` is true when a list was cut.
+sources/missing entries, `clients`: 20 rows and 20 timeline entries by default);
+the `counts` fields carry the visible totals and `truncated` is true when a list
+was cut.
 
 ## Configuration
 

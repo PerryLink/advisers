@@ -155,5 +155,5 @@ test('initialize negotiates the legacy protocol versions and keeps 2024-11-05 as
   const discover = await f.call('server/discover', {})
   assert.equal(discover.error.code, -32601)
   const tools = await f.call('tools/list')
-  assert.equal(tools.result.tools.length, 7)
+  assert.equal(tools.result.tools.length, 8)
 })

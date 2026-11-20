@@ -32,13 +32,15 @@
         "advisers_evidence",
         "advisers_remind",
         "advisers_capture_candidate",
-        "advisers_pack_verify"
+        "advisers_pack_verify",
+        "advisers_clients"
       ],
       "requiredResources": [
         "advisers://today",
         "advisers://commitments",
         "advisers://who",
-        "advisers://evidence"
+        "advisers://evidence",
+        "advisers://clients"
       ]
     }
   },

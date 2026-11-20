@@ -10,14 +10,16 @@ versions, how a release is built and published, what provenance exists today,
 and how to verify what you install. It describes the current state; "not yet
 implemented" is written as such.
 
-Status: 2026-11-20, covering the 0.2.x line and the 0.3.x line (the repository is
-lockstep at package version `0.3.1`). **0.3.1 was published on 2026-11-20**: npm `latest`
-is now `0.3.1` and `next` is also `0.3.1`. 0.3.1 is a release-metadata patch with no
-runtime, CLI or contract changes; it supersedes `0.3.0`, whose published tarballs shipped
-release-candidate READMEs and whose release surface could not be repaired in place (an
-npm tarball cannot be replaced, and `npm unpublish` requires the account owner's 2FA).
-0.2.4 was tagged but never published and the 0.3.0 line supersedes it (see sections 3
-and 4). The legal texts are TOS/PRIVACY v2026.11.3 (2026-11-20).
+Status: 2026-11-21, covering the 0.2.x line and the 0.3.x line (the repository is
+lockstep at package version `0.3.2`). **0.3.2 was published on 2026-11-21**: npm `latest`
+is now `0.3.2` and `next` is also `0.3.2`. 0.3.2 is a feature release (customer-loop
+surfaces + performance closeout, additive contracts, no schema migration). `0.3.1` was a
+release-metadata patch with no runtime, CLI or interface changes; it superseded `0.3.0`,
+whose published tarballs shipped release-candidate READMEs and whose release surface
+could not be repaired in place (an npm tarball cannot be replaced, and `npm unpublish`
+requires the account owner's 2FA). 0.2.4 was tagged but never published and the 0.3.0
+line supersedes it (see sections 3 and 4). The legal texts are TOS/PRIVACY v2026.11.3
+(2026-11-20; unchanged by 0.3.2).
 
 ## 1. Reporting a vulnerability
 
@@ -76,16 +78,21 @@ advisers-bridge-hermes, and dsh-advisers.
   fault-injection suite, release lockstep, and the dependency audit described
   below.
 
-## 4. Provenance and trusted publishing (0.3.1 published)
+## 4. Provenance and trusted publishing (0.3.2 published)
 
-Status as of 2026-11-20: **0.3.1 is published**; npm `latest` = `0.3.1` and `next` =
-`0.3.1`; `advisers@0.2.4` is not on the registry. 0.3.1 is a release-metadata patch over
-0.3.0: the runtime, CLI and contracts are unchanged. It is published from
-`refs/tags/v0.3.1` through CI Trusted Publishing with SLSA provenance, so the
-attestations point at the release tag rather than a branch, and the GitHub Release
-carries the CycloneDX SBOM and a `SHA256SUMS` file for the six tarballs. Verify it with
-the post-publish check below. Release notes:
-<https://github.com/PerryLink/advisers/releases/tag/v0.3.1>.
+Status as of 2026-11-21: **0.3.2 is published**; npm `latest` = `0.3.2` and `next` =
+`0.3.2`; `advisers@0.2.4` is not on the registry. 0.3.2 is a feature release (customer
+loop + performance closeout) published from `refs/tags/v0.3.2` through CI Trusted
+Publishing with SLSA provenance; the release gate now rejects a provenance build ref
+that is not `refs/tags/vX.Y.Z`, and the GitHub Release carries the CycloneDX SBOM and a
+`SHA256SUMS` file for the six tarballs. Verify it with the post-publish check below.
+Release notes: <https://github.com/PerryLink/advisers/releases/tag/v0.3.2>.
+
+0.3.1 corrected 0.3.0's release surface with the same runtime: 0.3.1 changed no runtime,
+CLI/MCP/DSH payload or contract version. The only `contracts/` change was the additive
+consumer-registry entry `dsh-famling -> pet-brief@0.2` in `contracts/CONSUMERS.json`;
+no frozen artifact or JSON Schema changed. It was published from `refs/tags/v0.3.1`
+with tag-ref provenance.
 
 **0.3.0 was the first CI Trusted Publishing release and its runtime evidence remains
 valid, but its release surface was incomplete**: the package READMEs in its tarballs
@@ -135,18 +142,20 @@ from commit `1199fbf`. The configuration checklist:
   owner's explicit OTP approval before it becomes installable.
 - **Post-approval gate (0.3.x and later).** Do not announce provenance from the
   workflow output; verify the registry:
-  `node scripts/verify-release.mjs --version 0.3.1 --tag latest --sbom <file> --require-sbom`
+  `node scripts/verify-release.mjs --version 0.3.2 --tag latest --sbom <file> --require-sbom`
   (plus the existing tarball/install/import checks). It requires non-empty
   `dist.attestations` on all six packages, fetches each attestation bundle,
-  checks the SLSA provenance source repository and commit against the `v0.3.1`
-  tag, and checks that each attestation subject sha512 equals the registry
-  tarball integrity. `node scripts/check-provenance.mjs --version 0.3.1` runs
-  the same provenance checks standalone; `--allow-unpublished` prints a clear
-  SKIP instead of a failure while the version is still unpublished. The 0.3.1
-  publish re-runs the same gate from `refs/tags/v0.3.1`; the 0.3.0 run passed
-  **222 checks** with `--sbom artifacts/sbom.cdx.json` (attestations, tarball
-  hashes, tag/commit/registry agreement at commit `1199fbf`, clean-prefix
-  install and imports).
+  checks the SLSA provenance source repository and commit against the `v0.3.2`
+  tag, checks that each attestation subject sha512 equals the registry tarball
+  integrity, and requires the SLSA build ref to be `refs/tags/vX.Y.Z` rather
+  than a branch. `node scripts/check-provenance.mjs --version 0.3.2
+  --expected-ref refs/tags/v0.3.2` runs the same provenance checks standalone
+  (pass `--allow-non-tag-provenance` only to audit a known historical release
+  such as 0.3.0, whose provenance named `refs/heads/main`); `--allow-unpublished`
+  prints a clear SKIP instead of a failure while the version is still unpublished.
+  The 0.3.2 publish re-runs the same gate from `refs/tags/v0.3.2`; each release
+  records its own `verify-release` count (the 0.3.0 run passed **222 checks**
+  with `--sbom artifacts/sbom.cdx.json`; that figure is not a 0.3.2 claim).
 - These checks verify npm's metadata linkage (attestation subject to tarball
   digest, source repository/commit to release tag). They do **not**
   cryptographically verify the Sigstore bundle or transparency log; consumers
@@ -370,7 +379,7 @@ and check-js gates are blocking.
   Release notes: <https://github.com/PerryLink/advisers/releases/tag/v0.3.0>.
 
 - 2026-11-20 (0.3.1 release-metadata patch): 0.3.1 supersedes 0.3.0 without
-  runtime, CLI or contract changes. It fixes the published release surface that
+  runtime, CLI or interface changes. It fixes the published release surface that
   cannot be repaired in place: the six 0.3.0 tarballs shipped release-candidate
   README wording (the published-state docs were committed after the tag), the
   0.3.0 provenance named the branch build ref `refs/heads/main`, the GitHub

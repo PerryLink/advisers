@@ -1,9 +1,9 @@
 # Deterministic eval suite (`pnpm eval:det`)
 
 > Status: introduced in the 0.3.0 line (published 2026-11-20). This tree is
-> `advisers@0.3.1`; 0.3.1 is a release-metadata patch with no runtime changes, so the
-> suite is the same release gate for the deterministic contract, not a claim about
-> model quality.
+> `advisers@0.3.2`; 0.3.2 is a feature release (customer loop + performance closeout),
+> so the baseline also pins the 8-tool/5-resource MCP surface. The suite is a release
+> gate for the deterministic contract, not a claim about model quality.
 
 `eval/` also contains the older **manual, real-model** runners
 (`eval/run-*.mjs`, see [eval/README.md](../eval/README.md)). Those need a
@@ -177,7 +177,7 @@ Hard rules for the result file:
 ## Related documents
 
 - [docs/CLI-JSON.md](CLI-JSON.md) — CLI JSON contract and the 0/1/3 exit-code map.
-- [docs/MCP.md](MCP.md) — MCP stdio surface (7 tools, 4 resources).
+- [docs/MCP.md](MCP.md) — MCP stdio surface (8 tools, 5 resources).
 - [docs/PERFORMANCE.md](PERFORMANCE.md) — performance baselines (separate from
   this determinism gate).
 - [docs/SECURITY.md](SECURITY.md) — security suites and supply-chain gates.

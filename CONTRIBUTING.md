@@ -83,13 +83,21 @@ packages (the six published packages plus the private `advisers-link-email` and
 `advisers-link-feishu`) are **lockstep**: they share one version and exact internal
 pins. `scripts/check-release.mjs` enforces the shared version and the pins.
 
-Releases up to 0.2.3 used local `npm stage publish` + human OTP approval. 0.3.0
-was published on 2026-11-20 through the GitHub `publish` workflow's
-owner-authorized direct OIDC/Trusted Publishing path
-(`release.mjs --provenance --publish`), which attaches npm provenance
-attestations; the staged path still needs the owner's own OTP approval. Before
-publishing, build from a clean checkout, `npm pack` every package, and install
-the exact tarballs in an empty directory on Node 22 and 24.
+The operational checklist is [docs/RELEASING.md](docs/RELEASING.md): commit the
+release docs first, push `main` and wait for CI, create an **annotated** tag, then
+dispatch `publish.yml` from that tag ref. Publishing from `main` records
+`refs/heads/main` in the SLSA provenance; the workflow and `verify-release` now
+reject a non-tag build ref, and `check-release --require-tag` requires the tag
+commit to be HEAD.
+
+Releases up to 0.2.3 used local `npm stage publish` + human OTP approval. Since
+0.3.0 the release uses the GitHub `publish` workflow's owner-authorized direct
+OIDC/Trusted Publishing path (`release.mjs --provenance --publish`), which
+attaches npm provenance attestations; the staged path still needs the owner's
+own OTP approval. 0.3.1 was published from its tag ref; 0.3.2 is prepared the
+same way. Before publishing, run the full local gate in docs/RELEASING.md,
+`npm pack` every package, and install the exact tarballs in an empty directory
+on Node 22 and 24.
 
 ## Security issues
 

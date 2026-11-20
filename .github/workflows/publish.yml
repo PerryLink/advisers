@@ -63,6 +63,18 @@ jobs:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
         with:
           fetch-depth: 0
+      # The provenance build ref is the workflow ref, so dispatch from the tag,
+      # not from main. This check is the pre-publish gate for the 0.3.0 defect
+      # (provenance recorded refs/heads/main).
+      - name: Release ref must be the version tag
+        run: |
+          set -eu
+          VERSION="$(node -p "require('./packages/advisers/package.json').version")"
+          if [ "${GITHUB_REF}" != "refs/tags/v${VERSION}" ]; then
+            echo "::error::dispatch publish.yml from refs/tags/v${VERSION} (got ${GITHUB_REF}); npm provenance records this ref"
+            exit 1
+          fi
+          test "$(git rev-parse HEAD)" = "$(git rev-parse "v${VERSION}^{commit}")" || { echo "::error::HEAD != v${VERSION}"; exit 1; }
       - uses: pnpm/action-setup@fc06bc1257f339d1d5d8b3a19a8cae5388b55320 # v4.4.0
         with:
           version: 12.16.1
@@ -75,8 +87,11 @@ jobs:
       - run: pnpm -r --if-present run typecheck
       - run: pnpm -r --if-present run test
       - run: node scripts/pack-smoke.mjs
+      - run: node scripts/check-js.mjs
       - run: node scripts/check-docs.mjs
       - run: node scripts/check-release.mjs --stable --require-tag
+      - run: node scripts/check-contracts.mjs
+      - run: pnpm run sbom && pnpm run check:sbom
       - run: node scripts/check-licenses.mjs
       - run: node scripts/check-tos.mjs --release
       - run: node scripts/security-suite.mjs

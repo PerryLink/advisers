@@ -23,7 +23,11 @@
 //     unseal / sync pull inode replacement and a concurrent writer are safe;
 //   - per-item clearance (default 0, fail closed): rows whose matter.secrecy
 //     is above the clearance are excluded and only counted, never partially
-//     returned.
+//     returned;
+//   - customer reads (0.3.2 M3): the client list/status projection is derived by
+//     lib/customer-read.js inside one read snapshot; customer entities are
+//     SQLite-only, so a JSON backend reports customerEntities:false and an
+//     empty list instead of inventing rows.
 //
 // The API is a versioned contract (docs/LEDGER-READ-API.md): 0.x versions only
 // add fields/signatures; existing names, shapes and error codes stay stable.
@@ -32,6 +36,7 @@ import { existsSync, readFileSync } from 'node:fs'
 import { homedir } from 'node:os'
 import { isAbsolute, join } from 'node:path'
 
+import { listClientRows, readClientStatus } from './customer-read.js'
 import { secrecyLevel } from './egress.js'
 import { evidenceRecordSecrecy } from './evidence.js'
 
@@ -285,6 +290,20 @@ function normalizeLimit(value) {
   return limit
 }
 
+/**
+ * Validate one customer-page limit (clients or timeline rows). The read-only
+ * facade caps a customer page at 200 rows even when a caller asks for more, so
+ * a single read can never load an unbounded customer projection.
+ */
+function normalizeCustomerLimit(value, fallback, label) {
+  if (value === undefined || value === null) return fallback
+  const limit = Number(value)
+  if (!Number.isInteger(limit) || limit < 1) {
+    throw new LedgerReadError('E_USAGE', label + ' must be a positive integer when supplied', 'Omit ' + label + ' to use the default; the read-only facade caps customer pages at 200 rows.')
+  }
+  return Math.min(limit, 200)
+}
+
 function normalizeParts(parts) {
   if (parts === undefined || parts === null) return null
   if (!Array.isArray(parts)) throw new LedgerReadError('E_USAGE', 'parts must be an array of wire table names', `Accepted names: ${WIRE_TABLES.join(', ')}.`)
@@ -324,10 +343,15 @@ async function openLedgerHandle(home) {
       backend: 'json',
       schemaVersion: null,
       warnings: [],
+      // Customer entities are SQLite-only (schema v21): the legacy JSON ledger has
+      // no client/project/note tables. Report that honestly; never invent rows.
+      customerEntities: false,
       close() {},
       getEntity: (kind, id, clearance) => jsonEntity(ledger, kind, id, clearance),
       index: (options) => jsonCommitmentIndex(ledger, options),
       snapshot: (parts) => jsonSnapshot(ledger, parts),
+      clientList: () => ({ rows: [], total: 0, limit: null, clearance: 0, protectedExcluded: 0 }),
+      clientStatus: () => null,
     }
   }
   if (!existsSync(backend.dbPath)) throw notFoundInHome(backend)
@@ -345,6 +369,9 @@ async function openLedgerHandle(home) {
     backend: 'sqlite',
     schemaVersion: store.schemaVersion(),
     warnings,
+    // A read-only open asserts the current schema (v21), so the customer tables
+    // exist whenever this handle is returned.
+    customerEntities: true,
     close() { try { store.close() } catch {} },
     getEntity(kind, id, clearance) {
       const spec = ENTITY_KINDS[kind]
@@ -355,6 +382,12 @@ async function openLedgerHandle(home) {
     },
     snapshot(parts) {
       return store.read(() => store.loadSnapshot(parts))
+    },
+    clientList(options) {
+      return listClientRows(store, options)
+    },
+    clientStatus(id, options) {
+      return readClientStatus(store, id, options)
     },
   }
 }
@@ -598,6 +631,79 @@ export async function readLedgerSnapshot({ home, parts = null } = {}) {
   }))
 }
 
+/**
+ * Read-only customer list (0.3.2 M3). Customer entities are SQLite-only: on the
+ * legacy JSON backend the result is an empty list with `customerEntities:false`
+ * (never invented rows). The list is clearance-filtered per client (matters and
+ * client-level note counts above the clearance are counted in
+ * `protectedExcluded`, not shown). Note bodies are never returned.
+ *
+ * @param {{ home?: string, clearance?: number, limit?: number, all?: boolean }} [options]
+ * @returns {Promise<{clients:Array<object>, total:number, truncated:boolean,
+ *   limit:number, clearance:number, protectedExcluded:number,
+ *   customerEntities:boolean, schemaVersion:number|null, backend:'sqlite'|'json',
+ *   readAt:string, warnings:string[]}>}
+ */
+export async function readClientList({ home, clearance = 0, limit = 20, all = false } = {}) {
+  const root = resolveAdvisersHome({ home })
+  const level = normalizeClearance(clearance)
+  const pageLimit = normalizeCustomerLimit(limit, 20, 'limit')
+  return withLedger(root, (handle) => {
+    const result = handle.customerEntities === true
+      ? handle.clientList({ clearance: level, limit: pageLimit, includeArchived: all === true })
+      : { rows: [], total: 0, protectedExcluded: 0 }
+    return {
+      clients: result.rows,
+      total: result.total,
+      truncated: result.total > result.rows.length,
+      limit: pageLimit,
+      clearance: level,
+      protectedExcluded: result.protectedExcluded,
+      customerEntities: handle.customerEntities === true,
+      schemaVersion: handle.schemaVersion,
+      backend: handle.backend,
+      readAt: new Date().toISOString(),
+      warnings: handle.warnings.slice(),
+    }
+  })
+}
+
+/**
+ * Read-only customer status by id (0.3.2 M3): client identity, project
+ * summaries, exact counts, open mine/waiting items and a derived
+ * delivery/commitment timeline. `found:false` (with `view:null`) distinguishes
+ * an unknown/archived-by-id client from a gate failure, without throwing.
+ *
+ * @param {{ home?: string, id: string, clearance?: number, timelineLimit?: number }} [options]
+ * @returns {Promise<{found:boolean, view:object|null, clearance:number,
+ *   customerEntities:boolean, schemaVersion:number|null, backend:'sqlite'|'json',
+ *   readAt:string, warnings:string[]}>}
+ */
+export async function readClientById({ home, id, clearance = 0, timelineLimit = 20 } = {}) {
+  const root = resolveAdvisersHome({ home })
+  if (typeof id !== 'string' || id.trim() === '') {
+    throw new LedgerReadError('E_USAGE', 'id must be a non-empty string', 'Pass the client id (cl_…); list ids with readClientList.')
+  }
+  const key = id.trim()
+  const level = normalizeClearance(clearance)
+  const timelinePage = normalizeCustomerLimit(timelineLimit, 20, 'timelineLimit')
+  return withLedger(root, (handle) => {
+    const view = handle.customerEntities === true
+      ? handle.clientStatus(key, { clearance: level, timelineLimit: timelinePage, openLimit: 20 })
+      : null
+    return {
+      found: view !== null && view !== undefined,
+      view: view ?? null,
+      clearance: level,
+      customerEntities: handle.customerEntities === true,
+      schemaVersion: handle.schemaVersion,
+      backend: handle.backend,
+      readAt: new Date().toISOString(),
+      warnings: handle.warnings.slice(),
+    }
+  })
+}
+
 export default Object.freeze({
   LedgerReadError,
   resolveAdvisersHome,
@@ -605,4 +711,6 @@ export default Object.freeze({
   readOpenCommitmentIndex,
   readEntityById,
   readLedgerSnapshot,
+  readClientList,
+  readClientById,
 })

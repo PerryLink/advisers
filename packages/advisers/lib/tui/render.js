@@ -3,7 +3,7 @@
  * and the read-only snapshot. No I/O, no readline, no clock, no store access.
  *
  * The same functions serve three consumers, which is the point of the kernel:
- *   - the future interactive shell (0.3.1) and the existing CLI human output;
+ *   - the future interactive shell (0.3.2) and the existing CLI human output;
  *   - --once / redirected / --plain / --accessible byte snapshots;
  *   - golden unit tests.
  *

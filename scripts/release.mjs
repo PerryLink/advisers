@@ -189,6 +189,14 @@ if (!dryRun) {
   }
 }
 
+// 0.3.2: npm provenance records the workflow ref. Publishing from a branch that
+// merely POINTS at the tag commit still records refs/heads/main (the 0.3.0
+// defect), so a provenance publish outside the version tag ref fails closed.
+if (!dryRun && provenance && process.env.GITHUB_REF && process.env.GITHUB_REF !== 'refs/tags/v' + version) {
+  console.error('provenance publish must run from refs/tags/v' + version + ' (got ' + process.env.GITHUB_REF + '); the SLSA attestation records this ref')
+  process.exit(2)
+}
+
 async function tarballExists(name, ver) {
   try {
     const res = await fetch(registry + name + '/-/' + name + '-' + ver + '.tgz', { method: 'HEAD', signal: AbortSignal.timeout(15000) })

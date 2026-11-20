@@ -1,10 +1,10 @@
 # MCP 接入（stdio；legacy 协议协商 2024-11-05 / 2025-06-18 / 2025-11-25）
 
-状态（2026-11-20，0.3.1 **已发布**；包版本为 `0.3.1`——0.3.1 是仅修复发布面的 metadata patch，运行时/CLI/契约与 0.3.0 完全相同；更早的 `0.2.4` 是已被 0.3.0 取代的未发布 candidate，npm `latest` = `0.3.1`、`next` 也为 `0.3.1`，发布由 GitHub Actions OIDC/Trusted Publishing 完成并带 SLSA provenance）：
+状态（2026-11-21，0.3.2 **已发布**；包版本为 `0.3.2`——0.3.2 是客户闭环 + 性能收尾 feature release，MCP 侧新增只读客户投影（8 工具/5 resources）与窄承诺读模型；0.3.1 是 0.3.0 的发布面修复版（运行时不变）；更早的 `0.2.4` 是已被 0.3.0 取代的未发布 candidate，npm `latest` = `0.3.2`、`next` 也为 `0.3.2`，发布由 GitHub Actions OIDC/Trusted Publishing 完成并带 SLSA provenance）：
 
-- **0.2.0 库**：MCP server 已从 `bin/advisers.js` 抽成可测试库 `packages/advisers/lib/mcp-server.js`（工厂 `createMcpServer({store, ledger | loadLedger, version, audit, clearance})`）。库提供 **5 个只读工具 + 2 个白名单工具 + 4 个只读 resources**。
-- **CLI 入口（已接线，2026-11-17）**：`advisers mcp --stdio` 与库是同一实现——`bin/advisers.js` 只负责注入 home/store/ledger/version/audit，然后调用 `createMcpServer(...).serve()`；7 工具 + 4 resources 均从 CLI 可用，并自 `0.2.0` 起随 npm 包发布（2026-11-17 已上 `latest`）。仓库内的 `node scripts/mcp-dev.mjs` 保留为开发/双进程冒烟入口，不再是试用新接口的前提。
-- **0.2.3 变化（性能/健壮性，协议面不变）**：`initialize` 只做协议初始化，不再预加载整个账本——可写 store 与逐工具的部分加载推迟到首次 `tools/call`（200k 行账本上 init 从 1.85s 降到 91ms）；只读调用走无锁只读快照，可在 `ui` 等长期写者持锁时工作；协议面仍是 7 工具 + 4 resources。
+- **0.2.0 库**：MCP server 已从 `bin/advisers.js` 抽成可测试库 `packages/advisers/lib/mcp-server.js`（工厂 `createMcpServer({store, ledger | loadLedger, version, audit, clearance})`）。0.3.2 起库提供 **6 个只读工具 + 2 个白名单工具 + 5 个只读 resources**（客户只读投影见 §3.4）。
+- **CLI 入口（已接线，2026-11-17）**：`advisers mcp --stdio` 与库是同一实现——`bin/advisers.js` 只负责注入 home/store/ledger/version/audit，然后调用 `createMcpServer(...).serve()`；8 工具 + 5 resources 均从 CLI 可用，并自 `0.2.0` 起随 npm 包发布（2026-11-17 已上 `latest`）。仓库内的 `node scripts/mcp-dev.mjs` 保留为开发/双进程冒烟入口，不再是试用新接口的前提。
+- **0.2.3 变化（性能/健壮性，协议面不变）**：`initialize` 只做协议初始化，不再预加载整个账本——可写 store 与逐工具的部分加载推迟到首次 `tools/call`（200k 行账本上 init 从 1.85s 降到 91ms）；只读调用走无锁只读快照，可在 `ui` 等长期写者持锁时工作；协议面当时仍是 7 工具 + 4 resources（0.3.2 起为 8 工具 + 5 resources）。
 - **0.3.0 变化（新，见 §3.1/§5.1）**：
   1. **legacy 协议协商**：`initialize` 回显客户端请求的受支持版本（2024-11-05 / 2025-06-18 / 2025-11-25）；缺失或未知版本回退 **2024-11-05**。现代无状态修订 2026-07-28 **未实现**，也不广告 `server/discover`。
   2. **列表输出上限**：每个列表型工具**先做 per-item clearance 过滤、再截断、再计数**，返回 additive 的 `total`/`truncated`（`who` 用 `mineTotal`/`waitingTotal`）与 `clearance`/`protectedExcluded`；大账本上 today/commit_ls/remind 不再因内容分类器 100k 字符上限返回 `CONTENT_BLOCKED`，小账本行为逐字段不变。
@@ -16,7 +16,7 @@
 
 ## 1. 入口
 
-### 1.1 CLI（7 工具 + 4 resources，已接线）
+### 1.1 CLI（8 工具 + 5 resources，已接线）
 
 ```sh
 advisers mcp --stdio
@@ -37,7 +37,7 @@ ADVISERS_HOME=/tmp/advisers-mcp node scripts/mcp-dev.mjs
 
 ### 1.3 DSH 适配器：读真实账本（只读），不是 MCP 端
 
-`packages/dsh-advisers` 是 **DSH 宿主内的工具适配器**（5 个工具），不是 MCP server，也不经过本文件的 JSON-RPC 协议。0.3.0 起它的三个账本读工具（`advisers_today`/`advisers_who`/`advisers_evidence`）通过受控只读门面 `advisers/lib/ledger-read.js` 读 **真实本地账本**（`docs/LEDGER-READ-API.md`）：只读连接、不取 HOME 写锁、不迁移、不建 HOME、不写库、TOS 已接受记录门禁、clearance=0；`advisers_today`/`advisers_who` 用窄承诺索引投影，`advisers_evidence` 用主键点查，不装载整账本。
+`packages/dsh-advisers` 是 **DSH 宿主内的工具适配器**（0.3.2 起 **6 个工具**），不是 MCP server，也不经过本文件的 JSON-RPC 协议。0.3.0 起它的三个账本读工具（`advisers_today`/`advisers_who`/`advisers_evidence`）通过受控只读门面 `advisers/lib/ledger-read.js` 读 **真实本地账本**（`docs/LEDGER-READ-API.md`）：只读连接、不取 HOME 写锁、不迁移、不建 HOME、不写库、TOS 已接受记录门禁、clearance=0；`advisers_today`/`advisers_who` 用窄承诺索引投影，`advisers_evidence` 用主键点查，不装载整账本。0.3.2 的 `advisers_clients`（list/show）经同一门面的 `readClientList`/`readClientById` 读客户只读投影（SQLite 客户表；JSON store 返回空列表并标 `customerEntities:false`，不造假数据）；无库/门面不可用仍回退 marked preview，show 在 preview 下返回结构化 `CLIENT_NOT_FOUND`，绝不用空 client 冒充真实存在。
 
 **preview 只是回退标记**：无库（首次运行）、门面不可用（旧 `advisers` 包 / 宿主无 `node:sqlite`）或 `config.mode: "preview"` 时，才回退到 0.2.x 的 marked preview（`preview: true`、`source: "preview-no-ledger"`、`note`，渲染以 `[preview: no ledger]` 开头）；TOS/vault/schema/损坏/忙等其它门禁失败必须返回结构化 `LEDGER_*` 错误，**不得**用空数据冒充“没有”。
 
@@ -101,6 +101,7 @@ claude mcp add advisers -- advisers mcp --stdio
 | `advisers_who` | 只读 | 谁欠谁：`mine`（我/agent）vs `waiting`（第三方） |
 | `advisers_evidence` | 只读 | `cm_*`/`fact_*`/`pref_*` 的回溯来源（session#turn + 引文） |
 | `advisers_remind` | 只读 | 当前到期提醒（不投递、不联网） |
+| `advisers_clients` | 只读 | 客户只读投影：`{action:"list"}` 客户行 / `{action:"show", id}` 单个客户（项目、计数、未完成、时间线）；无备注正文、无对话原文 |
 | `advisers_capture_candidate` | 白名单写 | **只产生 pending 记忆候选**，绝不自动 accept、绝不写账本 |
 | `advisers_pack_verify` | 只读校验 | 校验证据包/回执目录（`manifest.json`/`README.txt`/`SHA256SUMS`[+`receipt.docx`]） |
 
@@ -115,12 +116,14 @@ claude mcp add advisers -- advisers mcp --stdio
 | `advisers_who` | `mine`/`waiting` 各 20 行 | `mineTotal`、`waitingTotal`、`truncated`、`clearance`、`protectedExcluded` |
 | `advisers_remind` | 20 条提醒 | `total`、`truncated`、`clearance`、`protectedExcluded` |
 | `advisers_evidence` | `sources`/`missing` 各 20 条 | `sourcesTotal`、`missingTotal`、`truncated`、`clearance`；保护记录返回 `protectedExcluded: 1` 且内容全空 |
+| `advisers_clients` | list 默认 20 行（`limit` 1..50）；show 的 `timeline` 默认 20 行（`timelineLimit` 1..50），`open.mine`/`open.waiting` 各 20 | list：`total`、`truncated`、`limit`、`clearance`、`protectedExcluded`；show：`timelineTotal`、`timelineTruncated`、`clearance`、`protectedExcluded`；客户行/项目行各带 `counts` 与 `nextDueAt` |
 
 语义（0.3.0 契约，实现 `packages/advisers/lib/mcp-server.js` 的 `MCP_OUTPUT_LIMITS` 与 `boundPayload`）：
 
 - **先过滤后计数**：`total` 是 per-item clearance 过滤后的真数；截断不改变它，`truncated: true` 只表示"还有行没发"，不要把截断结果当成全部账本。
 - **clearance 默认 0（fail closed）**：是 server 进程的配置，不是工具参数（CLI `advisers mcp --stdio` 固定 0；嵌入方可传 `createMcpServer({clearance})`，非法/负值回落 0）。`secrecy` 高于 clearance 的记录只计入 `protectedExcluded`，不返回 id/标题/引文任何字段。
 - **最后一道字节保护**：序列化后仍超过 64 KiB 时，最长的列表继续对半截断并置 `truncated: true`（仍先于内容分类器），避免单个超长证据数组把结果变成 `CONTENT_BLOCKED`。
+- **客户投影（0.3.2）**：`advisers_clients` 的每个客户先按 `effectiveSecrecy = max(client.secrecyDefault, matter.secrecy)` 过滤其 matter（及客户端备注），再计数/分页；被过滤对象只计入 `protectedExcluded`，不返回 id/标题/备注。list 行只含身份、标签、精确计数、`nextDueAt`、`clearance`、`protectedExcluded`；show 额外返回项目摘要、`open.mine/waiting` 和仅由 delivery/commitment 构成的派生时间线（`at DESC → delivery > commitment → id ASC`）。**不返回任何备注正文或对话原文**；未解析 matter 的 delivery 视为 protected。客户数据仅存于 SQLite：`ADVISERS_STORE=json` 时工具返回结构化 `isError`（`customer data requires the SQLite ledger (ADVISERS_STORE=sqlite)`），不崩溃、不返回空假数据。
 - **小账本不变**：未超上限时，除上述 additive 字段外，旧工具的名字/参数/返回形状逐字段一致；旧客户端忽略新字段即可。
 
 ### 3.2 候选写入（必须人工 accept）
@@ -155,6 +158,20 @@ claude mcp add advisers -- advisers mcp --stdio
 
 只读：不修改目录，只读 `SHA256SUMS`、`manifest.json`、`README.txt` 及 `SHA256SUMS` 列出的安全文件名；`receipt.docx` 只报告存在性，不解析。返回 `{ok, errors[], files[], fileCount, receiptPresent, extraFileCount, verifiedAt}`。目录/文件错误只返回通用文案，不回显绝对路径。审计行：`mcp.pack.verify`。
 
+### 3.4 客户只读投影（0.3.2）
+
+`advisers_clients` 是 0.3.2 新增的**只读客户工具**（`list`/`show`），读 SQLite 账本里的 v21 客户表（`clients`/`projects`/`client_notes`），与 `advisers://clients` 同源：
+
+```json
+{ "jsonrpc": "2.0", "id": 10, "method": "tools/call",
+  "params": { "name": "advisers_clients", "arguments": { "action": "list", "limit": 20 } } }
+```
+
+- `action:"list"`：`{clients[], total, truncated, limit, clearance, protectedExcluded}`；每个活跃客户行含 `id/name/status/aliases/tags/secrecyDefault/counts{...}/nextDueAt/clearance/protectedExcluded`。`all:true` 含归档客户；`limit` 1..50，默认 20。
+- `action:"show"`：必须带 `id`（`cl_…`）；返回客户身份（不含备注正文）、`projects[]`、`counts`、`open{mine,waiting,mineTotal,waitingTotal}`、`nextDueAt`、`timeline[]`、`timelineTotal`、`timelineTruncated`。`timelineLimit` 1..50（默认 20）。
+- **只读投影边界**：先按 `max(client.secrecyDefault, matter.secrecy)` 过滤再计数/分页；备注（client notes）只计数、不返回正文；`timeline` 只含 delivery/commitment（不含 note/对话原文），未解析 matter 的 delivery 视为 protected。未知 id 返回 `isError: true` 的 `unknown client id`（不回显具体 id）。
+- `ADVISERS_STORE=json`（旧 JSON store 没有客户表）时返回结构化 `isError`，文案提示需要 SQLite 账本（`customer data requires the SQLite ledger (ADVISERS_STORE=sqlite)`）；不崩溃、不返回空假数据。审计 action 仍为 `mcp.call`，resource 读取审计 `resource:advisers://clients`。
+
 ## 4. Resources（只读 JSON）
 
 | URI | 内容 |
@@ -163,6 +180,7 @@ claude mcp add advisers -- advisers mcp --stdio
 | `advisers://commitments` | 全部承诺的紧凑行（含状态） |
 | `advisers://who` | `{mine[], waiting[]}` |
 | `advisers://evidence` | 承诺/事实/偏好的证据回溯索引（只含计数，不含引文正文） |
+| `advisers://clients` | 活跃客户行只读投影（默认 20 行；精确计数、`nextDueAt`、`total/truncated/limit`、`clearance/protectedExcluded`；无备注正文） |
 
 ```json
 { "jsonrpc": "2.0", "id": 9, "method": "resources/read",
@@ -171,7 +189,7 @@ claude mcp add advisers -- advisers mcp --stdio
 
 响应：`{contents:[{uri, mimeType:"application/json", text:"<JSON 字符串>"}]}`。未知 URI 返回 `-32002`。
 
-resources 与对应工具读同一份**已做 clearance 过滤 + 上限截断**的读模型：`advisers://today`/`://commitments`/`://who` 与 today/commit_ls/who 同形（同样带 `total`/`truncated` 等字段），`advisers://evidence` 与 `advisers_evidence` 同源（`limits.perKind` + 计数）。因此 resources 与 tools 对同一账本给出一致的可见性与截断口径。
+resources 与对应工具读同一份**已做 clearance 过滤 + 上限截断**的读模型：`advisers://today`/`://commitments`/`://who` 与 today/commit_ls/who 同形（同样带 `total`/`truncated` 等字段），`advisers://evidence` 与 `advisers_evidence` 同源（`limits.perKind` + 计数），`advisers://clients` 与 `advisers_clients` 的 `action:"list"` 同源（默认 active、20 行）。因此 resources 与 tools 对同一账本给出一致的可见性与截断口径。
 
 ## 5. 协议与错误码
 
@@ -244,7 +262,7 @@ async function mcpServer() {
 }
 ```
 
-验收命令（`tools/list` = 7、`resources/list` = 4、legacy 版本回显/回退）：
+验收命令（`tools/list` = 8、`resources/list` = 5、legacy 版本回显/回退）：
 
 ```sh
 printf '%s\n' \
@@ -258,12 +276,12 @@ printf '%s\n' \
 兼容性（旧 5 工具保持可用）：
 
 - 5 个旧工具的**名字、参数与原字段一致**：`advisers_today` `{open, commitments[{id,debtor,creditor,action,dueAt}]}`；`advisers_commit_ls` `{commitments[{id,status,action,dueAt,creditor}]}`；`advisers_who` `{mine,waiting}`；`advisers_evidence` 直通 `lib/evidence.js`；`advisers_remind` 仍返回 `buildReminders` 结果；只读调用的审计 action 仍是 `mcp.call`。0.3.0 只**新增** §3.1 的 `total`/`truncated`/`limit`/`clearance`/`protectedExcluded` 等字段。
-- `tools/list` 只增不减（5 → 7）；旧客户端按工具名调用不受影响。`serverInfo.name` 与默认 `protocolVersion`（2024-11-05）不变，`capabilities` 含 tools + resources。
+- `tools/list` 只增不减（5 → 7 → 8）；旧客户端按工具名调用不受影响。`serverInfo.name` 与默认 `protocolVersion`（2024-11-05）不变，`capabilities` 含 tools + resources。
 - 有意的行为差异：未知方法/参数的错误文案不再回显原始值；未知工具仍为 `-32602`；单行上限 1 MiB；未知 resource 返回 `-32002`。
 - 写调用审计失败即 fail-closed：`audit` 绑定 `store.appendAudit`；回调抛错时候选被回滚，调用返回 `isError`，账本不变。
-- 自动化验收：`test/cli-mcp-json.test.js` 在真实 CLI 上覆盖 7 工具、4 resources、`-32601/-32602/-32002/-32700/-32600`、候选 pending-only、审计行与 1 MiB 行上限。
+- 自动化验收：`test/cli-mcp-json.test.js` 在真实 CLI 上覆盖 8 工具、5 resources、`-32601/-32602/-32002/-32700/-32600`、候选 pending-only、审计行与 1 MiB 行上限；`test/mcp-clients.test.js` 覆盖 `advisers_clients` 的 list/show、secrecy/`protectedExcluded`、未知客户、JSON store 结构化错误、输出上限、`advisers://clients` 与审计条目。
 
-集成说明（2026-11-17）：本库 `advisers_pack_verify` 校验的是 evidence-pack v1 目录（`manifest.json`/`README.txt`/`SHA256SUMS` + `receipt.docx` 存在性）。另一路工作已加入 delivery receipt pack v1.1（`lib/evidence.js` `buildReceiptPack` + `lib/receipt-verify.js` `verifyReceiptPackDir`）；等 `deliveries --pack` 切到 v1.1 后，建议把 `verifyReceipt(args)` 改为优先调用 `verifyReceiptPackDir`，并先剥离其 errors 中的绝对路径（该函数目前会把 `dir` 写进错误文案），保持“错误不回显路径”的约定。
+集成说明（2026-11-17 起，2026-11-20 更新）：本库 `advisers_pack_verify` 仍只校验 **evidence-pack v1 目录**（`manifest.json`/`README.txt`/`SHA256SUMS` + `receipt.docx` 存在性），这是 MCP 侧冻结的只读目录协议。0.3.2 的 **delivery receipt pack v2**（manifest v2：subject/scope/lineage；实现 `lib/evidence.js` 的 receipt-pack 构建 + `lib/receipt-verify.js` 的 `verifyReceiptPackDir`）由 CLI 侧 `advisers deliveries --pack/--verify` 路径使用；MCP 工具接线 v2 需要单独冻结响应形状，尚未包含在本契约内。若后续把 `verifyReceipt(args)` 改为优先调用 `verifyReceiptPackDir`，必须先剥离其 errors 中的绝对路径，保持“错误不回显路径”的约定。
 
 ## 9. 测试与验收
 
@@ -272,10 +290,11 @@ cd packages/advisers
 node --experimental-strip-types --test test/mcp-server.test.js       # 库协议面
 node --experimental-strip-types --test test/mcp-clearance.test.js    # 0.2.5 per-item clearance（A-2）
 node --experimental-strip-types --test test/mcp-output-caps.test.js  # 0.3.0 上限/截断/协商
+node --experimental-strip-types --test test/mcp-clients.test.js      # 0.3.2 客户只读投影
 node --experimental-strip-types --test test/cli-mcp-json.test.js     # 真实 CLI stdio 接线
 cd ../..
 node scripts/check-contracts.mjs --mcp   # 目录/响应与 contracts/mcp/* 对齐（真实 stdio）
 node scripts/check-contracts.mjs --status  # status --json 的 contracts 发现字段（已接线并断言）
 ```
 
-覆盖：initialize/tools/list（7）/resources/list（4）/resources/read、三个 legacy 协议版本回显与未知版本回退、capture 只产生 pending 候选且不动账本、审计回调与 fail-closed 回滚、参数错误码、回执目录校验与篡改检测、1 MiB 行上限、`scripts/mcp-dev.mjs` 的真实 stdio 双进程冒烟；`mcp-output-caps` 覆盖大账本（1,200 open）下三读工具不 `CONTENT_BLOCKED`、`total/truncated/limit` 语义、resources 与 tools 同口径、64 KiB 最后一道字节预算；`cli-mcp-json` 另在真实 `advisers mcp --stdio` 上覆盖同一协议面（7 工具/4 resources/错误码/审计行/行上限）。
+覆盖：initialize/tools/list（8）/resources/list（5）/resources/read、三个 legacy 协议版本回显与未知版本回退、capture 只产生 pending 候选且不动账本、审计回调与 fail-closed 回滚、参数错误码、回执目录校验与篡改检测、1 MiB 行上限、`scripts/mcp-dev.mjs` 的真实 stdio 双进程冒烟；`mcp-output-caps` 覆盖大账本（1,200 open）下三读工具不 `CONTENT_BLOCKED`、`total/truncated/limit` 语义、resources 与 tools 同口径、64 KiB 最后一道字节预算；`cli-mcp-json` 另在真实 `advisers mcp --stdio` 上覆盖同一协议面（8 工具/5 resources/错误码/审计行/行上限）；`mcp-clients` 覆盖客户只读投影（list/show、secrecy、未知客户、JSON store 错误、上限、resource、审计）。

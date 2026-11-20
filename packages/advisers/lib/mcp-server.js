@@ -36,6 +36,7 @@ import {
 } from './evidence.js'
 import { buildReminders } from './remind.js'
 import { inspectCaptureText } from './capture.js'
+import { listClientRows, readClientStatus } from './customer-read.js'
 import { classify, redact, safetyErrorFrom } from './safety/index.js'
 
 /**
@@ -76,6 +77,11 @@ export const MCP_OUTPUT_LIMITS = Object.freeze({
   whoRows: 20,
   reminders: 20,
   evidenceItems: 20,
+  clients: 20,
+  clientsMax: 50,
+  clientTimeline: 20,
+  clientTimelineMax: 50,
+  clientOpen: 20,
 })
 /**
  * Last-resort byte budget for one tool/resource payload. The per-tool row caps
@@ -86,7 +92,7 @@ export const MCP_OUTPUT_LIMITS = Object.freeze({
  * classifier never turns a large ledger into CONTENT_BLOCKED.
  */
 export const MCP_MAX_RESULT_BYTES = 64 * 1024
-const PAYLOAD_LIST_KEYS = Object.freeze(['commitments', 'mine', 'waiting', 'reminders', 'sources', 'missing'])
+const PAYLOAD_LIST_KEYS = Object.freeze(['commitments', 'mine', 'waiting', 'reminders', 'sources', 'missing', 'clients', 'projects', 'timeline'])
 /** Receipt directories are small; refuse to slurp anything huge. */
 export const MAX_PACK_FILE_BYTES = 512 * 1024
 export const MAX_PACK_SUMS_BYTES = 64 * 1024
@@ -104,6 +110,7 @@ export const TOOL_NAMES = Object.freeze([
   'advisers_who',
   'advisers_evidence',
   'advisers_remind',
+  'advisers_clients',
   'advisers_capture_candidate',
   'advisers_pack_verify',
 ])
@@ -113,6 +120,7 @@ export const RESOURCE_URIS = Object.freeze([
   'advisers://commitments',
   'advisers://who',
   'advisers://evidence',
+  'advisers://clients',
 ])
 
 const RESOURCE_DEFINITIONS = Object.freeze([
@@ -138,6 +146,12 @@ const RESOURCE_DEFINITIONS = Object.freeze([
     uri: 'advisers://evidence',
     name: 'evidence',
     description: 'Evidence traceback index for commitments, facts and preferences (counts only).',
+    mimeType: 'application/json',
+  },
+  {
+    uri: 'advisers://clients',
+    name: 'clients',
+    description: 'Active client rows as compact read-only projections (exact counts and next due date; no note text or conversation bodies), capped with total/truncated/limit and clearance/protectedExcluded.',
     mimeType: 'application/json',
   },
 ])
@@ -455,9 +469,21 @@ export function readReceiptDirectory(dir) {
  *        (0.2.5 A-2). Every read model excludes records whose matter secrecy is
  *        above it and reports `protectedExcluded`; 0 (fail closed) is the
  *        default and a client cannot raise it through a tool argument.
+ * @param {Function} [options.loadCommitmentView] 0.3.2 P2-1 narrow read model:
+ *        `(options: {all: boolean, clearance: number}) => {rows, total,
+ *        protectedExcluded}` where rows are the positional projection from
+ *        `SqliteStore.projectCommitmentReadModel()` (id/debtor/creditor/action/
+ *        dueAt/status/matterId/reminderOffsets/hidden). When supplied, today /
+ *        commit_ls / who / remind read this projection instead of loading the
+ *        full ledger. Omitted => the legacy ledger path is used unchanged
+ *        (embedders/tests that pass `ledger` never change behaviour).
+ * @param {Function} [options.loadCommitmentRecords] 0.3.2 P2-1 hydration for
+ *        `advisers_who` (whose payload is full Commitment rows): `(ids: string[])
+ *        => Map<string, object> | object[]`. Only the capped <= 20 rows per
+ *        bucket are hydrated; omitted => the narrow who path is not used.
  * @returns {{protocolVersion: string, handle: Function, handleLine: Function, serve: Function, tools: Function, resources: Function}}
  */
-export function createMcpServer({ store, ledger, loadLedger, loadStore, version = '0.0.0', audit, readPack, now = () => new Date(), clearance = 0 } = {}) {
+export function createMcpServer({ store, ledger, loadLedger, loadStore, loadCommitmentView, loadCommitmentRecords, version = '0.0.0', audit, readPack, now = () => new Date(), clearance = 0 } = {}) {
   const serverVersion = String(version ?? '0.0.0')
   // Protocol version agreed by the last legacy `initialize` (advisory only:
   // the legacy method surface is identical for every supported revision).
@@ -474,6 +500,30 @@ export function createMcpServer({ store, ledger, loadLedger, loadStore, version 
   let resolvedLedger = ledger
   let resolvedStore = store
   const ledgerCache = new Map()
+  // 0.3.2 P2-1: process-level cache of the narrow commitment view, keyed like
+  // the legacy ledger cache (the snapshot is taken on first use and reused until
+  // the process exits; refresh semantics are unchanged).
+  const commitmentViewCache = new Map()
+  function commitmentView(options = {}) {
+    if (typeof loadCommitmentView !== 'function') return null
+    const key = String(options.all === true) + ':' + String(options.clearance ?? clearanceLevel)
+    if (commitmentViewCache.has(key)) return commitmentViewCache.get(key)
+    const view = loadCommitmentView(options)
+    commitmentViewCache.set(key, view)
+    return view
+  }
+  /** Normalize loadCommitmentRecords() output to an id -> record Map. */
+  function commitmentRecordsById(ids) {
+    const loaded = loadCommitmentRecords(ids)
+    if (loaded instanceof Map) return loaded
+    const byId = new Map()
+    if (Array.isArray(loaded)) {
+      for (const record of loaded) {
+        if (record && typeof record.id === 'string' && record.id) byId.set(record.id, record)
+      }
+    }
+    return byId
+  }
   function ledgerFor(kind = 'full') {
     if (resolvedLedger !== undefined) return resolvedLedger
     if (ledgerCache.has(kind)) return ledgerCache.get(kind)
@@ -544,6 +594,19 @@ export function createMcpServer({ store, ledger, loadLedger, loadStore, version 
   /* ------------------------------ read models ------------------------------ */
 
   function todayData() {
+    const narrow = commitmentView({ all: false, clearance: clearanceLevel })
+    if (narrow) {
+      const visible = narrow.rows.filter((row) => !row.hidden)
+      const commitments = visible.slice(0, MCP_OUTPUT_LIMITS.todayCommitments)
+      return {
+        open: visible.length,
+        commitments: commitments.map((c) => ({ id: c.id, debtor: c.debtor, creditor: c.creditor, action: c.action, dueAt: c.dueAt })),
+        clearance: clearanceLevel,
+        protectedExcluded: narrow.protectedExcluded,
+        total: visible.length,
+        truncated: visible.length > commitments.length,
+      }
+    }
     const open = requireLedger('commitments').openCommitments()
     const view = splitByClearance('commitment', open)
     // Cap AFTER clearance and BEFORE the egress classifier: `open` and `total`
@@ -560,6 +623,21 @@ export function createMcpServer({ store, ledger, loadLedger, loadStore, version 
   }
 
   function commitListData(all, requestedLimit) {
+    const narrow = commitmentView({ all: true, clearance: clearanceLevel })
+    if (narrow) {
+      const statusFiltered = all ? narrow.rows : narrow.rows.filter((row) => row.status === 'open')
+      const visible = statusFiltered.filter((row) => !row.hidden)
+      const limit = Number.isInteger(requestedLimit) ? requestedLimit : MCP_OUTPUT_LIMITS.commitRows
+      const commitments = visible.slice(0, limit)
+      return {
+        commitments: commitments.map((c) => ({ id: c.id, status: c.status, action: c.action, dueAt: c.dueAt, creditor: c.creditor })),
+        clearance: clearanceLevel,
+        protectedExcluded: statusFiltered.length - visible.length,
+        total: visible.length,
+        truncated: visible.length > commitments.length,
+        limit,
+      }
+    }
     const rows = requireLedger('commitments')
       .listCommitments()
       .filter((c) => all || c.status === 'open')
@@ -577,6 +655,30 @@ export function createMcpServer({ store, ledger, loadLedger, loadStore, version 
   }
 
   function whoData() {
+    const narrow = commitmentView({ all: false, clearance: clearanceLevel })
+    if (narrow) {
+      const visible = narrow.rows.filter((row) => !row.hidden)
+      const mine = visible.filter((c) => c.debtor === 'user' || c.debtor === 'agent')
+      const waiting = visible.filter((c) => c.debtor === 'third' || String(c.debtor).startsWith('third:'))
+      const limit = MCP_OUTPUT_LIMITS.whoRows
+      // who returns full Commitment rows (the frozen v1 shape with
+      // evidence/matterId/timezone/...), so hydrate only the capped page.
+      const hydrate = (list) => {
+        const capped = list.slice(0, limit)
+        if (typeof loadCommitmentRecords !== 'function' || !capped.length) return capped
+        const byId = commitmentRecordsById(capped.map((row) => row.id))
+        return capped.map((row) => byId.get(row.id) ?? row)
+      }
+      return {
+        mine: hydrate(mine),
+        waiting: hydrate(waiting),
+        clearance: clearanceLevel,
+        protectedExcluded: narrow.protectedExcluded,
+        mineTotal: mine.length,
+        waitingTotal: waiting.length,
+        truncated: mine.length > limit || waiting.length > limit,
+      }
+    }
     const open = requireLedger('commitments').openCommitments()
     const view = splitByClearance('commitment', open)
     const mine = view.visible.filter((c) => c.debtor === 'user' || c.debtor === 'agent')
@@ -594,6 +696,33 @@ export function createMcpServer({ store, ledger, loadLedger, loadStore, version 
   }
 
   function remindData() {
+    const narrow = commitmentView({ all: true, clearance: clearanceLevel })
+    if (narrow) {
+      const hiddenIds = new Set()
+      for (const row of narrow.rows) if (row.hidden) hiddenIds.add(row.id)
+      let reminders
+      try {
+        // buildReminders only needs listCommitments(); the narrow rows carry the
+        // fields it reads (id/action/dueAt/status/reminderOffsets).
+        reminders = buildReminders({ listCommitments: () => narrow.rows }, { now: nowDate() })
+      } catch {
+        throw new ToolError('reminder planning failed')
+      }
+      const visible = []
+      let protectedExcluded = 0
+      for (const reminder of reminders) {
+        if (hiddenIds.has(reminder.commitmentId)) protectedExcluded += 1
+        else visible.push(reminder)
+      }
+      const capped = visible.slice(0, MCP_OUTPUT_LIMITS.reminders)
+      return {
+        reminders: capped,
+        clearance: clearanceLevel,
+        protectedExcluded,
+        total: visible.length,
+        truncated: visible.length > capped.length,
+      }
+    }
     const ledgerApi = requireLedger('commitments')
     let reminders
     try {
@@ -698,6 +827,49 @@ export function createMcpServer({ store, ledger, loadLedger, loadStore, version 
         .slice(0, limit)
         .map((p) => summarize('preference', p.id, evidenceForPreference(storeApi, ledgerApi, p.id))),
     }
+  }
+
+  /* ----------------------------- customer reads ---------------------------- */
+
+  /**
+   * Customer entities are SQLite-only (schema v21). A JSON store (storeFor()
+   * returns undefined), a legacy embedder store without the customer API or a
+   * store opened before the customer tables existed is a structured ToolError,
+   * never a crash and never fake empty data.
+   */
+  function requireCustomerStore() {
+    const storeApi = storeFor()
+    if (!storeApi || typeof storeApi.read !== 'function' || typeof storeApi.listClients !== 'function'
+      || typeof storeApi.getClient !== 'function' || typeof storeApi.listMattersByClient !== 'function') {
+      throw new ToolError('customer data requires the SQLite ledger (ADVISERS_STORE=sqlite)')
+    }
+    return storeApi
+  }
+
+  function clientsListData(all, requestedLimit) {
+    const storeApi = requireCustomerStore()
+    const limit = Number.isInteger(requestedLimit) ? requestedLimit : MCP_OUTPUT_LIMITS.clients
+    const result = listClientRows(storeApi, { clearance: clearanceLevel, limit, includeArchived: all === true })
+    return {
+      clients: result.rows,
+      total: result.total,
+      truncated: result.total > result.rows.length,
+      limit: result.limit,
+      clearance: clearanceLevel,
+      protectedExcluded: result.protectedExcluded,
+    }
+  }
+
+  function clientsShowData(args) {
+    const id = requireString(args, 'id', { min: 1, max: 120 })
+    const timelineLimit = optionalLimit(args, 'timelineLimit', MCP_OUTPUT_LIMITS.clientTimelineMax)
+    const view = readClientStatus(requireCustomerStore(), id, {
+      clearance: clearanceLevel,
+      timelineLimit: timelineLimit === undefined ? MCP_OUTPUT_LIMITS.clientTimeline : timelineLimit,
+      openLimit: MCP_OUTPUT_LIMITS.clientOpen,
+    })
+    if (!view) throw new ToolError('unknown client id')
+    return view
   }
 
   /* ------------------------------ write tools ------------------------------ */
@@ -833,6 +1005,33 @@ export function createMcpServer({ store, ledger, loadLedger, loadStore, version 
       inputSchema: { type: 'object', properties: {} },
       annotations: READ_ONLY_ANNOTATIONS,
       run: () => remindData(),
+    },
+    {
+      name: 'advisers_clients',
+      description:
+        'Read-only customer projection: list active clients (all=true includes archived) or show one client by id. Rows carry exact counts, nextDueAt, clearance and protectedExcluded; show adds project summaries, open mine/waiting items and a derived delivery/commitment timeline. Note text and conversation bodies are never returned. At most ' +
+        MCP_OUTPUT_LIMITS.clients + ' client rows are returned (limit 1..' + MCP_OUTPUT_LIMITS.clientsMax + '); timelineLimit (1..' + MCP_OUTPUT_LIMITS.clientTimelineMax + ') caps the show timeline. ' +
+        CLEARANCE_NOTE,
+      inputSchema: {
+        type: 'object',
+        properties: {
+          action: { type: 'string', enum: ['list', 'show'], description: 'list: client rows; show: one client view.' },
+          id: { type: 'string', description: 'Client id (cl_…). Required when action is show.' },
+          all: { type: 'boolean', description: 'Include archived clients (action=list).' },
+          limit: { type: 'integer', minimum: 1, maximum: MCP_OUTPUT_LIMITS.clientsMax, description: 'Max client rows for action=list (default ' + MCP_OUTPUT_LIMITS.clients + ', max ' + MCP_OUTPUT_LIMITS.clientsMax + ').' },
+          timelineLimit: { type: 'integer', minimum: 1, maximum: MCP_OUTPUT_LIMITS.clientTimelineMax, description: 'Max timeline rows for action=show (default ' + MCP_OUTPUT_LIMITS.clientTimeline + ', max ' + MCP_OUTPUT_LIMITS.clientTimelineMax + ').' },
+        },
+        required: ['action'],
+      },
+      annotations: READ_ONLY_ANNOTATIONS,
+      run: (args) => {
+        const action = optionalEnum(args, 'action', ['list', 'show'], undefined)
+        if (action === undefined) throw invalidParams('action must be one of list, show')
+        if (action === 'list') {
+          return clientsListData(optionalBoolean(args, 'all'), optionalLimit(args, 'limit', MCP_OUTPUT_LIMITS.clientsMax))
+        }
+        return clientsShowData(args)
+      },
     },
     { ...CAPTURE_TOOL, run: (args) => captureCandidate(args) },
     { ...PACK_VERIFY_TOOL, run: (args) => verifyReceipt(args) },
@@ -992,6 +1191,7 @@ export function createMcpServer({ store, ledger, loadLedger, loadStore, version 
     if (uri === 'advisers://today') data = todayData()
     else if (uri === 'advisers://commitments') data = commitListData(true)
     else if (uri === 'advisers://who') data = whoData()
+    else if (uri === 'advisers://clients') data = clientsListData(false)
     else data = evidenceIndex()
     await recordAudit({ actor: 'mcp', action: 'mcp.call', allowed: true, reason: 'resource:' + uri })
     const bounded = boundPayload(data)

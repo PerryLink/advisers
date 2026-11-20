@@ -153,7 +153,7 @@ test('receipt pack v1.1: CLI generates, verifies offline and detects tampering',
     const payload = JSON.parse(run(home, ['deliveries', '--receipt', '--out', out, '--recipient', '王工 <wang@example.com>'], work))
     assert.equal(payload.ok, true)
     assert.equal(payload.format, 'advisers-delivery-receipt-pack')
-    assert.equal(payload.version, 1)
+    assert.equal(payload.version, 2)
     assert.equal(payload.deliveryCount, 1)
     assert.equal(payload.verifyStatus, 'not-recorded')
     assert.equal(payload.anchored, false)

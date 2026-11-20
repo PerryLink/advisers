@@ -123,6 +123,57 @@
       "stability": "stable"
     },
     {
+      "name": "advisers_clients",
+      "description": "Read-only customer projection: list active clients (all=true includes archived) or show one client by id. Rows carry exact counts, nextDueAt, clearance and protectedExcluded; show adds project summaries, open mine/waiting items and a derived delivery/commitment timeline. Note text and conversation bodies are never returned. At most 20 client rows are returned (limit 1..50); timelineLimit (1..50) caps the show timeline. Records belonging to protected matters (matter secrecy above this server clearance, default 0) are excluded and only counted in protectedExcluded.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "action": {
+            "type": "string",
+            "enum": [
+              "list",
+              "show"
+            ],
+            "description": "list: client rows; show: one client view."
+          },
+          "id": {
+            "type": "string",
+            "description": "Client id (cl_…). Required when action is show."
+          },
+          "all": {
+            "type": "boolean",
+            "description": "Include archived clients (action=list)."
+          },
+          "limit": {
+            "type": "integer",
+            "minimum": 1,
+            "maximum": 50,
+            "description": "Max client rows for action=list (default 20, max 50)."
+          },
+          "timelineLimit": {
+            "type": "integer",
+            "minimum": 1,
+            "maximum": 50,
+            "description": "Max timeline rows for action=show (default 20, max 50)."
+          }
+        },
+        "required": [
+          "action"
+        ]
+      },
+      "annotations": {
+        "readOnlyHint": true,
+        "destructiveHint": false,
+        "idempotentHint": true,
+        "openWorldHint": false
+      },
+      "sideEffect": "read",
+      "policySurface": "mcp.tool",
+      "write": false,
+      "responseSchemaRef": "responses-v1.schema.json#/$defs/ClientsToolPayload",
+      "stability": "stable"
+    },
+    {
       "name": "advisers_capture_candidate",
       "description": "Propose a PENDING commitment candidate captured from a quote. This writes a memory candidate only: it never accepts the candidate and never changes the ledger. A human must review it with \"advisers memory candidates\" and run \"advisers memory accept <id>\".",
       "inputSchema": {
@@ -217,6 +268,7 @@
     }
   ],
   "additiveChanges": [
+    "0.3.2: added advisers_clients (read-only customer list/show; SQLite customer entities, clearance-filtered, no note bodies or conversation text) with responseSchemaRef responses-v1.schema.json#/$defs/ClientsToolPayload; the other seven tools are unchanged.",
     "0.3.0: advisers_commit_ls inputSchema gained the optional `limit` integer (1..200, default 50); tool names, annotations and the other six inputSchemas are unchanged.",
     "0.3.0: list-shaped tool descriptions now state their output caps and the total/truncated contract; descriptions are documentation snapshots, the checker only requires them to be non-empty."
   ]

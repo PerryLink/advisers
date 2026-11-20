@@ -246,6 +246,6 @@ test('tool descriptions advertise the real-ledger read and the preview fallback 
   assert.doesNotMatch(byName.get('advisers_office').description, /preview/i)
   assert.deepEqual(
     [...byName.keys()].sort(),
-    ['advisers_brief', 'advisers_evidence', 'advisers_office', 'advisers_today', 'advisers_who'],
+    ['advisers_brief', 'advisers_clients', 'advisers_evidence', 'advisers_office', 'advisers_today', 'advisers_who'],
   )
 })

@@ -13,7 +13,6 @@ artifacts/
 eval/results/
 docs/HANDOFF-*.md
 docs/NEW-SESSION-PROMPT.md
-docs/RELEASING.md
 docs/WINDOWS-SMOKE*.md
 scripts/staged-backlog.mjs
 scripts/windows-clean-staged.ps1

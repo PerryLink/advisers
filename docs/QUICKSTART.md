@@ -1,20 +1,21 @@
 # Quickstart (Windows + PowerShell)
 
-> Current status: **`0.3.1` was published on 2026-11-20** and is the npm `latest`
-> (`next` is also `0.3.1`). The repository is lockstep at package version `0.3.1`.
-> `0.3.1` is a **release-metadata patch with no runtime, CLI or contract changes**: it
-> supersedes `0.3.0`, whose published tarballs shipped release-candidate READMEs and
-> whose release surface could not be repaired in place (an npm tarball cannot be
-> replaced, and `npm unpublish` requires the account owner's 2FA); `0.3.0` remains
-> installable by pinning. The earlier `0.2.4` was an **unpublished release candidate**
-> superseded by the 0.3.0 line (its `v0.2.4` tag points at an older commit, there is no
-> 0.2.4 tarball on npm, so do not try to install it). Stable-channel install:
+> Current status: **`0.3.2` was published on 2026-11-21** and is the npm `latest`
+> (`next` is also `0.3.2`). The repository is lockstep at package version `0.3.2`.
+> `0.3.2` is a **feature release**: customer-loop surfaces (subject receipt packs,
+> `client export` status sheets, read-only MCP/DSH customer projections) plus the
+> performance closeout (`today --json --limit`, narrow MCP read model), with additive
+> contract changes and no schema migration. `0.3.1` was the release-metadata correction
+> for 0.3.0 (same runtime); both remain installable by pinning but are superseded. The
+> earlier `0.2.4` was an **unpublished release candidate** superseded by the 0.3.0 line
+> (its `v0.2.4` tag points at an older commit, there is no 0.2.4 tarball on npm, so do
+> not try to install it). Stable-channel install:
 > `npm i -g --registry=https://registry.npmjs.org advisers@latest advisers-office@latest`.
-> Release notes: <https://github.com/PerryLink/advisers/releases/tag/v0.3.1> (the release
-> also carries the CycloneDX SBOM and `SHA256SUMS`). The 0.3.1 tarballs are published
+> Release notes: <https://github.com/PerryLink/advisers/releases/tag/v0.3.2> (the release
+> also carries the CycloneDX SBOM and `SHA256SUMS`). The 0.3.2 tarballs are published
 > from GitHub Actions OIDC/Trusted Publishing with SLSA provenance; from a checkout
 > (after `corepack pnpm run sbom`),
-> `node scripts/verify-release.mjs --version 0.3.1 --tag latest --sbom artifacts/sbom.cdx.json --require-sbom`
+> `node scripts/verify-release.mjs --version 0.3.2 --tag latest --sbom artifacts/sbom.cdx.json --require-sbom`
 > verifies the registry release. The checkout sections below remain the development path.
 
 > **Before you start** — read the [Terms of Service](TOS.md) (v2026.11.3),
@@ -103,14 +104,14 @@ node $A memory candidates
 node $A chat "做一份 Q4 汇报 PPT，放到 out\q4.pptx"
 ```
 
-## B. Installed CLI (stable channel = 0.3.1, published 2026-11-20)
+## B. Installed CLI (stable channel = 0.3.2, published 2026-11-21)
 
 ```powershell
-# Stable channel: npm @latest resolves to 0.3.1 (published 2026-11-20).
+# Stable channel: npm @latest resolves to 0.3.2 (published 2026-11-21).
 npm i -g --registry=https://registry.npmjs.org advisers@latest advisers-office@latest
-# Pre-release channel: `next` also resolves to 0.3.1.
+# Pre-release channel: `next` also resolves to 0.3.2.
 # npm i -g --registry=https://registry.npmjs.org advisers@next advisers-office@next
-advisers --version    # expect 0.3.1
+advisers --version    # expect 0.3.2
 advisers status
 advisers soul init
 advisers template weekly weekly.json out\weekly.docx
@@ -271,9 +272,9 @@ node $A sync pull --dir .\Sync\advisers
 Encrypted whole-DB snapshots in a **user-provided** folder; no Advisers server,
 no merge, last-snapshot-wins. See `docs/SYNC.md`.
 
-## O. 0.3.0 additions (carried unchanged by 0.3.1)
+## O. 0.3.0 additions (carried unchanged by 0.3.1 and 0.3.2)
 
-These landed on the 0.3.0 release tree (0.3.1 carries them unchanged) and are also
+These landed on the 0.3.0 release tree (0.3.1/0.3.2 carry them unchanged) and are also
 exercised from a checkout. They are documented as 0.3.0 surfaces:
 
 ```powershell

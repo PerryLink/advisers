@@ -806,6 +806,16 @@
             "description": "Commitment sources (--sources only).",
             "additionalProperties": true
           }
+        },
+        "limit": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 10000,
+          "description": "0.3.2 additive: per-group row cap requested with --limit."
+        },
+        "truncated": {
+          "type": "boolean",
+          "description": "0.3.2 additive: true when any group had more rows than --limit."
         }
       },
       "required": [

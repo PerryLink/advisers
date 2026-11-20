@@ -1,12 +1,12 @@
 # Software Bill of Materials (SBOM)
 
-> Status: 0.3.1 was published on 2026-11-20 as a release-metadata patch (npm `latest`;
-> `next` is also `0.3.1`); its runtime is the 0.3.0 tree. The workspace version is
-> whatever `packages/advisers/package.json` records. This page documents a release-gate
-> artifact, not a claim that the build is reproducible. Provenance status lives in
-> [SECURITY.md](SECURITY.md). The 0.3.1 GitHub Release carries the generated CycloneDX
+> Status: 0.3.2 was published on 2026-11-21 as the current feature release (npm `latest`;
+> `next` is also `0.3.2`). The workspace version is whatever
+> `packages/advisers/package.json` records. This page documents a release-gate artifact,
+> not a claim that the build is reproducible. Provenance status lives in
+> [SECURITY.md](SECURITY.md). The 0.3.2 GitHub Release carries the generated CycloneDX
 > SBOM (`sbom.cdx.json`) and a `SHA256SUMS` file for the six tarballs; the post-publish
-> `node scripts/verify-release.mjs --version 0.3.1 --tag latest --sbom artifacts/sbom.cdx.json --require-sbom`
+> `node scripts/verify-release.mjs --version 0.3.2 --tag latest --sbom artifacts/sbom.cdx.json --require-sbom`
 > check verifies the SBOM. The 0.3.0 run passed 222 checks (historical record:
 > <https://github.com/PerryLink/advisers/releases/tag/v0.3.0>).
 

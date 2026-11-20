@@ -7,7 +7,7 @@
  * 0.3.0 contract:
  *   - morning `dataSha256` stability (same ledger + same day -> same hash) and
  *     golden values from eval/det/baseline.json;
- *   - the MCP stdio surface (legacy protocol echo, 7 tools, 4 resources, codes);
+ *   - the MCP stdio surface (legacy protocol echo, 8 tools, 5 resources, codes);
  *   - CLI JSON purity (one JSON document on stdout, errors as envelopes);
  *   - exit codes 0 / 1 / 3;
  *   - non-TTY output: no ANSI/clear-screen, no prompt/hang.

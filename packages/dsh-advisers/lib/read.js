@@ -29,6 +29,7 @@ export const ERROR_CODES = Object.freeze({
   UNKNOWN_ID_PREFIX: 'UNKNOWN_ID_PREFIX',
   EVIDENCE_NOT_FOUND: 'EVIDENCE_NOT_FOUND',
   EVIDENCE_PROTECTED: 'EVIDENCE_PROTECTED',
+  CLIENT_NOT_FOUND: 'CLIENT_NOT_FOUND',
   INTERNAL_ERROR: 'INTERNAL_ERROR',
   LEDGER_TOS_REQUIRED: 'LEDGER_TOS_REQUIRED',
   LEDGER_VAULT_SEALED: 'LEDGER_VAULT_SEALED',
@@ -61,6 +62,11 @@ const DAY_FORMAT = new Intl.DateTimeFormat('en-CA', { timeZone: TIME_ZONE })
 export const PREVIEW_NOTE = 'Preview only: the DSH adapter did not read ~/.advisers/state.db (no ledger was found, or preview mode is configured), so this comes from an empty in-memory ledger, not your real books. Run `advisers init` to create the ledger, or use the advisers CLI/MCP for real data.'
 /** Real-ledger disclosure. */
 export const LEDGER_NOTE = 'Read-only snapshot of the local ledger; call again to refresh.'
+/** Customer disclosure for the legacy JSON store (it has no customer tables). */
+export const JSON_CUSTOMER_NOTE = 'Read-only snapshot of the JSON ledger; it has no customer tables (clients/projects require the SQLite store), so no client rows are available.'
+/** Client-list page default/cap of the DSH adapter. */
+const CLIENT_LIST_DEFAULT = 20
+const CLIENT_LIST_MAX = 50
 
 /** The 0.2.x preview marker; exactly the fields the 0.2.3 contract required. */
 export function previewMarker() {
@@ -391,6 +397,49 @@ function previewEvidence(runtime, args) {
   return evidencePayload(id, kind, record, traced, previewMarker(), { auditExtra: '' })
 }
 
+/* -------------------------------------------------------------------------- */
+/* customer projection (0.3.2 M3; list/show through the read-only facade)      */
+/* -------------------------------------------------------------------------- */
+
+const CLIENT_ID_MAX = 120
+
+function normalizeClientLimit(value) {
+  if (value === undefined || value === null) return CLIENT_LIST_DEFAULT
+  const limit = Number(value)
+  if (!Number.isInteger(limit) || limit < 1 || limit > CLIENT_LIST_MAX) {
+    throw new ReadToolError(ERROR_CODES.INVALID_ARGUMENT, 'limit must be an integer between 1 and ' + CLIENT_LIST_MAX)
+  }
+  return limit
+}
+
+/** The no-ledger customer preview: an empty, marked list — never fake data. */
+function previewClientsList(limit) {
+  return {
+    data: {
+      action: 'list',
+      clients: [],
+      total: 0,
+      truncated: false,
+      limit,
+      customerEntities: false,
+      clearance: 0,
+      protectedExcluded: 0,
+      ...previewMarker(),
+    },
+    audit: 'preview clients=0',
+  }
+}
+
+/** A preview ledger cannot contain a real client: not-found, never an empty fake. */
+function previewClientMissing(id) {
+  const safeId = String(id).slice(0, CLIENT_ID_MAX)
+  throw new ReadToolError(
+    ERROR_CODES.CLIENT_NOT_FOUND,
+    'no client with id ' + safeId + ' (preview ledger: the DSH adapter did not read a real ledger)',
+    'Run `advisers init` and `advisers client add "<name>"` on the local machine, then retry.',
+  )
+}
+
 function evidencePayload(id, kind, record, traced, marker, { auditExtra }) {
   const counts = { sources: traced.sources.length, missing: traced.missing.length }
   return {
@@ -553,6 +602,83 @@ export function createLedgerReader(config = {}, options = {}) {
       else { record = preferenceRecord(info.record); traced = traceSourceRefs(info.record) }
       const marker = withLedgerMarker({}, { backend: info.backend, clearance: info.clearance, protectedExcluded: 0, warnings: info.warnings })
       return evidencePayload(id, kind, record, traced, marker, { auditExtra: ` backend=${info.backend}` })
+    },
+    /**
+     * Customer projection (0.3.2 M3): action 'list' | 'show'. Real ledger reads
+     * go through the read-only facade (clearance 0, TOS-gated, no HOME lock, no
+     * migration); a missing ledger / unavailable facade falls back to the marked
+     * preview. Note bodies and conversation text are never part of the payload.
+     */
+    async clientsView(args = {}) {
+      const action = args?.action
+      if (action !== 'list' && action !== 'show') {
+        throw new ReadToolError(ERROR_CODES.INVALID_ARGUMENT, 'action must be "list" or "show"')
+      }
+      const limit = normalizeClientLimit(args?.limit)
+      const id = typeof args?.id === 'string' ? args.id.trim().slice(0, CLIENT_ID_MAX) : ''
+      if (action === 'show') {
+        if (!id) throw new ReadToolError(ERROR_CODES.INVALID_ARGUMENT, 'id is required for action "show"')
+        if (mode === 'preview') return previewClientMissing(id)
+        const { api } = await loadFacade()
+        if (!api || typeof api.readClientById !== 'function') return previewClientMissing(id)
+        let info
+        try {
+          info = await api.readClientById({ home, id, clearance, timelineLimit: limit })
+        } catch (error) {
+          if (fallback(error)) return previewClientMissing(id)
+          throw mapError(error)
+        }
+        if (!info.found || !info.view) {
+          throw new ReadToolError(
+            ERROR_CODES.CLIENT_NOT_FOUND,
+            `no client with id ${id}`,
+            info.customerEntities === false
+              ? 'The JSON ledger store has no customer tables; use ADVISERS_STORE=sqlite.'
+              : 'Ids are case-sensitive; use `advisers client list --json` to confirm the id.',
+          )
+        }
+        const view = info.view
+        const marker = withLedgerMarker({}, {
+          backend: info.backend,
+          clearance: info.clearance,
+          protectedExcluded: view.protectedExcluded,
+          warnings: info.warnings,
+        })
+        return {
+          data: { action: 'show', ...view, customerEntities: info.customerEntities === true, ...marker },
+          audit: `client ${view.client.id} matters=${view.counts.matters} open=${view.counts.openMine}/${view.counts.openWaiting} timeline=${view.timelineTotal}`,
+        }
+      }
+      if (mode === 'preview') return previewClientsList(limit)
+      const { api } = await loadFacade()
+      if (!api || typeof api.readClientList !== 'function') return previewClientsList(limit)
+      let info
+      try {
+        info = await api.readClientList({ home, clearance, limit })
+      } catch (error) {
+        if (fallback(error)) return previewClientsList(limit)
+        throw mapError(error)
+      }
+      const marker = withLedgerMarker({}, {
+        backend: info.backend,
+        clearance: info.clearance,
+        protectedExcluded: info.protectedExcluded,
+        warnings: info.warnings,
+      })
+      const data = {
+        action: 'list',
+        clients: info.clients,
+        total: info.total,
+        truncated: info.truncated,
+        limit: info.limit,
+        customerEntities: info.customerEntities === true,
+        ...marker,
+      }
+      if (info.customerEntities !== true) data.note = JSON_CUSTOMER_NOTE
+      return {
+        data,
+        audit: `clients=${info.clients.length}/${info.total} customerEntities=${info.customerEntities === true}`,
+      }
     },
   }
 }

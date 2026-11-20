@@ -9,7 +9,8 @@
  * those checks: scripts/verify-release.mjs imports it for the post-approval
  * release gate, and it also runs standalone:
  *
- *   node scripts/check-provenance.mjs --version 0.3.0
+ *   node scripts/check-provenance.mjs --version 0.3.1   # requires refs/tags/v0.3.1 by default
+ *   node scripts/check-provenance.mjs --version 0.3.0 --allow-non-tag-provenance  # historical audit (0.3.0 named refs/heads/main)
  *   node scripts/check-provenance.mjs --version 0.3.0 --allow-unpublished  # pre-release dry run
  *   node scripts/check-provenance.mjs --self-test                          # offline wiring gate
  *   node scripts/check-provenance.mjs --version 0.3.0 --fixture <dir>      # offline fixture (tests)
@@ -21,7 +22,12 @@
  *   - every known attestation statement names a subject whose sha512 digest
  *     equals the registry tarball integrity (dist.integrity);
  *   - the SLSA statement's source repository matches --repo and, when known, its
- *     resolved git commit matches the release commit.
+ *     resolved git commit matches the release commit;
+ *   - when `expectedRef` is supplied (the CLI derives `refs/tags/vX.Y.Z` by
+ *     default and verify-release passes the checked-out tag), the SLSA build ref
+ *     must equal it: a branch ref such as `refs/heads/main` fails, because
+ *     provenance must name the release tag. Pass --allow-non-tag-provenance
+ *     only to audit a historical release that predates this rule.
  *
  * The checks verify npm's metadata linkage. They do NOT cryptographically verify
  * the Sigstore bundle or the transparency log; `npm audit signatures` does that
@@ -76,6 +82,13 @@ function normalizeRepo(value) {
     .toLowerCase()
 }
 
+function statementBuildRef(statement) {
+  const workflow = statement && statement.predicate && statement.predicate.buildDefinition
+    && statement.predicate.buildDefinition.externalParameters
+    && statement.predicate.buildDefinition.externalParameters.workflow
+  return workflow && typeof workflow.ref === 'string' ? workflow.ref : ''
+}
+
 function statementRepository(statement) {
   const workflow = statement && statement.predicate && statement.predicate.buildDefinition
     && statement.predicate.buildDefinition.externalParameters
@@ -112,6 +125,7 @@ export async function checkPackageAttestations(options) {
     allowMissing = false,
     expectedRepo = 'PerryLink/advisers',
     expectedCommit = '',
+    expectedRef = '',
   } = options || {}
   const checks = []
   const warnings = []
@@ -159,6 +173,7 @@ export async function checkPackageAttestations(options) {
   add(known.length > 0, 'bundle contains in-toto statements with known npm/SLSA predicate types')
   let repository = ''
   let commit = ''
+  let buildRef = ''
   for (const attestation of known) {
     const label = String(attestation.predicateType).split('/').slice(-2).join('/')
     const statement = decodeStatement(attestation)
@@ -195,6 +210,15 @@ export async function checkPackageAttestations(options) {
       } else {
         warnings.push('attestation has no resolved gitCommit to compare with the release tag')
       }
+      buildRef = statementBuildRef(statement)
+      if (expectedRef) {
+        add(
+          buildRef === String(expectedRef),
+          label + ': SLSA build ref is ' + String(expectedRef) + ' (got ' + (buildRef || 'missing') + ')',
+        )
+      } else if (buildRef) {
+        warnings.push('attestation build ref is ' + buildRef + ' (no expected tag ref was supplied)')
+      }
     }
   }
   return {
@@ -202,7 +226,7 @@ export async function checkPackageAttestations(options) {
     skipped: false,
     checks,
     warnings,
-    info: { url, predicateType, repository, commit },
+    info: { url, predicateType, repository, commit, buildRef },
   }
 }
 
@@ -316,12 +340,20 @@ export function selfTest(options = {}) {
   )
   add('workflow never wires NPM_TOKEN from repository secrets', !/NPM_TOKEN\s*:\s*\$\{\{/.test(publish))
   add(
+    'publish.yml requires the workflow ref to be the release tag',
+    /GITHUB_REF/.test(publish) && /refs\/tags\/v\$\{?VERSION/.test(publish),
+  )
+  add(
     'workflow comments match the real stage step',
     !/never publishes and never stages/i.test(publish) && !/does not publish or stage anything/i.test(publish),
   )
 
   const release = read('scripts/release.mjs')
   add('release.mjs understands --provenance', /--provenance/.test(release))
+  add(
+    'release.mjs fails closed when provenance runs outside the version tag ref',
+    /GITHUB_REF/.test(release) && /refs\/tags\/v/.test(release) && /must run from refs\/tags\/v/.test(release),
+  )
   add('release.mjs fails closed when provenance is requested with NPM_TOKEN set', /NPM_TOKEN must not be set/.test(release))
   add('release.mjs enforces npm >= 11.15.0 for trusted staging', /11\.15\.0/.test(release))
   add('release.mjs requires the GitHub OIDC request environment', /ACTIONS_ID_TOKEN_REQUEST_URL/.test(release))
@@ -330,10 +362,32 @@ export function selfTest(options = {}) {
   add('verify-release.mjs consumes the provenance checks', /checkPackageAttestations/.test(verify))
   add('verify-release.mjs has clear unpublished skip semantics', /--allow-unpublished/.test(verify))
   add('verify-release.mjs gates the SBOM artifact', /--require-sbom/.test(verify))
+  add(
+    'verify-release.mjs requires the provenance build ref to be the release tag',
+    /expectedRef/.test(verify) && /refs\/tags\//.test(verify),
+  )
+
+  const checkRelease = read('scripts/check-release.mjs')
+  add(
+    'check-release.mjs --require-tag requires the tag commit to be HEAD',
+    /is the HEAD commit/.test(checkRelease),
+  )
+
+  const checkDocs = read('scripts/check-docs.mjs')
+  add(
+    'check-docs.mjs rejects release-candidate wording for the current version',
+    /release\[- \]candidate/.test(checkDocs),
+  )
+
+  const releasing = read('docs/RELEASING.md')
+  add(
+    'docs/RELEASING.md exists and documents tag-ref publishing',
+    /refs\/tags\//.test(releasing) && /publish\.yml/.test(releasing),
+  )
 
   const security = read('docs/SECURITY.md')
   add('docs/SECURITY.md covers the 0.3.0 provenance status', /0\.3\.0/.test(security))
-  add('docs/SECURITY.md says 0.3.0 is not published yet', /not (?:yet )?published/i.test(security))
+  add('docs/SECURITY.md records the current published release', /0\.3\.2[^\n]{0,80}published/i.test(security) || /published on 2026-11-21/i.test(security))
   add(
     'docs/SECURITY.md does not claim 0.2.4 was staged via Trusted Publishing',
     !/0\.2\.4[^\n]{0,120}staged via Trusted Publishing/i.test(security),
@@ -385,6 +439,12 @@ async function main() {
   const allowMissing = bool('allow-missing-attestations')
   const expectedRepo = flag('repo', 'PerryLink/advisers')
   const expectedCommit = String(flag('expected-commit', '')).toLowerCase()
+  // 0.3.2: provenance must name the release tag, not a branch (the 0.3.0
+  // defect). Historical releases whose provenance named refs/heads/main can
+  // still be audited with --allow-non-tag-provenance.
+  const expectedRef = bool('allow-non-tag-provenance')
+    ? ''
+    : String(flag('expected-ref', 'refs/tags/v' + version))
   const sbomFile = flag('sbom', '')
   const requireSbom = bool('require-sbom')
   const jsonOut = bool('json')
@@ -452,6 +512,7 @@ async function main() {
       allowMissing,
       expectedRepo,
       expectedCommit,
+      expectedRef,
     })
     for (const check of result.checks) {
       if (check.skipped) skip(name, check.detail)
@@ -493,6 +554,7 @@ async function main() {
   if (jsonOut) {
     console.log(JSON.stringify({
       version,
+      expectedRef,
       registry: fixture ? 'fixture:' + fixture : registry,
       packages: PACKAGES,
       status,

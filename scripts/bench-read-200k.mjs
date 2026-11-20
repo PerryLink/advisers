@@ -7,7 +7,7 @@
  * preferences 20k / deliveries 10k / model_calls 10k / sessions 20; no turns), then
  * measures the read commands that the 0.3.0 targets name plus the MCP read surface:
  *
- *   status / today / today --json / remind / remind --json / tui --once /
+ *   status / today / today --json / today --json --limit 100/50 / remind / remind --json / tui --once /
  *   digest / digest week / pet-brief / pet-brief --json
  *   mcp: initialize + first advisers_today / advisers_commit_ls / advisers_remind
  *
@@ -41,6 +41,8 @@ const READ_SCENARIOS = [
   ['status', ['status', '--json']],
   ['today', ['today']],
   ['today --json', ['today', '--json']],
+  ['today --json --limit 100', ['today', '--json', '--limit', '100']],
+  ['today --json --limit 50', ['today', '--json', '--limit', '50']],
   ['remind', ['remind']],
   ['remind --json', ['remind', '--json']],
   ['tui --once', ['tui', '--once']],

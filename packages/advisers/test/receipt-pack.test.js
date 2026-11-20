@@ -187,12 +187,19 @@ test('buildReceiptPack writes a complete hash-covered receipt pack', async () =>
     assert.equal(pack.summary.fileCount, 5)
     assert.equal(pack.summary.deliveryCount, 2)
     assert.equal(pack.summary.verifyStatus, 'passed')
+    assert.equal(pack.summary.version, RECEIPT_MANIFEST_VERSION)
+    assert.equal(pack.summary.subject, null)
+    assert.equal(pack.summary.scope, 'local-all')
     assert.equal(pack.summary.diskVerified, true)
     assert.equal(pack.summary.outDir, outDir)
 
     const manifest = JSON.parse(readFileSync(join(outDir, 'manifest.json'), 'utf8'))
     assert.equal(manifest.format, RECEIPT_MANIFEST_FORMAT)
     assert.equal(manifest.version, RECEIPT_MANIFEST_VERSION)
+    // v2 compatibility: no subject passed -> explicit local-all scope, and the
+    // subject key stays absent so the v1 row shape is unchanged for old callers.
+    assert.equal(manifest.scope, 'local-all')
+    assert.equal('subject' in manifest, false)
     assert.equal(manifest.createdAt, FIXED_NOW)
     assert.equal(manifest.generator.advisersVersion, '0.2.0-test')
     assert.equal(manifest.generator.nodeVersion, 'v-test')
@@ -384,7 +391,8 @@ test('verifyReceiptPackDir validates the manifest schema even when checksums are
     await buildSamplePack(ws.work, base)
     const cases = [
       ['format', (manifest) => { manifest.format = 'evil-pack' }, 'manifest.format'],
-      ['version', (manifest) => { manifest.version = 2 }, 'manifest.version'],
+      // The builder now writes v2; an unknown third version is still schema drift.
+      ['version', (manifest) => { manifest.version = 3 }, 'manifest.version'],
       ['path-traversal', (manifest) => { manifest.deliveries[0].files[0].path = '../escape.docx' }, 'safe relative path'],
       ['receipt-digest', (manifest) => { manifest.receipt.sha256 = hex64('f') }, 'manifest digest disagrees with SHA256SUMS for receipt.docx'],
       ['entry-count', (manifest) => { manifest.evidence.entryCount += 1 }, 'entryCount'],

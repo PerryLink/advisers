@@ -12,7 +12,7 @@ import { ERROR_CODES as READ_ERROR_CODES, ReadToolError, createLedgerReader } fr
 
 export const name = 'advisers'
 export const inject = ['tools']
-export const version = '0.3.1'
+export const version = '0.3.2'
 
 // ---------------------------------------------------------------------------
 // Read-only ledger views: advisers_today / advisers_who / advisers_evidence.
@@ -99,7 +99,7 @@ const errorDetailSchema = {
     code: {
       type: 'string',
       required: true,
-      description: 'Stable error code: INVALID_ARGUMENT | UNKNOWN_ID_PREFIX | EVIDENCE_NOT_FOUND | EVIDENCE_PROTECTED | LEDGER_TOS_REQUIRED | LEDGER_VAULT_SEALED | LEDGER_SCHEMA_STALE | LEDGER_SCHEMA_NEWER | LEDGER_CORRUPT | LEDGER_UNAVAILABLE | LEDGER_BUSY | INTERNAL_ERROR.',
+      description: 'Stable error code: INVALID_ARGUMENT | UNKNOWN_ID_PREFIX | EVIDENCE_NOT_FOUND | EVIDENCE_PROTECTED | CLIENT_NOT_FOUND | LEDGER_TOS_REQUIRED | LEDGER_VAULT_SEALED | LEDGER_SCHEMA_STALE | LEDGER_SCHEMA_NEWER | LEDGER_CORRUPT | LEDGER_UNAVAILABLE | LEDGER_BUSY | INTERNAL_ERROR.',
     },
     message: { type: 'string', required: true, description: 'One-line human-readable detail (never contains an absolute filesystem path).' },
     hint: { type: 'string', description: 'Optional actionable next step (usually a CLI command); never contains an absolute filesystem path.' },
@@ -317,6 +317,186 @@ const evidenceDataSchema = {
   },
 }
 
+/* -------------------------------------------------------------------------- */
+/* customer projection (0.3.2 M3)                                             */
+/* -------------------------------------------------------------------------- */
+
+const clientCountsSchema = {
+  type: 'object',
+  additionalProperties: false,
+  properties: {
+    matters: { type: 'number', required: true },
+    mattersArchived: { type: 'number', required: true },
+    deliveries: { type: 'number', required: true },
+    notes: { type: 'number', required: true },
+    commitments: { type: 'number', required: true },
+    openMine: { type: 'number', required: true },
+    openWaiting: { type: 'number', required: true },
+    overdue: { type: 'number', required: true },
+  },
+}
+
+const nullableClientDateSchema = {
+  oneOf: [
+    { type: 'string' },
+    { type: 'null' },
+  ],
+}
+
+const clientListRowSchema = {
+  type: 'object',
+  additionalProperties: false,
+  properties: {
+    id: { type: 'string', required: true },
+    name: { type: 'string', required: true },
+    status: { type: 'string', required: true },
+    aliases: { type: 'array', items: { type: 'string' }, required: true },
+    secrecyDefault: { type: 'number', required: true },
+    tags: { type: 'array', items: { type: 'string' }, required: true },
+    counts: { ...clientCountsSchema, required: true },
+    nextDueAt: nullableClientDateSchema,
+    clearance: { type: 'number', required: true },
+    protectedExcluded: { type: 'number', required: true },
+  },
+}
+
+const clientIdentitySchema = {
+  type: 'object',
+  additionalProperties: false,
+  properties: {
+    id: { type: 'string', required: true },
+    name: { type: 'string', required: true },
+    status: { type: 'string', required: true },
+    aliases: { type: 'array', items: { type: 'string' }, required: true },
+    tags: { type: 'array', items: { type: 'string' }, required: true },
+    secrecyDefault: { type: 'number', required: true },
+  },
+}
+
+const clientProjectSchema = {
+  type: 'object',
+  additionalProperties: false,
+  properties: {
+    id: { type: 'string', required: true },
+    name: { type: 'string', required: true },
+    status: { type: 'string', required: true },
+    counts: { ...clientCountsSchema, required: true },
+    nextDueAt: nullableClientDateSchema,
+  },
+}
+
+const clientTimelineItemSchema = {
+  type: 'object',
+  additionalProperties: false,
+  properties: {
+    at: { type: 'string', required: true },
+    kind: { type: 'string', enum: ['delivery', 'commitment'], required: true },
+    title: { type: 'string', required: true },
+    ref: {
+      type: 'object',
+      additionalProperties: false,
+      properties: {
+        kind: { type: 'string', enum: ['delivery', 'commitment'], required: true },
+        id: { type: 'string', required: true },
+      },
+      required: true,
+    },
+    matterId: { type: 'string' },
+    secrecy: { type: 'number', required: true },
+  },
+}
+
+const clientOpenRowSchema = {
+  type: 'object',
+  additionalProperties: false,
+  properties: {
+    id: { type: 'string', required: true },
+    action: { type: 'string', required: true },
+    debtor: { type: 'string', required: true },
+    creditor: { type: 'string', required: true },
+    status: { type: 'string', required: true },
+    dueAt: { type: 'string' },
+    matterId: { type: 'string' },
+    projectId: { type: 'string' },
+    secrecy: { type: 'number', required: true },
+  },
+}
+
+const clientsListDataSchema = {
+  type: 'object',
+  additionalProperties: false,
+  properties: {
+    ...sourceDataSchema,
+    clearance: { type: 'number', required: true },
+    protectedExcluded: { type: 'number', required: true },
+    customerEntities: { type: 'boolean', required: true },
+    action: { type: 'string', enum: ['list'], required: true },
+    clients: { type: 'array', items: clientListRowSchema, required: true },
+    total: { type: 'number', required: true },
+    truncated: { type: 'boolean', required: true },
+    limit: { type: 'number', required: true },
+  },
+}
+
+const clientsStatusDataSchema = {
+  type: 'object',
+  additionalProperties: false,
+  properties: {
+    ...sourceDataSchema,
+    clearance: { type: 'number', required: true },
+    protectedExcluded: { type: 'number', required: true },
+    customerEntities: { type: 'boolean', required: true },
+    action: { type: 'string', enum: ['show'], required: true },
+    client: { ...clientIdentitySchema, required: true },
+    projects: { type: 'array', items: clientProjectSchema, required: true },
+    counts: { ...clientCountsSchema, required: true },
+    open: {
+      type: 'object',
+      additionalProperties: false,
+      properties: {
+        mine: { type: 'array', items: clientOpenRowSchema, required: true },
+        waiting: { type: 'array', items: clientOpenRowSchema, required: true },
+        mineTotal: { type: 'number', required: true },
+        waitingTotal: { type: 'number', required: true },
+      },
+      required: true,
+    },
+    nextDueAt: nullableClientDateSchema,
+    timeline: { type: 'array', items: clientTimelineItemSchema, required: true },
+    timelineTotal: { type: 'number', required: true },
+    timelineTruncated: { type: 'boolean', required: true },
+  },
+}
+
+const clientsOutputSchema = {
+  oneOf: [
+    {
+      type: 'object',
+      additionalProperties: false,
+      properties: {
+        ok: { type: 'boolean', const: true, required: true },
+        data: { ...clientsListDataSchema, required: true },
+      },
+    },
+    {
+      type: 'object',
+      additionalProperties: false,
+      properties: {
+        ok: { type: 'boolean', const: true, required: true },
+        data: { ...clientsStatusDataSchema, required: true },
+      },
+    },
+    {
+      type: 'object',
+      additionalProperties: false,
+      properties: {
+        ok: { type: 'boolean', const: false, required: true },
+        error: { ...errorDetailSchema, required: true },
+      },
+    },
+  ],
+}
+
 /** '[preview: no ledger] ' prefix for rendered text of a preview payload. */
 function previewTag(value) {
   const data = value && value.ok === true ? value.data : undefined
@@ -390,11 +570,29 @@ function renderEvidence(value) {
   return `${previewTag(value)}${asString(data.kind)} ${asString(data.id)}: ${counts.sources ?? 0} source(s), ${counts.missing ?? 0} missing (ledger refs only; turns not verified)`
 }
 
+function renderClients(value) {
+  if (!value || value.ok !== true) return renderError(value)
+  const data = value.data ?? {}
+  if (data.action === 'show') {
+    const client = data.client ?? {}
+    const counts = data.counts ?? {}
+    const open = data.open ?? {}
+    const projects = Array.isArray(data.projects) ? data.projects.length : 0
+    const timeline = Array.isArray(data.timeline) ? data.timeline.length : 0
+    const next = asString(data.nextDueAt) || 'none'
+    return `${previewTag(value)}client ${asString(client.name)} (${asString(client.id)}): ${counts.matters ?? 0} matter(s), ${open.mineTotal ?? 0} mine / ${open.waitingTotal ?? 0} waiting, ${counts.deliveries ?? 0} delivery(s), ${counts.notes ?? 0} note(s), next due ${next}; ${projects} project(s); timeline ${timeline}/${data.timelineTotal ?? 0}${data.timelineTruncated ? ' (truncated)' : ''}${protectedTag(value)}`
+  }
+  const clients = Array.isArray(data.clients) ? data.clients.length : 0
+  const noTables = data.customerEntities === false && data.preview !== true ? ' (no customer tables in this ledger)' : ''
+  return `${previewTag(value)}clients: ${clients}/${data.total ?? 0} shown${data.truncated ? ' (truncated)' : ''}${noTables}${protectedTag(value)}`
+}
+
 const asString = (value) => (typeof value === 'string' ? value : '')
 
 const TODAY_DESCRIPTION = 'Read-only view of the real local Advisers ledger: today/overdue/next-7-days/waiting counts, capped lists and the earliest due item. Opens ~/.advisers/state.db read-only (no HOME write lock, no migration, no writes) and requires an existing accepted TOS record. Falls back to a marked preview ([preview: no ledger]) only when no ledger exists or the read-only facade is unavailable; TOS/schema/vault/corruption/busy failures are structured errors, not empty data. Reads at clearance 0: records of protected matters are excluded and only counted. Never writes the ledger and never sends a message.'
 const WHO_DESCRIPTION = 'Read-only view of who owes whom in the real local Advisers ledger: open commitments I owe (user/agent debtor) and ones I am waiting on (third-party debtor), with counts and capped lists. Opens ~/.advisers/state.db read-only (no HOME write lock, no migration, no writes) and requires an existing accepted TOS record. Falls back to a marked preview ([preview: no ledger]) only when no ledger exists or the read-only facade is unavailable; TOS/schema/vault/corruption/busy failures are structured errors, not empty data. Reads at clearance 0: records of protected matters are excluded and only counted. Never writes the ledger and never sends a message.'
 const EVIDENCE_DESCRIPTION = 'Read-only evidence lookup in the real local Advisers ledger for a commitment (cm_…), fact (fact_…), or preference (pref_…) id: the stored quotes/refs/sources. It does not resolve turn bodies (verified:false), write the ledger, or send a message; use `advisers evidence show <id> --json` in the CLI or MCP for turn-resolved evidence. Opens ~/.advisers/state.db read-only with the same TOS/schema/vault gates as advisers_today; a missing ledger or an unavailable facade falls back to a marked preview. Records of protected matters are withheld with EVIDENCE_PROTECTED (clearance 0).'
+const CLIENTS_DESCRIPTION = 'Read-only customer projection from the real local Advisers ledger: list active clients (or one client by id) with exact counts, next due date, open mine/waiting items, project summaries and a derived delivery/commitment timeline. It never returns note bodies or conversation text. Opens ~/.advisers/state.db read-only (no HOME write lock, no migration, no writes) and requires an existing accepted TOS record; a missing ledger or an unavailable facade falls back to a marked preview ([preview: no ledger]), and a JSON ledger store (no customer tables) returns an empty list marked customerEntities:false. Reads at clearance 0: protected matters and client-level notes are excluded and only counted. Never writes the ledger and never sends a message.'
 
 /**
  * DSH bundle entry point. It registers the service plus the read-only brief /
@@ -570,6 +768,23 @@ export function apply(ctx, config = {}) {
     },
     async execute(args) {
       return executeRead(runtime, 'advisers_evidence', () => reader.evidenceView(args))
+    },
+  }))
+
+  ctx.tools.register(defineTool({
+    name: 'advisers_clients',
+    description: CLIENTS_DESCRIPTION,
+    parameters: {
+      action: { type: 'string', enum: ['list', 'show'], required: true, description: 'list: client rows; show: one client view.' },
+      id: { type: 'string', description: 'Client id (cl_…) required when action is "show".' },
+      limit: { type: 'number', description: 'Max rows (client rows for list, timeline rows for show): integer 1..50, default 20.' },
+    },
+    output: {
+      schema: clientsOutputSchema,
+      render: (_args, value) => [{ type: 'text', text: renderClients(value) }],
+    },
+    async execute(args) {
+      return executeRead(runtime, 'advisers_clients', () => reader.clientsView(args))
     },
   }))
 }

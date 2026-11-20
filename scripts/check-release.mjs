@@ -4,6 +4,7 @@
  *
  *   node scripts/check-release.mjs                 # lockstep + pins + constants
  *   node scripts/check-release.mjs --require-tag   # also require git tag v<version>
+ *                                                  # and that the tag commit is HEAD
  *   node scripts/check-release.mjs --registry      # also query registry.npmjs.org
  *
  * CI runs the default mode. check-docs.mjs covers README/CHANGELOG advertising;
@@ -95,6 +96,31 @@ if (argv.includes('--require-tag') || argv.includes('--stable')) {
   let tags = ''
   try { tags = execFileSync('git', ['tag', '-l', 'v' + version], { cwd: root, encoding: 'utf8' }).trim() } catch {}
   check('git tag v' + version + ' exists', tags === 'v' + version, 'found ' + (tags || 'none'))
+  // 0.3.0 was published from a working tree that was not the tagged tree (the
+  // final docs commit came after the tag). Requiring the tag commit to be HEAD
+  // makes "publish from main after tagging" fail before dispatch.
+  if (tags === 'v' + version) {
+    let head = ''
+    let tagCommit = ''
+    try { head = execFileSync('git', ['rev-parse', 'HEAD'], { cwd: root, encoding: 'utf8' }).trim() } catch {}
+    try { tagCommit = execFileSync('git', ['rev-parse', 'v' + version + '^{commit}'], { cwd: root, encoding: 'utf8' }).trim() } catch {}
+    check(
+      'git tag v' + version + ' is the HEAD commit',
+      Boolean(head) && tagCommit === head,
+      'tag ' + (tagCommit || 'missing') + ', HEAD ' + (head || 'unknown') + ' (commit the release docs, then tag that same commit)',
+    )
+    // An annotated tag carries the tag object (message/date) and is harder to
+    // mutate silently than a lightweight tag. Record object -> commit so the
+    // release evidence can pin both SHAs before the workflow is dispatched.
+    let tagType = ''
+    let tagObject = ''
+    try { tagType = execFileSync('git', ['cat-file', '-t', 'v' + version], { cwd: root, encoding: 'utf8' }).trim() } catch {}
+    try { tagObject = execFileSync('git', ['rev-parse', 'v' + version], { cwd: root, encoding: 'utf8' }).trim() } catch {}
+    check('git tag v' + version + ' is an annotated tag', tagType === 'tag', 'found ' + (tagType || 'none'))
+    if (tagType === 'tag' && tagObject && tagCommit) {
+      console.log('INFO tag object ' + tagObject + ' -> commit ' + tagCommit + ' (record both in the release evidence before dispatch)')
+    }
+  }
 }
 
 if (argv.includes('--registry')) {

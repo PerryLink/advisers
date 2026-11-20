@@ -370,5 +370,5 @@ test('safety.mcp: block-level tool output is replaced with CONTENT_BLOCKED inste
   assert.ok(denied, 'a blocked read must still be audited')
   // Non-blocking tools keep working afterwards.
   const ping = await f.server.handle({ jsonrpc: '2.0', id: 9, method: 'tools/list' })
-  assert.equal(ping.result.tools.length, 7)
+  assert.equal(ping.result.tools.length, 8)
 })

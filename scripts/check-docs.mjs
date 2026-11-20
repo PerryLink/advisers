@@ -193,8 +193,131 @@ for (const [file, needle] of advertised) {
 }
 
 const changelog = read('CHANGELOG.md')
+const rawFirstHeading = /^##\s+[^\n]+/m.exec(changelog)?.[0] ?? ''
 const firstHeading = /^##\s+(\S+)/m.exec(changelog)?.[1] ?? ''
 check('CHANGELOG.md top section is the current version', firstHeading === version, `found ${firstHeading}, expected ${version}`)
+
+// ---------------------------------------------------------------------------
+// Release-state wording (0.3.0 shipped a tarball whose README/CHANGELOG still
+// said "release candidate"). The check is version-attributed: a negative phrase
+// only fails when the CURRENT version is the version it describes, so historical
+// sentences ("0.2.4 was an unpublished release candidate", "0.3.0's tarballs
+// shipped release-candidate text") stay valid.
+// ---------------------------------------------------------------------------
+const RELEASE_STATE_PATTERNS = [
+  /release[- ]candidate/gi,
+  /not\s+published/gi,
+  /unpublished/gi,
+  /尚未发布/g,
+  /未发布/g,
+  /发布候选/g,
+  /候选版本/g,
+]
+
+/** Version number written immediately before \`index\` (80 chars window). */
+function precedingVersion(text, index) {
+  const windowText = text.slice(Math.max(0, index - 80), index)
+  let nearest = ''
+  for (const match of windowText.matchAll(/\b(\d+\.\d+\.\d+)\b/g)) nearest = match[1]
+  return nearest
+}
+
+/** Negative release-state phrases attributed to \`currentVersion\`. */
+function releaseStateProblems(text, currentVersion) {
+  const problems = []
+  for (const pattern of RELEASE_STATE_PATTERNS) {
+    pattern.lastIndex = 0
+    for (const match of text.matchAll(pattern)) {
+      const index = match.index ?? 0
+      if (precedingVersion(text, index) === currentVersion) {
+        problems.push(match[0] + ' (attributed to ' + currentVersion + ')')
+      }
+    }
+  }
+  return problems
+}
+
+/** CHANGELOG \`Status:\` lines are a strong form regardless of attribution. */
+function changelogStatusProblems(text) {
+  const problems = []
+  for (const line of text.split('\n')) {
+    const trimmed = line.trim()
+    if (/^Status[:：]/.test(trimmed) && /release[- ]candidate|not\s+published|尚未发布|未发布|发布候选/i.test(trimmed)) {
+      problems.push(trimmed.slice(0, 140))
+    }
+  }
+  return problems
+}
+
+check(
+  'CHANGELOG.md top heading is not a release-candidate heading',
+  !/release[- ]candidate/i.test(rawFirstHeading),
+  `found ${rawFirstHeading}`,
+)
+const topSectionEnd = changelog.slice(1).search(/^##\s+/m)
+const topSection = topSectionEnd === -1 ? changelog.slice(1) : changelog.slice(1, topSectionEnd + 1)
+check(
+  'CHANGELOG.md top section has no stale "npm @latest is still" line',
+  !/npm @latest is still/i.test(topSection),
+)
+check(
+  'CHANGELOG.md top section has no release-candidate Status line',
+  changelogStatusProblems(topSection).length === 0,
+  changelogStatusProblems(topSection).join('; '),
+)
+const changelogProblems = releaseStateProblems(topSection, version)
+check(
+  'CHANGELOG.md top section does not describe ' + version + ' as a release candidate',
+  changelogProblems.length === 0,
+  [...new Set(changelogProblems)].join('; '),
+)
+
+// All package READMEs that ship in a tarball, not only the root/advisers ones:
+// the 0.3.0 failure included packages/core and packages/office READMEs.
+const releaseStateDocs = [
+  'README.md',
+  'README-zh.md',
+  'packages/advisers/README.md',
+  'packages/advisers/README-zh.md',
+  'packages/core/README.md',
+  'packages/office/README.md',
+]
+for (const file of releaseStateDocs) {
+  const text = read(file)
+  const problems = releaseStateProblems(text, version)
+  check(
+    file + ' does not describe ' + version + ' as a release candidate or unpublished',
+    problems.length === 0,
+    [...new Set(problems)].join('; '),
+  )
+  check(file + ' has no stale "npm @latest is still" line', !/npm @latest is still/i.test(text))
+}
+
+// Offline fixture self-test: proves the detector still catches the real 0.3.0
+// defect (EN/ZH READMEs, CHANGELOG Status) and does not fire on the historical
+// sentences the 0.3.1 tree legitimately contains.
+if (process.argv.includes('--self-test')) {
+  const fixtures = [
+    ['v0.3.0 EN README', '`0.3.0` is a release candidate; npm @latest is still 0.2.3:', '0.3.0', true],
+    ['v0.3.0 ZH README', '`0.3.0` 是 release candidate（2026-11-20）；npm `latest` 仍是 0.2.3', '0.3.0', true],
+    ['v0.3.0 CHANGELOG status', '## 0.3.0 (release candidate, 2026-11-20)\n\nStatus: **release candidate, not published**.', '0.3.0', true],
+    ['released README confirms publish', '`0.3.1` was published on 2026-11-20 and is the current latest; 0.2.4 was an unpublished release candidate.', '0.3.1', false],
+    ['historical old-candidate sentence', 'it supersedes `0.3.0`, whose published tarballs shipped release-candidate READMEs', '0.3.1', false],
+    ['private packages are not published', 'the two private `advisers-link-*` packages are held at the same version but are not published.', '0.3.1', false],
+  ]
+  let selfTestFailures = 0
+  for (const [name, text, currentVersion, expected] of fixtures) {
+    const statusProblems = name.includes('CHANGELOG') ? changelogStatusProblems(text) : []
+    const detected = releaseStateProblems(text, currentVersion).length > 0 || statusProblems.length > 0
+    const ok = detected === expected
+    if (!ok) selfTestFailures += 1
+    console.log((ok ? 'PASS' : 'FAIL') + ' self-test :: ' + name + (ok ? '' : ' (expected ' + (expected ? 'detection' : 'clean') + ')'))
+  }
+  console.log('')
+  console.log(selfTestFailures === 0 ? 'PASS release-state self-test (' + fixtures.length + ' fixtures)' : 'FAIL release-state self-test')
+  if (selfTestFailures > 0 || failures.length > 0) process.exit(1)
+  process.exit(0)
+}
 
 if (failures.length) {
   console.error(`\n${failures.length} docs/version inconsistency(ies):`)

@@ -1,8 +1,89 @@
 # Changelog
 
+## 0.3.2 (2026-11-21)
+
+"Customer loop and performance closeout" minor release: the customer/project
+entities added in 0.3.0 now have an external-facing loop (subject receipt packs,
+a client status sheet, read-only MCP/DSH client projections), and the two
+remaining hot-path gaps are addressed with additive, opt-in surfaces
+(`today --json --limit`, a narrow MCP read model). No schema migration, no
+change to the flagless CLI JSON shapes.
+
+Customer loop (M2/M3):
+
+- **Subject receipt packs.** `deliveries --receipt --client <id> [--project <id>]`
+  builds a scoped delivery receipt pack. Manifest v2 records `subject`,
+  `scope` and delivery lineage (`clientId/projectId/matterId/template`), and the
+  offline verifier accepts v1 and v2 packs, so receipts written by 0.3.0/0.3.1
+  still verify. A subject pack contains only that subject's deliveries (current
+  matter ownership **or** the generation-time lineage snapshot) and the evidence
+  under those matters; global facts/preferences need `--include-global`. Row
+  secrecy is `max(client.secrecyDefault, matter.secrecy)` at clearance 0:
+  protected rows are counted and never copied, and a subject client with a
+  protected default fails closed (`E_SECRECY_BLOCKED`). Unscoped packs keep the
+  historical behaviour but are labelled `scope: "local-all"` and warn that they
+  contain every local customer's data.
+- **Client status sheet.** `client export <id> [--format md|docx] [--out <file>]
+  [--redact-names]` writes a deterministic, external-facing status summary (0600)
+  with profile, active projects, exact counts, open buckets, a recent
+  delivery/commitment timeline and a fixed disclaimer. It contains no evidence
+  quotes or note bodies; protected matters are counted only; `--redact-names`
+  only replaces client/project display names. The export is audited
+  (`client.export`, ids/counts only).
+- **Read-only customer projections.** MCP adds `advisers_clients` (list/show) and
+  the `advisers://clients` resource; DSH adds `advisers_clients` through the
+  `advisers/lib/ledger-read.js` facade. Both run at clearance 0, filter before
+  counting/paging, cap payloads with `total`/`truncated`, and never return note
+  bodies or conversation text. A JSON store or an absent ledger is reported
+  explicitly (structured error / marked preview), never as fake empty data.
+- **Contract additions:** MCP 8 tools / 5 resources, DSH 6 tools
+  (`contracts/versions-v1.json` `dshTools` v2), receipt manifest v2,
+  `today --json --limit`, and the `client export` JSON summary. Existing frozen
+  artifacts keep their meaning; 0.3.1's only `contracts/` change was the additive
+  `dsh-famling` entry in `contracts/CONSUMERS.json` (the earlier "contracts are
+  unchanged" wording is corrected across the docs).
+
+Performance (shared-host medians over a 200k synthetic ledger on ext4; the
+numbers are an instrument, not a service-level guarantee — see
+`docs/PERFORMANCE.md`):
+
+- **MCP first call.** The list tools (today / who / commit_ls / remind) use a
+  narrow commitment read model instead of mapping the whole ledger on the first
+  call. A/B on the 200k ledger (0.3.1 → 0.3.2): today 461 → 97 ms, who 439 →
+  108 ms, commit_ls 416 → 158 ms, remind 476 → 223 ms; tool payloads are
+  byte-identical. The targets (today/who/commit_ls ≤300 ms, remind ≤400 ms) are
+  met on the measured host.
+- **`today --json --limit N`.** An additive cap (N=1..10000, `--json` only,
+  cannot combine with `--sources`): each group keeps at most N **full Commitment
+  entities**, while `counts`/`next` stay the true totals; the payload gains
+  `limit`/`truncated`. On the 200k ledger `--limit 100` measured 152 ms /
+  194,776 B versus 795 ms / 27,374,336 B for the flagless command. Without the
+  flag the output is unchanged; a default cap is a later (0.4) decision.
+
+Release trust:
+
+- `docs/RELEASING.md` is now a tracked release checklist: docs first, main push
+  → CI green → annotated tag → tag-ref dispatch → post-publish verification.
+- `publish.yml` refuses a workflow ref other than `refs/tags/v<version>`;
+  `release.mjs --provenance --publish` fails closed outside the tag ref;
+  `check-release --require-tag` requires an annotated tag whose commit is HEAD
+  and prints the tag object/commit; `check-provenance`/`verify-release` require
+  the SLSA build ref to be `refs/tags/v<version>` (historical audits may pass
+  `--allow-non-tag-provenance`).
+- `check-docs` now rejects release-candidate/unpublished wording for the current
+  version in EN/ZH package READMEs, the CHANGELOG heading and a `Status:` line,
+  and has an offline self-test; the publish gate also runs `check-js`,
+  `check-contracts` and the SBOM check.
+
+Still not in 0.3.2: the interactive TUI shell, IMAP product entry, knowledge
+base, unified PolicyGrant/exit 4–6, MCP modern 2026-07-28, DSH ledger writes,
+Persistence v2 write path and vault v2. Real-Windows full E13 and external legal
+review remain open. The GitHub Release is built from the tag with the CycloneDX
+SBOM and `SHA256SUMS`.
+
 ## 0.3.1 (2026-11-20)
 
-Release-metadata remediation. **No runtime, CLI or contract changes**: the code tree is
+Release-metadata remediation. **No runtime, CLI or interface changes**: the code tree is
 the 0.3.0 tree, so commands, JSON shapes, MCP tools/resources and DSH payloads are the
 same product. This patch exists only because the 0.3.0 release surface was published
 wrong and cannot be repaired in place: an npm version's tarball cannot be replaced, and
@@ -32,8 +113,10 @@ What the 0.3.0 release surface got wrong (and what 0.3.1 fixes):
 The eight workspace packages are lockstep at `0.3.1`, the eight internal workspace pins,
 the three version constants and `pnpm-lock.yaml` follow, and the six per-package
 `THIRD-PARTY-NOTICES.md` files were regenerated (version line only; the dependency list
-is unchanged). The runtime, the `contracts/` artifacts and the legal texts are exactly
-those of 0.3.0 (TOS/PRIVACY/SAFETY/DISCLAIMER v2026.11.3). Release gates for 0.3.1:
+is unchanged). The runtime and the legal texts are exactly those of 0.3.0
+(TOS/PRIVACY/SAFETY/DISCLAIMER v2026.11.3); the only `contracts/` change is the
+additive `dsh-famling` entry in `contracts/CONSUMERS.json`, so the interface shapes
+(CLI JSON, MCP tools/resources, error codes) are unchanged. Release gates for 0.3.1:
 `check-docs`, `check-release`, `check-licenses`, `check-tos --release` and `pack-smoke`
 all pass; the 0.3.0 verification evidence (222 checks) remains valid for the unchanged
 runtime.
@@ -42,8 +125,10 @@ Honesty notes: 0.3.0 and its tarballs stay on the registry and remain installabl
 pinning; they are **superseded**, not withdrawn. Prefer `0.3.1` (npm `latest`). The
 release tooling, `publish.yml` and the legal texts are not changed by this patch. Work
 previously planned for a 0.3.1 feature release (the interactive TUI shell, MCP modern
-2026-07-28, the HOME-lock downgrade and the remaining policy-engine items) moves to the
-next feature release; the 0.3.0 section below keeps its original record.
+2026-07-28, the HOME-lock downgrade and the remaining policy-engine items) did not ship
+in 0.3.1. 0.3.2 delivered the customer M2/M3 surfaces and the performance closeout
+instead, so those items remain future work; the 0.3.0 section below keeps its original
+record.
 
 ## 0.3.0 (published 2026-11-20)
 

@@ -24,8 +24,9 @@ const REQUIRED_TOOLS = [
   'advisers_remind',
   'advisers_capture_candidate',
   'advisers_pack_verify',
+  'advisers_clients',
 ]
-const REQUIRED_RESOURCES = ['advisers://today', 'advisers://commitments', 'advisers://who', 'advisers://evidence']
+const REQUIRED_RESOURCES = ['advisers://today', 'advisers://commitments', 'advisers://who', 'advisers://evidence', 'advisers://clients']
 
 /** Read and validate the committed baseline; throws with an actionable message. */
 export function readBaseline() {

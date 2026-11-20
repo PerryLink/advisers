@@ -14,7 +14,7 @@ process.env.ADVISERS_HOME = join(EMPTY_ROOT, 'home')
 delete process.env.ADVISERS_STORE
 after(() => { rmSync(EMPTY_ROOT, { recursive: true, force: true }) })
 
-const ALL_TOOL_NAMES = ['advisers_brief', 'advisers_evidence', 'advisers_office', 'advisers_today', 'advisers_who']
+const ALL_TOOL_NAMES = ['advisers_brief', 'advisers_clients', 'advisers_evidence', 'advisers_office', 'advisers_today', 'advisers_who']
 const READ_ONLY_TOOL_NAMES = ['advisers_evidence', 'advisers_today', 'advisers_who']
 const EXEC = { signal: new AbortController().signal, deferContext() {}, concludeTurn() {} }
 const DAY_MS = 24 * 60 * 60 * 1000
@@ -90,10 +90,10 @@ function seedLedger(runtime) {
   return { matter, overdue, dueToday, waiting, noDue, fact, preference }
 }
 
-test('DSH bundle registers five tools with host-valid schemas', () => {
+test('DSH bundle registers six tools with host-valid schemas', () => {
   const { tools, byName } = mount({ workspace: process.cwd() })
 
-  assert.equal(tools.length, 5)
+  assert.equal(tools.length, 6)
   assert.deepEqual(tools.map((tool) => tool.name).sort(), ALL_TOOL_NAMES)
 
   for (const tool of tools) {

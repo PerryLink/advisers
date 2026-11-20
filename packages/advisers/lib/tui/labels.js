@@ -3,7 +3,7 @@
  *
  * 0.3.0 ships Simplified Chinese human-facing text. This table is the kernel's single
  * place for display words so callers can inject a different table (tests use it to
- * prove no bare literals leak into render logic) and so the 0.3.1 i18n seam can
+ * prove no bare literals leak into render logic) and so the 0.3.2 i18n seam can
  * re-export or replace it without touching render.js.
  *
  * Machine-facing strings (command names, flags, JSON keys, error codes) are English

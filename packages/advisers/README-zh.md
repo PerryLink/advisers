@@ -36,17 +36,16 @@ CLI 是**本地秘书运行时**：一个 REPL、用户账/承诺账/流程账�
 
 ## 状态
 
-`0.3.1` 已于 2026-11-20 发布（npm `latest` = `0.3.1`；`next` 也为 `0.3.1`）。
-0.3.1 是**仅修复发布面的 patch（无运行时/CLI/契约变化）**：它取代 `0.3.0`——0.3.0 的 tarball README 仍是
-release candidate 文案，且发布面无法原地修复（npm 同版本 tarball 不可替换，`npm unpublish` 需要 owner 的 2FA）。
-运行时是「可信交付」feature line：所有出网面逐 item secrecy clearance、本地审计尾锚、备份轮换/可验证恢复与
+`0.3.2` 已于 2026-11-21 发布（npm `latest` = `0.3.2`；`next` 也为 `0.3.2`）。
+0.3.2 是**功能版本**：交付面向客户的闭环（subject 回执包、`client export` 客户状态包、MCP/DSH 只读客户投影）
+与性能收尾（`today --json --limit`、MCP 窄承诺读模型），契约只做加法、无 schema 迁移。`0.3.1` 是 0.3.0 的
+发布面修复版（运行时不变），两者仍可按版本号安装但已被取代。运行时基线是「可信交付」feature line：所有出网面逐 item secrecy clearance、本地审计尾锚、备份轮换/可验证恢复与
 `doctor --repair`、200k 读路径消除 TEMP B-TREE 写放大、MCP 输出上限 + legacy 协议协商、DSH 只读账本门面、
-机器可读契约、无 key 的确定性评测套件与 SBOM 门禁；被该 line 取代的 0.2.4 candidate 从未发布，`0.3.0` 仍可
-按版本号安装但已被取代。0.3.1 tarball 由 GitHub Actions OIDC/Trusted Publishing 发布，带 SLSA provenance；
-可用 `scripts/verify-release.mjs --version 0.3.1 --tag latest --sbom artifacts/sbom.cdx.json --require-sbom`
+机器可读契约、无 key 的确定性评测套件与 SBOM 门禁；被该 line 取代的 0.2.4 candidate 从未发布。0.3.2 tarball 由 GitHub Actions OIDC/Trusted Publishing 发布，
+带 SLSA provenance；可用 `scripts/verify-release.mjs --version 0.3.2 --tag latest --sbom artifacts/sbom.cdx.json --require-sbom`
 校验（SBOM 由 `pnpm run sbom` 生成）。Release notes：
-<https://github.com/PerryLink/advisers/releases/tag/v0.3.1>。完整 TUI 壳、邮件入口、PolicyGrant 与 MCP
-modern 不在 0.3.1；未交付清单见仓库 CHANGELOG。
+<https://github.com/PerryLink/advisers/releases/tag/v0.3.2>。完整 TUI 壳、邮件入口、PolicyGrant、MCP
+modern 与 DSH 写账本不在 0.3.2；未交付清单见仓库 CHANGELOG。
 
 - SQLite 账本 `~/.advisers/state.db`（JSON fallback；schema v21 —— v21 增量加入客户/项目实体、无锁只读快照、增量写）；
 - soul 位于 `~/.advisers/soul.md`，人类独占；

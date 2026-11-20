@@ -901,6 +901,420 @@
         "verifiedAt"
       ],
       "additionalProperties": true
+    },
+    "ClientCounts": {
+      "type": "object",
+      "properties": {
+        "matters": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "mattersArchived": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "deliveries": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "notes": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "commitments": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "openMine": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "openWaiting": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "overdue": {
+          "type": "integer",
+          "minimum": 0
+        }
+      },
+      "required": [
+        "matters",
+        "mattersArchived",
+        "deliveries",
+        "notes",
+        "commitments",
+        "openMine",
+        "openWaiting",
+        "overdue"
+      ],
+      "additionalProperties": false
+    },
+    "NextDueAt": {
+      "description": "Earliest open due date as an ISO-8601 string, or null when nothing is due.",
+      "oneOf": [
+        {
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ]
+    },
+    "ClientRow": {
+      "type": "object",
+      "properties": {
+        "id": {
+          "type": "string"
+        },
+        "name": {
+          "type": "string"
+        },
+        "status": {
+          "type": "string"
+        },
+        "aliases": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "secrecyDefault": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "tags": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "counts": {
+          "$ref": "#/$defs/ClientCounts"
+        },
+        "nextDueAt": {
+          "$ref": "#/$defs/NextDueAt"
+        },
+        "clearance": {
+          "type": "integer"
+        },
+        "protectedExcluded": {
+          "type": "integer",
+          "minimum": 0
+        }
+      },
+      "required": [
+        "id",
+        "name",
+        "status",
+        "aliases",
+        "secrecyDefault",
+        "tags",
+        "counts",
+        "nextDueAt",
+        "clearance",
+        "protectedExcluded"
+      ],
+      "additionalProperties": false
+    },
+    "ClientsResource": {
+      "type": "object",
+      "properties": {
+        "clients": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/ClientRow"
+          }
+        },
+        "total": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "truncated": {
+          "type": "boolean"
+        },
+        "limit": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 50
+        },
+        "clearance": {
+          "type": "integer"
+        },
+        "protectedExcluded": {
+          "type": "integer",
+          "minimum": 0
+        }
+      },
+      "required": [
+        "clients",
+        "total",
+        "truncated",
+        "limit",
+        "clearance",
+        "protectedExcluded"
+      ],
+      "additionalProperties": false
+    },
+    "ClientIdentity": {
+      "type": "object",
+      "properties": {
+        "id": {
+          "type": "string"
+        },
+        "name": {
+          "type": "string"
+        },
+        "status": {
+          "type": "string"
+        },
+        "aliases": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "tags": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "secrecyDefault": {
+          "type": "integer",
+          "minimum": 0
+        }
+      },
+      "required": [
+        "id",
+        "name",
+        "status",
+        "aliases",
+        "tags",
+        "secrecyDefault"
+      ],
+      "additionalProperties": false
+    },
+    "ClientProject": {
+      "type": "object",
+      "properties": {
+        "id": {
+          "type": "string"
+        },
+        "name": {
+          "type": "string"
+        },
+        "status": {
+          "type": "string"
+        },
+        "counts": {
+          "$ref": "#/$defs/ClientCounts"
+        },
+        "nextDueAt": {
+          "$ref": "#/$defs/NextDueAt"
+        }
+      },
+      "required": [
+        "id",
+        "name",
+        "status",
+        "counts",
+        "nextDueAt"
+      ],
+      "additionalProperties": false
+    },
+    "ClientOpenRow": {
+      "type": "object",
+      "properties": {
+        "id": {
+          "type": "string"
+        },
+        "action": {
+          "type": "string"
+        },
+        "debtor": {
+          "type": "string"
+        },
+        "creditor": {
+          "type": "string"
+        },
+        "status": {
+          "type": "string"
+        },
+        "dueAt": {
+          "type": "string"
+        },
+        "matterId": {
+          "type": "string"
+        },
+        "projectId": {
+          "type": "string"
+        },
+        "secrecy": {
+          "type": "integer"
+        }
+      },
+      "required": [
+        "id",
+        "action",
+        "debtor",
+        "creditor",
+        "status",
+        "secrecy"
+      ],
+      "additionalProperties": false
+    },
+    "ClientOpen": {
+      "type": "object",
+      "properties": {
+        "mine": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/ClientOpenRow"
+          }
+        },
+        "waiting": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/ClientOpenRow"
+          }
+        },
+        "mineTotal": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "waitingTotal": {
+          "type": "integer",
+          "minimum": 0
+        }
+      },
+      "required": [
+        "mine",
+        "waiting",
+        "mineTotal",
+        "waitingTotal"
+      ],
+      "additionalProperties": false
+    },
+    "ClientTimelineItem": {
+      "type": "object",
+      "properties": {
+        "at": {
+          "type": "string"
+        },
+        "kind": {
+          "type": "string",
+          "enum": [
+            "delivery",
+            "commitment"
+          ]
+        },
+        "title": {
+          "type": "string"
+        },
+        "ref": {
+          "type": "object",
+          "properties": {
+            "kind": {
+              "type": "string",
+              "enum": [
+                "delivery",
+                "commitment"
+              ]
+            },
+            "id": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "kind",
+            "id"
+          ],
+          "additionalProperties": false
+        },
+        "matterId": {
+          "type": "string"
+        },
+        "secrecy": {
+          "type": "integer"
+        }
+      },
+      "required": [
+        "at",
+        "kind",
+        "title",
+        "ref",
+        "matterId",
+        "secrecy"
+      ],
+      "additionalProperties": false
+    },
+    "ClientStatusResource": {
+      "type": "object",
+      "properties": {
+        "client": {
+          "$ref": "#/$defs/ClientIdentity"
+        },
+        "projects": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/ClientProject"
+          }
+        },
+        "counts": {
+          "$ref": "#/$defs/ClientCounts"
+        },
+        "open": {
+          "$ref": "#/$defs/ClientOpen"
+        },
+        "nextDueAt": {
+          "$ref": "#/$defs/NextDueAt"
+        },
+        "timeline": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/ClientTimelineItem"
+          }
+        },
+        "timelineTotal": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "timelineTruncated": {
+          "type": "boolean"
+        },
+        "clearance": {
+          "type": "integer"
+        },
+        "protectedExcluded": {
+          "type": "integer",
+          "minimum": 0
+        }
+      },
+      "required": [
+        "client",
+        "projects",
+        "counts",
+        "open",
+        "nextDueAt",
+        "timeline",
+        "timelineTotal",
+        "timelineTruncated",
+        "clearance",
+        "protectedExcluded"
+      ],
+      "additionalProperties": false
+    },
+    "ClientsToolPayload": {
+      "description": "advisers_clients result: a list payload (action=list) or one client status payload (action=show).",
+      "oneOf": [
+        {
+          "$ref": "#/$defs/ClientsResource"
+        },
+        {
+          "$ref": "#/$defs/ClientStatusResource"
+        }
+      ]
     }
   }
 }

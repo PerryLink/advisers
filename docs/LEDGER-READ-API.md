@@ -18,6 +18,8 @@ import {
   readOpenCommitmentIndex,
   readEntityById,
   readLedgerSnapshot,
+  readClientList,
+  readClientById,
 } from 'advisers/lib/ledger-read.js'
 ```
 
@@ -63,6 +65,11 @@ import {
    cannot be resolved is treated as protected (Infinity).
 8. **Path-free messages**: consumer-visible `message`/`hint`/`warnings` never
    contain an absolute filesystem path.
+9. **Customer reads are SQLite-only projections (0.3.2)**: `readClientList` /
+   `readClientById` derive list/status views inside one read snapshot with the
+   same clearance rule (`max(client.secrecyDefault, matter.secrecy)`), return
+   no note bodies and no conversation text, and never invent customer data: the
+   legacy JSON backend reports `customerEntities:false` with an empty list.
 
 Documented side effect: a read-only SQLite open may create the empty
 `state.db-wal` / `state.db-shm` sidecars when they do not exist (SQLite WAL
@@ -162,6 +169,73 @@ consumers that build a core `Ledger`; do not hand it to a model/egress surface.
 { snapshot, schemaVersion, backend, readAt, warnings }
 ```
 
+### `readClientList({ home, clearance = 0, limit = 20, all = false })`
+
+Read-only customer list (0.3.2 M3). Customer entities live only in the SQLite
+store (schema v21), so on the legacy JSON backend this returns an empty list
+with `customerEntities: false` instead of inventing rows. The list is
+clearance-filtered per client BEFORE counting/paging: matters and client-level
+notes above the clearance are counted in `protectedExcluded`, never returned.
+No note body or conversation text is part of the payload.
+
+```js
+{
+  clients: [{ id, name, status, aliases, secrecyDefault, tags,
+              counts: { matters, mattersArchived, deliveries, notes,
+                        commitments, openMine, openWaiting, overdue },
+              nextDueAt, clearance, protectedExcluded }],
+  total: number,                    // post-filter client count
+  truncated: boolean,
+  limit: number,                    // capped at 200
+  clearance: number,
+  protectedExcluded: number,        // protected matters/client notes on the page
+  customerEntities: boolean,        // false => JSON store, empty list
+  schemaVersion: number | null,
+  backend: 'sqlite' | 'json',
+  readAt: string,
+  warnings: string[],
+}
+```
+
+### `readClientById({ home, id, clearance = 0, timelineLimit = 20 })`
+
+Read-only customer status view (0.3.2 M3): client identity (no notes body),
+project summaries with counts, exact client counts, `open.mine/waiting`, the
+next due date and a derived timeline. The timeline only contains
+delivery/commitment rows (notes are counted, never displayed), ordered by
+instant DESC, then delivery > commitment, then id ASC. A delivery whose matter
+cannot be resolved inside the visible scope is treated as protected (counted,
+never returned). An unknown id is `found: false, view: null` — not an error.
+
+```js
+{
+  found: boolean,
+  view: null | {
+    client: { id, name, status, aliases, tags, secrecyDefault },
+    projects: [{ id, name, status, counts, nextDueAt }],
+    counts: { matters, mattersArchived, deliveries, notes, commitments,
+              openMine, openWaiting, overdue },
+    open: { mine: [], waiting: [], mineTotal, waitingTotal },
+    nextDueAt,
+    timeline: [{ at, kind: 'delivery'|'commitment', title,
+                 ref: { kind, id }, matterId, secrecy }],
+    timelineTotal, timelineTruncated, clearance, protectedExcluded,
+  },
+  clearance: number,
+  customerEntities: boolean,
+  schemaVersion: number | null,
+  backend: 'sqlite' | 'json',
+  readAt: string,
+  warnings: string[],
+}
+```
+
+Both functions use only the existing `LedgerReadError` codes: an invalid
+`limit`/`timelineLimit` or `id` is `E_USAGE`; every gate failure is the same
+code as the other read functions (`E_TOS_REQUIRED`, `E_VAULT_SEALED`,
+`E_SCHEMA_STALE`, `E_SCHEMA_NEWER`, `E_LEDGER_CORRUPT`, `E_LEDGER_BUSY`,
+`E_LEDGER_UNAVAILABLE`, `E_LEDGER_ABSENT`). No new error code is introduced.
+
 ## Error codes (frozen; only additive changes)
 
 | code | meaning | user hint |
@@ -190,6 +264,14 @@ Errors are `LedgerReadError` instances: `{ code, message, hint?, cause?, schemaV
   (never empty data);
 - a successful real read -> `preview: false`, `source: "ledger-readonly"`,
   optional `backend`/`warnings`, `clearance: 0`, `protectedExcluded`;
+- `advisers_clients` (0.3.2) uses `readClientList`/`readClientById`:
+  list -> `{ action:"list", clients, total, truncated, limit,
+  customerEntities, ...marker }`; show -> the status view plus `action:"show"`
+  and `customerEntities`; an unknown id is the structured
+  `CLIENT_NOT_FOUND` error; a JSON store returns an empty list with
+  `customerEntities: false` (and show -> `CLIENT_NOT_FOUND`); a missing ledger /
+  unavailable facade falls back to the marked preview list (show -> structured
+  `CLIENT_NOT_FOUND` with the preview explanation);
 - `config.mode: "preview"` is the kill switch and restores the 0.2.x preview
   path exactly.
 
@@ -204,6 +286,11 @@ Errors are `LedgerReadError` instances: `{ code, message, hint?, cause?, schemaV
   fallback, real ledger today/who/evidence (CLI parity), TOS errors, sealed /
   stale / newer, preview kill switch, unavailable facade, WAL concurrency,
   JSON store, read-only side effects.
+- `packages/dsh-advisers/test/clients.test.js` — `advisers_clients` matrix:
+  real-ledger list/show (counts, clearance, timeline, no note bodies),
+  preview fallback (empty marked list; show -> CLIENT_NOT_FOUND), JSON-store
+  `customerEntities:false` + note, error mapping, schema/render, and the
+  read-only side-effect check (no HOME lock, database bytes unchanged).
 
 ```sh
 cd packages/advisers

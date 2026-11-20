@@ -1,4 +1,4 @@
-# Customer and project entities (0.3.0)
+# Customer and project entities (0.3.0; 0.3.2 receipt subjects, status export and read projections)
 
 Advisers 0.3.0 adds a **customer/project dimension** on top of the existing matter
 dimension. It is deliberately small: a client is who the work is for, a project is
@@ -57,6 +57,7 @@ advisers client archive <id> [--dry-run] [--json]
 advisers client merge <from-id> <into-id> [--dry-run] [--json]
 advisers client note add <id> "<summary>" [--kind note|call|meeting|decision|email-summary] [--at ISO] [--project <id>] [--matter <id>] [--json]
 advisers client note list <id> [--project <id>] [--limit n] [--json]
+advisers client export <id> [--format md|docx] [--out <file>] [--redact-names] [--json]
 
 advisers project add <client-id> "<name>" [--start YYYY-MM-DD] [--end YYYY-MM-DD] [--default-matter <id>] [--note text] [--json]
 advisers project list [--client <id>] [--all] [--limit n] [--json]
@@ -105,6 +106,7 @@ Every command keeps `--json` stdout pure JSON; errors are
   `{ok,command,client,projects[],matters[],counts,open{mine[],waiting[]},nextDueAt,timeline[],timelineTotal,timelineTruncated,nextCursor,clearance,protectedExcluded,degraded[]}`.
 - `client timeline --json` →
   `{ok,command,clientId,client:{id,name},items[],total,truncated,nextCursor,clearance,protectedExcluded,degraded[]}`.
+- `client export --json` (0.3.2) → `{ok:true, command:"client export", format, scope:"client", subject{kind,id,name}, out, bytes, sha256, generatedAt, clearance:0, protectedExcluded, counts, nextDueAt, timelineCount, timelineTotal, timelineTruncated, disclaimer:true}`; the written file itself is one deterministic markdown/DOCX status sheet (mode 0600, fixed disclaimer, no evidence quotes or note bodies).
 - `client add|archive|merge --json` → `{ok,command,...}` with the affected client
   (merge adds `mergedFrom,movedMatters,movedProjects,mergedProjects,movedNotes,movedDeliveries,carriedAliases`).
 - `client note add|list --json` → the note row / `NoteRow[]`.
@@ -140,8 +142,10 @@ output that will leave the local context (`N` is 0..3, default 3):
   guess.
 
 This is a local projection gate, not a permission system: it does not provide
-security against the local user or a compromised local process, and it is not
-receipt `--client` / MCP customer filtering (those are 0.3.1 scope).
+security against the local user or a compromised local process. The external
+surfaces built on the same rule (0.3.2) are `deliveries --receipt --client`, the
+`client export` status sheet and the MCP/DSH customer read tools; they all run at
+clearance 0 and report only a `protectedExcluded` count for hidden rows.
 
 ## 5. Export / import parity
 
@@ -178,9 +182,12 @@ of recomputing or guessing the lineage.
 
 - `client list`/`project list` default limit 100 (max 1000); timeline sources are
   bounded at 200 recent rows per type (the page contract says `total`/`truncated`).
-- No receipt `--client` filter, no customer status package, no MCP/DSH customer
-  tools in 0.3.0; those are 0.3.1. Pet Brief v3 also stays out (cross-repo consumer
-  contract).
+- 0.3.2 adds the external customer surfaces: `deliveries --receipt --client/--project`
+  (manifest v2 subject pack), `client export` (status sheet, md/docx), and the
+  read-only MCP tool `advisers_clients` (plus `advisers://clients`) and DSH tool
+  `advisers_clients`. They stay read-only: no customer writes, no DSH ledger
+  writes, no receipts sent anywhere, no automatic customer inference.
+- Pet Brief v3 still stays out (cross-repo consumer contract).
 - No automatic customer inference from mail/transcripts; no fuzzy matching; no
   multi-client projects (a cross-client job is two projects); no hard delete.
 - Customer rows are local-only in this version: `sync`/`vault`/`backup` operate on the
@@ -200,7 +207,29 @@ advisers matter ls --unclassified --json          # pre-v21 / not-yet-linked wor
 advisers export --all --out /secure/all.json && advisers import /secure/all.json --replace
 ```
 
-## 9. Errors
+## 9. Receipt subjects, status sheet and read projections (0.3.2)
+
+- `deliveries --receipt --client <id> [--project <id>]`: a subject pack contains
+  only that subject's delivered files and evidence. Delivery rows are matched by
+  current matter ownership OR the generation-time `client_id`/`project_id`
+  snapshot; evidence is scoped to the subject's matters (global facts/preferences
+  need `--include-global`). The v2 manifest records `subject`/`scope`; README.txt
+  and receipt.docx say the pack contains one subject's data. Row-level secrecy is
+  `max(client.secrecyDefault, matter.secrecy)` at clearance 0; a subject client
+  with a protected default fails closed (`E_SECRECY_BLOCKED`). A pack without a
+  subject keeps the historical behavior but is labelled `scope: "local-all"` and
+  warns that it contains all local customer data.
+- `client export <id> --format md|docx`: deterministic, external-facing status
+  sheet at clearance 0 (0600 file): profile, active projects, counts, open
+  buckets, recent delivery/commitment timeline and a fixed disclaimer. It
+  excludes evidence quotes and note bodies and is **not** a statement of account,
+  contract or legal advice. `--redact-names` only replaces client/project display
+  names. The export is audited (`client.export`, ids/counts only).
+- MCP `advisers_clients` (`list`/`show`) and DSH `advisers_clients` read the same
+  derived views at clearance 0: no note bodies, no evidence quotes, counts are
+  post-clearance and capped payloads carry `total`/`truncated`.
+
+## 10. Errors
 
 | Code | Meaning |
 |---|---|
