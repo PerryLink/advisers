@@ -1,5 +1,50 @@
 # Changelog
 
+## 0.3.1 (2026-11-20)
+
+Release-metadata remediation. **No runtime, CLI or contract changes**: the code tree is
+the 0.3.0 tree, so commands, JSON shapes, MCP tools/resources and DSH payloads are the
+same product. This patch exists only because the 0.3.0 release surface was published
+wrong and cannot be repaired in place: an npm version's tarball cannot be replaced, and
+`npm unpublish` requires the account owner's 2FA, so the honest correction is a new
+version that supersedes it.
+
+What the 0.3.0 release surface got wrong (and what 0.3.1 fixes):
+
+- **Tarball README was release-candidate text.** The six 0.3.0 tarballs shipped package
+  READMEs that still described 0.3.0 as an unpublished release candidate, because the
+  published-state docs were committed after the tag. 0.3.1 commits the final docs before
+  the tag, so the tarball README and the repository CHANGELOG match the release.
+- **Tag, provenance and artifacts did not describe one release.** The `v0.3.0` tag had
+  to be restored to the publish commit `1199fbf` after the post-publish documentation
+  commits, so the tag, provenance `gitCommit` and registry tarballs would agree again.
+  0.3.1 tags the released commit once and is not moved afterwards.
+- **Provenance named a branch instead of the tag.** The 0.3.0 attestations recorded
+  `refs/heads/main` as the build ref, so a consumer could not tie the attestation to the
+  release tag. 0.3.1 is published from `refs/tags/v0.3.1`; its attestations name the tag.
+- **No SBOM/checksum assets on the GitHub Release.** The 0.3.1 release attaches the
+  CycloneDX SBOM (`sbom.cdx.json`) and `SHA256SUMS` for the six tarballs.
+- **`next` lagged the release.** `next` stayed at 0.2.3 when `latest` moved to 0.3.0 and
+  only reached 0.3.0 later. The 0.3.1 release sets both `latest` and `next` to 0.3.1.
+- **The dsh-famling consumer registration was missing.** The Pet Brief consumer registry
+  entry for `dsh-famling` (commit `132c521`) landed after the 0.3.0 tag; 0.3.1 ships it.
+
+The eight workspace packages are lockstep at `0.3.1`, the eight internal workspace pins,
+the three version constants and `pnpm-lock.yaml` follow, and the six per-package
+`THIRD-PARTY-NOTICES.md` files were regenerated (version line only; the dependency list
+is unchanged). The runtime, the `contracts/` artifacts and the legal texts are exactly
+those of 0.3.0 (TOS/PRIVACY/SAFETY/DISCLAIMER v2026.11.3). Release gates for 0.3.1:
+`check-docs`, `check-release`, `check-licenses`, `check-tos --release` and `pack-smoke`
+all pass; the 0.3.0 verification evidence (222 checks) remains valid for the unchanged
+runtime.
+
+Honesty notes: 0.3.0 and its tarballs stay on the registry and remain installable by
+pinning; they are **superseded**, not withdrawn. Prefer `0.3.1` (npm `latest`). The
+release tooling, `publish.yml` and the legal texts are not changed by this patch. Work
+previously planned for a 0.3.1 feature release (the interactive TUI shell, MCP modern
+2026-07-28, the HOME-lock downgrade and the remaining policy-engine items) moves to the
+next feature release; the 0.3.0 section below keeps its original record.
+
 ## 0.3.0 (published 2026-11-20)
 
 "Trustworthy delivery" minor release: evidence that resolves or is honestly marked

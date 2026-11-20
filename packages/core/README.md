@@ -12,8 +12,9 @@ SQLite/FTS persistence lives in the `advisers` distribution; this package has no
 
 ## Status
 
-`0.3.0` was published on 2026-11-20 (npm `latest` = `0.3.0`; `next` is still
-`0.2.3`); the 0.2.4 candidate it supersedes was never published. The 0.2.3 baseline
+`0.3.1` was published on 2026-11-20 (npm `latest` = `0.3.1`; `next` is also `0.3.1`).
+0.3.1 is a release-metadata patch over 0.3.0 with no runtime, CLI or contract changes;
+the 0.2.4 candidate superseded by the 0.3.0 line was never published. The 0.2.3 baseline
 added pure ledger operations (`ops.ts`: commit add/edit/done/snooze, correct, decay,
 forget, memory accept/reject) and a partial-snapshot contract so the CLI can write
 incrementally and read only the tables it needs; 0.3.0 keeps those contracts additive and

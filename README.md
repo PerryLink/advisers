@@ -43,25 +43,31 @@ on any link package; adapters load one only when configured.
 
 ## Status
 
-**`0.3.0` was published on 2026-11-20** and is the current npm **`latest`**; npm
-**`next`** remains `0.2.3`. The repository is lockstep at package version `0.3.0`. The
-earlier `0.2.4` was an **unpublished release candidate** superseded by `0.3.0` (its
-`v0.2.4` tag points at an older commit and there is no 0.2.4 tarball on npm; do not try to
-install it). The six published packages are `advisers`, `advisers-core`,
-`advisers-office`, `advisers-policy-strict`, `advisers-bridge-hermes` and
-`dsh-advisers`; the two private `advisers-link-*` packages are held at the same version
-but are not published. All six 0.3.0 tarballs carry non-empty `dist.attestations` (SLSA
-provenance `https://slsa.dev/provenance/v1`) and were published from GitHub Actions
-OIDC/Trusted Publishing (no long-lived npm token). `0.2.2`/`0.2.1`/`0.2.0` remain
-installable by pinning. Release notes:
-<https://github.com/PerryLink/advisers/releases/tag/v0.3.0>. Verify the published
-release yourself:
+**`0.3.1` was published on 2026-11-20** and is the current npm **`latest`**; npm
+**`next`** is also `0.3.1` after this release advanced it. The repository is lockstep at
+package version `0.3.1`. `0.3.1` is a **release-metadata patch with no runtime, CLI or
+contract changes**: it supersedes `0.3.0`, whose published tarballs shipped
+release-candidate READMEs and whose release surface (tag, provenance build ref, GitHub
+Release assets, `next` tag) could not be repaired in place — an npm version's tarball
+cannot be replaced, and `npm unpublish` requires the account owner's 2FA. `0.3.0`
+remains installable by pinning but is superseded; use `0.3.1`. The earlier `0.2.4` was
+an **unpublished release candidate** superseded by the 0.3.0 line (its `v0.2.4` tag
+points at an older commit and there is no 0.2.4 tarball on npm; do not try to install
+it). The six published packages are `advisers`, `advisers-core`, `advisers-office`,
+`advisers-policy-strict`, `advisers-bridge-hermes` and `dsh-advisers`; the two private
+`advisers-link-*` packages are held at the same version but are not published. The 0.3.1
+tarballs are published from GitHub Actions OIDC/Trusted Publishing (no long-lived npm
+token) with SLSA provenance (`https://slsa.dev/provenance/v1`), and the attestation
+names the release tag ref rather than a branch. `0.2.2`/`0.2.1`/`0.2.0` remain
+installable by pinning. Release notes (with the CycloneDX SBOM and `SHA256SUMS` attached):
+<https://github.com/PerryLink/advisers/releases/tag/v0.3.1>. Verify the published release
+yourself:
 
 ```sh
-npm view advisers@0.3.0 dist.attestations --json --registry=https://registry.npmjs.org/
+npm view advisers@0.3.1 dist.attestations --json --registry=https://registry.npmjs.org/
 corepack pnpm install && corepack pnpm run sbom   # writes artifacts/sbom.cdx.json (gitignored)
-node scripts/verify-release.mjs --version 0.3.0 --tag latest \
-  --sbom artifacts/sbom.cdx.json --require-sbom   # 222 checks PASS
+node scripts/verify-release.mjs --version 0.3.1 --tag latest \
+  --sbom artifacts/sbom.cdx.json --require-sbom
 ```
 
 0.3.0 is the **"trustworthy delivery"** line: evidence that resolves or is honestly
@@ -79,7 +85,8 @@ docs/licence/TOS/release-lockstep checks, the security suite and the fault-injec
 (`check-contracts`, `eval:det`, `sbom`+`check:sbom`); the post-publish
 `verify-release --version 0.3.0 --tag latest --sbom artifacts/sbom.cdx.json --require-sbom`
 run passed **222 checks** (attestations, tarball hashes, tag/commit/registry agreement,
-SBOM, clean-prefix install and imports).
+SBOM, clean-prefix install and imports). 0.3.1 re-runs the same release gate; because
+its runtime is unchanged, that evidence applies to 0.3.1 as well.
 
 > Requires **Node >= 22.16**. See [docs/QUICKSTART.md](docs/QUICKSTART.md) for Windows/PowerShell and BOM notes.
 
@@ -106,14 +113,14 @@ SBOM, clean-prefix install and imports).
 - real-account/WS/Office-L3 validation still pending.
 
 ```sh
-# 0.3.0 was published on 2026-11-20 (npm `latest` = 0.3.0; `next` still points at 0.2.3).
-# Run from the checkout (development; the same 0.3.0 version):
+# 0.3.1 was published on 2026-11-20 (npm `latest` = 0.3.1; `next` also points at 0.3.1).
+# Run from the checkout (development; the same 0.3.1 version):
 git clone https://github.com/PerryLink/advisers.git
 cd advisers && corepack pnpm install && corepack pnpm -r build
 ADVISERS_OFFICE_LOCAL=1 node packages/advisers/bin/advisers.js status
-# From npm (stable channel = default `latest`, now 0.3.0):
+# From npm (stable channel = default `latest`, now 0.3.1):
 #   npm i -g --registry=https://registry.npmjs.org advisers@latest advisers-office@latest
-# The `next` channel currently still points at 0.2.3:
+# The `next` channel also points at 0.3.1:
 #   npm i -g --registry=https://registry.npmjs.org advisers@next advisers-office@next
 advisers
 # or one-shot:
@@ -126,13 +133,14 @@ advisers bridge --dir "$BRIDGE_DIR"   # Hermes gateway bridge
 
 Local interaction: `advisers` starts a REPL; `/help`, `/status`, `/new`, `/brief`, `/debug`, `/quit`. With an API key the model can call local Office/file tools and report the generated paths. File writes are confined to the working directory, overwrites require confirmation unless `ADVISERS_FORCE=1`, and local tools do not send file contents to the model unless you attach/read them.
 
-npm tags: **`latest`** is the stable channel (**`0.3.0`**, published 2026-11-20),
-**`next`** is the pre-release channel (currently `0.2.3`). `0.2.4` was a
-never-published candidate superseded by `0.3.0` — it is not installable from npm.
-0.3.0 is the first provenance-signed release: all six packages have non-empty
-`dist.attestations` in the registry and `scripts/verify-release.mjs` passed 222 checks
-(commands in the Status section). Pin an exact version (`advisers@0.3.0` today) when you
-need a reproducible install, and query the official registry directly
+npm tags: **`latest`** is the stable channel (**`0.3.1`**, published 2026-11-20),
+**`next`** is the pre-release channel (also `0.3.1`). `0.2.4` was a
+never-published candidate superseded by the 0.3.0 line — it is not installable from npm.
+0.3.1 supersedes 0.3.0: the 0.3.0 tarballs stay installable by pinning but ship
+release-candidate READMEs and cannot be repaired in place (npm unpublish needs the
+owner's 2FA). 0.3.0 was the first provenance-signed release; 0.3.1 repeats it with the
+same runtime. Pin an exact version (`advisers@0.3.1` today) when you need a reproducible
+install, and query the official registry directly
 (`npm view advisers dist-tags --registry=https://registry.npmjs.org/`) — mirrors can lag
 behind.
 

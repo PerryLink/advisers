@@ -1,16 +1,21 @@
 # Quickstart (Windows + PowerShell)
 
-> Current status: **`0.3.0` was published on 2026-11-20** and is the npm `latest`
-> (`next` is still `0.2.3`). The repository is lockstep at package version `0.3.0`; the
-> earlier `0.2.4` was an **unpublished release candidate** superseded by `0.3.0` (its
-> `v0.2.4` tag points at an older commit, there is no 0.2.4 tarball on npm, so do not try
-> to install it). Stable-channel install:
+> Current status: **`0.3.1` was published on 2026-11-20** and is the npm `latest`
+> (`next` is also `0.3.1`). The repository is lockstep at package version `0.3.1`.
+> `0.3.1` is a **release-metadata patch with no runtime, CLI or contract changes**: it
+> supersedes `0.3.0`, whose published tarballs shipped release-candidate READMEs and
+> whose release surface could not be repaired in place (an npm tarball cannot be
+> replaced, and `npm unpublish` requires the account owner's 2FA); `0.3.0` remains
+> installable by pinning. The earlier `0.2.4` was an **unpublished release candidate**
+> superseded by the 0.3.0 line (its `v0.2.4` tag points at an older commit, there is no
+> 0.2.4 tarball on npm, so do not try to install it). Stable-channel install:
 > `npm i -g --registry=https://registry.npmjs.org advisers@latest advisers-office@latest`.
-> Release notes: <https://github.com/PerryLink/advisers/releases/tag/v0.3.0>. All six
-> 0.3.0 packages carry non-empty `dist.attestations` (SLSA provenance); from a checkout
+> Release notes: <https://github.com/PerryLink/advisers/releases/tag/v0.3.1> (the release
+> also carries the CycloneDX SBOM and `SHA256SUMS`). The 0.3.1 tarballs are published
+> from GitHub Actions OIDC/Trusted Publishing with SLSA provenance; from a checkout
 > (after `corepack pnpm run sbom`),
-> `node scripts/verify-release.mjs --version 0.3.0 --tag latest --sbom artifacts/sbom.cdx.json --require-sbom`
-> passed **222 checks**. The checkout sections below remain the development path.
+> `node scripts/verify-release.mjs --version 0.3.1 --tag latest --sbom artifacts/sbom.cdx.json --require-sbom`
+> verifies the registry release. The checkout sections below remain the development path.
 
 > **Before you start** — read the [Terms of Service](TOS.md) (v2026.11.3),
 > [Disclaimer](DISCLAIMER.md), [Safety & content review](SAFETY.md), and
@@ -98,21 +103,23 @@ node $A memory candidates
 node $A chat "做一份 Q4 汇报 PPT，放到 out\q4.pptx"
 ```
 
-## B. Installed CLI (stable channel = 0.3.0, published 2026-11-20)
+## B. Installed CLI (stable channel = 0.3.1, published 2026-11-20)
 
 ```powershell
-# Stable channel: npm @latest resolves to 0.3.0 (published 2026-11-20).
+# Stable channel: npm @latest resolves to 0.3.1 (published 2026-11-20).
 npm i -g --registry=https://registry.npmjs.org advisers@latest advisers-office@latest
-# Pre-release channel: `next` still resolves to 0.2.3.
+# Pre-release channel: `next` also resolves to 0.3.1.
 # npm i -g --registry=https://registry.npmjs.org advisers@next advisers-office@next
-advisers --version    # expect 0.3.0
+advisers --version    # expect 0.3.1
 advisers status
 advisers soul init
 advisers template weekly weekly.json out\weekly.docx
 advisers verify out\weekly.docx
 ```
-> `0.2.4` never reached npm and must not be presented as installable. The 0.3.0
-> release notes (<https://github.com/PerryLink/advisers/releases/tag/v0.3.0>) and
+> `0.2.4` never reached npm and must not be presented as installable. `0.3.0` is
+> superseded by `0.3.1` (release-metadata patch, same runtime) and remains installable
+> by pinning. The 0.3.1 release notes
+> (<https://github.com/PerryLink/advisers/releases/tag/v0.3.1>) and
 > `scripts/verify-release.mjs` are the provenance record.
 
 If `advisers-office` is missing, install it explicitly (`advisers-office@latest`, or
@@ -264,10 +271,10 @@ node $A sync pull --dir .\Sync\advisers
 Encrypted whole-DB snapshots in a **user-provided** folder; no Advisers server,
 no merge, last-snapshot-wins. See `docs/SYNC.md`.
 
-## O. 0.3.0 additions (in the published npm packages)
+## O. 0.3.0 additions (carried unchanged by 0.3.1)
 
-These are on the 0.3.0 release tree and are also exercised from a checkout. They are
-documented as 0.3.0 surfaces:
+These landed on the 0.3.0 release tree (0.3.1 carries them unchanged) and are also
+exercised from a checkout. They are documented as 0.3.0 surfaces:
 
 ```powershell
 # MCP: legacy protocol negotiation (2024-11-05 / 2025-06-18 / 2025-11-25) + capped list output
@@ -288,7 +295,7 @@ node scripts/bench-read-200k.mjs --home (Join-Path $env:TEMP "advisers-bench") -
 node scripts/bench-read-200k.mjs --home (Join-Path $env:TEMP "advisers-bench") --reps 3
 ```
 
-Recovery and audit-anchor commands (0.3.0 tree; **not in 0.2.3**):
+Recovery and audit-anchor commands (0.3.0/0.3.1 tree; **not in 0.2.3**):
 
 ```powershell
 node $A backup --dry-run                     # managed backup plan (no backup file written)

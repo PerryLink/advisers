@@ -26,16 +26,16 @@ Advisers 不是聊天框，也不是情感陪伴。它维护三本账：
 
 ## 状态
 
-**`0.3.0` 已于 2026-11-20 发布**，当前 npm **`latest`** 为 `0.3.0`，**`next`** 仍为 `0.2.3`。仓库版本锁步在 `0.3.0`；更早的 `0.2.4` 是**未发布的 release candidate**，已被 `0.3.0` 取代（`v0.2.4` tag 指向更早的 commit，npm 上没有 0.2.4 tarball，不要尝试安装它）。6 个发布包为 `advisers`、`advisers-core`、`advisers-office`、`advisers-policy-strict`、`advisers-bridge-hermes`、`dsh-advisers`；两个私有 `advisers-link-*` 包保持同版本但不发布。6 个 0.3.0 tarball 的 `dist.attestations` 均非空（SLSA provenance `https://slsa.dev/provenance/v1`），由 GitHub Actions OIDC/Trusted Publishing 发布（不依赖长期 npm token）。`0.2.2`/`0.2.1`/`0.2.0` 仍可按版本号安装。Release notes：<https://github.com/PerryLink/advisers/releases/tag/v0.3.0>。可自行验证：
+**`0.3.1` 已于 2026-11-20 发布**，当前 npm **`latest`** 为 `0.3.1`，**`next`** 也随本次发布推进到 `0.3.1`。仓库版本锁步在 `0.3.1`。`0.3.1` 是**仅修复发布面的 patch（无运行时/CLI/契约变化）**：它取代 `0.3.0`——0.3.0 的 tarball README 仍是 release candidate 文案，且其发布面（tag、provenance build ref、GitHub Release 附件、`next` tag）无法原地修复（npm 同版本 tarball 不可替换，`npm unpublish` 需要账号 owner 的 2FA）；`0.3.0` 仍可按版本号安装，但已被取代，请使用 `0.3.1`。更早的 `0.2.4` 是**未发布的 release candidate**，已被 0.3.0 线取代（`v0.2.4` tag 指向更早的 commit，npm 上没有 0.2.4 tarball，不要尝试安装它）。6 个发布包为 `advisers`、`advisers-core`、`advisers-office`、`advisers-policy-strict`、`advisers-bridge-hermes`、`dsh-advisers`；两个私有 `advisers-link-*` 包保持同版本但不发布。0.3.1 tarball 由 GitHub Actions OIDC/Trusted Publishing 发布（不依赖长期 npm token），带 SLSA provenance（`https://slsa.dev/provenance/v1`），且 provenance 记录的是发布 tag ref 而不是分支。`0.2.2`/`0.2.1`/`0.2.0` 仍可按版本号安装。Release notes：<https://github.com/PerryLink/advisers/releases/tag/v0.3.1>（该 Release 同时附 CycloneDX SBOM 与 6 个 tarball 的 `SHA256SUMS`）。可自行验证：
 
 ```sh
-npm view advisers@0.3.0 dist.attestations --json --registry=https://registry.npmjs.org/
+npm view advisers@0.3.1 dist.attestations --json --registry=https://registry.npmjs.org/
 corepack pnpm install && corepack pnpm run sbom   # 生成 artifacts/sbom.cdx.json（gitignored）
-node scripts/verify-release.mjs --version 0.3.0 --tag latest \
-  --sbom artifacts/sbom.cdx.json --require-sbom   # 222 checks PASS
+node scripts/verify-release.mjs --version 0.3.1 --tag latest \
+  --sbom artifacts/sbom.cdx.json --require-sbom
 ```
 
-0.3.0 的主题是**可信交付**：证据可核（可解析或诚实标 missing/unverifiable）、数据能救（备份/恢复/审计锚点）、大账本可用（200k 行读路径）、发布可验（provenance）。它同时吸收 0.2.4 的 Windows durable-fsync 与逐 item secrecy/证据校验修复作为基线。0.3.0 的新增内容按主题记录在文档中：[MCP 输出上限与协议协商](docs/MCP.md)、[200k 读 A/B 与写放大修复](docs/PERFORMANCE.md)、[只读账本门面](docs/LEDGER-READ-API.md)、[接口契约](docs/CONTRACTS.md)、[TUI 输出内核](docs/TUI.md)。0.2.3 已通过 743/743 测试、build/typecheck、打包冒烟、文档/许可/TOS/版本锁步检查、安全套件与故障注入套件（9/9）；其 registry tarball 由 `scripts/verify-release.mjs` 验证（86/86）。0.3.0 重跑了这些门禁并新增 `check-contracts`/`eval:det`/`check-sbom`；发布后 `verify-release --version 0.3.0 --tag latest --sbom artifacts/sbom.cdx.json --require-sbom` 实测 **222 checks PASS**（attestations、tarball 哈希、tag/commit/registry 一致、SBOM、干净前缀安装与 import）。
+0.3.0 的主题是**可信交付**：证据可核（可解析或诚实标 missing/unverifiable）、数据能救（备份/恢复/审计锚点）、大账本可用（200k 行读路径）、发布可验（provenance）。它同时吸收 0.2.4 的 Windows durable-fsync 与逐 item secrecy/证据校验修复作为基线。0.3.0 的新增内容按主题记录在文档中：[MCP 输出上限与协议协商](docs/MCP.md)、[200k 读 A/B 与写放大修复](docs/PERFORMANCE.md)、[只读账本门面](docs/LEDGER-READ-API.md)、[接口契约](docs/CONTRACTS.md)、[TUI 输出内核](docs/TUI.md)。0.2.3 已通过 743/743 测试、build/typecheck、打包冒烟、文档/许可/TOS/版本锁步检查、安全套件与故障注入套件（9/9）；其 registry tarball 由 `scripts/verify-release.mjs` 验证（86/86）。0.3.0 重跑了这些门禁并新增 `check-contracts`/`eval:det`/`check-sbom`；发布后 `verify-release --version 0.3.0 --tag latest --sbom artifacts/sbom.cdx.json --require-sbom` 实测 **222 checks PASS**（attestations、tarball 哈希、tag/commit/registry 一致、SBOM、干净前缀安装与 import）。0.3.1 重跑同一发布门禁；运行时未变，因此 0.3.0 的验证证据同样适用于 0.3.1。
 
 > 需要 **Node >= 22.16**；Windows/PowerShell/BOM 说明见 [docs/QUICKSTART.md](docs/QUICKSTART.md)。
 
@@ -59,13 +59,13 @@ node scripts/verify-release.mjs --version 0.3.0 --tag latest \
 - Pet Brief（只读脱敏投影，契约 v0.2：`schemaVersion: 2` + `displayPolicy`，默认 `private`；v0.1 brief 按 legacy 可读）：`pet-brief --json|--out|--check [--strict]|--print-schema|--display-policy public|private|none`；`secrecy >= 2` 全排除、confidence < 0.7 丢弃、5 分钟 TTL、每节 10 项上限；不调模型、不联网、不改账本；桌宠 UI/传输尚未接通。见 `docs/PET-BRIEF-PRODUCER.md`。
 
 ```sh
-# 0.3.0 已于 2026-11-20 发布（npm `latest` = 0.3.0；`next` 仍指向 0.2.3）。
-# 从 checkout 运行（开发用途；同为 0.3.0 版本）：
+# 0.3.1 已于 2026-11-20 发布（npm `latest` = 0.3.1；`next` 也指向 0.3.1）。
+# 从 checkout 运行（开发用途；同为 0.3.1 版本）：
 #   corepack pnpm install && corepack pnpm -r build
 #   ADVISERS_OFFICE_LOCAL=1 node packages/advisers/bin/advisers.js status
-# 从 npm 安装（稳定渠道 = 默认 `latest`，当前为 0.3.0）：
+# 从 npm 安装（稳定渠道 = 默认 `latest`，当前为 0.3.1）：
 #   npm i -g --registry=https://registry.npmjs.org advisers@latest advisers-office@latest
-# `next` 渠道当前仍指向 0.2.3：
+# `next` 渠道也指向 0.3.1：
 #   npm i -g --registry=https://registry.npmjs.org advisers@next advisers-office@next
 advisers soul init
 advisers commit add "周五前发报价给王工" --quote "周五前发报价给王工" --due 2026-11-13T18:00:00+08:00
@@ -76,7 +76,7 @@ advisers office docx spec.json out.docx
 advisers verify out.docx
 ```
 
-npm 标签：**`latest`** 是稳定渠道（当前为 **`0.3.0`**，2026-11-20 已发布）；**`next`** 是预发布渠道（当前 `0.2.3`）。`0.2.4` 是已被 `0.3.0` 取代的**从未发布的 candidate**，不能从 npm 安装。0.3.0 是首个 provenance 可验证的发布：6 个包 `dist.attestations` 均非空，`scripts/verify-release.mjs` 实测 222 checks PASS（命令见「状态」节）。需要可复现安装时请固定版本（当前 `advisers@0.3.0`），并直接查询官方 registry（`npm view advisers dist-tags --registry=https://registry.npmjs.org/`）——镜像可能滞后。
+npm 标签：**`latest`** 是稳定渠道（当前为 **`0.3.1`**，2026-11-20 已发布）；**`next`** 是预发布渠道（同样为 `0.3.1`）。`0.2.4` 是已被 0.3.0 线取代的**从未发布的 candidate**，不能从 npm 安装。0.3.1 取代 0.3.0：0.3.0 的 tarball 仍可按版本号安装，但其 README 是 release candidate 文案且无法原地修复（npm unpublish 需要 owner 2FA）。0.3.0 是首个 provenance 可验证的发布；0.3.1 以同一运行时重跑该发布流程，且 provenance 记录发布 tag ref。需要可复现安装时请固定版本（当前 `advisers@0.3.1`），并直接查询官方 registry（`npm view advisers dist-tags --registry=https://registry.npmjs.org/`）——镜像可能滞后。
 
 ## 许可
 

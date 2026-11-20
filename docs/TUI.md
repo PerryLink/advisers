@@ -1,16 +1,17 @@
 # TUI and terminal output kernel
 
-> Scope: Advisers 0.3.0 output kernel (this document) and the 0.3.1 interactive
+> Scope: Advisers 0.3.0 output kernel (this document) and the 0.3.2 interactive
 > shell boundary (section 10). The kernel is pure library code under
 > `packages/advisers/lib/tui/` plus the console/log sanitizer
 > `packages/advisers/lib/text-safe.js`; it performs no I/O, reads no environment
-> variables at import time and owns no command. **Status in 0.3.0 (published 2026-11-20):
-> the kernel is delivered, unit-tested and wired into `bin/advisers.js`** —
+> variables at import time and owns no command. **Status: the 0.3.0 kernel was published
+> 2026-11-20, and 0.3.1 (a release-metadata patch) carries it unchanged; it is
+> delivered, unit-tested and wired into `bin/advisers.js`** —
 > the global output policy (`--plain`/`--accessible`/`--color`, env flags), the `tui`
 > snapshot/JSON paths, and the REPL reply wrapping, status line and failure blocks render
 > through it (the one-shot `advisers chat` reply print path keeps its existing bytes);
 > webhook/IMAP remote text and bin error/log lines go through `sanitizeConsoleText`.
-> The interactive 0.3.1 shell is still out of scope (see §10/§12).
+> The interactive 0.3.2 shell is still out of scope (see §10/§12).
 
 ## 1. Why this exists
 
@@ -56,7 +57,7 @@ grapheme clustering, `node:fs` in `text-file.js`, existing `lib/fs-safe.js` for 
 writes). PTY tooling is not part of the kernel.
 
 0.3.0 human text is Simplified Chinese. The kernel keeps every display word in the
-single `lib/tui/labels.js` table and accepts `options.labels`, so the planned 0.3.1
+single `lib/tui/labels.js` table and accepts `options.labels`, so the planned 0.3.2
 i18n seam (`lib/i18n/zh.js` + `t()`) can replace or re-export it without touching
 render/sanitize/width logic; machine-facing strings (commands, flags, JSON keys,
 error codes) stay English.
@@ -308,10 +309,10 @@ from argv/env/TTY state for `tui` and the REPL, `tui`/`tui --once`/`tui --json` 
 through the kernel, and a pipe gets one plain snapshot — verified by
 `test/bin-tui-wiring.test.js`, `test/bin-json-contracts.test.js` and the `tty` +
 opt-in `tui` groups of `pnpm eval:det` (`pnpm eval:det --suite tui`: 2/2). The remaining
-0.3.x items are the 0.3.1 interactive shell and routing BOM-prone file reads through
+0.3.x items are the 0.3.2 interactive shell and routing BOM-prone file reads through
 `lib/tui/text-file.js`; windowing/refresh logic must not be added to the kernel.
 
-## 10. 0.3.0 kernel vs 0.3.1 shell boundary
+## 10. 0.3.0 kernel vs 0.3.2 shell boundary
 
 In 0.3.0 this module set is the **output kernel only**. It is deliberately
 headless: it renders data and decides capabilities, but does not read stdin, own
@@ -320,7 +321,7 @@ not own the command surface. `tui --once` keeps its headings and assertion seman
 but its sections now render through `renderSnapshot` (CJK width-wrapped, sanitised,
 width-capped).
 
-| Capability | 0.3.0 kernel | 0.3.1 shell (planned) |
+| Capability | 0.3.0 kernel | 0.3.2 shell (planned) |
 |---|---|---|
 | display width / wrap / truncate | yes | reuses |
 | sanitisation (display + console/log) | yes | reuses |
@@ -334,7 +335,7 @@ width-capped).
 | PTY semantic snapshot tooling (node-pty/@xterm/headless, dev-only) | no | yes |
 
 The 0.3.0 tree already performs this integration for `tui` and the REPL (global flag
-stripping + one policy object per process); the 0.3.1 shell must reuse the same entry
+stripping + one policy object per process); the 0.3.2 shell must reuse the same entry
 point rather than fork the kernel. Sketch of the wiring now in `bin/advisers.js`:
 
 ```js
@@ -380,13 +381,13 @@ checks; changing ledger/policy/network behaviour from the UI layer.
   defence; emoji families appear as separate emoji in log lines. Display blocks
   preserve them.
 - Real Windows IME behaviour in raw mode and old-conhost VT behaviour remain
-  manual/D-level checks for the 0.3.1 shell; `--plain` is the escape hatch.
+  manual/D-level checks for the 0.3.2 shell; `--plain` is the escape hatch.
 - The output-side wiring is done in 0.3.0: `bin/advisers.js`
   uses `resolveOutputPolicy` globally and renders `tui`/`tui --once`/`tui --json` and the
   REPL result/status/error blocks through the kernel, while `lib/notify.js` (webhook
   failure detail) and `lib/imap.js` (greeting/status) call `sanitizeConsoleText`.
   Remaining follow-ups are (a) routing user-editable file reads through the BOM helpers
-  (`lib/tui/text-file.js`) and (b) the 0.3.1 interactive shell; the call-site tests above
+  (`lib/tui/text-file.js`) and (b) the 0.3.2 interactive shell; the call-site tests above
   are the enforcement for the wired paths.
 
 ## 13. References

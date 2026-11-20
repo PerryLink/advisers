@@ -1,11 +1,13 @@
 # Performance
 
-> Status: `0.3.0` (published 2026-11-20) is the current npm `latest` (`next` is still
-> `0.2.3`). The repository is at package version `0.3.0`; the earlier `0.2.4` was an
-> unpublished candidate that 0.3.0 supersedes. The numbers below are marked with the tree
-> they were measured on; the 0.3.0 section is release-time evidence from the published
-> tree, not a service-level guarantee. `0.2.2`, `0.2.1` and `0.2.0` are "before" baselines
-> where a comparison says so.
+> Status: `0.3.1` (published 2026-11-20) is the current npm `latest` (`next` is also
+> `0.3.1`). The repository is at package version `0.3.1`. `0.3.1` is a release-metadata
+> patch over `0.3.0` with **no runtime changes**, so every measurement below applies to
+> the 0.3.1 tree unchanged; the earlier `0.2.4` was an unpublished candidate that the
+> 0.3.0 line supersedes. The numbers below are marked with the tree they were measured on;
+> the 0.3.0 section is release-time evidence from the published tree, not a service-level
+> guarantee. `0.2.2`, `0.2.1` and `0.2.0` are "before" baselines where a comparison says
+> so.
 
 How Advisers performs on the hot paths, how to reproduce the numbers, and which
 behaviour the regression tests pin. This is a developer/operator reference, not

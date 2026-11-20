@@ -1,4 +1,4 @@
-# Interface contracts (0.3.0 minimal set)
+# Interface contracts (0.3.0 minimal set; unchanged by the 0.3.1 release-metadata patch)
 
 Advisers is CLI-first and its consumers (scripts, CI, MCP clients, the DSH host,
 Famling) need a machine-readable, versioned interface instead of prose. This
@@ -128,7 +128,7 @@ legacy compatibility. The checker asserts the echo and the fallback; changing
 to strict rejection is a documented contract change.) List-shaped MCP payloads
 gained the additive cap fields `total`/`truncated`/`limit`/per-array totals
 (caps applied after clearance, before the egress classifier); the modern
-2026-07-28 era remains 0.3.1+.
+2026-07-28 era remains 0.3.2+.
 
 ## How to validate
 
@@ -143,7 +143,7 @@ The gate runs **in CI on every PR** (the `test` job, after build/typecheck; see
 `.github/workflows/ci.yml`), so a shape change that is not reflected in the frozen
 artifacts fails the PR. It is offline (no credentials, no model, no network), uses a
 temporary `ADVISERS_HOME` under the OS temp directory, and removes it afterwards.
-Current tree: **46 checks PASS** (2026-11-20 0.3.0 tree, including the wired
+Current tree: **46 checks PASS** (2026-11-20 0.3.1 tree, including the wired
 `status.contracts` field and the real stdio MCP catalogue). The eight checks:
 
 | Check | Enforces |

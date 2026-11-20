@@ -1,8 +1,9 @@
 # Deterministic eval suite (`pnpm eval:det`)
 
 > Status: introduced in the 0.3.0 line (published 2026-11-20). This tree is
-> `advisers@0.3.0`; the suite is a release gate for the deterministic contract,
-> not a claim about model quality.
+> `advisers@0.3.1`; 0.3.1 is a release-metadata patch with no runtime changes, so the
+> suite is the same release gate for the deterministic contract, not a claim about
+> model quality.
 
 `eval/` also contains the older **manual, real-model** runners
 (`eval/run-*.mjs`, see [eval/README.md](../eval/README.md)). Those need a
