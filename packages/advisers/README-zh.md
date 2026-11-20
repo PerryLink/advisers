@@ -5,12 +5,12 @@
 ## 安装
 
 ```sh
-# 0.3.0 是 release candidate；npm @latest 仍为 0.2.3（稳定渠道 = 默认 `latest`）：
+# 0.3.0 已于 2026-11-20 发布；npm @latest 现为 0.3.0（稳定渠道 = 默认 `latest`）：
 #   npm i -g --registry=https://registry.npmjs.org advisers@latest advisers-office@latest
 # 从 checkout 运行：
 #   corepack pnpm install && corepack pnpm -r build
 #   ADVISERS_OFFICE_LOCAL=1 node packages/advisers/bin/advisers.js status
-# preview/RC 构建使用 `next` 渠道（当前 `next` 也指向 0.2.3）：
+# `next` 渠道当前仍指向 0.2.3：
 #   npm i -g --registry=https://registry.npmjs.org advisers@next advisers-office@next
 advisers soul init
 advisers brief "做一份 Q4 预算 Excel，周五前给老板"
@@ -36,12 +36,14 @@ CLI 是**本地秘书运行时**：一个 REPL、用户账/承诺账/流程账�
 
 ## 状态
 
-`0.3.0` 是 release candidate（2026-11-20；npm `latest` 仍为 `0.2.3`，2026-11-18 发布）。
+`0.3.0` 已于 2026-11-20 发布（npm `latest` = `0.3.0`；`next` 仍为 `0.2.3`）。
 0.3.0 是「可信交付」minor：所有出网面逐 item secrecy clearance、本地审计尾锚、备份轮换/可验证恢复与
 `doctor --repair`、200k 读路径消除 TEMP B-TREE 写放大、MCP 输出上限 + legacy 协议协商、DSH 只读账本门面、
-机器可读契约、无 key 的确定性评测套件与 SBOM 门禁；被它取代的 0.2.4 candidate 从未发布。0.3.0 须待账号所有者
-OTP 批准 CI staged 构建后才可安装，且只有在 6 个包 `dist.attestations` 非空后才能称为 provenance-signed。
-完整 TUI 壳、客户/项目 CLI、邮件入口、PolicyGrant 与 MCP modern 不在 0.3.0；未交付清单见仓库 CHANGELOG。
+机器可读契约、无 key 的确定性评测套件与 SBOM 门禁；被它取代的 0.2.4 candidate 从未发布。6 个包的
+`dist.attestations` 均非空（SLSA provenance），2026-11-20 实测 `scripts/verify-release.mjs --version 0.3.0
+--tag latest --sbom artifacts/sbom.cdx.json --require-sbom` 为 **222 checks**（SBOM 由 `pnpm run sbom` 生成）；release notes：
+<https://github.com/PerryLink/advisers/releases/tag/v0.3.0>。完整 TUI 壳、邮件入口、PolicyGrant 与 MCP
+modern 不在 0.3.0；未交付清单见仓库 CHANGELOG。
 
 - SQLite 账本 `~/.advisers/state.db`（JSON fallback；schema v21 —— v21 增量加入客户/项目实体、无锁只读快照、增量写）；
 - soul 位于 `~/.advisers/soul.md`，人类独占；

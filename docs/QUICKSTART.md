@@ -1,13 +1,16 @@
 # Quickstart (Windows + PowerShell)
 
-> Current status: **`0.3.0` is a release candidate (2026-11-20) and is NOT published.**
-> The repository is lockstep at package version `0.3.0`; the earlier `0.2.4` was an
-> **unpublished release candidate** superseded by `0.3.0` (its `v0.2.4` tag points at an
-> older commit, there is no 0.2.4 tarball on npm, so do not try to install it). npm
-> `latest` = `next` = `0.2.3` (published 2026-11-18). Stable-channel install:
+> Current status: **`0.3.0` was published on 2026-11-20** and is the npm `latest`
+> (`next` is still `0.2.3`). The repository is lockstep at package version `0.3.0`; the
+> earlier `0.2.4` was an **unpublished release candidate** superseded by `0.3.0` (its
+> `v0.2.4` tag points at an older commit, there is no 0.2.4 tarball on npm, so do not try
+> to install it). Stable-channel install:
 > `npm i -g --registry=https://registry.npmjs.org advisers@latest advisers-office@latest`.
-> The checkout instructions below are the supported way to try the 0.3.0 release
-> candidate; no 0.3.0 package has been staged or published.
+> Release notes: <https://github.com/PerryLink/advisers/releases/tag/v0.3.0>. All six
+> 0.3.0 packages carry non-empty `dist.attestations` (SLSA provenance); from a checkout
+> (after `corepack pnpm run sbom`),
+> `node scripts/verify-release.mjs --version 0.3.0 --tag latest --sbom artifacts/sbom.cdx.json --require-sbom`
+> passed **222 checks**. The checkout sections below remain the development path.
 
 > **Before you start** — read the [Terms of Service](TOS.md) (v2026.11.3),
 > [Disclaimer](DISCLAIMER.md), [Safety & content review](SAFETY.md), and
@@ -95,22 +98,22 @@ node $A memory candidates
 node $A chat "做一份 Q4 汇报 PPT，放到 out\q4.pptx"
 ```
 
-## B. Installed CLI (stable channel = 0.2.3; 0.3.0 is a release candidate, not published)
+## B. Installed CLI (stable channel = 0.3.0, published 2026-11-20)
 
 ```powershell
-# Stable channel: npm @latest resolves to 0.2.3 (published 2026-11-18).
-# 0.3.0 (release candidate) is not published; build it from a checkout (section A) to try it.
+# Stable channel: npm @latest resolves to 0.3.0 (published 2026-11-20).
 npm i -g --registry=https://registry.npmjs.org advisers@latest advisers-office@latest
-# Pre-release channel (a future 0.3.0 pre-release would land on `next` first):
+# Pre-release channel: `next` still resolves to 0.2.3.
 # npm i -g --registry=https://registry.npmjs.org advisers@next advisers-office@next
-advisers --version    # expect 0.2.3
+advisers --version    # expect 0.3.0
 advisers status
 advisers soul init
 advisers template weekly weekly.json out\weekly.docx
 advisers verify out\weekly.docx
 ```
-> `0.2.4` never reached npm and must not be presented as installable; the 0.3.0
-> release notes (when published) are the only place that can claim provenance.
+> `0.2.4` never reached npm and must not be presented as installable. The 0.3.0
+> release notes (<https://github.com/PerryLink/advisers/releases/tag/v0.3.0>) and
+> `scripts/verify-release.mjs` are the provenance record.
 
 If `advisers-office` is missing, install it explicitly (`advisers-office@latest`, or
 `@next` before promotion); the CLI does not pull it automatically.
@@ -261,10 +264,10 @@ node $A sync pull --dir .\Sync\advisers
 Encrypted whole-DB snapshots in a **user-provided** folder; no Advisers server,
 no merge, last-snapshot-wins. See `docs/SYNC.md`.
 
-## O. 0.3.0 release-candidate additions (checkout only; not published)
+## O. 0.3.0 additions (in the published npm packages)
 
-These are on the 0.3.0 release-candidate tree and are exercised from a checkout, not from
-npm. They are documented as candidate features — do not treat them as a released contract:
+These are on the 0.3.0 release tree and are also exercised from a checkout. They are
+documented as 0.3.0 surfaces:
 
 ```powershell
 # MCP: legacy protocol negotiation (2024-11-05 / 2025-06-18 / 2025-11-25) + capped list output
@@ -285,7 +288,7 @@ node scripts/bench-read-200k.mjs --home (Join-Path $env:TEMP "advisers-bench") -
 node scripts/bench-read-200k.mjs --home (Join-Path $env:TEMP "advisers-bench") --reps 3
 ```
 
-Recovery and audit-anchor commands (0.3.0 release-candidate tree; **not in 0.2.3**):
+Recovery and audit-anchor commands (0.3.0 tree; **not in 0.2.3**):
 
 ```powershell
 node $A backup --dry-run                     # managed backup plan (no backup file written)

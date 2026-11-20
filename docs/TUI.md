@@ -4,8 +4,8 @@
 > shell boundary (section 10). The kernel is pure library code under
 > `packages/advisers/lib/tui/` plus the console/log sanitizer
 > `packages/advisers/lib/text-safe.js`; it performs no I/O, reads no environment
-> variables at import time and owns no command. **Status on the 0.3.0 release candidate
-> (2026-11-20): the kernel is delivered, unit-tested and wired into `bin/advisers.js`** —
+> variables at import time and owns no command. **Status in 0.3.0 (published 2026-11-20):
+> the kernel is delivered, unit-tested and wired into `bin/advisers.js`** —
 > the global output policy (`--plain`/`--accessible`/`--color`, env flags), the `tui`
 > snapshot/JSON paths, and the REPL reply wrapping, status line and failure blocks render
 > through it (the one-shot `advisers chat` reply print path keeps its existing bytes);
@@ -381,7 +381,7 @@ checks; changing ledger/policy/network behaviour from the UI layer.
   preserve them.
 - Real Windows IME behaviour in raw mode and old-conhost VT behaviour remain
   manual/D-level checks for the 0.3.1 shell; `--plain` is the escape hatch.
-- The output-side wiring is done on the 0.3.0 release candidate: `bin/advisers.js`
+- The output-side wiring is done in 0.3.0: `bin/advisers.js`
   uses `resolveOutputPolicy` globally and renders `tui`/`tui --once`/`tui --json` and the
   REPL result/status/error blocks through the kernel, while `lib/notify.js` (webhook
   failure detail) and `lib/imap.js` (greeting/status) call `sanitizeConsoleText`.

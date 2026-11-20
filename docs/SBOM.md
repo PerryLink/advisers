@@ -1,10 +1,12 @@
 # Software Bill of Materials (SBOM)
 
-> Status: 0.3.0 development line. The packages are not published yet; the
-> workspace version is whatever `packages/advisers/package.json` records. This
-> page documents a release-gate artifact, not a claim that 0.3.0 has shipped or
-> that its build is reproducible. Provenance status lives in
-> [SECURITY.md](SECURITY.md).
+> Status: 0.3.0 was published on 2026-11-20 (npm `latest`; `next` is still
+> `0.2.3`). The workspace version is whatever `packages/advisers/package.json`
+> records. This page documents a release-gate artifact, not a claim that the build
+> is reproducible. Provenance status lives in [SECURITY.md](SECURITY.md); the
+> post-publish `node scripts/verify-release.mjs --version 0.3.0 --tag latest
+> --sbom artifacts/sbom.cdx.json --require-sbom` run passed 222 checks (release
+> notes: <https://github.com/PerryLink/advisers/releases/tag/v0.3.0>).
 
 Advisers publishes a CycloneDX SBOM for its dependency set. The document is
 generated from `pnpm-lock.yaml` by the package manager's built-in `pnpm sbom`

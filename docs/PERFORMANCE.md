@@ -1,10 +1,10 @@
 # Performance
 
-> Status: `0.2.3` (2026-11-18) is the published npm `latest`; the repository is at
-> package version `0.3.0`, a **release candidate — not released** (2026-11-20). The
-> earlier `0.2.4` was an unpublished candidate that 0.3.0 supersedes. The numbers below
-> are marked with the tree they were measured on; the 0.3.0 section is candidate
-> evidence, not a release claim. `0.2.2`, `0.2.1` and `0.2.0` are "before" baselines
+> Status: `0.3.0` (published 2026-11-20) is the current npm `latest` (`next` is still
+> `0.2.3`). The repository is at package version `0.3.0`; the earlier `0.2.4` was an
+> unpublished candidate that 0.3.0 supersedes. The numbers below are marked with the tree
+> they were measured on; the 0.3.0 section is release-time evidence from the published
+> tree, not a service-level guarantee. `0.2.2`, `0.2.1` and `0.2.0` are "before" baselines
 > where a comparison says so.
 
 How Advisers performs on the hot paths, how to reproduce the numbers, and which
@@ -81,11 +81,10 @@ current rounds of 3 fresh children per scenario** (so it is a small-sample media
 distribution), and the synthetic ledger has **no FTS/turns content** — this section
 measures read-model/SQL cost, not search.
 
-## 0.3.0 (release candidate, 2026-11-20): 200k read A/B and the T1 write-amplification fix
+## 0.3.0 (published 2026-11-20): 200k read A/B and the T1 write-amplification fix
 
-Two changes on the 0.3.0 release-candidate tree are measured here. `0.3.0` is **not
-released**; these are development evidence, and the numbers are subject to the shared-host
-caveats above.
+Two changes on the 0.3.0 tree are measured here. 0.3.0 was published on 2026-11-20;
+these are release-time measurements, subject to the shared-host caveats above.
 
 ### T1: remove the TEMP B-TREE spill behind read-command write amplification
 
@@ -140,7 +139,7 @@ its wall time stays dominated by serializing ~27 MB of JSON to stdout.
 
 ### Measured A/B (200k synthetic ledger)
 
-Baseline = the 0.2.4 tree (`35a51c3`). Current = the 0.3.0 release-candidate tree
+Baseline = the 0.2.4 tree (`35a51c3`). Current = the 0.3.0 tree
 (`e1af67a`, 2026-11-20). Same `/tmp/advisers-bench-home` synthetic ledger (≈124 MB,
 shape above), one process at a time, **medians of 3 fresh CLI children per scenario per
 round, two interleaved rounds**, shared host. "Writes" = child `/proc/<pid>/io`

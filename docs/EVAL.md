@@ -1,6 +1,6 @@
 # Deterministic eval suite (`pnpm eval:det`)
 
-> Status: introduced for the 0.3.0 release-candidate line. This tree is
+> Status: introduced in the 0.3.0 line (published 2026-11-20). This tree is
 > `advisers@0.3.0`; the suite is a release gate for the deterministic contract,
 > not a claim about model quality.
 
@@ -10,7 +10,7 @@ provider key, cost tokens, and are not CI gates. This page documents the other
 half: `eval:det`, a no-key / no-network suite that is intended to be green in
 CI and in the release evidence. It is **wired as a required CI step** (the `test`
 job runs `pnpm eval:det` after the workspace build) and remains a release-gate
-input; also run it explicitly when cutting a release candidate.
+input; also run it explicitly when cutting a release.
 
 ## Quick start
 

@@ -143,7 +143,7 @@ The gate runs **in CI on every PR** (the `test` job, after build/typecheck; see
 `.github/workflows/ci.yml`), so a shape change that is not reflected in the frozen
 artifacts fails the PR. It is offline (no credentials, no model, no network), uses a
 temporary `ADVISERS_HOME` under the OS temp directory, and removes it afterwards.
-Current tree: **46 checks PASS** (2026-11-20 release-candidate tree, including the wired
+Current tree: **46 checks PASS** (2026-11-20 0.3.0 tree, including the wired
 `status.contracts` field and the real stdio MCP catalogue). The eight checks:
 
 | Check | Enforces |
@@ -189,7 +189,7 @@ Current tree: **46 checks PASS** (2026-11-20 release-candidate tree, including t
   artifacts carry `x-license: CC-BY-NC-SA-4.0` and `contracts/LICENSE` records
   the intended license; updating the legal scope text needs owner/legal
   confirmation and is outside this implementation.
-- DSH bundle: on the 0.3.0 release candidate the three ledger read tools read the
+- DSH bundle: in 0.3.0 the three ledger read tools read the
   **real local ledger read-only** through `advisers/lib/ledger-read.js` (TOS-gated,
   clearance 0, no HOME lock, no migration, no writes) with a marked preview fallback;
   the read payload keeps the 0.2.x field names and adds source/clearance/backend fields

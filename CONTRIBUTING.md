@@ -83,11 +83,13 @@ packages (the six published packages plus the private `advisers-link-email` and
 `advisers-link-feishu`) are **lockstep**: they share one version and exact internal
 pins. `scripts/check-release.mjs` enforces the shared version and the pins.
 
-Current flow is local `npm stage publish --tag next` + human OTP approval; the
-GitHub `publish` workflow is manual and cannot approve stages. Trusted Publishing
-(OIDC) is a target, not current behavior. Before publishing, build from a clean
-checkout, `npm pack` every package, and install the exact tarballs in an empty
-directory on Node 22 and 24.
+Releases up to 0.2.3 used local `npm stage publish` + human OTP approval. 0.3.0
+was published on 2026-11-20 through the GitHub `publish` workflow's
+owner-authorized direct OIDC/Trusted Publishing path
+(`release.mjs --provenance --publish`), which attaches npm provenance
+attestations; the staged path still needs the owner's own OTP approval. Before
+publishing, build from a clean checkout, `npm pack` every package, and install
+the exact tarballs in an empty directory on Node 22 and 24.
 
 ## Security issues
 

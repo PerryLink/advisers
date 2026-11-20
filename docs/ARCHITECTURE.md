@@ -1,8 +1,8 @@
 # Advisers architecture
 
-> Status: **0.3.0 release candidate** (2026-11-20; not released). The repository package
-> version is `0.3.0`; the earlier `0.2.4` was an **unpublished** release candidate that
-> 0.3.0 supersedes, and npm `latest` is `0.2.3`. 0.3.0 is the "trustworthy delivery"
+> Status: **0.3.0 published 2026-11-20** (npm `latest` = `0.3.0`; `next` is still
+> `0.2.3`). The repository package version is `0.3.0`; the earlier `0.2.4` was an
+> **unpublished** release candidate that 0.3.0 supersedes. 0.3.0 is the "trustworthy delivery"
 > line: it adds the read-only ledger facade, read-model projections, MCP output
 > caps/legacy protocol negotiation, interface contracts, the TUI output kernel and the
 > audit-anchor/backup surface on top of the 0.2.x runtime. Anything marked *target* below
@@ -59,7 +59,7 @@
 ### 2.1 0.3.0 architecture invariants (reviewed per release)
 
 The 0.3.0 planning froze ten invariants for the read/model/contract surfaces. They are
-recorded here with an honest status on the 0.3.0 release-candidate tree; "target" means the
+recorded here with an honest status on the 0.3.0 tree; "target" means the
 design is accepted but the code does **not** enforce it yet, and no release note may claim
 it.
 
@@ -146,14 +146,14 @@ adding a `MatterLink` table after the fact is a migration, adding it now is free
 |---|---|
 | 0.1 | Soul slot + user ledger + commitment ledger + teaching receipt + **30 probes** + SQLite + CLI |
 | 0.2 | Routine capture + diff + approval (manual first) + email/share link + eval harness |
-| 0.3 | **Trustworthy delivery (0.3.0, release candidate):** read-only ledger facade + read-model projections + MCP output caps/legacy protocol negotiation + interface contracts + TUI output kernel; DSH reads the real ledger read-only. Association hints and the interactive TUI shell move later. |
+| 0.3 | **Trustworthy delivery (0.3.0, published 2026-11-20):** read-only ledger facade + read-model projections + MCP output caps/legacy protocol negotiation + interface contracts + TUI output kernel; DSH reads the real ledger read-only. Association hints and the interactive TUI shell move later. |
 | 0.4 | Interactive TUI shell (0.3.1 first) + Feishu/cross-matter proposals + policy engine/Evidence 2.0 + full DSH write (0.5+) |
 | 1.0 | SPI frozen + 20 users × 30 days metrics + two external links |
 
 The earlier plan put routines at 1.0; that makes the product a commitment
 tracker for a year. Routines must appear by 0.2 to keep the "intern" promise.
 
-## 9. Current limits (0.3.0 release candidate; runtime additive over 0.2.4)
+## 9. Current limits (0.3.0, published 2026-11-20; runtime additive over 0.2.4)
 
 - Ledger is persisted in SQLite (`advisers/lib/sqlite.js`); JSON mode is a fallback but loses turns/search/audit. Physical schema is **v21** on the 0.3.0 tree: v21 is the additive customer-entity step (`clients`/`projects`/`client_notes`, nullable `matters.client_id`/`project_id`, `commitments.created_at` and delivery lineage columns). No `due_ms`/`rev` migration is part of 0.3.0, so date windows still run in JS.
 - CLI calls the model only when `ADVISERS_API_KEY` is set; without a key it records/search/builds but does not create promises or artifacts from natural language.
@@ -165,10 +165,10 @@ tracker for a year. Routines must appear by 0.2 to keep the "intern" promise.
 - No real IM account and no 5-user dogfood validation yet.
 - **Audit tail anchoring (0.3.0)**: the local hash chain detects edits to its own rows; 0.3.0 adds `lib/audit-anchor.js` and the `audit --write-anchor`/`audit --expect-head`/`audit --expect-count` CLI surface, so deleting the tail becomes detectable **when an anchor exists**. This is a local anchor file (0600), not a third-party timestamp/TSA; see `docs/SECURITY.md` (`audit`/`privacy --prove`/`export` report the anchor state) and the CLI help.
 - **Recovery (0.3.0)**: `backup` keeps managed, checksummed backups in `$ADVISERS_HOME/backups` with `--keep` rotation (only managed backups are rotated), `backups ls|verify` inspects/verifies them, `restore <file>` is a plan unless `--yes` and refuses an anchor-behind backup unless explicitly allowed, `doctor --repair` defaults to dry-run with `--only lock,temp,wal,fts`, and `audit --rebuild-fts` rebuilds the FTS indexes. `restore`/`doctor --repair` success paths write `db.restore`/`doctor.repair` audit rows and refresh the anchor; `backup` instead writes `.sha256`/`.anchor.json` sidecars aligned with the new backup's head (no audit row), so an immediate restore is anchor-match and only older backups need `--allow-anchor-behind`. Failures report whether the original database stayed intact. See `docs/SECURITY.md` and the CLI help.
-- **TUI / console-safe wiring is done on the 0.3.0 release candidate**: the output kernel (`lib/tui/**`, `lib/text-safe.js`) is wired into `bin/advisers.js` — one `resolveOutputPolicy` per process for the global `--plain`/`--accessible`/`--color` flags, `tui`/`tui --once`/`tui --json` rendered through the kernel, REPL reply wrapping + status/failure blocks through the renderers, and `lib/notify.js`/`lib/imap.js` routing remote text through `sanitizeConsoleText`. On a pipe `advisers tui </dev/null` now prints one plain snapshot without a clear-screen ESC; the `tty`/`tui` eval groups and `test/bin-tui-*` / `test/console-safe-wiring` cover it. Remaining: the 0.3.1 interactive shell and routing BOM-prone file reads through `lib/tui/text-file.js`. See [docs/TUI.md](TUI.md).
-- **Performance (0.3.0 release candidate)**: the T1 write-amplification fix removed the ordered status-predicate TEMP B-TREE spill (`pet-brief` now writes ~32 KB/run instead of 31.8 MB; `today` 32 KB instead of 5.8 MB at 200k rows) and the read-model projections moved `remind`/`tui`/`digest` inside target; `today` (151–158 ms median, target ≤150) and `pet-brief` (399/588 ms, target ≤400) are at the boundary, and `today --json` remains output-bound. Full A/B, method and caveats: [docs/PERFORMANCE.md](PERFORMANCE.md). Do not advertise the 0.3.0 performance table as fully met.
-- **MCP (0.3.0 release candidate)**: 7 tools + 4 read-only resources; list results are capped after clearance and before the classifier and carry `total/truncated` (see [docs/MCP.md](MCP.md)). Legacy protocol negotiation covers 2024-11-05 / 2025-06-18 / 2025-11-25 with a 2024-11-05 default; the modern stateless 2026-07-28 revision is **not implemented** and is not advertised.
-- **Provenance (0.3.0 target)**: 0.2.3 and earlier were staged locally with owner OTP and have no npm provenance; `0.2.4` was **never published**. 0.3.0 is intended to be the first CI Trusted-Publishing release, but until the registry shows non-empty `dist.attestations` for all six packages, no document or release note may call a build provenance-signed. Supply-chain artifacts: `scripts/check-provenance.mjs`, `scripts/sbom.mjs` + `scripts/check-sbom.mjs` and [docs/SBOM.md](SBOM.md) (lockfile-derived gate artifact, not a build graph, vulnerability scan or reproducible-build proof).
+- **TUI / console-safe wiring is done in 0.3.0**: the output kernel (`lib/tui/**`, `lib/text-safe.js`) is wired into `bin/advisers.js` — one `resolveOutputPolicy` per process for the global `--plain`/`--accessible`/`--color` flags, `tui`/`tui --once`/`tui --json` rendered through the kernel, REPL reply wrapping + status/failure blocks through the renderers, and `lib/notify.js`/`lib/imap.js` routing remote text through `sanitizeConsoleText`. On a pipe `advisers tui </dev/null` now prints one plain snapshot without a clear-screen ESC; the `tty`/`tui` eval groups and `test/bin-tui-*` / `test/console-safe-wiring` cover it. Remaining: the 0.3.1 interactive shell and routing BOM-prone file reads through `lib/tui/text-file.js`. See [docs/TUI.md](TUI.md).
+- **Performance (0.3.0)**: the T1 write-amplification fix removed the ordered status-predicate TEMP B-TREE spill (`pet-brief` now writes ~32 KB/run instead of 31.8 MB; `today` 32 KB instead of 5.8 MB at 200k rows) and the read-model projections moved `remind`/`tui`/`digest` inside target; `today` (151–158 ms median, target ≤150) and `pet-brief` (399/588 ms, target ≤400) are at the boundary, and `today --json` remains output-bound. Full A/B, method and caveats: [docs/PERFORMANCE.md](PERFORMANCE.md). Do not advertise the 0.3.0 performance table as fully met.
+- **MCP (0.3.0)**: 7 tools + 4 read-only resources; list results are capped after clearance and before the classifier and carry `total/truncated` (see [docs/MCP.md](MCP.md)). Legacy protocol negotiation covers 2024-11-05 / 2025-06-18 / 2025-11-25 with a 2024-11-05 default; the modern stateless 2026-07-28 revision is **not implemented** and is not advertised.
+- **Provenance (0.3.0 published)**: 0.2.3 and earlier were staged locally with owner OTP and have no npm provenance; `0.2.4` was **never published**. 0.3.0 is the first CI OIDC/Trusted-Publishing release: on 2026-11-20 all six packages showed non-empty `dist.attestations` (SLSA `https://slsa.dev/provenance/v1`) from commit `1199fbf`, and the post-publish `verify-release --version 0.3.0 --tag latest --sbom artifacts/sbom.cdx.json --require-sbom` run passed 222 checks (release notes: <https://github.com/PerryLink/advisers/releases/tag/v0.3.0>). Supply-chain artifacts: `scripts/check-provenance.mjs`, `scripts/sbom.mjs` + `scripts/check-sbom.mjs` and [docs/SBOM.md](SBOM.md) (lockfile-derived gate artifact, not a build graph, vulnerability scan or reproducible-build proof).
 
 ## 10. Intent, Office, and Affect policy
 
@@ -363,7 +363,7 @@ Windows/AV/OneDrive errors.
 
 ## 13. 0.3.0 additions and their contracts
 
-The 0.3.0 release-candidate tree adds these surfaces. Each has its own document; this section is
+The 0.3.0 tree adds these surfaces. Each has its own document; this section is
 the map, not a second source of truth.
 
 | Surface | Where | Contract / status |
