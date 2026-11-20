@@ -46,6 +46,12 @@ on:
         default: "no"
         type: choice
         options: ["no", "yes"]
+      publish:
+        description: "direct OIDC+provenance publish; validates a Pending-validation Trusted Publisher (requires confirm=yes)"
+        required: true
+        default: "no"
+        type: choice
+        options: ["no", "yes"]
 
 permissions:
   contents: read
@@ -162,6 +168,39 @@ jobs:
           code=$?
           if [ "$code" -ne 0 ]; then
             echo "::error::Trusted Publishing staging failed; see the npm debug log below"
+            echo '--- npm debug log (tail; npm does not print auth tokens) ---'
+            found=0
+            for f in "$HOME"/.npm/_logs/*-debug-0.log; do
+              if [ -f "$f" ]; then
+                found=1
+                echo "== $f"
+                tail -250 "$f"
+              fi
+            done
+            if [ "$found" -eq 0 ]; then
+              echo "no npm debug log found under $HOME/.npm/_logs"
+            fi
+            echo '--- end npm debug log ---'
+          fi
+          exit "$code"
+
+      - name: Publish directly with Trusted Publishing + provenance (owner-authorized validation)
+        if: ${{ inputs.confirm == 'yes' && inputs.publish == 'yes' }}
+        env:
+          RELEASE_TAG: ${{ inputs.release_tag }}
+          NPM_CONFIG_LOGLEVEL: verbose
+        run: |
+          set -u
+          if [ -n "${NPM_TOKEN:-}" ]; then
+            echo "::error::NPM_TOKEN must not be set for Trusted Publishing; OIDC supplies the short-lived token"
+            exit 1
+          fi
+          echo "Direct publishing (OIDC provenance) with RELEASE_TAG=${RELEASE_TAG}."
+          set +e
+          node scripts/release.mjs --provenance --publish
+          code=$?
+          if [ "$code" -ne 0 ]; then
+            echo "::error::Trusted Publishing direct publish failed; see the npm debug log below"
             echo '--- npm debug log (tail; npm does not print auth tokens) ---'
             found=0
             for f in "$HOME"/.npm/_logs/*-debug-0.log; do

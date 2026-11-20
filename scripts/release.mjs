@@ -6,6 +6,7 @@
  *   RELEASE_TAG=latest node scripts/release.mjs
  *   node scripts/release.mjs --dry-run        # npm stage publish --dry-run only
  *   node scripts/release.mjs --provenance     # require npm provenance (OIDC CI only)
+ *   node scripts/release.mjs --provenance --publish  # direct OIDC publish (validates a pending Trusted Publisher)
  *
  * Provenance / Trusted Publishing:
  *   --provenance (or ADVISERS_PROVENANCE=1) asks npm to attach build provenance
@@ -42,6 +43,7 @@ import { fileURLToPath } from 'node:url'
 const root = fileURLToPath(new URL('..', import.meta.url))
 const registry = process.env.ADVISERS_REGISTRY || 'https://registry.npmjs.org/'
 const dryRun = process.argv.includes('--dry-run')
+const direct = process.argv.includes('--publish')
 const packages = [
   ['packages/core', 'advisers-core'],
   ['packages/office', 'advisers-office'],
@@ -216,6 +218,7 @@ if (process.env.NPM_TOKEN) {
 }
 
 const staged = []
+const published = []
 let failed = null
 try {
   execFileSync('pnpm', ['-r', '--if-present', 'run', 'build'], { cwd: root, stdio: 'inherit' })
@@ -223,7 +226,9 @@ try {
     const cwd = join(root, dir)
     const ver = readJson(dir + '/package.json').version
     console.log('\n== ' + name + '@' + ver + ' (' + tag + ')' + (dryRun ? ' [dry-run]' : ''))
-    const args = ['stage', 'publish', '--tag', tag, '--registry', registry]
+    const args = direct
+      ? ['publish', '--tag', tag, '--registry', registry, '--access', 'public']
+      : ['stage', 'publish', '--tag', tag, '--registry', registry]
     if (provenance) args.push('--provenance')
     if (dryRun) args.push('--dry-run')
     let out
@@ -241,7 +246,7 @@ try {
         continue
       }
       console.error('')
-      console.error('npm stage publish failed for ' + name + '@' + ver + (provenance ? ' (provenance/OIDC requested)' : '') + '; staging stopped.')
+      console.error('npm ' + (direct ? 'publish' : 'stage publish') + ' failed for ' + name + '@' + ver + (provenance ? ' (provenance/OIDC requested)' : '') + '; ' + (direct ? 'publishing' : 'staging') + ' stopped.')
       console.error('--- npm output (tail) ---')
       const output = text.trim()
       console.error(output ? output.split('\n').slice(-80).join('\n') : String(error.message || error))
@@ -251,7 +256,12 @@ try {
       break
     }
     if (dryRun) {
-      console.log('  dry-run ok (npm validated the package; nothing staged)')
+      console.log('  dry-run ok (npm validated the package; nothing ' + (direct ? 'published' : 'staged') + ')')
+      continue
+    }
+    if (direct) {
+      published.push({ name, ver })
+      console.log('  published: ' + name + '@' + ver)
       continue
     }
     const id = /staged with id ([0-9a-f-]{36})/i.exec(out)?.[1]
@@ -273,17 +283,35 @@ if (failed) {
   if (dryRun) {
     console.error('DRY-RUN FAILED: ' + failed.name + '@' + failed.ver + ' did not pass npm validation; nothing was staged.')
   } else {
-    console.error('STAGING FAILED: ' + failed.name + '@' + failed.ver + ' did not stage.')
+    console.error((direct ? 'PUBLISHING FAILED: ' : 'STAGING FAILED: ') + failed.name + '@' + failed.ver + (direct ? ' did not publish.' : ' did not stage.'))
     if (staged.length) {
       console.error(staged.length + ' package(s) staged before the failure (review before approving anything):')
       for (const item of staged) console.error('  ' + item.name + '@' + item.ver + '  ' + item.id)
     }
-    console.error('Nothing was published; approval is a separate human step. Read the npm error and debug log before retrying.')
+    if (published.length) {
+      console.error(published.length + ' package(s) published before the failure:')
+      for (const item of published) console.error('  ' + item.name + '@' + item.ver)
+    }
+    console.error(direct ? 'Review the npm error and debug log before retrying; already published packages cannot be reused.' : 'Nothing was published; approval is a separate human step. Read the npm error and debug log before retrying.')
   }
   process.exit(1)
 }
 if (dryRun) {
-  console.log('\ndry-run finished; nothing was staged.')
+  console.log('\ndry-run finished; nothing was ' + (direct ? 'published' : 'staged') + '.')
+  process.exit(process.exitCode || 0)
+}
+if (direct) {
+  if (!published.length) {
+    console.error('\nno packages were published')
+    process.exit(process.exitCode || 1)
+  }
+  console.log('\nPublished packages:')
+  for (const item of published) console.log('  ' + item.name + '@' + item.ver)
+  if (provenance) {
+    console.log('\nProvenance was requested. Confirm attestations:')
+    for (const item of published) console.log('  npm view ' + item.name + '@' + item.ver + ' dist.attestations --json --registry ' + registry)
+    console.log('Empty dist.attestations means the publish did not use OIDC/Trusted Publishing: do not describe the release as provenance-signed.')
+  }
   process.exit(process.exitCode || 0)
 }
 if (!staged.length) {
