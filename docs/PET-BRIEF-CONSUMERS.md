@@ -1,13 +1,13 @@
 # Pet Brief 消费者清单与消费契约（v0.2）
 
-状态：**已接消费者 1 个（私有、pre-GA、未公开）；Advisers 发布物不含消费端**。该消费端已于 **2026-11-17 接受契约 v0.2**（`schemaVersion: 1|2`，缺失 `displayPolicy` 按 `private`），并实现了 `private` / `none` 的展示约束。
+状态：**已接消费者 2 个（1 个私有 pre-GA、1 个公开 DSH 插件）；Advisers 发布物不含消费端**。两个消费端均已接受契约 v0.2（`schemaVersion: 1|2`，缺失 `displayPolicy` 按 `private`），并实现了 `private` / `none` 的展示约束。
 产出：2026-11-17（只读核对；该消费端不在本仓 CI 中运行）。
 配套文档：生产者/`displayPolicy` 语义见 [`PET-BRIEF-PRODUCER.md`](PET-BRIEF-PRODUCER.md) §4.1；契约快照与测试向量见 [`docs/pet-brief/`](pet-brief/README.md)。
 
 ## 0. 一句话
 
 **Advisers 拥有账本与投影；消费者只轮询一个 5 分钟过期的脱敏 JSON，不回写、不联网、不直连数据库。**
-当前唯一已接消费者是 PerryLink 的私有桌面宠物仓（Pearl/Famling 方向）；它已于 2026-11-17 接受 v0.2
+已接消费者是 PerryLink 的私有桌面宠物仓（Pearl/Famling 方向，2026-11-17 接受 v0.2）与公开的 `dsh-famling` DSH 插件（2026-11-20 通过 0.3.0 兼容核对）
 （`schemaVersion: 1|2`，缺失 `displayPolicy` 按 `private`），并实现了 v0.2 的展示约束。
 
 ## 1. 已接消费者
@@ -15,6 +15,7 @@
 | 消费者 | 仓库/可见性 | 契约版本 | 传输 | 状态 | 证据 |
 |---|---|---|---|---|---|
 | Pearl（私有桌面宠物） | 私有仓，**pre-GA、未公开** | **v0.1 + v0.2**（`schemaVersion 1/2`；`displayPolicy` 缺失按 `private`） | 固定本地文件 `~/.advisers/pet-brief.json` + Tauri command | 已接线（2026-11-16）；默认关闭，用户手动开启；v0.2 展示约束已实现 | 见 §1.1 |
+| `dsh-famling`（DSH 客户端插件） | 公开仓 `PerryLink/dsh-famling`；插件独立发布 | **v0.2**（`schemaVersion 2`） | DSH Host bridge `op:"brief"` 只读 `~/.advisers/pet-brief.json`（≤128 KiB，5 分钟 TTL） | 已接线并完成 0.3.0 兼容核对（2026-11-20） | `plugins/dsh-famling/docs/PET-BRIEF-0.3.0-COMPAT-2026-11-20.md` |
 | Advisers 仓自身 | 公开仓 | — | — | **无消费端**（只有 producer） | 本仓 `packages/` 无桌宠 UI |
 
 > 上表之外没有已接消费者。候选壳（Famling/Pearl 上游、Familiar、fishpet、VPet/Live2D 系）均为**未接**候选，

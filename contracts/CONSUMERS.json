@@ -53,6 +53,17 @@
       "inCi": false,
       "status": "cross-repo, not in this repo CI (docs/PET-BRIEF-CONSUMERS.md)",
       "note": "Closed schema owned by docs/pet-brief/schema-v0.2.json; not duplicated under contracts/."
+    },
+    {
+      "id": "dsh-famling",
+      "visibility": "public",
+      "contracts": [
+        "pet-brief@0.2"
+      ],
+      "inRepo": false,
+      "inCi": false,
+      "status": "cross-repo consumer verified 2026-11-20 (plugins/dsh-famling, Pet Brief 0.3.0 compatibility report)",
+      "note": "DSH client plugin Host bridge op:\"brief\" reads ~/.advisers/pet-brief.json (schemaVersion 2); separate repository and release cadence."
     }
   ],
   "license": "CC-BY-NC-SA-4.0 (intended; see LICENSE status note)"
