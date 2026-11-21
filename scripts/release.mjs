@@ -204,8 +204,16 @@ if (!dryRun && provenance && process.env.GITHUB_REF && process.env.GITHUB_REF !=
  * verify the registry instead of trusting npm's exit code. Polls for a short
  * propagation window; returns true only when the version is visible.
  */
-async function waitForPublishedVersion(name, ver, { attempts = 8, intervalMs = 5000 } = {}) {
+async function waitForPublishedVersion(name, ver, { attempts = 180, intervalMs = 5000 } = {}) {
+  // npm's registry can take several minutes to make a fresh publish visible
+  // (observed ~9 minutes during the 0.3.2 release). Poll for up to 15 minutes
+  // instead of treating normal propagation as a failed publish; a genuinely
+  // misconfigured publisher still fails after the window, before the next
+  // package is attempted.
   for (let attempt = 1; attempt <= attempts; attempt += 1) {
+    if (attempt === 13) {
+      console.log('  waiting for registry propagation of ' + name + '@' + ver + ' (npm can take several minutes; up to 15 minutes)') 
+    }
     try {
       const res = await fetch(registry + name + '/' + ver, { headers: { 'cache-control': 'no-cache' }, signal: AbortSignal.timeout(15000) })
       if (res.status === 200) {
