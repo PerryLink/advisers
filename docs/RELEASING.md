@@ -369,8 +369,9 @@ changelog copy.
 
 - **Published:** npm `latest` = 0.4.1, `next` = 0.4.1; all eight workspace
   packages lockstep at 0.4.1 (six published). Tag: `v0.4.1`, annotated object
-  `TBD` -> commit `TBD`; published from `refs/tags/v0.4.1` (publish run `TBD`).
-  These three fields are filled in after the tag-ref dispatch and publish gate.
+  `100e616d00f0e74f8763e35db40b16a8578854b9` -> commit
+  `1a05f7c9a0ec8ce3789c0aba41b45076c34fce3f`; published from
+  `refs/tags/v0.4.1` (publish run 44895635180).
 - **Release shape:** same-day follow-up patch on 0.4.0 — KB/mail review links
   (`kb link/unlink`, `mail link/dismiss`), reminder quiet hours + per-local-day
   dedupe + `--force-notify`, the kb/mail/policy deterministic eval groups (30
@@ -383,17 +384,25 @@ changelog copy.
 - **Artifacts:** CycloneDX SBOM and `SHA256SUMS` attached to the GitHub Release;
   the Windows portable ZIP `advisers-0.4.1-win-x64.zip` is assembled after the
   npm publish from the published tarballs (offline channel; verify its hash and
-  attestation, it is not npm-provenance-covered). Hashes: `TBD` until attached.
+  attestation, it is not npm-provenance-covered). Hashes: portable ZIP
+  `dd6a3d14de7488a9b775086b3171c6033563b36e19bcd1eaf32132821c629444`
+  (51,728,685 B); SBOM asset
+  `3444b6d6146acc653911cf8d6b7a596180db3d2ee6412ee275ca5c8e006e6ef6`
+  (248,918 B); `SHA256SUMS-0.4.1.txt` asset
+  `c6038284c8a184b63ee679956cbc31e2923b9c779d7f6a1192c728c663c14367`;
+  `SHA256SUMS-0.4.1-portable.txt` asset
+  `fd670bdf430f4a1a429da3fe7d53e4b13a67d837806870c47e23bb3ea0bb7240`.
 - **Verification:** `verify-release --version 0.4.1 --tag latest --sbom
-  artifacts/sbom.cdx.json --require-sbom` -> `TBD` checks (filled in after the
-  publish); CI on the release commit `TBD`. Local pre-tag evidence on the
+  artifacts/sbom.cdx.json --require-sbom` -> **228 checks PASS**; CI on the
+  release commit 44895258934 (green on Linux and blocking Windows full). Local
+  pre-tag evidence on the
   follow-up tree: `check-docs`/`check-release`/`check-licenses` pass,
   `check-contracts` 90 checks PASS, `pnpm eval:det` 30 cases / 277 checks PASS,
   real-machine Windows smoke 29/29 PASS.
 - **Release notes / assets:**
-  <https://github.com/PerryLink/advisers/releases/tag/v0.4.1> (placeholder until
-  the Release is created; the six tarball `SHA256SUMS` and the SBOM are attached
-  there).
+  <https://github.com/PerryLink/advisers/releases/tag/v0.4.1> (created
+  2026-11-21T11:07Z with SBOM, six-tarball `SHA256SUMS`, portable ZIP and its
+  checksums). 0.4.0 is deprecated on npm with a pointer to 0.4.1.
 
 ### 0.4.0 (2026-11-21)
 
