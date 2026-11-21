@@ -482,7 +482,12 @@ test('fake IO: colour mode emits only the 16-colour SGR whitelist, --plain emits
   }
   assert.equal(colour.io.allText().includes(ESC + '[2J'), false, 'clear-screen is forbidden')
   assert.equal(colour.io.allText().includes(ESC + ']'), false, 'OSC is forbidden')
-  assert.equal(stripSgr(colour.io.allText()).includes(ESC), false, 'non-SGR escapes are forbidden on app-written lines')
+  // readline itself may emit CSI cursor-control sequences (e.g. ESC[?25l / ESC[1G)
+  // while redrawing the prompt; those are terminal control, not app text. SGR is
+  // audited above, OSC/clear-screen are rejected below/above, so what remains must
+  // not contain a non-CSI escape family (e.g. a two-byte ESC sequence).
+  const streamText = stripSgr(colour.io.allText()).replace(/\u001b\[[0-9;?]*[A-Za-z]/g, '')
+  assert.equal(streamText.includes(ESC), false, 'non-CSI escapes are forbidden on app-written lines')
 
   const plain = await run(['--plain'], 100)
   assert.equal(plain.io.allText().includes(ESC), false, '--plain must emit no ESC at all')

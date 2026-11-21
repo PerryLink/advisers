@@ -127,7 +127,7 @@ test('agent tools use the default workspace and write audit rows without absolut
     assert.ok(writeRow, 'expected an actor=agent tool.write audit row: ' + JSON.stringify(rows.map((row) => row.action)))
     assert.equal(writeRow.allowed, true)
     assert.match(String(writeRow.reason), /tool=file_write/)
-    assert.match(String(writeRow.reason), /path=out\/hello\.txt/)
+    assert.match(String(writeRow.reason), /path=out[\\/]hello\.txt/)
     assert.ok(!String(writeRow.reason).includes(home), 'the audit row must not store the absolute workspace path')
   } finally {
     rmSync(root, { recursive: true, force: true })

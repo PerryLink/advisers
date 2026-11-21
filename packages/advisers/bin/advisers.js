@@ -10232,12 +10232,15 @@ async function remind(args) {
     }
     const schedule = typeof flags.schedule === 'string' ? flags.schedule : scheduler.DEFAULT_CRON_SCHEDULE
     const time = typeof flags.time === 'string' ? flags.time : scheduler.DEFAULT_TASK_TIME
+    // Windows Task Scheduler has no cron expression: a user cron schedule is
+    // accepted for compatibility but the task is registered daily at `time`.
+    const winSchedule = process.platform === 'win32' ? 'daily' : schedule
     const plan = scheduler.planScheduler({
       platform: process.platform,
       action: 'install',
       dryRun: !apply,
       command: remindCommand,
-      schedule,
+      schedule: winSchedule,
       time,
       ...(existing.ok ? { existingText: existing.text } : {}),
     })
