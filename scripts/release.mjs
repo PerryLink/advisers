@@ -197,6 +197,27 @@ if (!dryRun && provenance && process.env.GITHUB_REF && process.env.GITHUB_REF !=
   process.exit(2)
 }
 
+/**
+ * Fail-closed registry read after a direct publish. npm has been observed
+ * exiting 0 when the OIDC publish did not actually land (misconfigured or
+ * stage-only Trusted Publisher, silent fallback), so the release script must
+ * verify the registry instead of trusting npm's exit code. Polls for a short
+ * propagation window; returns true only when the version is visible.
+ */
+async function waitForPublishedVersion(name, ver, { attempts = 8, intervalMs = 5000 } = {}) {
+  for (let attempt = 1; attempt <= attempts; attempt += 1) {
+    try {
+      const res = await fetch(registry + name + '/' + ver, { headers: { 'cache-control': 'no-cache' }, signal: AbortSignal.timeout(15000) })
+      if (res.status === 200) {
+        const doc = await res.json()
+        if (doc && doc.version === ver) return true
+      }
+    } catch {}
+    if (attempt < attempts) await new Promise((resolve) => setTimeout(resolve, intervalMs))
+  }
+  return false
+}
+
 async function tarballExists(name, ver) {
   try {
     const res = await fetch(registry + name + '/-/' + name + '-' + ver + '.tgz', { method: 'HEAD', signal: AbortSignal.timeout(15000) })
@@ -268,8 +289,20 @@ try {
       continue
     }
     if (direct) {
-      published.push({ name, ver })
+      // Surface npm's own notice output (it names the registry and tag); on
+      // success release.mjs used to swallow it, which hid silent no-ops.
+      if (out && out.trim()) console.log(out.trim().split('\n').slice(-20).join('\n'))
       console.log('  published: ' + name + '@' + ver)
+      const visible = await waitForPublishedVersion(name, ver)
+      if (!visible) {
+        console.error('')
+        console.error('PUBLISH NOT VISIBLE: npm exited 0 for ' + name + '@' + ver + ' but ' + registry + name + '/' + ver + ' is not returning it after the propagation window.')
+        console.error('Do not retry blindly: check the Trusted Publisher binding (direct vs stage-only), npm 2FA/staged-publish settings, and whether this publish silently became a stage.')
+        failed = { name, ver }
+        process.exitCode = 1
+        break
+      }
+      published.push({ name, ver })
       continue
     }
     const id = /staged with id ([0-9a-f-]{36})/i.exec(out)?.[1]

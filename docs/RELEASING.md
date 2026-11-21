@@ -158,7 +158,10 @@ Inputs (both jobs enforce `GITHUB_REF == refs/tags/v<version>`):
 
 The `gate` job re-runs the release gates on the tag tree and never publishes.
 The OIDC publish runs `node scripts/release.mjs --provenance --publish` and
-fails closed if `NPM_TOKEN` is present or the workflow ref is not the tag.
+fails closed if `NPM_TOKEN` is present or the workflow ref is not the tag. After
+each `npm publish` the script now re-reads the registry and fails closed if the
+version is not visible within the propagation window (npm can exit 0 without
+publishing when a Trusted Publisher is misconfigured or stage-only).
 Staged path: `confirm=yes, stage=yes, publish=no`; the owner then runs
 `npm stage approve <stage-id>` with their own OTP. Never claim a staged release
 is published until the registry shows it.
