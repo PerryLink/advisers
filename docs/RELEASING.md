@@ -363,9 +363,10 @@ changelog copy.
 ### 0.4.0 (2026-11-21)
 
 - **Published:** npm `latest` = 0.4.0, `next` = 0.4.0; all eight workspace
-  packages lockstep at 0.4.0 (six published). Tag: `v0.4.0` (annotated,
-  tag-ref publish; record the tag object and commit SHAs here when archiving the
-  release evidence).
+  packages lockstep at 0.4.0 (six published). Tag: `v0.4.0`, annotated object
+  `9d055260cb832b9bda3e1e9413750a0c30477104` → commit
+  `ca9c48181e7d12da829f4829895e5c0586ba630a`; published from
+  `refs/tags/v0.4.0` (publish run 44881757121).
 - **Release shape:** single 0.4 feature release — KB/schema v22, mail entry,
   interactive shell, proactive briefs, policy/evidence 2.0 subset (decision
   tokens, consent), receivables/payments + client status packs, MCP modern
@@ -381,9 +382,13 @@ changelog copy.
   Windows portable ZIP `advisers-0.4.0-win-x64.zip` +
   `SHA256SUMS-0.4.0-portable.txt` (offline channel; verify the hash/attestation,
   it is not npm-provenance-covered).
-- **Verification:** record the 0.4.0 `verify-release` check count from the actual
-  run (do not reuse 0.3.0's 222), the tag object/commit SHAs, the portable ZIP
-  sha256 and the `windows-smoke` / `windows-full` results (both blocking).
+- **Verification:** `verify-release --version 0.4.0 --tag latest --sbom
+  artifacts/sbom.cdx.json --require-sbom` → **228 checks PASS**; CI on the
+  release commit 44881425639 was green on Linux (Node 22.16/24) and Windows
+  (`windows-smoke`, `windows-full` on Node 22.16/24, both blocking). Portable ZIP
+  sha256 `79e687ef8a1e19ac130453f2abb47b00ba5ee69d4ae058915cf91eaf9ef15527`
+  (49.3 MiB); SBOM asset sha256
+  `fba6777a0883d211adee31c05012152e9ad821e3e6f2a2a5200999adb439302e`.
 - **Release notes / assets:**
   <https://github.com/PerryLink/advisers/releases/tag/v0.4.0>.
 
