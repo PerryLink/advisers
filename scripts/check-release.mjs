@@ -116,9 +116,17 @@ if (argv.includes('--require-tag') || argv.includes('--stable')) {
     let tagObject = ''
     try { tagType = execFileSync('git', ['cat-file', '-t', 'v' + version], { cwd: root, encoding: 'utf8' }).trim() } catch {}
     try { tagObject = execFileSync('git', ['rev-parse', 'v' + version], { cwd: root, encoding: 'utf8' }).trim() } catch {}
-    check('git tag v' + version + ' is an annotated tag', tagType === 'tag', 'found ' + (tagType || 'none'))
-    if (tagType === 'tag' && tagObject && tagCommit) {
-      console.log('INFO tag object ' + tagObject + ' -> commit ' + tagCommit + ' (record both in the release evidence before dispatch)')
+    // actions/checkout materialises a tag-ref checkout as a lightweight local
+    // ref (the annotated tag object is not kept), so the annotation cannot be
+    // asserted from a CI checkout. Enforce it on a developer machine, and keep
+    // the tag-object evidence out of CI where it would be the commit SHA.
+    if (process.env.GITHUB_ACTIONS === 'true' && tagType !== 'tag') {
+      console.log('INFO CI checkout materialised v' + version + ' as a lightweight ref; annotated-tag evidence is checked locally before the tag is pushed')
+    } else {
+      check('git tag v' + version + ' is an annotated tag', tagType === 'tag', 'found ' + (tagType || 'none'))
+      if (tagType === 'tag' && tagObject && tagCommit) {
+        console.log('INFO tag object ' + tagObject + ' -> commit ' + tagCommit + ' (record both in the release evidence before dispatch)')
+      }
     }
   }
 }

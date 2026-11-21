@@ -131,6 +131,12 @@ order above matters: main push → CI green → annotated tag → record both SH
 push tag. Do not create the tag before the release commit, and do not commit
 release content after the tag.
 
+Note: `actions/checkout` materialises a tag-ref workflow checkout as a
+lightweight local ref, so `check-release --require-tag` skips the
+annotated-tag assertion under `GITHUB_ACTIONS=true` (it still checks tag commit
+== HEAD). The annotated-tag evidence is captured locally in step 4 and stays
+verifiable through the remote tag object SHA recorded above.
+
 ## 5. Dispatch `publish.yml` from the tag ref
 
 GitHub UI: Actions → `release-gate` → Run workflow, and choose the tag in
