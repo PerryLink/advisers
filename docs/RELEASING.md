@@ -132,10 +132,9 @@ Note: the **publish workflow gate runs a subset** of this list (install, build,
 typecheck, test, pack-smoke, check-js, check-docs, check-release, contracts,
 SBOM, licenses, TOS, security, office, deps (warn)). It is not a substitute for
 this local list; `eval:det`, `fault-injection` and the portable-bundle self-tests
-stay local/CI only unless added there. CI also has a `windows-full` job that is
-**report-only** in 0.4.0 (`continue-on-error`) while the Windows fixture triage
-is open — a red `windows-full` is tracked work, not a release blocker, but
-`windows-smoke` must be green. The real-machine Windows checklist is in
+stay local/CI only unless added there. CI also has a **blocking** `windows-full`
+job (Node 22.16 and 24) in 0.4.0, green on `main` after the POSIX-fixture fixes;
+`windows-smoke` must stay green too. The real-machine Windows checklist is in
 [docs/WINDOWS.md](WINDOWS.md) §8.
 
 ## 4. Commit, push main, wait for CI, tag
@@ -271,10 +270,10 @@ gh release upload vX.Y.Z \
 
 - `verify-release.mjs` does **not** check the ZIP (its scope is the npm
   tarballs/SBOM/provenance); the portable verifier above is the ZIP gate.
-- Windows status at release time: `windows-smoke` is blocking,
-  `windows-full` is report-only until the fixture triage lands, and the
-  real-machine record (docs/WINDOWS.md §8) must be re-run; do not describe the
-  release as "fully Windows-verified" from CI alone.
+- Windows status at release time: `windows-smoke` and `windows-full` are both
+  blocking and green on the release commit; the real-client record (docs/WINDOWS.md
+  §8) must still be re-run manually, so do not describe the release as "fully
+  Windows-verified" from CI alone.
 
 ## 7. dist-tags and deprecation (owner only)
 
@@ -384,7 +383,7 @@ changelog copy.
   it is not npm-provenance-covered).
 - **Verification:** record the 0.4.0 `verify-release` check count from the actual
   run (do not reuse 0.3.0's 222), the tag object/commit SHAs, the portable ZIP
-  sha256 and the `windows-smoke` result. `windows-full` is report-only.
+  sha256 and the `windows-smoke` / `windows-full` results (both blocking).
 - **Release notes / assets:**
   <https://github.com/PerryLink/advisers/releases/tag/v0.4.0>.
 

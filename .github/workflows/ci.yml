@@ -259,14 +259,11 @@ jobs:
     # replace the manual real-client verification (IME/Terminal/OneDrive/Office;
     # docs/WINDOWS.md) but it does keep the full suite honest.
     #
-    # 0.4.0 starts report-only: the 2026-11-21 real-machine run has 34 known
-    # Windows-only failures (fixture/POSIX assumptions and product/local
-    # semantics; tracked in the release checklist's Windows triage). Flip this to
-    # blocking by deleting continue-on-error once those fixtures are fixed and
-    # this job is green on main; keep windows-smoke green throughout.
+    # 0.4.0: blocking (green on main with Node 22.16 and 24 after the fixture
+    # fixes; the remaining product-side argv/instance-lock limits are explicit
+    # skips with documented reasons). Keep windows-smoke green too.
     runs-on: windows-latest
     timeout-minutes: 30
-    continue-on-error: true
     strategy:
       fail-fast: false
       matrix:

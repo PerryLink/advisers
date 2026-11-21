@@ -81,8 +81,8 @@ advisers-bridge-hermes, and dsh-advisers.
   staging and publishing are separate, manual, owner-authorized actions.
 - A release is expected to be cut only from a commit that passed the full
   gate: the test suite on Node 22.16 and 24, the production-JS static checks,
-  the **blocking** Windows smoke job (the `windows-full` full suite is
-  report-only in 0.4.0, see §5), packaging smoke, the portable-bundle
+  the **blocking** Windows smoke and full-suite jobs (`windows-full`, see §5),
+  packaging smoke, the portable-bundle
   self-tests, docs/version consistency, license and terms-of-service checks,
   Office verification, the security suite, the fault-injection suite, release
   lockstep, and the dependency audit described below.
@@ -241,9 +241,10 @@ of them as unbypassable, unforgeable, "certified" or "zero-knowledge".
   provenance, and has no code signing. Verify its SHA-256 against the Release
   `SHA256SUMS-<version>-portable.txt` (and a GitHub artifact attestation when the
   operator attached one) before use. No MSI/MSIX/Microsoft Store/signed EXE/auto-update
-  ships in 0.4.0. The blocking Windows gate is the smoke job; the full Windows suite is
-  report-only in 0.4.0 and the real-machine record still contains known Windows-only
-  failures, so "Windows support" remains scoped (docs/WINDOWS.md).
+  ships in 0.4.0. Both Windows CI gates are blocking; the Windows Server 2025 CI
+  image still cannot replace the real-client IME/Terminal/OneDrive/Office checks, and
+  remaining product-side limits (adapter argv, recalc quoting, hard-kill lock reclaim)
+  are documented skips, so "Windows support" remains scoped (docs/WINDOWS.md).
 
 ## 5. Automated gates in CI
 
@@ -256,7 +257,7 @@ partial — see section 5.3.
 |---|---|---|
 | `test` | ubuntu-latest, Node 22.16 and 24 | frozen install, build, typecheck; the **deterministic gates introduced in 0.3.0**: `pnpm eval:det` (no key, no network), `node scripts/check-contracts.mjs` (now including the MCP modern-era contract vectors) and `pnpm run sbom && pnpm run check:sbom`; `scripts/check-js.mjs`; the full `pnpm -r test` suite (which includes the 0.4 KB/mail/policy/consent/receivable suites); `scripts/pack-smoke.mjs`; docs/version consistency, license, TOS and release-lockstep checks; Office verification; `scripts/security-suite.mjs`; and a WARN-only dependency audit. On Node 22.16 only: `scripts/fault-injection.mjs`. |
 | `windows-smoke` | windows-latest, Node 22.16 | frozen install, build, `scripts/pack-smoke.mjs`, the docs/version and release-lockstep gates (`check-docs`, `check-release`, which exercises the `fileURLToPath` Windows fix), and a CLI smoke on a fresh temporary `ADVISERS_HOME`: `--version`, `init`, `status`, `commit add`, `commit ls`, `doctor`, `doctor --check-db`, plus the **durable-write paths** that fsync a plaintext copy — `backup`, `export --out`, `import --replace`, `vault seal`/`vault unseal` — asserting non-empty outputs, the import/unseal recovery backups and no staged temp-file residue. This is the 0.2.4/0.3.0 Windows P0 regression gate and remains **blocking**. |
-| `windows-full` | windows-latest, Node 22.16 and 24 | 0.4.0 adds this job: build, typecheck, `check-js`, every package's test files (enumerated in PowerShell because cmd does not expand the test glob), `pack-smoke`, and the portable-bundle self-tests (`portable-zip.mjs --self-test`, `pack-portable.mjs --self-test`). It is **report-only in 0.4.0** (`continue-on-error: true`): the 2026-11-21 real-machine run still had known Windows-only fixture/POSIX failures, so a red `windows-full` is tracked, not a release blocker, until the fixtures are fixed and it is green on `main`. |
+| `windows-full` | windows-latest, Node 22.16 and 24 | 0.4.0 adds this job: build, typecheck, `check-js`, every package's test files (enumerated in PowerShell because cmd does not expand the test glob), `pack-smoke`, and the portable-bundle self-tests (`portable-zip.mjs --self-test`, `pack-portable.mjs --self-test`). It is **blocking in 0.4.0**: green on `main` with Node 22.16 and 24 after the POSIX-fixture fixes, with explicit skips for the documented product-side argv/instance-lock limits. |
 
 The deterministic gates introduced in 0.3.0 remain release-gate inputs: `eval:det` is
 the deterministic eval contract ([EVAL.md](EVAL.md)); `check-contracts` validates the
@@ -264,8 +265,9 @@ frozen `contracts/**` artifacts against the real CLI and stdio MCP server
 ([CONTRACTS.md](CONTRACTS.md)); `sbom`+`check:sbom` regenerates and validates the
 lockfile-derived CycloneDX SBOM ([SBOM.md](SBOM.md)). The 0.4.0 release additionally
 runs the Windows smoke job (blocking) and the portable-bundle self-tests. "Windows
-support" is still not fully verified: `windows-full` is report-only and the
-real-machine E13/full-suite record has known failures until the triage lands.
+support" is CI-verified but not a real-client certification: `windows-full` is
+blocking, while the manual IME/Terminal/OneDrive/Office matrix in docs/WINDOWS.md
+remains an owner-run follow-up.
 
 Release-trust tooling is exercised by the regular test suite too: `packages/advisers/test/release-trust.test.js` runs `scripts/check-provenance.mjs --self-test` (offline checks that the publish workflow, release script and this page agree on the OIDC/provenance path), validates attestation and SBOM parsing against local fixtures, and covers the unpublished-version skip/fail semantics of `scripts/verify-release.mjs`. Those tests never publish, stage, or need npm credentials; fixture registries are loopback HTTP servers.
 
@@ -506,7 +508,7 @@ and check-js gates are blocking.
   records the 0.4.0 security surface: the one-way v22 migration, the
   policy/consent boundaries in §4.1, the mail credential handling (0600
   POSIX-only; NTFS ACL on Windows), evidence pack v2's honest
-  `verificationBasis`, the report-only `windows-full` job, and the portable
+  `verificationBasis`, the blocking `windows-full` job, and the portable
   ZIP as an offline channel that is not covered by npm provenance. Legal texts
   are **v2026.11.4 (2026-11-21)** (mail/KB/receivables/shell/model-consent
   revision); a v2026.11.3 consent record is not valid for v2026.11.4.

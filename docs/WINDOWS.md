@@ -280,9 +280,11 @@ CI runs two Windows jobs on GitHub's windows-latest image:
 - **windows-smoke** (blocking): frozen install, build, packaging smoke,
   docs/release gates and a minimal CLI plus durable-write flow on a fresh
   temporary ADVISERS_HOME. It does not run the full test suite.
-- **windows-full** (0.4.0: report-only): frozen install, build, typecheck, every
-  package's test files on Node 22.16 and 24. It becomes blocking once the known
-  Windows fixture failures are fixed and the job is green on main.
+- **windows-full** (0.4.0: blocking): frozen install, build, typecheck, every
+  package's test files on Node 22.16 and 24, pack-smoke and the portable-bundle
+  self-tests. It was green on `main` for the 0.4.0 release after the POSIX
+  fixture fixes; product-side argv/instance-lock limits are explicit, documented
+  skips (see §8).
 
 The CI image is a **Windows Server 2025** image: it has no IME, Windows
 Terminal, OneDrive, Office/WPS or Defender client, so it cannot replace the
