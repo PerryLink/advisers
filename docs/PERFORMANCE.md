@@ -1,8 +1,10 @@
 # Performance
 
-> Status: `0.4.0` (published 2026-11-21) is the current npm `latest` (`next` is also
-> `0.4.0`) and the repository is at package version `0.4.0`. `0.4.0` is the single 0.4
-> feature release: KB (schema **v22**), mail entry, interactive shell, proactive briefs,
+> Status: `0.4.1` (published 2026-11-21) is the current npm `latest` (`next` is also
+> `0.4.1`) and the repository is at package version `0.4.1`. `0.4.1` is a same-day
+> follow-up patch on the 0.4.0 feature release with **no hot-path change** (review-link
+> wiring, reminder delivery policy and contract/eval growth only), so the `0.4.0`
+> measurements and limits below still apply. `0.4.0` is the single 0.4 feature release: KB (schema **v22**), mail entry, interactive shell, proactive briefs,
 > policy/evidence 2.0 subset, receivables/payments, MCP modern dual-era and the Windows
 > portable ZIP. It ships **one schema migration** (v21 → v22) and **no hot-path
 > read-model rewrite**; the 0.3.0/0.3.2 numbers below were not re-measured on the 0.4.0

@@ -1,10 +1,10 @@
 # Deterministic eval suite (`pnpm eval:det`)
 
 > Status: introduced in the 0.3.0 line (published 2026-11-20); this tree is
-> `advisers@0.4.0` plus the post-release main follow-ups. The published 0.4.0 adds
-> one deterministic case — `det.mcp.modern-dual-era` (MCP `2026-07-28` modern
-> envelopes behind the legacy surface); main after 0.4.0 adds the `kb`, `mail` and
-> `policy` groups (10 cases / 95 checks), for 30 cases / 277 checks in the default
+> `advisers@0.4.1` (the 0.4.0 feature release plus its same-day follow-up patch). The
+> published 0.4.0 adds one deterministic case — `det.mcp.modern-dual-era` (MCP
+> `2026-07-28` modern envelopes behind the legacy surface); 0.4.1 adds the `kb`, `mail`
+> and `policy` groups (10 cases / 95 checks), for 30 cases / 277 checks in the default
 > run. The suite is a release gate for the deterministic contract, not a claim about
 > model quality; the remaining KB/mail/policy/consent/receivable behaviour is also
 > covered by deterministic package tests.
@@ -63,12 +63,12 @@ removes `ADVISERS_API_KEY`, `DEEPSEEK_API_KEY`, `OPENAI_API_KEY`,
 `ADVISERS_MODEL` and `ADVISERS_BASE_URL` from every child environment and sets
 `ADVISERS_NO_MODEL=1`.
 
-## 0.4.0 coverage
+## 0.4.0/0.4.1 coverage
 
 The published 0.4.0 adds `det.mcp.modern-dual-era` in the `mcp` group (MCP
 `2026-07-28` dual-era: `server/discover`, per-request `_meta`, result envelopes,
-mapped errors, byte-identical legacy responses). Main after 0.4.0 adds three
-fully deterministic groups:
+mapped errors, byte-identical legacy responses). 0.4.1 adds three fully
+deterministic groups:
 
 - **kb** (4 cases): batch add/ls/show byte-stability, duplicate skip, 2-character
   `degraded:["short_query_like"]` vs 3+ character FTS, page rebuild idempotence and

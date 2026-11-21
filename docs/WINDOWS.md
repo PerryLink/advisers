@@ -1,12 +1,13 @@
 # Windows support
 
-> Status: **0.4.0 draft, 2026-11-21.** Windows is the primary target platform
-> (the product and its docs are Windows-first), but "supported" is a claim this
-> page scopes precisely: Windows 11 25H2/26H2 x64 only, npm as the official
-> channel, and the portable ZIP as the offline channel. The real-machine
-> verification run is recorded in the release checklist; until that run and the
-> full Windows test suite are green, the README keeps the partial-coverage
-> wording from [SECURITY.md](SECURITY.md).
+> Status: **0.4.1, 2026-11-21.** Windows is the primary target platform (the product
+> and its docs are Windows-first), but "supported" is a claim this page scopes
+> precisely: Windows 11 25H2/26H2 x64 only, npm as the official channel, and the
+> portable ZIP as the offline channel. The 0.4 line has real-machine evidence: the
+> 0.4.0 full-suite triage and the 0.4.1 CLI smoke (Windows 11 25H2, Windows Node
+> 24.22.1: 25 commands / 29 assertions, 29/29 PASS) are recorded in §8, and the full
+> Windows test suite is green in CI. Remaining manual items (IME, Office/OneDrive,
+> Windows Terminal, >260-character paths) stay scoped in §8.
 >
 > This page is the operator/consumer reference for installing, upgrading and
 > troubleshooting Advisers on Windows. It does not replace the
@@ -17,7 +18,7 @@
 
 | Platform | Status | Notes |
 |---|---|---|
-| Windows 11 25H2 x64 (build 26200+) | **Supported** | Primary target; the 2026-11-21 real-machine checks and the Windows full test suite run here. |
+| Windows 11 25H2 x64 (build 26200+) | **Supported** | Primary target; the 2026-11-21 real-machine full-suite triage and the 0.4.1 CLI smoke (29/29) ran here, and the Windows full test suite runs here. |
 | Windows 11 26H2 x64 (build 26300+) | **Supported** | Same client API surface as 25H2; covered by the same release verification. |
 | Windows 11 24H2 x64 | Not supported | End of support 2026-10-13 (outside the 0.4 support window). May work but is not tested. |
 | Windows 11 23H2 x64 | Not supported | End of support 2026-11-10. |
@@ -289,8 +290,19 @@ CI runs two Windows jobs on GitHub's windows-latest image:
 The CI image is a **Windows Server 2025** image: it has no IME, Windows
 Terminal, OneDrive, Office/WPS or Defender client, so it cannot replace the
 real-client checks. The supported-client evidence is the manual real-machine
-run recorded in the release checklist:
+record:
 
+- 2026-11-21, Windows 11 25H2 x64 (build 26200.9974), Windows Node 24.22.1,
+  PowerShell 5.1 (0.4-line CLI smoke, run against the published 0.4.0 tag-identical
+  `bin`: `git archive` sha256 `c91d8e26...`; the 0.4.1 wiring is covered by the package
+  tests and CI): 25 commands / 29 assertions, **29/29 PASS** on
+  a fresh `%TEMP%` home — `--version`, `init`, `status`, `commit add/ls`,
+  `kb add/ls/search`, `search --scope all`, `doctor --check-db`, `backup`,
+  `export --all`, `import --replace` and `tos status`, plus Chinese text, GB18030
+  input and Chinese/space paths. The export JSON carries no absolute paths, KB
+  rows keep basenames only, and the real user home was untouched. A WSL-mounted
+  checkout cannot drive the Windows Node build (pnpm symlinks resolve to EACCES);
+  that is a checkout-assembly limitation, not a product defect.
 - 2026-11-21, Windows 11 25H2 x64, Node 24.22.1: 1011 tests, 36 known
   Windows-only failures at first run (30 fixture/POSIX-assumption failures and
   6 product/local-semantics items). A clean re-run reproduced 34 (including all
@@ -299,7 +311,7 @@ run recorded in the release checklist:
   green (or every skip justified) before the README claims full Windows
   verification.
 
-Known limitations in 0.4.0:
+Known limitations in 0.4.x:
 
 - IME composition in the interactive raw-mode shell is not verified; use the
   one-shot commands (advisers chat ...) or a non-raw shell if input breaks.

@@ -5,11 +5,12 @@ parsing human text. JSON mode never mixes human prose into stdout; diagnostics g
 stderr and `--json` must not require a TTY. Shapes are additive: new optional keys may
 appear, existing keys keep their meaning.
 
-> Status: **0.4.0 (schema v22)**. Every 0.4.0 change in this document is additive
+> Status: **0.4.1 (schema v22)**. Every 0.4.0/0.4.1 change in this document is additive
 > inside the v1 contract: new commands, new optional fields and new `--scope` values.
 > Existing commands, keys, ordering and exit codes are unchanged, so a 0.3.2 consumer
 > keeps working without modification. The 0.4.0-only additions are marked
-> **(0.4.0)**; anything not marked is 0.3.2/earlier behaviour.
+> **(0.4.0)**; 0.4.1 follow-ups (KB/mail review links, reminder delivery policy) are
+> called out inline; anything not marked is 0.3.2/earlier behaviour.
 
 ## Current JSON surfaces (2026-11; 0.2.3 additions marked)
 
@@ -483,7 +484,8 @@ Read-only fact views over the existing facts table (no migration). A fact row is
 
 - `fact show <id>` → `{ok, command:"fact show", fact, kbSources[], warnings[], includeDeleted}`.
   `kbSources` is additive and lists explicit KB links (`kb_fact_links`); manual
-  `kb link` / `kb unlink` are wired on main after the 0.4.0 release (next patch); in the 0.4.0 tarball they were not wired, so the array is normally empty there.
+  `kb link` / `kb unlink` are wired in 0.4.1 (the 0.4.0 tarball exposed the library
+  only, so the array is normally empty there).
 - `fact history <id>` → `{ok, command:"fact history", rootId, items[], warnings[], counts:{items}, includeDeleted}`;
   walks `supersedes` back and `supersededBy` forward, tolerating broken links/cycles;
   tombstones are included by default (the chain is the audit history).
@@ -501,8 +503,8 @@ password is read from a TTY prompt or `--pass-stdin` (`--pass` is refused).
 - `mail account show <ref>` → `{ok, command:"mail account show", account:{...,hasCredential}}`.
 - `mail account rm <ref>` → `{ok, command:"mail account rm", accountId, removed:true, credentialRemoved, messagesDeleted}`.
 
-`mail account test` remains unwired. `mail link` and `mail dismiss` are wired on main after the 0.4.0 release (next patch); they were **not wired in the 0.4.0 tarball**
-(0.4.x).
+`mail account test` remains unwired. `mail link` and `mail dismiss` are wired in
+**0.4.1**; they were **not wired in the 0.4.0 tarball**.
 
 ### `mail sync|ls|show|extract|import|purge --json` (0.4.0)
 
@@ -634,7 +636,7 @@ third-party attestation (`verificationBasis: "local-checksums-only"`).
   `timezone:"Asia/Shanghai"` and an optional per-reminder `urgency`. `--now ISO`
   fixes both the planning instant and the echoed `now`. `--json` is a pure read and
   never delivers notifications.
-- `remind --deliver --notify` (on main after the 0.4.0 release): `--quiet-hours
+- `remind --deliver --notify` (0.4.1): `--quiet-hours
   HH:MM-HH:MM` suppresses notification channels inside the window (the local
   `reminders.log` line is still written and the recorded channel is
   `quiet-suppressed`); a second delivery for the same commitment/bucket/rule/local

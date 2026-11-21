@@ -28,7 +28,7 @@ advisers morning [--json] [--now ISO] [--top 1..5]       # deterministic brief +
 advisers morning --archive [--keep 1..365] [--out f]    # archive under ~/.advisers/briefs/
 ```
 
-> Runtime quiet-hours/dedupe below are available on main after the 0.4.0 release (next patch); the 0.4.0 npm tarball only baked `--quiet-hours` into the scheduler script.
+> Runtime quiet-hours/dedupe below are shipped in **0.4.1**; the 0.4.0 npm tarball only baked `--quiet-hours` into the scheduler script.
 
 ## Urgency v1 and `whyNow` (0.4.0, deterministic)
 

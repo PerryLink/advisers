@@ -45,38 +45,43 @@ on any link package; adapters load one only when configured.
 
 ## Status
 
-**`0.4.0` was published on 2026-11-21** and is the current npm **`latest`**; npm
-**`next`** is also `0.4.0` after this release advanced it. The repository is lockstep at
-package version `0.4.0`. `0.4.0` is the single 0.4 feature release: it adds the local
-knowledge base (schema v22), TLS-only IMAP mail entry, the interactive shell, proactive
-urgent-first briefs, the policy/evidence 2.0 subset, receivables/payments with client
-pack v2, MCP modern dual-era, Windows CI plus a portable ZIP, and the v2026.11.4 legal
-revision. Defaults stay local: no new command requires a model call, there is no
-background daemon, and `mail sync` is the one new explicit network path (TLS-only,
-read-only, user-invoked). **Schema v22 is a one-way migration**: the CLI writes
+**`0.4.1` was published on 2026-11-21** and is the current npm **`latest`**; npm
+**`next`** is also `0.4.1` after this release advanced it. The repository is lockstep at
+package version `0.4.1`. `0.4.1` is a same-day follow-up patch on `0.4.0`, not a new
+feature line: it adds the KB/mail review links (`kb link/unlink`, `mail link/dismiss`),
+runtime quiet hours + per-local-day dedupe + `--force-notify` for
+`remind --deliver --notify`, the `kb`/`mail`/`policy` deterministic eval groups (30
+cases / 277 checks), 38 documented-additive CLI commands behind a 90-check contract
+gate, and a real Windows 11 25H2 machine smoke (29/29 assertions). The `0.4.0` feature
+surface is unchanged: local knowledge base (schema v22), TLS-only IMAP mail entry, the
+interactive shell, proactive urgent-first briefs, the policy/evidence 2.0 subset,
+receivables/payments with client pack v2, MCP modern dual-era, Windows CI plus a
+portable ZIP, and the v2026.11.4 legal revision. Defaults stay local: no new command
+requires a model call, there is no background daemon, and `mail sync` is the one new
+explicit network path (TLS-only, read-only, user-invoked). **Schema v22 is a one-way migration**: the CLI writes
 `state.db.before-migrate-v*` before upgrading, a 0.3.2 binary opening a v22 database
-fails with `E_SCHEMA_NEWER`, and downgrading means restoring that backup. `0.3.2`,
-`0.3.1` and `0.3.0` remain installable by pinning but are superseded — use `0.4.0`. The
+fails with `E_SCHEMA_NEWER`, and downgrading means restoring that backup. `0.4.0`, `0.3.2`,
+`0.3.1` and `0.3.0` remain installable by pinning but are superseded — use `0.4.1`. The
 earlier `0.2.4` was an **unpublished release candidate** superseded by the 0.3.0 line
 (its `v0.2.4` tag points at an older commit and there is no 0.2.4 tarball on npm; do not
 try to install it). The six published packages are `advisers`, `advisers-core`,
 `advisers-office`, `advisers-policy-strict`, `advisers-bridge-hermes` and
 `dsh-advisers`; the two private `advisers-link-*` packages are held at the same version
-but are not published. The 0.4.0 tarballs are published from GitHub Actions
+but are not published. The `0.4.1` tarballs are published from GitHub Actions
 OIDC/Trusted Publishing (no long-lived npm token) with SLSA provenance
 (`https://slsa.dev/provenance/v1`), and the attestation names the release tag ref rather
 than a branch. Release notes (with the CycloneDX SBOM and `SHA256SUMS` attached):
-<https://github.com/PerryLink/advisers/releases/tag/v0.4.0>. Verify the published release
+<https://github.com/PerryLink/advisers/releases/tag/v0.4.1>. Verify the published release
 yourself:
 
 ```sh
-npm view advisers@0.4.0 dist.attestations --json --registry=https://registry.npmjs.org/
+npm view advisers@0.4.1 dist.attestations --json --registry=https://registry.npmjs.org/
 corepack pnpm install && corepack pnpm run sbom   # writes artifacts/sbom.cdx.json (gitignored)
-node scripts/verify-release.mjs --version 0.4.0 --tag latest \
+node scripts/verify-release.mjs --version 0.4.1 --tag latest \
   --sbom artifacts/sbom.cdx.json --require-sbom
 ```
 
-0.4.0 builds on the **"trustworthy delivery"** line (0.3.0: evidence that resolves or is
+0.4.1 builds on the **"trustworthy delivery"** line (0.3.0: evidence that resolves or is
 honestly marked missing/unverifiable, recoverable data, 200k-row ledgers, verifiable
 provenance) and the 0.3.2 customer/performance closeout. The 0.4 additions are documented
 per topic: [Windows support matrix](docs/WINDOWS.md), [MCP output caps + protocol
@@ -117,17 +122,18 @@ check count rather than inheriting an older figure.
 - **0.4.0 receivables**: `receivable add|ls|show|edit|void` + `payment add|ls|void` (integer minor units; CNY/USD/EUR/HKD; partial/multiple/over/void; auto-completes the linked commitment in the same transaction), per-currency totals (open/overdue/paid) and aging buckets; `client export --pack` writes a manifest + `SHA256SUMS` status pack with an offline verifier. Amounts stay out of receipt packs, the client status pack, MCP, DSH and Pet Brief;
 - **0.4.0 MCP modern dual-era**: `server/discover`, an explicit modern-method allowlist and `resultType`/`ttlMs`/`cacheScope` envelopes for 2026-07-28 clients, while legacy responses stay byte-identical and `ADVISERS_MCP_MODERN=off` is a one-restart rollback; the tool surface remains 8 tools / 5 resources and DSH 6 tools;
 - **0.4.0 Windows**: `windows-full` CI (Node 24/22.16 matrix) and a portable-ZIP builder/verifier; npm remains the official channel, `docs/WINDOWS.md` scopes support to Windows 11 25H2/26H2 x64, and the real-machine full-suite record stays a release-checklist item;
-- **0.4.0 legal**: TOS/PRIVACY/SAFETY/DISCLAIMER are **v2026.11.4**; the new data planes (mail bodies/credentials, KB text and pages, receivables/payments, shell and brief archive) and the separate model-egress consent are disclosed, and gated commands re-confirm the revised terms.
+- **0.4.0 legal**: TOS/PRIVACY/SAFETY/DISCLAIMER are **v2026.11.4**; the new data planes (mail bodies/credentials, KB text and pages, receivables/payments, shell and brief archive) and the separate model-egress consent are disclosed, and gated commands re-confirm the revised terms;
+- **0.4.1 follow-ups**: `kb link/unlink` and `mail link/dismiss` turn KB/mail references into explicit, audited review decisions (fail-closed on unknown ids); `remind --deliver --notify` gains runtime `--quiet-hours HH:MM-HH:MM` (cross-midnight; notification channel only — the local log line is always written), per-local-day notification dedupe (30-day local metadata retention) and `--force-notify`; the deterministic eval suite adds the `kb`/`mail`/`policy` groups (30 cases / 277 checks) and the CLI contracts add 38 documented-additive commands / 76 vectors behind a 90-check gate.
 
 ```sh
-# 0.4.0 was published on 2026-11-21 (npm `latest` = 0.4.0; `next` also points at 0.4.0).
-# Run from the checkout (development; the same 0.4.0 version):
+# 0.4.1 was published on 2026-11-21 (npm `latest` = 0.4.1; `next` also points at 0.4.1).
+# Run from the checkout (development; the same 0.4.1 version):
 git clone https://github.com/PerryLink/advisers.git
 cd advisers && corepack pnpm install && corepack pnpm -r build
 ADVISERS_OFFICE_LOCAL=1 node packages/advisers/bin/advisers.js status
-# From npm (stable channel = default `latest`, now 0.4.0):
+# From npm (stable channel = default `latest`, now 0.4.1):
 #   npm i -g --registry=https://registry.npmjs.org advisers@latest advisers-office@latest
-# The `next` channel also points at 0.4.0:
+# The `next` channel also points at 0.4.1:
 #   npm i -g --registry=https://registry.npmjs.org advisers@next advisers-office@next
 advisers
 # or one-shot:
@@ -140,12 +146,13 @@ advisers bridge --dir "$BRIDGE_DIR"   # Hermes gateway bridge
 
 Local interaction: `advisers` starts an interactive shell (REPL); `/help` lists the commands, and the shell keeps confirmations, a bounded queue and paste protection. With an API key the model can call local Office/file tools and report the generated paths. File writes are confined to the working directory, overwrites require confirmation unless `ADVISERS_FORCE=1`, and local tools do not send file contents to the model unless you attach/read them.
 
-npm tags: **`latest`** is the stable channel (**`0.4.0`**, published 2026-11-21),
-**`next`** is the pre-release channel (also `0.4.0`). `0.2.4` was a
+npm tags: **`latest`** is the stable channel (**`0.4.1`**, published 2026-11-21),
+**`next`** is the pre-release channel (also `0.4.1`). `0.2.4` was a
 never-published candidate superseded by the 0.3.0 line — it is not installable from npm.
-0.4.0 supersedes 0.3.2/0.3.1/0.3.0: earlier tarballs stay installable by pinning but ship
-stale docs and cannot be repaired in place (npm unpublish needs the owner's 2FA).
-Pin an exact version (`advisers@0.4.0` today) when you need a reproducible install, and
+`0.4.1` supersedes `0.4.0`/`0.3.2`/`0.3.1`/`0.3.0`: earlier tarballs stay installable by
+pinning but ship stale docs and cannot be repaired in place (npm unpublish needs the
+owner's 2FA). `0.4.1` is the current same-day patch on the 0.4.0 feature release.
+Pin an exact version (`advisers@0.4.1` today) when you need a reproducible install, and
 query the official registry directly
 (`npm view advisers dist-tags --registry=https://registry.npmjs.org/`) — mirrors can lag
 behind.

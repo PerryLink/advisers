@@ -1,4 +1,4 @@
-# Interface contracts (0.3.0 minimal set; 0.4.0 adds the additive MCP modern era v2 and additive CLI read-model `$defs`; interface shapes frozen by 0.3.x stay unchanged)
+# Interface contracts (0.3.0 minimal set; 0.4.0 adds the additive MCP modern era v2 and additive CLI read-model `$defs`; 0.4.1 extends the documented-additive CLI command/read-model set; interface shapes frozen by 0.3.x stay unchanged)
 
 Advisers is CLI-first and its consumers (scripts, CI, MCP clients, the DSH host,
 Famling) need a machine-readable, versioned interface instead of prose. This
@@ -55,8 +55,10 @@ error envelope to stderr (stdout stays machine-free) and exit 1, or exit 3 for
 
 The 0.4.0 release adds **documented-additive** shapes for the new families
 (`kb`, `kb page`, `fact`, `mail`, `receivable`, `payment`, `consent`,
-`privacy --matrix`, `search --scope`, `client export --pack`): they are
-registered with `status: "documented-additive"` in `commands-v1.json` and
+`privacy --matrix`, `search --scope`, `client export --pack`), and 0.4.1 extends
+the set to 38 documented-additive commands / 77 schema `$defs` / 76 vectors
+(including `kb link/unlink`, `mail link/dismiss` and the reminder delivery flags):
+they are registered with `status: "documented-additive"` in `commands-v1.json` and
 declared in the schema's `x-documented-additive` block. The gate checks their
 structure, schema refs and accept/reject vectors but does not execute them as
 frozen v1 commands; when a shape stabilises it can be promoted to a frozen
@@ -175,7 +177,7 @@ The gate runs **in CI on every PR** (the `test` job, after build/typecheck; see
 `.github/workflows/ci.yml`), so a shape change that is not reflected in the frozen
 artifacts fails the PR. It is offline (no credentials, no model, no network), uses a
 temporary `ADVISERS_HOME` under the OS temp directory, and removes it afterwards.
-Current tree: **90 checks PASS** (2026-11-21 0.4.0 + post-release main, including the wired
+Current tree: **90 checks PASS** (2026-11-21 0.4.1 tree, including the wired
 `status.contracts` field, the real stdio MCP **dual-era** catalogue and the
 0.4.0 error-code layers). The eight checks:
 

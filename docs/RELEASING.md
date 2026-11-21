@@ -10,8 +10,11 @@ from `refs/tags/v0.3.1`. Never repeat the 0.3.0 order.
 **0.4.0 (published 2026-11-21) followed the corrected order** — docs first, main
 push, CI green, annotated `v0.4.0` tag, tag-ref dispatch, then the post-publish
 `verify-release` check and the Windows portable ZIP — and is the reference release
-for the 0.4 line (see §13). One runbook detail is easy to get wrong: the portable
-ZIP is assembled **after** the npm publish from the published tarballs, because
+for the 0.4 line (see §13). **0.4.1 (published 2026-11-21)** is the same-day
+follow-up patch and follows the identical order; its §13 record starts with
+placeholders for the tag object, publish run and `verify-release` count and is
+filled in once the publish completes. One runbook detail is easy to get wrong: the
+portable ZIP is assembled **after** the npm publish from the published tarballs, because
 `pack-portable.mjs` installs `advisers@<version>` and `advisers-office@<version>`
 from the registry.
 
@@ -53,8 +56,9 @@ deprecate, move a tag or edit a GitHub Release without explicit owner approval**
 
 - Patch/minor per semver; never reuse a published number. The release-metadata
   patch 0.3.1 is the only exception in history. The 0.4 line shipped as one
-  release, **0.4.0** (2026-11-21); later fixes are 0.4.x patch releases, and the
-  next feature line is 0.5.
+  feature release, **0.4.0** (2026-11-21), followed the same day by the **0.4.1**
+  follow-up patch; later fixes are 0.4.x patch releases, and the next feature line
+  is 0.5.
 - All eight workspace packages are lockstep; six are published
   (`advisers`, `advisers-core`, `advisers-office`, `advisers-policy-strict`,
   `advisers-bridge-hermes`, `dsh-advisers`), two link packages stay private but
@@ -81,9 +85,10 @@ Then update every current-version reference: `CHANGELOG.md` (top section),
 `README.md`, `README-zh.md`, the package READMEs, and the status headers in
 `docs/ARCHITECTURE.md`, `docs/QUICKSTART.md`, `docs/PERFORMANCE.md`,
 `docs/MCP.md`, `docs/SECURITY.md`, `docs/SBOM.md`, `docs/EVAL.md`,
-`docs/CONTRACTS.md`, `docs/RELEASING.md` and `docs/PRIVACY.md` when the data
-surface changes; the 0.4 line also added `docs/WINDOWS.md`, `docs/KB.md`,
-`docs/TUI.md` and `docs/CLIENTS.md`. Historical sections keep their original
+`docs/CONTRACTS.md`, `docs/RELEASING.md`, `docs/CLI-JSON.md`, `docs/REMINDERS.md`,
+`docs/MCP.md`, `docs/DELIVERY-RECEIPT.md`, `eval/det/README.md` and `docs/PRIVACY.md`
+when the data surface changes; the 0.4 line also added `docs/WINDOWS.md`,
+`docs/KB.md`, `docs/TUI.md` and `docs/CLIENTS.md`. Historical sections keep their original
 version numbers. The legal texts are versioned separately in
 `packages/advisers/lib/tos/manifest.json`; `check-tos --release` compares them to
 `docs/TOS.md`/`PRIVACY.md` and the packaged copies, so a legal revision is its
@@ -359,6 +364,36 @@ body or a log. CI publishing uses GitHub OIDC only.
 
 A short factual record per release; keep it terse and do not turn it into a
 changelog copy.
+
+### 0.4.1 (2026-11-21)
+
+- **Published:** npm `latest` = 0.4.1, `next` = 0.4.1; all eight workspace
+  packages lockstep at 0.4.1 (six published). Tag: `v0.4.1`, annotated object
+  `TBD` -> commit `TBD`; published from `refs/tags/v0.4.1` (publish run `TBD`).
+  These three fields are filled in after the tag-ref dispatch and publish gate.
+- **Release shape:** same-day follow-up patch on 0.4.0 — KB/mail review links
+  (`kb link/unlink`, `mail link/dismiss`), reminder quiet hours + per-local-day
+  dedupe + `--force-notify`, the kb/mail/policy deterministic eval groups (30
+  cases / 277 checks), 38 documented-additive CLI commands (90-check contract
+  gate) and the Windows 11 25H2 real-machine smoke (29/29). No schema migration,
+  no new runtime dependency, legal texts unchanged (v2026.11.4).
+- **Contracts:** additive only — `cli/commands-v1.json` +38 documented-additive
+  commands, `read-models-v1.schema.json` +77 `$defs`, +76 vectors; the frozen v1
+  entries are unchanged.
+- **Artifacts:** CycloneDX SBOM and `SHA256SUMS` attached to the GitHub Release;
+  the Windows portable ZIP `advisers-0.4.1-win-x64.zip` is assembled after the
+  npm publish from the published tarballs (offline channel; verify its hash and
+  attestation, it is not npm-provenance-covered). Hashes: `TBD` until attached.
+- **Verification:** `verify-release --version 0.4.1 --tag latest --sbom
+  artifacts/sbom.cdx.json --require-sbom` -> `TBD` checks (filled in after the
+  publish); CI on the release commit `TBD`. Local pre-tag evidence on the
+  follow-up tree: `check-docs`/`check-release`/`check-licenses` pass,
+  `check-contracts` 90 checks PASS, `pnpm eval:det` 30 cases / 277 checks PASS,
+  real-machine Windows smoke 29/29 PASS.
+- **Release notes / assets:**
+  <https://github.com/PerryLink/advisers/releases/tag/v0.4.1> (placeholder until
+  the Release is created; the six tarball `SHA256SUMS` and the SBOM are attached
+  there).
 
 ### 0.4.0 (2026-11-21)
 

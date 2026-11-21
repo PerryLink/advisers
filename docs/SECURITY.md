@@ -11,20 +11,25 @@ and how to verify what you install. It describes the current state; "not yet
 implemented" is written as such.
 
 Status: 2026-11-21, covering the **0.4.x line** (the repository is lockstep at package
-version `0.4.0`). **0.4.0 was published on 2026-11-21**: npm `latest` = `0.4.0` and
-`next` is also `0.4.0`. 0.4.0 is the single 0.4 feature release (local knowledge base
-with **schema v22**, IMAP mail entry, interactive shell, policy/evidence 2.0 subset,
-receivables/payments, MCP modern dual-era, Windows CI + portable ZIP) published from
-`refs/tags/v0.4.0` through CI Trusted Publishing with SLSA provenance. **Schema v22 is a
+version `0.4.1`). **0.4.1 was published on 2026-11-21**: npm `latest` = `0.4.1` and
+`next` is also `0.4.1`. 0.4.1 is a same-day follow-up patch on the 0.4.0 feature release
+(KB/mail review links, reminder quiet hours/dedupe/`--force-notify`, expanded
+deterministic eval groups, documented-additive CLI contracts) with **no schema change and
+no new runtime dependency**; the 0.4.0 feature surface is unchanged: the local knowledge
+base with **schema v22**, IMAP mail entry, interactive shell, policy/evidence 2.0 subset,
+receivables/payments, MCP modern dual-era, Windows CI + portable ZIP. 0.4.0 was published
+from `refs/tags/v0.4.0` and 0.4.1 from `refs/tags/v0.4.1`, both through CI Trusted
+Publishing with SLSA provenance. **Schema v22 is a
 one-way migration**: a 0.3.2 binary opening a v22 database fails with `E_SCHEMA_NEWER`
-and going back means restoring the pre-migration copy. `0.3.2`/`0.3.1`/`0.3.0` are
+and going back means restoring the pre-migration copy. `0.4.0`, `0.3.2`/`0.3.1`/`0.3.0` are
 superseded and remain installable by pinning; 0.3.0's published tarballs shipped
 release-candidate READMEs and its release surface could not be repaired in place (an npm
 tarball cannot be replaced, and `npm unpublish` requires the account owner's 2FA).
 0.2.4 was tagged but never published and the 0.3.0 line supersedes it (see sections 3–4).
 The legal texts are **TOS/PRIVACY/DISCLAIMER/SAFETY v2026.11.4 (2026-11-21)**, which
 cover the new 0.4 data planes (mail bodies/credentials, KB text, receivables, shell,
-model-egress consent) — v2026.11.3 consent is not valid for v2026.11.4.
+model-egress consent) — v2026.11.3 consent is not valid for v2026.11.4. 0.4.1 does
+not revise the legal texts.
 
 ## 1. Reporting a vulnerability
 
@@ -45,7 +50,7 @@ reporter unless anonymity is requested. There is no bug bounty program.
 | Version line | Support |
 |---|---|
 | 0.4.x (latest stable) | supported; security fixes ship in a new patch or minor release |
-| 0.3.x | superseded on 2026-11-21; not supported for new fixes. A 0.3.x binary cannot open a v22 database (`E_SCHEMA_NEWER`); upgrade to 0.4.0. |
+| 0.3.x | superseded on 2026-11-21; not supported for new fixes. A 0.3.x binary cannot open a v22 database (`E_SCHEMA_NEWER`); upgrade to 0.4.1. |
 | 0.2.x and earlier (including 0.2.0-preview.*) | not supported |
 
 Track the npm dist-tag "latest" for supported releases. A pre-release tag does
@@ -72,8 +77,8 @@ advisers-bridge-hermes, and dsh-advisers.
   Trusted Publishing** (GitHub Actions OIDC) with provenance attestations; **0.3.1
   (release-metadata patch, 2026-11-20) supersedes it** and was published the same way,
   from the release tag. The 0.3.0 final publish used the owner-authorized direct OIDC
-  path (no long-lived token, no npm stage/OTP step); the 0.3.1 and **0.4.0** publishes
-  reuse that path from `refs/tags/v0.3.1` and `refs/tags/v0.4.0` respectively. The
+  path (no long-lived token, no npm stage/OTP step); the 0.3.1, 0.4.0 and **0.4.1**
+  publishes reuse that path from their respective tag refs. The
   release tooling fails closed outside `refs/tags/v<version>` and never publishes
   automatically.
 - No npm token is committed to the repository. CI workflows default to
@@ -87,22 +92,23 @@ advisers-bridge-hermes, and dsh-advisers.
   Office verification, the security suite, the fault-injection suite, release
   lockstep, and the dependency audit described below.
 
-## 4. Provenance and trusted publishing (0.4.0 published)
+## 4. Provenance and trusted publishing (0.4.1 published)
 
-Status as of 2026-11-21: **0.4.0 is published**; npm `latest` = `0.4.0` and `next` =
-`0.4.0`; `advisers@0.2.4` is not on the registry. 0.4.0 is the single 0.4 feature
-release published from `refs/tags/v0.4.0` through CI Trusted Publishing with SLSA
-provenance (no long-lived npm token). The release gate rejects a provenance build ref
+Status as of 2026-11-21: **0.4.1 is published**; npm `latest` = `0.4.1` and `next` =
+`0.4.1`; `advisers@0.2.4` is not on the registry. 0.4.1 is the same-day follow-up patch
+on the 0.4.0 feature release, published from `refs/tags/v0.4.1` through CI Trusted
+Publishing with SLSA provenance (no long-lived npm token); 0.4.0 keeps its own
+`refs/tags/v0.4.0` record. The release gate rejects a provenance build ref
 that is not `refs/tags/vX.Y.Z`; the GitHub Release carries the CycloneDX SBOM and a
 `SHA256SUMS` file for the six tarballs. The Windows portable ZIP is the separate
 offline channel and is published by the release operator with its own
-`SHA256SUMS-0.4.0-portable.txt` (not covered by npm provenance) — see §4.1 and
+`SHA256SUMS-0.4.1-portable.txt` (not covered by npm provenance) — see §4.1 and
 [docs/WINDOWS.md](WINDOWS.md) §3.4. Verify the registry release with the post-publish
 check below. Release notes:
-<https://github.com/PerryLink/advisers/releases/tag/v0.4.0>.
+<https://github.com/PerryLink/advisers/releases/tag/v0.4.1>.
 
 0.3.2 (customer loop + performance closeout) was published on 2026-11-21 from
-`refs/tags/v0.3.2` and is now superseded by 0.4.0; its tarballs and release assets
+`refs/tags/v0.3.2` and is now superseded by 0.4.0/0.4.1; its tarballs and release assets
 remain in place. `advisers@0.2.4` is not on the registry.
 
 0.3.1 corrected 0.3.0's release surface with the same runtime: 0.3.1 changed no runtime,
@@ -159,20 +165,20 @@ from commit `1199fbf`. The configuration checklist:
   owner's explicit OTP approval before it becomes installable.
 - **Post-approval gate (0.3.x and later).** Do not announce provenance from the
   workflow output; verify the registry:
-  `node scripts/verify-release.mjs --version 0.4.0 --tag latest --sbom <file> --require-sbom`
+  `node scripts/verify-release.mjs --version 0.4.1 --tag latest --sbom <file> --require-sbom`
   (plus the existing tarball/install/import checks). It requires non-empty
   `dist.attestations` on all six packages, fetches each attestation bundle,
-  checks the SLSA provenance source repository and commit against the `v0.4.0`
+  checks the SLSA provenance source repository and commit against the `v0.4.1`
   tag, checks that each attestation subject sha512 equals the registry tarball
   integrity, and requires the SLSA build ref to be `refs/tags/vX.Y.Z` rather
-  than a branch. `node scripts/check-provenance.mjs --version 0.4.0
-  --expected-ref refs/tags/v0.4.0` runs the same provenance checks standalone
+  than a branch. `node scripts/check-provenance.mjs --version 0.4.1
+  --expected-ref refs/tags/v0.4.1` runs the same provenance checks standalone
   (pass `--allow-non-tag-provenance` only to audit a known historical release
   such as 0.3.0, whose provenance named `refs/heads/main`); `--allow-unpublished`
   prints a clear SKIP instead of a failure while the version is still unpublished.
   Each release records its own `verify-release` count and must not reuse an
   older figure (the 0.3.0 run passed **222 checks** with
-  `--sbom artifacts/sbom.cdx.json`; that is a 0.3.0 record, not a 0.4.0 claim).
+  `--sbom artifacts/sbom.cdx.json`; that is a 0.3.0 record, not a 0.4.1 claim).
 - These checks verify npm's metadata linkage (attestation subject to tarball
   digest, source repository/commit to release tag). They do **not**
   cryptographically verify the Sigstore bundle or transparency log; consumers
@@ -183,16 +189,16 @@ from commit `1199fbf`. The configuration checklist:
   (`artifacts/sbom.cdx.json`, generated from the lockfile) as a release-gate
   artifact; `verify-release --sbom <file> --require-sbom` fails if it is
   missing, malformed, has no components, or contains absolute build-machine
-  paths. The 0.4.0 GitHub Release attaches the generated SBOM and `SHA256SUMS`
-  (0.4.0 adds no runtime dependency, so the component set has the same shape as
-  0.3.2); the SBOM is not a build graph, vulnerability scan or
+  paths. The 0.4.1 GitHub Release attaches the generated SBOM and `SHA256SUMS`
+  (0.4.1 adds no runtime dependency, so the component set has the same shape as
+  0.4.0); the SBOM is not a build graph, vulnerability scan or
   reproducible-build proof.
 - The release-trust tooling does not change the legal texts; the packaged and public legal
   texts are **v2026.11.4 (2026-11-21)** for the mail/KB/receivables/shell/model-egress
   consent revision — see [TOS.md](TOS.md) §9.3 and [PRIVACY.md](PRIVACY.md) §4. A
   v2026.11.3 consent record is not valid for v2026.11.4 and triggers re-acceptance.
 
-### 4.1 Honest boundaries of the 0.4.0 security surfaces
+### 4.1 Honest boundaries of the 0.4.x security surfaces
 
 These are mitigations, not sandboxes, signatures or certifications. Do not describe any
 of them as unbypassable, unforgeable, "certified" or "zero-knowledge".
@@ -375,9 +381,9 @@ and check-js gates are blocking.
 
        npm view advisers dist.integrity dist.signatures dist.attestations --json
 
-   dist.integrity should match the lockfile entry. **0.4.0 (published
-   2026-11-21) has non-empty `dist.attestations` on all six packages**; 0.3.0
-   also does (historical), while 0.2.3 and earlier have none and cannot be
+   dist.integrity should match the lockfile entry. **0.4.1 (published
+   2026-11-21) has non-empty `dist.attestations` on all six packages**; 0.4.0 and
+   0.3.0 also do (historical), while 0.2.3 and earlier have none and cannot be
    retro-signed. 0.2.4 was never published and has nothing to verify (see
    section 4).
 3. Verify registry signatures for the installed dependency tree:
@@ -512,3 +518,9 @@ and check-js gates are blocking.
   ZIP as an offline channel that is not covered by npm provenance. Legal texts
   are **v2026.11.4 (2026-11-21)** (mail/KB/receivables/shell/model-consent
   revision); a v2026.11.3 consent record is not valid for v2026.11.4.
+- 2026-11-21 (0.4.1 published): same-day follow-up patch on 0.4.0 (KB/mail review
+  links, reminder quiet hours/dedupe/`--force-notify`, kb/mail/policy deterministic
+  eval groups, documented-additive CLI contracts) published from `refs/tags/v0.4.1`
+  with tag-ref SLSA provenance. No schema migration, no new runtime dependency and no
+  frozen-contract change; the security surface recorded above is unchanged, and the
+  legal texts stay v2026.11.4.

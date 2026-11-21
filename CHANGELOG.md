@@ -1,5 +1,118 @@
 # Changelog
 
+## 0.4.1 (2026-11-21)
+
+Same-day follow-up patch on the 0.4.0 feature release. **No schema migration, no
+new runtime dependency and no change to a frozen contract**: the ledger stays
+schema v22 and the published 0.4.0 CLI JSON/MCP/DSH shapes keep their meaning.
+0.4.1 carries the mainline closeout that landed after the `v0.4.0` tag — the
+review links, the reminder delivery policy, the expanded deterministic eval
+groups, the documented-additive CLI contracts and the real-Windows machine smoke
+— plus the documentation restated for this tarball.
+
+Status: **published 2026-11-21.** npm `latest` = `0.4.1`, and `next` also points
+at `0.4.1` after this release advanced it. The eight workspace packages are
+lockstep at `0.4.1`: the six published packages (`advisers`, `advisers-core`,
+`advisers-office`, `advisers-policy-strict`, `advisers-bridge-hermes`,
+`dsh-advisers`) and the two private `advisers-link-*` packages held at the same
+version. The eight internal workspace pins, the three version constants and
+`pnpm-lock.yaml` follow; the six per-package `THIRD-PARTY-NOTICES.md` files were
+regenerated (version line only; the dependency closure is unchanged from 0.4.0).
+The packaged and public legal texts stay **v2026.11.4 (2026-11-21)** — this patch
+does not revise them — and schema v22 keeps the one-way migration rule from
+0.4.0. The six tarballs are published from GitHub Actions OIDC/Trusted Publishing
+with SLSA provenance naming the release tag ref; verify with
+`node scripts/verify-release.mjs --version 0.4.1 --tag latest --sbom artifacts/sbom.cdx.json --require-sbom`.
+Release notes, the CycloneDX SBOM and `SHA256SUMS` are attached to
+<https://github.com/PerryLink/advisers/releases/tag/v0.4.1>.
+
+### KB and mail review links
+
+- `advisers kb link <doc> <fact> [--relation source|mentions]` and `kb unlink`
+  maintain explicit `kb_fact_links` rows: the document -> fact association is a
+  user decision, validated (both ids must exist) and audited (`kb.link` /
+  `kb.unlink`), and fails closed rather than guessing. `kb show --chunks` /
+  `fact show --json` expose the linked rows; no model or network path is added.
+- `advisers mail link <message> [--client/--project/--commitment/--fact]` and
+  `mail dismiss <message> [--reason]` turn the mail review queue into explicit
+  decisions (`mail.link` / `mail.dismiss` audit rows, id validation, fail
+  closed). Hints remain display-only; nothing is bound automatically. This also
+  fixes a `mailLink` SQLite binding bug where an undefined `projectId` was bound
+  instead of `NULL`.
+
+### Reminder delivery policy (`remind --deliver --notify`)
+
+- `--quiet-hours HH:MM-HH:MM` is now enforced at delivery time (cross-midnight
+  windows included). It suppresses only the notification channel: the local
+  `reminders.log` line is always written, and the recorded channel is
+  `quiet-suppressed` with the suppression audited.
+- Same local day + same commitment/bucket/rule is deduplicated: a second
+  delivery is recorded with channel `deduped` and is not sent again. The
+  bookkeeping lives in local metadata only (`notify:dedupe:*`, 30-day cleanup)
+  and adds no egress.
+- `--force-notify` bypasses both policies for one explicit run. The opt-in
+  webhook signature and payload bytes are unchanged.
+
+### Deterministic eval and CLI contracts
+
+- `eval:det` gains three fully deterministic groups: **kb** (4 cases), **mail**
+  (2) and **policy** (4) — 10 cases / 95 checks — for **30 cases / 277 checks**
+  in the default run. They use a temporary `ADVISERS_HOME`, fixed
+  `TZ=Asia/Shanghai`, no model key and no network; the committed baseline is
+  unchanged.
+- CLI contracts stay documented-additive: `cli/commands-v1.json` adds 38
+  `x-documented-additive` commands, `read-models-v1.schema.json` adds 77 `$defs`
+  and the vectors add 76 cases. `check-contracts` grows from 49 to **90 checks**
+  and now validates documented-additive defs/commands/vectors too; the frozen v1
+  entries keep their meaning.
+
+### Windows real-machine evidence
+
+- A manual smoke run on **Windows 11 25H2 x64 (build 26200.9974)**, Windows Node
+  v24.22.1 and PowerShell 5.1 exercised 25 commands in a temporary `%TEMP%`
+  home. The run was fixed to the published 0.4.0 tag-identical `bin` (`git archive`;
+  `bin/advisers.js` sha256
+  `c91d8e2630b92ed769295eb41f41dcca5e0e30cd75b5abfae8237b27cdfe9cd2`) because the
+  0.4.1 wiring landed after the tag; that wiring is covered by the package tests and
+  CI, and this smoke is the real-machine record for the 0.4 line. Commands:
+  `--version`, `init`, `status`, `commit add/ls`, `kb add/ls/search`,
+  `search --scope all`, `doctor --check-db`, `backup`, `export --all`,
+  `import --replace` and `tos status` — **29/29 assertions PASS**, including
+  Chinese text, GB18030 input, and Chinese/space filesystem paths. The export
+  JSON contains no absolute paths, KB rows keep only basenames, and the real
+  `C:\Users\<user>\.advisers` was never created. The WSL-mounted-checkout
+  symlink limitation (`jszip` `ERR_MODULE_NOT_FOUND`, missing policy pack) is
+  documented in `docs/WINDOWS.md` and is a checkout-assembly limit, not a product
+  defect.
+- CI on the follow-up commit `5373055` was green (run `44891176769`): Linux
+  `test` on Node 22.16/24, `windows-smoke` and blocking `windows-full` on Node
+  22.16/24.
+
+### Docs
+
+- [docs/KB.md](docs/KB.md), [docs/CLI-JSON.md](docs/CLI-JSON.md),
+  [docs/CLIENTS.md](docs/CLIENTS.md), [docs/REMINDERS.md](docs/REMINDERS.md),
+  [docs/CONTRACTS.md](docs/CONTRACTS.md), [docs/EVAL.md](docs/EVAL.md) and
+  [eval/det/README.md](eval/det/README.md) are updated: additions that were
+  labelled "main after 0.4.0" / "next patch" are now shipped in 0.4.1.
+- Current-version statements move to 0.4.1 across the READMEs and the status
+  headers (`ARCHITECTURE`, `QUICKSTART`, `PERFORMANCE`, `SECURITY`, `SBOM`,
+  `EVAL`, `CONTRACTS`, `WINDOWS`, `DELIVERY-RECEIPT`, `KB`, `CLI-JSON`,
+  `CLIENTS`, `RELEASING`); the 0.4.0 sections keep their historical record
+  unchanged.
+
+Release gates on the follow-up tree: `check-docs`, `check-release`,
+`check-licenses`, `check-contracts` (90 checks), `pnpm eval:det` (30 cases / 277
+checks), `check-tos --release`, the security/fault-injection suites and
+`pack-smoke` all pass. The post-publish `verify-release` run and its check count
+are recorded in [docs/RELEASING.md](docs/RELEASING.md) §13.
+
+Still not in 0.4.1: model-backed `kb compile`/`kb ask`, embeddings/vector
+search, model mail extraction, a full PolicyGrant with exit 4-6, DSH ledger
+writes, TUI history persistence, Pet Brief v3, Homebrew/winget/MSI packaging and
+the external legal review — plus the Windows IME/Office/OneDrive/Terminal
+large-path items listed in [docs/WINDOWS.md](docs/WINDOWS.md) §8.
+
 ## 0.4.0 (2026-11-21)
 
 "Local knowledge, mail and money" feature release. 0.4.0 is the single 0.4 line

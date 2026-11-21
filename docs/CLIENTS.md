@@ -10,7 +10,7 @@ dimension: a **receivables/payments money sidecar** (§11), an offline-verifiabl
 **client status pack v2** (§9.2) and **mail-to-client hints** that are shown but
 never bound automatically (§12).
 
-- Status: **0.4.0, schema v22** (`SCHEMA_VERSION = 22`). The customer tables are
+- Status: **0.4.1, schema v22** (`SCHEMA_VERSION = 22`). The customer tables are
   still the three v21 tables (`clients`/`projects`/`client_notes`); v22 adds the
   money sidecar (`receivables`/`payments`) plus the KB/mail tables.
 - Store: SQLite only. The legacy `ADVISERS_STORE=json` store has no customer
@@ -407,10 +407,10 @@ address/domain, display name or message text matches a live client or project:
   hint. This preserves the 0.3.0 invariant "no automatic customer detection".
 - `basis`/`confidence` are the honest match reasons: address-domain (0.75), exact
   From display name (0.8), message text (0.6). They are heuristics, not identifiers.
-- Manual `mail link <id> --client/--project` / `mail dismiss <id>` are wired on main
-  after the 0.4.0 release (the 0.4.0 tarball left them unwired; design 41 §3.5).
-  In 0.4.0, record the association through the candidate/commitment workflow or a
-  `client note`.
+- Manual `mail link <id> --client/--project` / `mail dismiss <id>` are wired in
+  **0.4.1** (the 0.4.0 tarball left them unwired; design 41 §3.5). They validate the
+  ids, fail closed and write audit rows (`mail.link`/`mail.dismiss`); hints stay
+  display-only and nothing is bound automatically.
 - Mail content is never exposed to MCP/DSH, receipts, client packs, Pet Brief or
   KB in 0.4.0. See [KB.md](KB.md) and [MCP.md](MCP.md).
 

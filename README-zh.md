@@ -26,16 +26,16 @@ Advisers 不是聊天框，也不是情感陪伴。它维护三本账：
 
 ## 状态
 
-**`0.4.0` 已于 2026-11-21 发布**，当前 npm **`latest`** 为 `0.4.0`，**`next`** 也随本次发布推进到 `0.4.0`。仓库版本锁步在 `0.4.0`。`0.4.0` 是单版本 0.4 功能发布：新增本地知识库（schema v22）、TLS-only IMAP 邮件入口、交互式壳、可解释的主动式晨报、Policy/Evidence 2.0 子集、回款/对账与客户状态包 v2、MCP modern dual-era、Windows CI 与便携 ZIP，以及 v2026.11.4 法务修订。默认仍然本地：所有新命令都不需要模型调用，也没有后台常驻进程，`mail sync` 是唯一新增的显式网络路径（TLS-only、只读、用户主动触发）。**schema v22 是单向迁移**：升级前 CLI 会写 `state.db.before-migrate-v*` 备份，0.3.2 打开 v22 数据库会报 `E_SCHEMA_NEWER`，降级需要恢复该备份。`0.3.2`/`0.3.1`/`0.3.0` 仍可按版本号安装但已被取代，请使用 `0.4.0`。更早的 `0.2.4` 是**未发布的 release candidate**，已被 0.3.0 线取代（`v0.2.4` tag 指向更早的 commit，npm 上没有 0.2.4 tarball，不要尝试安装它）。6 个发布包为 `advisers`、`advisers-core`、`advisers-office`、`advisers-policy-strict`、`advisers-bridge-hermes`、`dsh-advisers`；两个私有 `advisers-link-*` 包保持同版本但不发布。0.4.0 tarball 由 GitHub Actions OIDC/Trusted Publishing 发布（不依赖长期 npm token），带 SLSA provenance（`https://slsa.dev/provenance/v1`），且 provenance 记录的是发布 tag ref 而不是分支。Release notes：<https://github.com/PerryLink/advisers/releases/tag/v0.4.0>（该 Release 同时附 CycloneDX SBOM 与 6 个 tarball 的 `SHA256SUMS`）。可自行验证：
+**`0.4.1` 已于 2026-11-21 发布**，当前 npm **`latest`** 为 `0.4.1`，**`next`** 也随本次发布推进到 `0.4.1`。仓库版本锁步在 `0.4.1`。`0.4.1` 是紧随 0.4.0 的当日补丁（不是新的功能线）：新增 KB/邮件审查链接（`kb link/unlink`、`mail link/dismiss`）、`remind --deliver --notify` 的运行时安静时段 + 按本地日去重 + `--force-notify`、`kb`/`mail`/`policy` 三组确定性评测（30 cases / 277 checks）、38 个 documented-additive CLI 命令（90 checks 契约门禁），以及真实 Windows 11 25H2 手工 smoke（29/29 断言）。0.4.0 的功能面不变：本地知识库（schema v22）、TLS-only IMAP 邮件入口、交互式壳、可解释的主动式晨报、Policy/Evidence 2.0 子集、回款/对账与客户状态包 v2、MCP modern dual-era、Windows CI 与便携 ZIP，以及 v2026.11.4 法务修订。默认仍然本地：所有新命令都不需要模型调用，也没有后台常驻进程，`mail sync` 是唯一新增的显式网络路径（TLS-only、只读、用户主动触发）。**schema v22 是单向迁移**：升级前 CLI 会写 `state.db.before-migrate-v*` 备份，0.3.2 打开 v22 数据库会报 `E_SCHEMA_NEWER`，降级需要恢复该备份。`0.4.0`/`0.3.2`/`0.3.1`/`0.3.0` 仍可按版本号安装但已被取代，请使用 `0.4.1`。更早的 `0.2.4` 是**未发布的 release candidate**，已被 0.3.0 线取代（`v0.2.4` tag 指向更早的 commit，npm 上没有 0.2.4 tarball，不要尝试安装它）。6 个发布包为 `advisers`、`advisers-core`、`advisers-office`、`advisers-policy-strict`、`advisers-bridge-hermes`、`dsh-advisers`；两个私有 `advisers-link-*` 包保持同版本但不发布。`0.4.1` tarball 由 GitHub Actions OIDC/Trusted Publishing 发布（不依赖长期 npm token），带 SLSA provenance（`https://slsa.dev/provenance/v1`），且 provenance 记录的是发布 tag ref 而不是分支。Release notes：<https://github.com/PerryLink/advisers/releases/tag/v0.4.1>（该 Release 同时附 CycloneDX SBOM 与 6 个 tarball 的 `SHA256SUMS`）。可自行验证：
 
 ```sh
-npm view advisers@0.4.0 dist.attestations --json --registry=https://registry.npmjs.org/
+npm view advisers@0.4.1 dist.attestations --json --registry=https://registry.npmjs.org/
 corepack pnpm install && corepack pnpm run sbom   # 生成 artifacts/sbom.cdx.json（gitignored）
-node scripts/verify-release.mjs --version 0.4.0 --tag latest \
+node scripts/verify-release.mjs --version 0.4.1 --tag latest \
   --sbom artifacts/sbom.cdx.json --require-sbom
 ```
 
-0.4.0 建立在「可信交付」线（0.3.0：证据可核或诚实标注 missing/unverifiable、数据能救、200k 行账本可用、provenance 可验）与 0.3.2 客户/性能收尾之上。0.4 的新增内容按主题记录在文档中：[Windows 支持矩阵](docs/WINDOWS.md)、[MCP 输出上限与协议协商](docs/MCP.md)、[200k 读 A/B 与写放大修复](docs/PERFORMANCE.md)、[只读账本门面](docs/LEDGER-READ-API.md)、[接口契约](docs/CONTRACTS.md)、[TUI 输出内核](docs/TUI.md) 与 [发布清单](docs/RELEASING.md)。每个版本记录自己的 `verify-release` check 数，不沿用旧版本数字。
+0.4.1 建立在「可信交付」线（0.3.0：证据可核或诚实标注 missing/unverifiable、数据能救、200k 行账本可用、provenance 可验）与 0.3.2 客户/性能收尾之上。0.4 的新增内容按主题记录在文档中：[Windows 支持矩阵](docs/WINDOWS.md)、[MCP 输出上限与协议协商](docs/MCP.md)、[200k 读 A/B 与写放大修复](docs/PERFORMANCE.md)、[只读账本门面](docs/LEDGER-READ-API.md)、[接口契约](docs/CONTRACTS.md)、[TUI 输出内核](docs/TUI.md) 与 [发布清单](docs/RELEASING.md)。每个版本记录自己的 `verify-release` check 数，不沿用旧版本数字。
 
 > 需要 **Node >= 22.16**；Windows/PowerShell/BOM 说明见 [docs/QUICKSTART.md](docs/QUICKSTART.md)。
 
@@ -57,7 +57,8 @@ node scripts/verify-release.mjs --version 0.4.0 --tag latest \
 - **0.4.0 回款**：`receivable add|ls|show|edit|void` + `payment add|ls|void`（整数分、CNY/USD/EUR/HKD、部分/多笔/超额/void、同事务自动完成承诺）、逐币种合计（open/overdue/paid）与账龄桶；`client export --pack` 输出 manifest + `SHA256SUMS` 客户状态包并附离线校验器。金额不进回执包、客户状态包、MCP、DSH 与 Pet Brief；
 - **0.4.0 MCP modern dual-era**：`server/discover`、显式 modern 方法 allowlist、`resultType`/`ttlMs`/`cacheScope` envelope；legacy 响应逐字节不变，`ADVISERS_MCP_MODERN=off` 可一键回退；工具面仍 8 tools / 5 resources，DSH 仍 6 tools；
 - **0.4.0 Windows**：`windows-full` CI（Node 24/22.16 矩阵）与便携 ZIP 构建/校验脚本；npm 仍是正式渠道，`docs/WINDOWS.md` 把支持范围限定为 Win11 25H2/26H2 x64，真机全量记录仍属发布清单项；
-- **0.4.0 法务**：TOS/PRIVACY/SAFETY/DISCLAIMER 升级到 **v2026.11.4**，新增数据面（邮件正文/凭据、KB 文本与页、回款记录、壳与晨报归档）与独立的模型出网同意均已披露，门控命令会重新确认修订后的条款。
+- **0.4.0 法务**：TOS/PRIVACY/SAFETY/DISCLAIMER 升级到 **v2026.11.4**，新增数据面（邮件正文/凭据、KB 文本与页、回款记录、壳与晨报归档）与独立的模型出网同意均已披露，门控命令会重新确认修订后的条款；
+- **0.4.1 收尾**：`kb link/unlink` 与 `mail link/dismiss` 把 KB/邮件引用变成显式、可审计的审查决定（未知 id 失败关闭）；`remind --deliver --notify` 增加运行时 `--quiet-hours HH:MM-HH:MM`（跨午夜；只抑制通知通道，本地日志行始终写入）、按本地日去重（通知去重元数据本地保留 30 天）与 `--force-notify`；确定性评测新增 `kb`/`mail`/`policy` 三组（30 cases / 277 checks），CLI 契约新增 38 个 documented-additive 命令 / 76 个向量（90 checks 门禁）。
 - `research --web/--url` 是唯一内置的**网页**出网路径；设置 key 后 `chat`/`capture`/`review`/`brief --deep`/`learn review` 会把输入发给配置的模型 API；`status`/`office`/`template`/`verify`/`commit` 等纯本地命令不联网。research 对 `secrecy > 0` 的 matter 拒绝（fail closed）。
 - 提醒：`remind` + `.ics`/VALARM 导出 + 可选的本地调度脚本；`.ics` 日历只读导入；
 - 只读入口：`capture --from-mail` / `--from-transcript`（去重、全部候选需人工 accept、secret matter 拒绝）；
@@ -68,13 +69,13 @@ node scripts/verify-release.mjs --version 0.4.0 --tag latest \
 - Pet Brief（只读脱敏投影，契约 v0.2：`schemaVersion: 2` + `displayPolicy`，默认 `private`；v0.1 brief 按 legacy 可读）：`pet-brief --json|--out|--check [--strict]|--print-schema|--display-policy public|private|none`；`secrecy >= 2` 全排除、confidence < 0.7 丢弃、5 分钟 TTL、每节 10 项上限；不调模型、不联网、不改账本；桌宠 UI/传输尚未接通。见 `docs/PET-BRIEF-PRODUCER.md`。
 
 ```sh
-# 0.4.0 已于 2026-11-21 发布（npm `latest` = 0.4.0；`next` 也指向 0.4.0）。
-# 从 checkout 运行（开发用途；同为 0.4.0 版本）：
+# 0.4.1 已于 2026-11-21 发布（npm `latest` = 0.4.1；`next` 也指向 0.4.1）。
+# 从 checkout 运行（开发用途；同为 0.4.1 版本）：
 #   corepack pnpm install && corepack pnpm -r build
 #   ADVISERS_OFFICE_LOCAL=1 node packages/advisers/bin/advisers.js status
-# 从 npm 安装（稳定渠道 = 默认 `latest`，当前为 0.4.0）：
+# 从 npm 安装（稳定渠道 = 默认 `latest`，当前为 0.4.1）：
 #   npm i -g --registry=https://registry.npmjs.org advisers@latest advisers-office@latest
-# `next` 渠道也指向 0.4.0：
+# `next` 渠道也指向 0.4.1：
 #   npm i -g --registry=https://registry.npmjs.org advisers@next advisers-office@next
 advisers soul init
 advisers commit add "周五前发报价给王工" --quote "周五前发报价给王工" --due 2026-11-13T18:00:00+08:00
@@ -85,7 +86,7 @@ advisers office docx spec.json out.docx
 advisers verify out.docx
 ```
 
-npm 标签：**`latest`** 是稳定渠道（当前为 **`0.4.0`**，2026-11-21 已发布）；**`next`** 是预发布渠道（同样为 `0.4.0`）。`0.2.4` 是已被 0.3.0 线取代的**从未发布的 candidate**，不能从 npm 安装。0.4.0 取代 0.3.2/0.3.1/0.3.0：旧 tarball 仍可按版本号安装，但其文档是旧版本且无法原地修复（npm unpublish 需要 owner 2FA）。需要可复现安装时请固定版本（当前 `advisers@0.4.0`），并直接查询官方 registry（`npm view advisers dist-tags --registry=https://registry.npmjs.org/`）——镜像可能滞后。
+npm 标签：**`latest`** 是稳定渠道（当前为 **`0.4.1`**，2026-11-21 已发布）；**`next`** 是预发布渠道（同样为 `0.4.1`）。`0.2.4` 是已被 0.3.0 线取代的**从未发布的 candidate**，不能从 npm 安装。`0.4.1` 取代 `0.4.0`/`0.3.2`/`0.3.1`/`0.3.0`：旧 tarball 仍可按版本号安装，但其文档是旧版本且无法原地修复（npm unpublish 需要 owner 2FA）。`0.4.1` 是 0.4.0 功能发布之上的当日补丁。需要可复现安装时请固定版本（当前 `advisers@0.4.1`），并直接查询官方 registry（`npm view advisers dist-tags --registry=https://registry.npmjs.org/`）——镜像可能滞后。
 
 ## 许可
 

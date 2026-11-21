@@ -10,10 +10,11 @@ DSH bundle for **Advisers**. It registers:
 - `advisers_evidence` — read-only **real-ledger** evidence lookup (stored quotes/refs/sources) for a `cm_…`, `fact_…`, or `pref_…` id;
 - `advisers_clients` — read-only **real-ledger** customer projection: `{action:"list"}` client rows or `{action:"show", id}` one client (projects, exact counts, open buckets, a delivery/commitment timeline). No note bodies, no conversation text.
 
-`0.4.0` is the current lockstep release (published 2026-11-21). This adapter's six-tool
-surface and its read-only ledger behaviour are unchanged from 0.3.2; the new 0.4.0
-capability (knowledge base, mail entry, interactive shell, receivables, policy/evidence
-subset) lives in the `advisers` package, and this adapter keeps its read-only scope.
+`0.4.1` is the current lockstep release (published 2026-11-21; a same-day follow-up patch
+on 0.4.0). This adapter's six-tool surface and its read-only ledger behaviour are unchanged
+from 0.3.2; the new 0.4.x capability (knowledge base, mail entry, interactive shell,
+receivables, policy/evidence subset, KB/mail review links) lives in the `advisers`
+package, and this adapter keeps its read-only scope.
 
 0.3.0 wires the three ledger read tools to the real local ledger through the
 controlled `advisers/lib/ledger-read.js` facade (see

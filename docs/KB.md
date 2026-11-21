@@ -1,6 +1,6 @@
 # Knowledge base (KB): deterministic compiled pages and local search
 
-> Status: **0.4.0, schema v22** (`SCHEMA_VERSION = 22`). The KB is a local,
+> Status: **0.4.1, schema v22** (`SCHEMA_VERSION = 22`). The KB is a local,
 > deterministic knowledge layer: it indexes extracted text from your own files,
 > builds compiled pages from the local ledger, and answers lexical searches. It is
 > **not** RAG, not a chatbot, not a vector store, and it does not call a model or
@@ -34,8 +34,9 @@ Three consequences you can rely on:
    page content). `dataSha256` on `morning` is unaffected by KB.
 3. **Auditable references, not similarity scores.** Search hits carry stable
    `kb_doc`/`kb_chunk`/`kb_page` refs; facts link to KB documents through
-   `kb_fact_links` (manual `kb link` is wired on main after the 0.4.0 release; the 0.4.0 tarball did not wire it, and the table
-   and `evidence show --json.kbSources` are prepared for 0.4.x). A hit is a
+   `kb_fact_links` (manual `kb link` is wired in 0.4.1; the 0.4.0 tarball exposed the
+   library only, and the table and `evidence show --json.kbSources` were prepared for
+   it). A hit is a
    deterministic match against text you ingested, not a model's opinion.
 
 Explicit non-goals for 0.4.0: no chat/`kb ask`, no model-generated pages, no
@@ -155,8 +156,9 @@ advisers fact as-of <YYYY-MM-DD|ISO> [--matter <id>] [--client <id>] [--subject 
     [--predicate p] [--limit n] [--include-deleted] [--json]
 ```
 
-`kb link`/`kb unlink` (`kb_fact_links` maintenance) are wired on main after the 0.4.0 release (the 0.4.0 tarball exposed the library only) and are
-**not wired into the 0.4.0 CLI**; they are a 0.4.x follow-up.
+`kb link`/`kb unlink` (`kb_fact_links` maintenance) are wired in the **0.4.1 CLI**;
+the 0.4.0 tarball exposed the library only. Both commands validate the ids, fail
+closed and write an audit row (`kb.link`/`kb.unlink`).
 
 ### 5.1 `kb add`
 
