@@ -53,6 +53,15 @@ removing a key or changing its type is a major change. Failures write the
 error envelope to stderr (stdout stays machine-free) and exit 1, or exit 3 for
 `E_TOS_REQUIRED`.
 
+The 0.4.0 release adds **documented-additive** shapes for the new families
+(`kb`, `kb page`, `fact`, `mail`, `receivable`, `payment`, `consent`,
+`privacy --matrix`, `search --scope`, `client export --pack`): they are
+registered with `status: "documented-additive"` in `commands-v1.json` and
+declared in the schema's `x-documented-additive` block. The gate checks their
+structure, schema refs and accept/reject vectors but does not execute them as
+frozen v1 commands; when a shape stabilises it can be promoted to a frozen
+entry in a future contract revision.
+
 ### Status and the discovery field (v1)
 
 `contracts/cli/status-v1.json` freezes `advisers status --json` and the rule
@@ -166,15 +175,15 @@ The gate runs **in CI on every PR** (the `test` job, after build/typecheck; see
 `.github/workflows/ci.yml`), so a shape change that is not reflected in the frozen
 artifacts fails the PR. It is offline (no credentials, no model, no network), uses a
 temporary `ADVISERS_HOME` under the OS temp directory, and removes it afterwards.
-Current tree: **49 checks PASS** (2026-11-21 0.4.0 tree, including the wired
+Current tree: **90 checks PASS** (2026-11-21 0.4.0 + post-release main, including the wired
 `status.contracts` field, the real stdio MCP **dual-era** catalogue and the
 0.4.0 error-code layers). The eight checks:
 
 | Check | Enforces |
 |---|---|
-| `--schema` | every `*.schema.json` parses, has the required metadata (`$schema/$id/version/x-license/x-*`), uses only the supported JSON-Schema subset (unknown keywords fail closed) and has resolvable local `$ref`s; all other contract JSON parses. |
-| `--vectors` | each vectors file targets an existing schema, covers every top-level `$def`, has at least 3 accept/reject cases, and each case validates (or fails) as declared. |
-| `--cli` | the real CLI, in a temp home, returns pure JSON for every command in `cli/commands-v1.json` and every payload matches its frozen `$def`. |
+| `--schema` | every `*.schema.json` parses, has the required metadata (`$schema/$id/version/x-license/x-*`), uses only the supported JSON-Schema subset (unknown keywords fail closed) and has resolvable local `$ref`s; the documented-additive `$defs` agree with the commands registry; all other contract JSON parses. |
+| `--vectors` | each vectors file targets an existing schema, covers every top-level `$def` (including one accept + one reject for every documented-additive def), has at least 3 cases, and each case validates (or fails) as declared. |
+| `--cli` | the real CLI, in a temp home, returns pure JSON for every frozen command in `cli/commands-v1.json` and every payload matches its frozen `$def`; documented-additive commands are structurally validated without execution. |
 | `--status` | `status --json` works on a fresh home with no TOS/key, matches `StatusPayload`, and the (when present) discovery field equals the manifest. |
 | `--exit` | the real CLI exit codes match `cli/exit-codes-v1.json` probes; the error envelope validates against `cli/errors-v1.schema.json`. |
 | `--mcp` | a real `advisers mcp --stdio` session for **both eras**: legacy initialize/tools/list/resources/list/resources/read/tools/call/error probes validated against `mcp/*.json` and `mcp/responses-v1.schema.json` (catalogue deep-equals the contract), then modern probes (server/discover, tools/list, tools/call, resources/list, resources/read) validated against `mcp/responses-v2.schema.json` with the envelope stripped and the payload re-validated against the frozen v1 `$defs`, plus `-32022`/`-32602`/`-32601`, cursor rejection, notification silence, legacy-byte equality and the `ADVISERS_MCP_MODERN=off` fallback. |

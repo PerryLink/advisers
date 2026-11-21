@@ -1,13 +1,13 @@
 # Deterministic eval suite (`pnpm eval:det`)
 
 > Status: introduced in the 0.3.0 line (published 2026-11-20); this tree is
-> `advisers@0.4.0` (published 2026-11-21). The 0.4.0 release adds one deterministic
-> case — `det.mcp.modern-dual-era` (MCP `2026-07-28` modern envelopes behind the
-> legacy surface) — while the default suite set and the 8-tool/5-resource MCP baseline
-> are unchanged. The suite is a release gate for the deterministic contract, not a
-> claim about model quality; the new KB/mail/policy/consent/receivable surfaces are
-> covered by deterministic package tests, not by new `eval:det` groups (see
-> "0.4.0 coverage" below).
+> `advisers@0.4.0` plus the post-release main follow-ups. The published 0.4.0 adds
+> one deterministic case — `det.mcp.modern-dual-era` (MCP `2026-07-28` modern
+> envelopes behind the legacy surface); main after 0.4.0 adds the `kb`, `mail` and
+> `policy` groups (10 cases / 95 checks), for 30 cases / 277 checks in the default
+> run. The suite is a release gate for the deterministic contract, not a claim about
+> model quality; the remaining KB/mail/policy/consent/receivable behaviour is also
+> covered by deterministic package tests.
 
 `eval/` also contains the older **manual, real-model** runners
 (`eval/run-*.mjs`, see [eval/README.md](../eval/README.md)). Those need a
@@ -65,11 +65,24 @@ removes `ADVISERS_API_KEY`, `DEEPSEEK_API_KEY`, `OPENAI_API_KEY`,
 
 ## 0.4.0 coverage
 
-`eval:det` does **not** gain KB/mail/policy groups in 0.4.0. The new local surfaces
-are covered by deterministic package tests under `packages/advisers/test/`, while the
-one new det case is `det.mcp.modern-dual-era` in the `mcp` group (MCP `2026-07-28`
-dual-era: `server/discover`, per-request `_meta`, result envelopes, mapped errors, and
-byte-identical legacy responses).
+The published 0.4.0 adds `det.mcp.modern-dual-era` in the `mcp` group (MCP
+`2026-07-28` dual-era: `server/discover`, per-request `_meta`, result envelopes,
+mapped errors, byte-identical legacy responses). Main after 0.4.0 adds three
+fully deterministic groups:
+
+- **kb** (4 cases): batch add/ls/show byte-stability, duplicate skip, 2-character
+  `degraded:["short_query_like"]` vs 3+ character FTS, page rebuild idempotence and
+  staleness, fact `show/history/as-of` time travel and boundaries.
+- **mail** (2 cases): fixed `.eml` import/ls/show byte-stability with dedupe and
+  `sha256`/id cross-home stability, local-rule extraction dry-run and persisted
+  pending candidate (no model, no IMAP).
+- **policy** (4 cases): `privacy --matrix` row stability, consent grant/status/revoke
+  lifecycle and mode, `mail extract --model` fail-closed gates, and evidence
+  resolution routing (`verified`/`missing`/`unverifiable`; the fourth vocabulary value
+  is pinned but not reachable through the current CLI).
+
+These cases run with a fresh temp `ADVISERS_HOME`, `TZ=Asia/Shanghai`, no model key and
+the network-block preload (0 network attempts).
 
 Run the 0.4.0 deterministic package tests explicitly (no key, no network, temp
 `ADVISERS_HOME`):
@@ -85,18 +98,17 @@ node --experimental-strip-types --test test/migration-v22.test.js test/schema-mi
 node --experimental-strip-types --test test/mcp-modern*.test.js
 ```
 
-`pnpm -r test` runs the same files in the CI `test` job (and `windows-full` runs them
-on Windows, report-only in 0.4.0). They are deterministic tests: the local mail
+`pnpm -r test` runs the same files in the CI `test` job (and the blocking
+`windows-full` job runs them on Windows). They are deterministic tests: the local mail
 extraction path is the only mail path covered — `mail sync` and `mail extract --model`
 need a server/key and are deliberately outside the gate. No case reads the real
 `~/.advisers` or the network.
 
-**Why no KB/mail/policy det groups yet:** `eval:det` gates the release contract
-(determinism hashes, MCP surface, JSON purity, exit codes, non-TTY behaviour). The new
-surfaces have library/CLI tests but no golden-hash contract yet; a det group needs a
-stable fixture plus a reviewed baseline, which is 0.4.x/0.5 work. Do not present these
-package tests as a model-quality evaluation, and do not claim det coverage the suite
-does not have.
+**Why these groups are still contract gates, not model quality:** every case asserts
+deterministic invariants (byte-identical repeat runs, frozen vocabulary/exit codes,
+fail-closed policy gates, no network) rather than a golden model answer. They do not
+need a provider key and never read the real `~/.advisers`. Do not present them as a
+model-quality evaluation.
 
 ## Environment (why the numbers are stable)
 

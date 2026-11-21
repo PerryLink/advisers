@@ -19,7 +19,23 @@
     "ResolvedEvidenceItem": {
       "type": "object",
       "description": "One resolved/unverifiable/missing evidence row. Fields such as kind/type/ref/quote/quoteSha256/resolution/reason are documented in docs/SOURCE-SCHEMA.md; additive fields are allowed.",
-      "additionalProperties": true
+      "additionalProperties": true,
+      "properties": {
+        "resolution": {
+          "type": "string",
+          "enum": [
+            "verified",
+            "missing",
+            "unverifiable",
+            "not_checked"
+          ],
+          "description": "0.4.0 additive four-state resolution."
+        },
+        "quoteVerified": {
+          "type": "boolean",
+          "description": "0.4.0 additive: true when the stored quote matched verbatim at build time."
+        }
+      }
     },
     "Commitment": {
       "type": "object",
@@ -380,6 +396,9 @@
           "items": {
             "type": "string"
           }
+        },
+        "urgency": {
+          "$ref": "#/$defs/Urgency"
         }
       },
       "required": [
@@ -465,6 +484,9 @@
           "type": "object",
           "description": "Kind-specific metadata (rrule/location/debtor/...).",
           "additionalProperties": true
+        },
+        "urgency": {
+          "$ref": "#/$defs/Urgency"
         }
       },
       "required": [
@@ -643,6 +665,14 @@
         },
         "contracts": {
           "$ref": "#/$defs/ContractsDiscovery"
+        },
+        "receivables": {
+          "type": "integer",
+          "description": "0.4.0 additive: active receivable row count (never amounts)."
+        },
+        "payments": {
+          "type": "integer",
+          "description": "0.4.0 additive: active payment row count (never amounts)."
         }
       },
       "required": [
@@ -844,6 +874,15 @@
           "items": {
             "$ref": "#/$defs/ReminderItem"
           }
+        },
+        "ok": {
+          "const": true
+        },
+        "command": {
+          "const": "remind"
+        },
+        "timezone": {
+          "type": "string"
         }
       },
       "required": [
@@ -1130,6 +1169,19 @@
         "out": {
           "type": "string",
           "description": "Written markdown path when --out is used."
+        },
+        "top": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/MorningTopItem"
+          },
+          "description": "0.4.0 additive: deterministic priority view (--top 1..5, default 3)."
+        },
+        "urgencyModelVersion": {
+          "const": 1
+        },
+        "archive": {
+          "$ref": "#/$defs/MorningArchive"
         }
       },
       "required": [
@@ -1274,6 +1326,11 @@
         },
         "operatorEntered": {
           "type": "integer"
+        },
+        "notCheckedCount": {
+          "type": "integer",
+          "minimum": 0,
+          "description": "0.4.0 additive: entries with no local lookup capability."
         }
       },
       "required": [
@@ -1324,6 +1381,21 @@
         },
         "summary": {
           "$ref": "#/$defs/EvidenceSummary"
+        },
+        "notChecked": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "additionalProperties": true
+          },
+          "description": "0.4.0 additive: sources that could not be checked locally (neither resolved nor missing)."
+        },
+        "kbSources": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/FactKbSource"
+          },
+          "description": "0.4.0 additive: explicit KB links for fact ids."
         }
       },
       "required": [
@@ -1513,6 +1585,3850 @@
         "path"
       ],
       "additionalProperties": true
+    },
+    "KbDocumentRow": {
+      "type": "object",
+      "properties": {
+        "id": {
+          "type": "string"
+        },
+        "kind": {
+          "type": "string",
+          "enum": [
+            "quote",
+            "contract",
+            "receipt",
+            "delivery",
+            "note",
+            "other"
+          ]
+        },
+        "title": {
+          "type": "string"
+        },
+        "status": {
+          "type": "string"
+        },
+        "clientId": {
+          "type": "string"
+        },
+        "projectId": {
+          "type": "string"
+        },
+        "matterId": {
+          "type": "string"
+        },
+        "sourceName": {
+          "type": "string"
+        },
+        "sourceSha256": {
+          "type": "string",
+          "pattern": "^[0-9a-f]{64}$"
+        },
+        "mime": {
+          "type": "string"
+        },
+        "sizeBytes": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "encoding": {
+          "type": "string"
+        },
+        "extractor": {
+          "type": "string"
+        },
+        "secrecy": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 3
+        },
+        "needsOcr": {
+          "type": "boolean"
+        },
+        "truncated": {
+          "type": "boolean"
+        },
+        "textBytes": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "chunkCount": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "createdAt": {
+          "type": "string",
+          "minLength": 4,
+          "description": "ISO-8601 timestamp string"
+        },
+        "capturedAt": {
+          "type": "string",
+          "minLength": 4,
+          "description": "ISO-8601 timestamp string"
+        },
+        "deletedAt": {
+          "type": "string",
+          "minLength": 4,
+          "description": "ISO-8601 timestamp string"
+        }
+      },
+      "required": [
+        "id",
+        "kind",
+        "title",
+        "status",
+        "sourceSha256",
+        "sizeBytes",
+        "extractor",
+        "secrecy",
+        "needsOcr",
+        "truncated",
+        "textBytes",
+        "chunkCount",
+        "createdAt",
+        "capturedAt"
+      ],
+      "description": "One KB document row (sourceName is a basename; no absolute paths are exposed).",
+      "additionalProperties": true
+    },
+    "KbChunkPreview": {
+      "type": "object",
+      "properties": {
+        "id": {
+          "type": "string"
+        },
+        "seq": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "charCount": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "text": {
+          "type": "string"
+        },
+        "truncated": {
+          "type": "boolean"
+        }
+      },
+      "required": [
+        "id",
+        "seq",
+        "charCount",
+        "text",
+        "truncated"
+      ],
+      "additionalProperties": true
+    },
+    "KbBatchCounts": {
+      "type": "object",
+      "properties": {
+        "added": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "skipped": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "failed": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "chunks": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "textBytes": {
+          "type": "integer",
+          "minimum": 0
+        }
+      },
+      "required": [
+        "added",
+        "skipped",
+        "failed",
+        "chunks",
+        "textBytes"
+      ],
+      "additionalProperties": true
+    },
+    "KbSkippedFile": {
+      "type": "object",
+      "properties": {
+        "file": {
+          "type": "string"
+        },
+        "code": {
+          "type": "string"
+        },
+        "existingId": {
+          "oneOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        }
+      },
+      "required": [
+        "file",
+        "code"
+      ],
+      "description": "Duplicate file skipped by a kb add batch (file is a basename).",
+      "additionalProperties": true
+    },
+    "KbFailedFile": {
+      "type": "object",
+      "properties": {
+        "file": {
+          "type": "string"
+        },
+        "code": {
+          "type": "string"
+        },
+        "message": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "file",
+        "code",
+        "message"
+      ],
+      "additionalProperties": true
+    },
+    "KbPageSummary": {
+      "type": "object",
+      "properties": {
+        "id": {
+          "type": "string"
+        },
+        "kind": {
+          "type": "string"
+        },
+        "subjectId": {
+          "type": "string"
+        },
+        "title": {
+          "type": "string"
+        },
+        "generatedAt": {
+          "type": "string",
+          "minLength": 4,
+          "description": "ISO-8601 timestamp string"
+        },
+        "status": {
+          "type": "string"
+        },
+        "inputsSha256": {
+          "type": "string",
+          "pattern": "^[0-9a-f]{64}$"
+        },
+        "stale": {
+          "oneOf": [
+            {
+              "type": "boolean"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "staleReason": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "id",
+        "kind",
+        "subjectId",
+        "title",
+        "generatedAt",
+        "status",
+        "inputsSha256",
+        "stale"
+      ],
+      "additionalProperties": true
+    },
+    "KbPageRef": {
+      "type": "object",
+      "properties": {
+        "id": {
+          "type": "string"
+        },
+        "kind": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "id",
+        "kind"
+      ],
+      "additionalProperties": true
+    },
+    "KbPageContent": {
+      "type": "object",
+      "properties": {
+        "id": {
+          "type": "string"
+        },
+        "kind": {
+          "type": "string"
+        },
+        "subjectId": {
+          "type": "string"
+        },
+        "title": {
+          "type": "string"
+        },
+        "markdown": {
+          "type": "string"
+        },
+        "data": {
+          "oneOf": [
+            {
+              "type": "object",
+              "additionalProperties": true
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "sourceRefs": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "additionalProperties": true
+          }
+        },
+        "inputsSha256": {
+          "type": "string",
+          "pattern": "^[0-9a-f]{64}$"
+        },
+        "generatedAt": {
+          "oneOf": [
+            {
+              "type": "string",
+              "minLength": 4,
+              "description": "ISO-8601 timestamp string"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "status": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "id",
+        "kind",
+        "subjectId",
+        "title",
+        "markdown",
+        "data",
+        "sourceRefs",
+        "inputsSha256",
+        "generatedAt",
+        "status"
+      ],
+      "additionalProperties": true
+    },
+    "KbPageLive": {
+      "type": "object",
+      "properties": {
+        "inputsSha256": {
+          "type": "string",
+          "pattern": "^[0-9a-f]{64}$"
+        },
+        "markdown": {
+          "type": "string"
+        },
+        "data": {
+          "oneOf": [
+            {
+              "type": "object",
+              "additionalProperties": true
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "sourceRefs": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "additionalProperties": true
+          }
+        }
+      },
+      "required": [
+        "inputsSha256",
+        "markdown",
+        "data",
+        "sourceRefs"
+      ],
+      "additionalProperties": true
+    },
+    "KbPageStored": {
+      "type": "object",
+      "properties": {
+        "exists": {
+          "type": "boolean"
+        },
+        "inputsSha256": {
+          "oneOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "generatedAt": {
+          "oneOf": [
+            {
+              "type": "string",
+              "minLength": 4,
+              "description": "ISO-8601 timestamp string"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "status": {
+          "oneOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        }
+      },
+      "required": [
+        "exists",
+        "inputsSha256",
+        "generatedAt",
+        "status"
+      ],
+      "additionalProperties": true
+    },
+    "SearchRef": {
+      "type": "object",
+      "properties": {
+        "kind": {
+          "type": "string",
+          "enum": [
+            "turn",
+            "kb_doc",
+            "kb_chunk",
+            "kb_page",
+            "fact",
+            "preference"
+          ]
+        },
+        "id": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "kind",
+        "id"
+      ],
+      "additionalProperties": true
+    },
+    "SearchHighlight": {
+      "type": "object",
+      "properties": {
+        "start": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "end": {
+          "type": "integer",
+          "minimum": 0
+        }
+      },
+      "required": [
+        "start",
+        "end"
+      ],
+      "additionalProperties": true
+    },
+    "SearchHit": {
+      "type": "object",
+      "properties": {
+        "kind": {
+          "type": "string",
+          "enum": [
+            "turn",
+            "kb_doc",
+            "kb_chunk",
+            "kb_page",
+            "fact",
+            "preference"
+          ]
+        },
+        "ref": {
+          "$ref": "#/$defs/SearchRef"
+        },
+        "docId": {
+          "type": "string"
+        },
+        "pageId": {
+          "type": "string"
+        },
+        "title": {
+          "type": "string"
+        },
+        "snippet": {
+          "type": "string"
+        },
+        "highlights": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/SearchHighlight"
+          }
+        },
+        "matchPath": {
+          "type": "string"
+        },
+        "at": {
+          "type": "string"
+        },
+        "generatedAt": {
+          "type": "string",
+          "minLength": 4,
+          "description": "ISO-8601 timestamp string"
+        },
+        "score": {
+          "type": "number"
+        },
+        "clientId": {
+          "type": "string"
+        },
+        "projectId": {
+          "type": "string"
+        },
+        "matterId": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "kind",
+        "ref"
+      ],
+      "description": "One unified-search hit; highlights are numeric ranges into snippet, never HTML.",
+      "additionalProperties": true
+    },
+    "SearchCounts": {
+      "type": "object",
+      "properties": {
+        "turns": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "kbDocs": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "kbChunks": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "kbPages": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "facts": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "preferences": {
+          "type": "integer",
+          "minimum": 0
+        }
+      },
+      "required": [
+        "turns",
+        "kbDocs",
+        "kbChunks",
+        "kbPages",
+        "facts",
+        "preferences"
+      ],
+      "additionalProperties": true
+    },
+    "FactFallback": {
+      "type": "object",
+      "properties": {
+        "validFromFromRecordedAt": {
+          "type": "boolean"
+        }
+      },
+      "required": [
+        "validFromFromRecordedAt"
+      ],
+      "additionalProperties": true
+    },
+    "FactKbSource": {
+      "type": "object",
+      "properties": {
+        "docId": {
+          "type": "string"
+        },
+        "title": {
+          "type": "string"
+        },
+        "chunkId": {
+          "type": "string"
+        },
+        "relation": {
+          "type": "string",
+          "enum": [
+            "source",
+            "mentions"
+          ]
+        }
+      },
+      "required": [
+        "docId",
+        "title",
+        "relation"
+      ],
+      "additionalProperties": true
+    },
+    "Fact": {
+      "type": "object",
+      "properties": {
+        "id": {
+          "type": "string"
+        },
+        "subject": {
+          "type": "string"
+        },
+        "predicate": {
+          "type": "string"
+        },
+        "object": {
+          "type": "string"
+        },
+        "matterId": {
+          "type": "string"
+        },
+        "clientId": {
+          "type": "string"
+        },
+        "authority": {
+          "type": "string"
+        },
+        "confidence": {
+          "type": "number"
+        },
+        "status": {
+          "type": "string"
+        },
+        "recordedAt": {
+          "type": "string",
+          "minLength": 4,
+          "description": "ISO-8601 timestamp string"
+        },
+        "validFrom": {
+          "type": "string",
+          "minLength": 4,
+          "description": "ISO-8601 timestamp string"
+        },
+        "validTo": {
+          "type": "string",
+          "minLength": 4,
+          "description": "ISO-8601 timestamp string"
+        },
+        "expiredAt": {
+          "type": "string",
+          "minLength": 4,
+          "description": "ISO-8601 timestamp string"
+        },
+        "supersedes": {
+          "type": "string"
+        },
+        "supersededBy": {
+          "type": "string"
+        },
+        "shadowedBy": {
+          "type": "string"
+        },
+        "lastSeenAt": {
+          "type": "string",
+          "minLength": 4,
+          "description": "ISO-8601 timestamp string"
+        },
+        "deletedAt": {
+          "type": "string",
+          "minLength": 4,
+          "description": "ISO-8601 timestamp string"
+        },
+        "deletedReason": {
+          "type": "string"
+        },
+        "evidence": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "additionalProperties": true
+          }
+        },
+        "fallback": {
+          "$ref": "#/$defs/FactFallback"
+        }
+      },
+      "required": [
+        "id",
+        "subject",
+        "predicate",
+        "object",
+        "authority",
+        "confidence",
+        "status",
+        "recordedAt",
+        "evidence",
+        "fallback"
+      ],
+      "description": "One fact row projection as returned by the 0.4.0 fact read views.",
+      "additionalProperties": true
+    },
+    "FactAsOfItem": {
+      "allOf": [
+        {
+          "$ref": "#/$defs/Fact"
+        },
+        {
+          "type": "object",
+          "properties": {
+            "effectiveFrom": {
+              "type": "string",
+              "minLength": 4,
+              "description": "ISO-8601 timestamp string"
+            }
+          },
+          "required": [
+            "effectiveFrom"
+          ],
+          "description": "Fact plus the effective start instant selected at --at.",
+          "additionalProperties": true
+        }
+      ]
+    },
+    "MailAccount": {
+      "type": "object",
+      "properties": {
+        "id": {
+          "type": "string"
+        },
+        "name": {
+          "type": "string"
+        },
+        "host": {
+          "type": "string"
+        },
+        "port": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 65535
+        },
+        "tls": {
+          "type": "string",
+          "enum": [
+            "tls",
+            "starttls",
+            "local"
+          ]
+        },
+        "username": {
+          "type": "string"
+        },
+        "mailbox": {
+          "type": "string"
+        },
+        "status": {
+          "type": "string",
+          "enum": [
+            "active",
+            "removed"
+          ]
+        },
+        "defaultMatterId": {
+          "type": "string"
+        },
+        "clientId": {
+          "type": "string"
+        },
+        "retentionDays": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "lastSyncAt": {
+          "type": "string",
+          "minLength": 4,
+          "description": "ISO-8601 timestamp string"
+        },
+        "lastError": {
+          "type": "string"
+        },
+        "createdAt": {
+          "type": "string",
+          "minLength": 4,
+          "description": "ISO-8601 timestamp string"
+        },
+        "updatedAt": {
+          "type": "string",
+          "minLength": 4,
+          "description": "ISO-8601 timestamp string"
+        },
+        "hasCredential": {
+          "type": "boolean"
+        }
+      },
+      "required": [
+        "id",
+        "name",
+        "host",
+        "port",
+        "tls",
+        "username",
+        "mailbox",
+        "status",
+        "retentionDays",
+        "createdAt",
+        "updatedAt",
+        "hasCredential"
+      ],
+      "description": "One mail account row; credentials never appear in this shape.",
+      "additionalProperties": true
+    },
+    "MailAttachment": {
+      "type": "object",
+      "properties": {
+        "name": {
+          "type": "string"
+        },
+        "size": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "mime": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "name",
+        "size",
+        "mime"
+      ],
+      "additionalProperties": true
+    },
+    "MailMessage": {
+      "type": "object",
+      "properties": {
+        "id": {
+          "type": "string"
+        },
+        "accountId": {
+          "type": "string"
+        },
+        "mailbox": {
+          "type": "string"
+        },
+        "uid": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "uidvalidity": {
+          "type": "string"
+        },
+        "messageId": {
+          "type": "string"
+        },
+        "dedupeKey": {
+          "type": "string"
+        },
+        "from": {
+          "type": "string"
+        },
+        "subject": {
+          "type": "string"
+        },
+        "sentAt": {
+          "type": "string",
+          "minLength": 4,
+          "description": "ISO-8601 timestamp string"
+        },
+        "receivedAt": {
+          "type": "string",
+          "minLength": 4,
+          "description": "ISO-8601 timestamp string"
+        },
+        "sizeBytes": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "retained": {
+          "type": "boolean"
+        },
+        "purgedAt": {
+          "type": "string",
+          "minLength": 4,
+          "description": "ISO-8601 timestamp string"
+        },
+        "bodySha256": {
+          "type": "string",
+          "pattern": "^[0-9a-f]{64}$"
+        },
+        "attachments": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/MailAttachment"
+          }
+        },
+        "clientId": {
+          "type": "string"
+        },
+        "projectId": {
+          "type": "string"
+        },
+        "status": {
+          "type": "string"
+        },
+        "candidateIds": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "createdAt": {
+          "type": "string",
+          "minLength": 4,
+          "description": "ISO-8601 timestamp string"
+        },
+        "updatedAt": {
+          "type": "string",
+          "minLength": 4,
+          "description": "ISO-8601 timestamp string"
+        },
+        "bodyText": {
+          "oneOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        }
+      },
+      "required": [
+        "id",
+        "accountId",
+        "mailbox",
+        "uid",
+        "dedupeKey",
+        "from",
+        "subject",
+        "receivedAt",
+        "retained",
+        "attachments",
+        "status",
+        "candidateIds",
+        "createdAt",
+        "updatedAt"
+      ],
+      "additionalProperties": true
+    },
+    "MailFailure": {
+      "type": "object",
+      "properties": {
+        "messageId": {
+          "type": "string"
+        },
+        "code": {
+          "oneOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        }
+      },
+      "required": [
+        "messageId",
+        "code"
+      ],
+      "additionalProperties": true
+    },
+    "MailSyncResult": {
+      "type": "object",
+      "properties": {
+        "ok": {
+          "const": true
+        },
+        "command": {
+          "const": "mail sync"
+        },
+        "accountId": {
+          "type": "string"
+        },
+        "mailbox": {
+          "type": "string"
+        },
+        "uidValidity": {
+          "type": "string"
+        },
+        "fetched": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "inserted": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "skipped": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "failed": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "duplicates": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "needsResync": {
+          "type": "boolean"
+        },
+        "dryRun": {
+          "type": "boolean"
+        },
+        "full": {
+          "type": "boolean"
+        },
+        "durationMs": {
+          "type": "integer",
+          "minimum": 0
+        }
+      },
+      "required": [
+        "ok",
+        "command",
+        "accountId",
+        "mailbox",
+        "fetched",
+        "inserted",
+        "skipped",
+        "failed",
+        "duplicates",
+        "needsResync",
+        "dryRun",
+        "full",
+        "durationMs"
+      ],
+      "additionalProperties": true
+    },
+    "MailExtractCandidate": {
+      "type": "object",
+      "properties": {
+        "id": {
+          "type": "string"
+        },
+        "kind": {
+          "type": "string"
+        },
+        "payload": {
+          "type": "object",
+          "additionalProperties": true
+        },
+        "evidence": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "additionalProperties": true
+          }
+        },
+        "status": {
+          "type": "string"
+        },
+        "createdAt": {
+          "type": "string",
+          "minLength": 4,
+          "description": "ISO-8601 timestamp string"
+        },
+        "mode": {
+          "type": "string",
+          "enum": [
+            "local",
+            "model"
+          ]
+        },
+        "preview": {
+          "type": "boolean"
+        }
+      },
+      "required": [
+        "kind",
+        "payload",
+        "evidence"
+      ],
+      "description": "One mail extraction candidate (memory-candidate shape; dry-run previews carry no id/status).",
+      "additionalProperties": true
+    },
+    "ReceivablePaymentsAgg": {
+      "type": "object",
+      "properties": {
+        "count": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "lastPaidAt": {
+          "type": "string",
+          "minLength": 4,
+          "description": "ISO-8601 timestamp string"
+        }
+      },
+      "required": [
+        "count"
+      ],
+      "additionalProperties": true
+    },
+    "Receivable": {
+      "type": "object",
+      "properties": {
+        "id": {
+          "type": "string"
+        },
+        "commitmentId": {
+          "type": "string"
+        },
+        "label": {
+          "type": "string"
+        },
+        "kind": {
+          "type": "string",
+          "enum": [
+            "quote",
+            "milestone",
+            "retainer",
+            "other"
+          ]
+        },
+        "memo": {
+          "type": "string"
+        },
+        "clientId": {
+          "type": "string"
+        },
+        "clientName": {
+          "type": "string"
+        },
+        "projectId": {
+          "type": "string"
+        },
+        "matterId": {
+          "type": "string"
+        },
+        "deliveryId": {
+          "type": "string"
+        },
+        "amountMinor": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "amount": {
+          "type": "string"
+        },
+        "currency": {
+          "type": "string",
+          "enum": [
+            "CNY",
+            "USD",
+            "EUR",
+            "HKD"
+          ]
+        },
+        "paidMinor": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "paid": {
+          "type": "string"
+        },
+        "outstandingMinor": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "outstanding": {
+          "type": "string"
+        },
+        "overpaidMinor": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "overpaid": {
+          "type": "string"
+        },
+        "state": {
+          "type": "string",
+          "enum": [
+            "open",
+            "partial",
+            "overdue",
+            "settled",
+            "written_off",
+            "void"
+          ]
+        },
+        "dueAt": {
+          "oneOf": [
+            {
+              "type": "string",
+              "minLength": 4,
+              "description": "ISO-8601 timestamp string"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "overdueDays": {
+          "oneOf": [
+            {
+              "type": "integer",
+              "minimum": 0
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "payments": {
+          "$ref": "#/$defs/ReceivablePaymentsAgg"
+        },
+        "reminderOffsets": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "createdAt": {
+          "type": "string",
+          "minLength": 4,
+          "description": "ISO-8601 timestamp string"
+        },
+        "updatedAt": {
+          "type": "string",
+          "minLength": 4,
+          "description": "ISO-8601 timestamp string"
+        },
+        "writtenOffAt": {
+          "type": "string",
+          "minLength": 4,
+          "description": "ISO-8601 timestamp string"
+        },
+        "deletedAt": {
+          "type": "string",
+          "minLength": 4,
+          "description": "ISO-8601 timestamp string"
+        },
+        "closedByPaymentId": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "id",
+        "commitmentId",
+        "label",
+        "kind",
+        "clientId",
+        "clientName",
+        "amountMinor",
+        "amount",
+        "currency",
+        "paidMinor",
+        "paid",
+        "outstandingMinor",
+        "outstanding",
+        "state",
+        "dueAt",
+        "overdueDays",
+        "payments",
+        "createdAt"
+      ],
+      "description": "One receivable row: amounts are decimal strings mirrored by integer minor units.",
+      "additionalProperties": true
+    },
+    "CurrencyTotals": {
+      "type": "object",
+      "properties": {
+        "currency": {
+          "type": "string",
+          "enum": [
+            "CNY",
+            "USD",
+            "EUR",
+            "HKD"
+          ]
+        },
+        "amountMinor": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "paidMinor": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "outstandingMinor": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "overdueMinor": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "overpaidMinor": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "unmatchedMinor": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "count": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "unsettledCount": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "settledCount": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "overdueCount": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "writtenOffCount": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "voidCount": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "aging": {
+          "type": "object",
+          "properties": {
+            "notDue": {
+              "type": "integer",
+              "minimum": 0
+            },
+            "0_30": {
+              "type": "integer",
+              "minimum": 0
+            },
+            "31_60": {
+              "type": "integer",
+              "minimum": 0
+            },
+            "61_90": {
+              "type": "integer",
+              "minimum": 0
+            },
+            "90plus": {
+              "type": "integer",
+              "minimum": 0
+            },
+            "noDue": {
+              "type": "integer",
+              "minimum": 0
+            }
+          },
+          "required": [
+            "notDue",
+            "0_30",
+            "31_60",
+            "61_90",
+            "90plus",
+            "noDue"
+          ],
+          "additionalProperties": true
+        }
+      },
+      "required": [
+        "currency",
+        "amountMinor",
+        "paidMinor",
+        "outstandingMinor",
+        "overdueMinor",
+        "overpaidMinor",
+        "unmatchedMinor",
+        "count",
+        "unsettledCount",
+        "settledCount",
+        "overdueCount",
+        "writtenOffCount",
+        "voidCount",
+        "aging"
+      ],
+      "additionalProperties": true
+    },
+    "UnmatchedPayment": {
+      "type": "object",
+      "properties": {
+        "currency": {
+          "type": "string",
+          "enum": [
+            "CNY",
+            "USD",
+            "EUR",
+            "HKD"
+          ]
+        },
+        "amountMinor": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "amount": {
+          "type": "string"
+        },
+        "count": {
+          "type": "integer",
+          "minimum": 0
+        }
+      },
+      "required": [
+        "currency",
+        "amountMinor",
+        "amount",
+        "count"
+      ],
+      "additionalProperties": true
+    },
+    "Payment": {
+      "type": "object",
+      "properties": {
+        "id": {
+          "type": "string"
+        },
+        "clientId": {
+          "type": "string"
+        },
+        "commitmentId": {
+          "type": "string"
+        },
+        "receivableId": {
+          "type": "string"
+        },
+        "amountMinor": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "amount": {
+          "type": "string"
+        },
+        "currency": {
+          "type": "string",
+          "enum": [
+            "CNY",
+            "USD",
+            "EUR",
+            "HKD"
+          ]
+        },
+        "paidAt": {
+          "type": "string",
+          "minLength": 4,
+          "description": "ISO-8601 timestamp string"
+        },
+        "method": {
+          "type": "string",
+          "enum": [
+            "bank",
+            "wechat",
+            "alipay",
+            "cash",
+            "other"
+          ]
+        },
+        "memo": {
+          "type": "string"
+        },
+        "deletedAt": {
+          "type": "string",
+          "minLength": 4,
+          "description": "ISO-8601 timestamp string"
+        },
+        "createdAt": {
+          "type": "string",
+          "minLength": 4,
+          "description": "ISO-8601 timestamp string"
+        },
+        "updatedAt": {
+          "type": "string",
+          "minLength": 4,
+          "description": "ISO-8601 timestamp string"
+        }
+      },
+      "required": [
+        "id",
+        "clientId",
+        "amountMinor",
+        "amount",
+        "currency",
+        "paidAt",
+        "method",
+        "createdAt"
+      ],
+      "additionalProperties": true
+    },
+    "ConsentListEntry": {
+      "type": "object",
+      "properties": {
+        "surface": {
+          "type": "string"
+        },
+        "dataClass": {
+          "type": "string"
+        },
+        "provider": {
+          "type": "string"
+        },
+        "baseUrl": {
+          "oneOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "grantedAt": {
+          "type": "string",
+          "minLength": 4,
+          "description": "ISO-8601 timestamp string"
+        },
+        "channel": {
+          "type": "string",
+          "enum": [
+            "tty",
+            "flag",
+            "env"
+          ]
+        },
+        "revokedAt": {
+          "oneOf": [
+            {
+              "type": "string",
+              "minLength": 4,
+              "description": "ISO-8601 timestamp string"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "active": {
+          "type": "boolean"
+        }
+      },
+      "required": [
+        "surface",
+        "dataClass",
+        "provider",
+        "baseUrl",
+        "grantedAt",
+        "channel",
+        "revokedAt",
+        "active"
+      ],
+      "additionalProperties": true
+    },
+    "ConsentStoredEntry": {
+      "type": "object",
+      "properties": {
+        "surface": {
+          "type": "string"
+        },
+        "dataClass": {
+          "type": "string"
+        },
+        "provider": {
+          "type": "string"
+        },
+        "baseUrl": {
+          "type": "string"
+        },
+        "grantedAt": {
+          "type": "string",
+          "minLength": 4,
+          "description": "ISO-8601 timestamp string"
+        },
+        "channel": {
+          "type": "string",
+          "enum": [
+            "tty",
+            "flag",
+            "env"
+          ]
+        },
+        "revokedAt": {
+          "type": "string",
+          "minLength": 4,
+          "description": "ISO-8601 timestamp string"
+        }
+      },
+      "required": [
+        "surface",
+        "dataClass",
+        "provider",
+        "grantedAt",
+        "channel"
+      ],
+      "additionalProperties": true
+    },
+    "ConsentRecord": {
+      "type": "object",
+      "properties": {
+        "version": {
+          "const": 1
+        },
+        "entries": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/ConsentStoredEntry"
+          }
+        }
+      },
+      "required": [
+        "version",
+        "entries"
+      ],
+      "additionalProperties": true
+    },
+    "PrivacyMatrixRow": {
+      "type": "object",
+      "properties": {
+        "surface": {
+          "type": "string"
+        },
+        "description": {
+          "type": "string"
+        },
+        "actions": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "dataClass": {
+          "type": "string",
+          "enum": [
+            "conversation",
+            "ledger",
+            "mail",
+            "kb",
+            "attachment",
+            "reminder",
+            "web",
+            "tool",
+            "credential",
+            "unknown"
+          ]
+        },
+        "sink": {
+          "type": "string"
+        },
+        "default": {
+          "type": "string",
+          "enum": [
+            "on",
+            "off"
+          ]
+        },
+        "gate": {
+          "type": "string",
+          "enum": [
+            "enforced-policy",
+            "legacy-gate",
+            "self-attested",
+            "not-wired"
+          ]
+        },
+        "tosRef": {
+          "type": "string"
+        },
+        "doc": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "surface",
+        "description",
+        "actions",
+        "dataClass",
+        "sink",
+        "default",
+        "gate",
+        "tosRef",
+        "doc"
+      ],
+      "additionalProperties": true
+    },
+    "ClientPackSubject": {
+      "type": "object",
+      "properties": {
+        "kind": {
+          "const": "client"
+        },
+        "id": {
+          "type": "string"
+        },
+        "name": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "kind",
+        "id",
+        "name"
+      ],
+      "additionalProperties": true
+    },
+    "ClientPackVerification": {
+      "type": "object",
+      "properties": {
+        "ok": {
+          "type": "boolean"
+        },
+        "code": {
+          "oneOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "errors": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "warnings": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "dir": {
+          "type": "string"
+        },
+        "format": {
+          "oneOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "version": {
+          "oneOf": [
+            {
+              "type": "integer",
+              "minimum": 0
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "subject": {
+          "oneOf": [
+            {
+              "type": "object",
+              "additionalProperties": true
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "scope": {
+          "oneOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "verificationBasis": {
+          "oneOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "fileCount": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "checksumCount": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "files": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "checksums": {
+          "type": "object",
+          "additionalProperties": true
+        },
+        "manifest": {
+          "oneOf": [
+            {
+              "type": "object",
+              "additionalProperties": true
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "totalBytes": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "limits": {
+          "type": "object",
+          "additionalProperties": true
+        },
+        "limitViolation": {
+          "oneOf": [
+            {
+              "type": "object",
+              "additionalProperties": true
+            },
+            {
+              "type": "null"
+            }
+          ]
+        }
+      },
+      "required": [
+        "ok",
+        "code",
+        "errors",
+        "warnings",
+        "dir",
+        "format",
+        "version",
+        "subject",
+        "scope",
+        "verificationBasis",
+        "fileCount",
+        "checksumCount",
+        "files",
+        "checksums",
+        "manifest",
+        "totalBytes",
+        "limits",
+        "limitViolation"
+      ],
+      "additionalProperties": true
+    },
+    "UrgencyTerm": {
+      "type": "object",
+      "properties": {
+        "id": {
+          "type": "string"
+        },
+        "contribution": {
+          "type": "integer"
+        },
+        "explain": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "id",
+        "contribution",
+        "explain"
+      ],
+      "additionalProperties": true
+    },
+    "Urgency": {
+      "type": "object",
+      "properties": {
+        "id": {
+          "oneOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "modelVersion": {
+          "const": 1
+        },
+        "score": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 100
+        },
+        "level": {
+          "type": "string",
+          "enum": [
+            "low",
+            "medium",
+            "high",
+            "critical"
+          ]
+        },
+        "terms": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/UrgencyTerm"
+          }
+        },
+        "topFactors": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "whyNow": {
+          "type": "string"
+        },
+        "dueAt": {
+          "oneOf": [
+            {
+              "type": "string",
+              "minLength": 4,
+              "description": "ISO-8601 timestamp string"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "excluded": {
+          "type": "boolean"
+        },
+        "degraded": {
+          "oneOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        }
+      },
+      "required": [
+        "id",
+        "modelVersion",
+        "score",
+        "level",
+        "terms",
+        "topFactors",
+        "whyNow",
+        "dueAt",
+        "excluded",
+        "degraded"
+      ],
+      "description": "Deterministic urgency v1 attached to commitment items (derived at read time; never part of dataSha256).",
+      "additionalProperties": true
+    },
+    "MorningTopItem": {
+      "type": "object",
+      "properties": {
+        "id": {
+          "type": "string"
+        },
+        "kind": {
+          "type": "string"
+        },
+        "title": {
+          "type": "string"
+        },
+        "localTime": {
+          "type": "string"
+        },
+        "urgency": {
+          "$ref": "#/$defs/Urgency"
+        },
+        "whyNow": {
+          "type": "string"
+        },
+        "source": {
+          "type": "string",
+          "enum": [
+            "today",
+            "overdue"
+          ]
+        }
+      },
+      "required": [
+        "id",
+        "kind",
+        "title",
+        "urgency",
+        "whyNow",
+        "source"
+      ],
+      "additionalProperties": true
+    },
+    "MorningArchive": {
+      "type": "object",
+      "properties": {
+        "path": {
+          "type": "string"
+        },
+        "latestPath": {
+          "type": "string"
+        },
+        "keep": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "bytes": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "removed": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "failed": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "additionalProperties": true
+          }
+        }
+      },
+      "required": [
+        "path",
+        "latestPath",
+        "keep",
+        "bytes",
+        "removed",
+        "failed"
+      ],
+      "additionalProperties": true
+    },
+    "SearchPayload": {
+      "type": "object",
+      "properties": {
+        "ok": {
+          "const": true
+        },
+        "command": {
+          "const": "search"
+        },
+        "query": {
+          "type": "string"
+        },
+        "scope": {
+          "type": "string",
+          "enum": [
+            "turns",
+            "kb",
+            "pages",
+            "all",
+            "facts"
+          ]
+        },
+        "limit": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "clearance": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 3
+        },
+        "degraded": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "counts": {
+          "$ref": "#/$defs/SearchCounts"
+        },
+        "hits": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/SearchHit"
+          }
+        },
+        "total": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "truncated": {
+          "type": "boolean"
+        },
+        "protectedExcluded": {
+          "type": "integer",
+          "minimum": 0
+        }
+      },
+      "required": [
+        "ok",
+        "command",
+        "query",
+        "scope",
+        "limit",
+        "clearance",
+        "degraded",
+        "counts",
+        "hits",
+        "total",
+        "truncated",
+        "protectedExcluded"
+      ],
+      "description": "0.4.0 additive: unified `search <q> --scope turns|kb|pages|all|facts --json` envelope (legacy unscoped search is unchanged).",
+      "additionalProperties": true
+    },
+    "KbAddPayload": {
+      "type": "object",
+      "properties": {
+        "ok": {
+          "type": "boolean"
+        },
+        "command": {
+          "const": "kb add"
+        },
+        "counts": {
+          "$ref": "#/$defs/KbBatchCounts"
+        },
+        "added": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/KbDocumentRow"
+          }
+        },
+        "skipped": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/KbSkippedFile"
+          }
+        },
+        "failed": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/KbFailedFile"
+          }
+        },
+        "truncated": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "needsOcr": {
+          "type": "integer",
+          "minimum": 0
+        }
+      },
+      "required": [
+        "ok",
+        "command",
+        "counts",
+        "added",
+        "skipped",
+        "failed",
+        "truncated",
+        "needsOcr"
+      ],
+      "description": "0.4.0 additive: `kb add --json` batch envelope (a single file is a batch of one; truncated/needsOcr are counts).",
+      "additionalProperties": true
+    },
+    "KbListPayload": {
+      "type": "object",
+      "properties": {
+        "ok": {
+          "const": true
+        },
+        "command": {
+          "const": "kb ls"
+        },
+        "documents": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/KbDocumentRow"
+          }
+        },
+        "total": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "truncated": {
+          "type": "boolean"
+        },
+        "limit": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "clearance": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 3
+        },
+        "protectedExcluded": {
+          "type": "integer",
+          "minimum": 0
+        }
+      },
+      "required": [
+        "ok",
+        "command",
+        "documents",
+        "total",
+        "truncated",
+        "limit",
+        "clearance",
+        "protectedExcluded"
+      ],
+      "additionalProperties": true
+    },
+    "KbShowPayload": {
+      "type": "object",
+      "properties": {
+        "ok": {
+          "const": true
+        },
+        "command": {
+          "const": "kb show"
+        },
+        "document": {
+          "$ref": "#/$defs/KbDocumentRow"
+        },
+        "chunks": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/KbChunkPreview"
+          }
+        },
+        "chunksTotal": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "clearance": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 3
+        }
+      },
+      "required": [
+        "ok",
+        "command",
+        "document",
+        "chunks",
+        "chunksTotal",
+        "clearance"
+      ],
+      "additionalProperties": true
+    },
+    "KbRmPayload": {
+      "type": "object",
+      "properties": {
+        "ok": {
+          "const": true
+        },
+        "command": {
+          "const": "kb rm"
+        },
+        "removed": {
+          "const": true
+        },
+        "document": {
+          "$ref": "#/$defs/KbDocumentRow"
+        },
+        "counts": {
+          "type": "object",
+          "properties": {
+            "chunks": {
+              "type": "integer",
+              "minimum": 0
+            }
+          },
+          "required": [
+            "chunks"
+          ],
+          "additionalProperties": true
+        }
+      },
+      "required": [
+        "ok",
+        "command",
+        "removed",
+        "document",
+        "counts"
+      ],
+      "additionalProperties": true
+    },
+    "KbPurgePayload": {
+      "type": "object",
+      "properties": {
+        "ok": {
+          "const": true
+        },
+        "command": {
+          "const": "kb purge"
+        },
+        "dryRun": {
+          "type": "boolean"
+        },
+        "purged": {
+          "type": "boolean"
+        },
+        "document": {
+          "$ref": "#/$defs/KbDocumentRow"
+        },
+        "counts": {
+          "type": "object",
+          "properties": {
+            "chunks": {
+              "type": "integer",
+              "minimum": 0
+            },
+            "factLinks": {
+              "type": "integer",
+              "minimum": 0
+            }
+          },
+          "required": [
+            "chunks",
+            "factLinks"
+          ],
+          "additionalProperties": true
+        },
+        "hint": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "ok",
+        "command",
+        "dryRun",
+        "purged",
+        "document",
+        "counts"
+      ],
+      "additionalProperties": true
+    },
+    "KbReindexPayload": {
+      "type": "object",
+      "properties": {
+        "ok": {
+          "type": "boolean"
+        },
+        "command": {
+          "const": "kb reindex"
+        },
+        "rebuilt": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "integrity": {
+          "type": "object",
+          "additionalProperties": true
+        },
+        "counts": {
+          "type": "object",
+          "properties": {
+            "documents": {
+              "type": "integer",
+              "minimum": 0
+            },
+            "chunks": {
+              "type": "integer",
+              "minimum": 0
+            },
+            "pages": {
+              "type": "integer",
+              "minimum": 0
+            }
+          },
+          "required": [
+            "documents",
+            "chunks",
+            "pages"
+          ],
+          "additionalProperties": true
+        },
+        "degraded": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        }
+      },
+      "required": [
+        "ok",
+        "command",
+        "rebuilt",
+        "integrity",
+        "counts",
+        "degraded"
+      ],
+      "additionalProperties": true
+    },
+    "KbPageListPayload": {
+      "type": "object",
+      "properties": {
+        "ok": {
+          "const": true
+        },
+        "command": {
+          "const": "kb page ls"
+        },
+        "pages": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/KbPageSummary"
+          }
+        },
+        "total": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "truncated": {
+          "type": "boolean"
+        },
+        "limit": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "clearance": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 3
+        },
+        "protectedExcluded": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "staleCount": {
+          "type": "integer",
+          "minimum": 0
+        }
+      },
+      "required": [
+        "ok",
+        "command",
+        "pages",
+        "total",
+        "truncated",
+        "limit",
+        "clearance",
+        "protectedExcluded"
+      ],
+      "additionalProperties": true
+    },
+    "KbPageShowPayload": {
+      "type": "object",
+      "properties": {
+        "ok": {
+          "const": true
+        },
+        "command": {
+          "const": "kb page show"
+        },
+        "page": {
+          "$ref": "#/$defs/KbPageContent"
+        },
+        "live": {
+          "oneOf": [
+            {
+              "$ref": "#/$defs/KbPageLive"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "stale": {
+          "type": "boolean"
+        },
+        "staleReason": {
+          "type": "string"
+        },
+        "stored": {
+          "$ref": "#/$defs/KbPageStored"
+        },
+        "clearance": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 3
+        },
+        "diff": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "ok",
+        "command",
+        "page",
+        "live",
+        "stale",
+        "stored",
+        "clearance"
+      ],
+      "additionalProperties": true
+    },
+    "KbPageRebuildPayload": {
+      "type": "object",
+      "properties": {
+        "ok": {
+          "const": true
+        },
+        "command": {
+          "const": "kb page rebuild"
+        },
+        "dryRun": {
+          "type": "boolean"
+        },
+        "counts": {
+          "type": "object",
+          "properties": {
+            "built": {
+              "type": "integer",
+              "minimum": 0
+            },
+            "written": {
+              "type": "integer",
+              "minimum": 0
+            },
+            "unchanged": {
+              "type": "integer",
+              "minimum": 0
+            },
+            "skipped": {
+              "type": "integer",
+              "minimum": 0
+            }
+          },
+          "required": [
+            "built",
+            "written",
+            "unchanged",
+            "skipped"
+          ],
+          "additionalProperties": true
+        },
+        "pages": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/KbPageRef"
+          }
+        },
+        "degraded": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "clearance": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 3
+        }
+      },
+      "required": [
+        "ok",
+        "command",
+        "dryRun",
+        "counts",
+        "pages",
+        "degraded",
+        "clearance"
+      ],
+      "additionalProperties": true
+    },
+    "KbPageDiffPayload": {
+      "type": "object",
+      "properties": {
+        "ok": {
+          "const": true
+        },
+        "command": {
+          "const": "kb page diff"
+        },
+        "pageId": {
+          "type": "string"
+        },
+        "stale": {
+          "type": "boolean"
+        },
+        "diff": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "ok",
+        "command",
+        "pageId",
+        "stale",
+        "diff"
+      ],
+      "additionalProperties": true
+    },
+    "FactShowPayload": {
+      "type": "object",
+      "properties": {
+        "ok": {
+          "const": true
+        },
+        "command": {
+          "const": "fact show"
+        },
+        "fact": {
+          "$ref": "#/$defs/Fact"
+        },
+        "kbSources": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/FactKbSource"
+          }
+        },
+        "warnings": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "includeDeleted": {
+          "type": "boolean"
+        }
+      },
+      "required": [
+        "ok",
+        "command",
+        "fact",
+        "kbSources",
+        "warnings",
+        "includeDeleted"
+      ],
+      "additionalProperties": true
+    },
+    "FactHistoryPayload": {
+      "type": "object",
+      "properties": {
+        "ok": {
+          "const": true
+        },
+        "command": {
+          "const": "fact history"
+        },
+        "rootId": {
+          "type": "string"
+        },
+        "items": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/Fact"
+          }
+        },
+        "warnings": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "counts": {
+          "type": "object",
+          "properties": {
+            "items": {
+              "type": "integer",
+              "minimum": 0
+            }
+          },
+          "required": [
+            "items"
+          ],
+          "additionalProperties": true
+        },
+        "includeDeleted": {
+          "type": "boolean"
+        }
+      },
+      "required": [
+        "ok",
+        "command",
+        "rootId",
+        "items",
+        "warnings",
+        "counts",
+        "includeDeleted"
+      ],
+      "additionalProperties": true
+    },
+    "FactAsOfPayload": {
+      "type": "object",
+      "properties": {
+        "ok": {
+          "const": true
+        },
+        "command": {
+          "const": "fact as-of"
+        },
+        "at": {
+          "type": "string",
+          "minLength": 4,
+          "description": "ISO-8601 timestamp string"
+        },
+        "asOfLocalDay": {
+          "type": "string",
+          "pattern": "^\\d{4}-\\d{2}-\\d{2}$"
+        },
+        "items": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/FactAsOfItem"
+          }
+        },
+        "counts": {
+          "type": "object",
+          "properties": {
+            "groups": {
+              "type": "integer",
+              "minimum": 0
+            },
+            "candidates": {
+              "type": "integer",
+              "minimum": 0
+            },
+            "overlappingGroups": {
+              "type": "integer",
+              "minimum": 0
+            }
+          },
+          "required": [
+            "groups",
+            "candidates",
+            "overlappingGroups"
+          ],
+          "additionalProperties": true
+        },
+        "warnings": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "degraded": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "includeDeleted": {
+          "type": "boolean"
+        },
+        "truncated": {
+          "type": "boolean"
+        }
+      },
+      "required": [
+        "ok",
+        "command",
+        "at",
+        "asOfLocalDay",
+        "items",
+        "counts",
+        "warnings",
+        "degraded",
+        "includeDeleted",
+        "truncated"
+      ],
+      "additionalProperties": true
+    },
+    "MailAccountAddPayload": {
+      "type": "object",
+      "properties": {
+        "ok": {
+          "const": true
+        },
+        "command": {
+          "const": "mail account add"
+        },
+        "account": {
+          "$ref": "#/$defs/MailAccount"
+        }
+      },
+      "required": [
+        "ok",
+        "command",
+        "account"
+      ],
+      "additionalProperties": true
+    },
+    "MailAccountListPayload": {
+      "type": "object",
+      "properties": {
+        "ok": {
+          "const": true
+        },
+        "command": {
+          "const": "mail account ls"
+        },
+        "accounts": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/MailAccount"
+          }
+        },
+        "total": {
+          "type": "integer",
+          "minimum": 0
+        }
+      },
+      "required": [
+        "ok",
+        "command",
+        "accounts",
+        "total"
+      ],
+      "additionalProperties": true
+    },
+    "MailAccountShowPayload": {
+      "type": "object",
+      "properties": {
+        "ok": {
+          "const": true
+        },
+        "command": {
+          "const": "mail account show"
+        },
+        "account": {
+          "$ref": "#/$defs/MailAccount"
+        }
+      },
+      "required": [
+        "ok",
+        "command",
+        "account"
+      ],
+      "additionalProperties": true
+    },
+    "MailAccountRemovePayload": {
+      "type": "object",
+      "properties": {
+        "ok": {
+          "const": true
+        },
+        "command": {
+          "const": "mail account rm"
+        },
+        "accountId": {
+          "type": "string"
+        },
+        "removed": {
+          "const": true
+        },
+        "credentialRemoved": {
+          "type": "boolean"
+        },
+        "messagesDeleted": {
+          "type": "integer",
+          "minimum": 0
+        }
+      },
+      "required": [
+        "ok",
+        "command",
+        "accountId",
+        "removed",
+        "credentialRemoved",
+        "messagesDeleted"
+      ],
+      "additionalProperties": true
+    },
+    "MailSyncPayload": {
+      "description": "0.4.0 additive: `mail sync --json` result; when no account was named the payload carries a results[] array.",
+      "oneOf": [
+        {
+          "$ref": "#/$defs/MailSyncResult"
+        },
+        {
+          "type": "object",
+          "properties": {
+            "ok": {
+              "const": true
+            },
+            "command": {
+              "const": "mail sync"
+            },
+            "results": {
+              "type": "array",
+              "items": {
+                "$ref": "#/$defs/MailSyncResult"
+              }
+            }
+          },
+          "required": [
+            "ok",
+            "command",
+            "results"
+          ],
+          "description": "Bulk sync envelope (no account argument).",
+          "additionalProperties": true
+        }
+      ]
+    },
+    "MailListPayload": {
+      "type": "object",
+      "properties": {
+        "ok": {
+          "const": true
+        },
+        "command": {
+          "const": "mail ls"
+        },
+        "messages": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/MailMessage"
+          }
+        },
+        "total": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "limit": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "offset": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "truncated": {
+          "type": "boolean"
+        }
+      },
+      "required": [
+        "ok",
+        "command",
+        "messages",
+        "total",
+        "limit",
+        "offset",
+        "truncated"
+      ],
+      "additionalProperties": true
+    },
+    "MailShowPayload": {
+      "type": "object",
+      "properties": {
+        "ok": {
+          "const": true
+        },
+        "command": {
+          "const": "mail show"
+        },
+        "message": {
+          "$ref": "#/$defs/MailMessage"
+        }
+      },
+      "required": [
+        "ok",
+        "command",
+        "message"
+      ],
+      "additionalProperties": true
+    },
+    "MailExtractPayload": {
+      "type": "object",
+      "properties": {
+        "ok": {
+          "const": true
+        },
+        "command": {
+          "const": "mail extract"
+        },
+        "mode": {
+          "type": "string",
+          "enum": [
+            "local",
+            "model"
+          ]
+        },
+        "dryRun": {
+          "type": "boolean"
+        },
+        "scanned": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "candidates": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/MailExtractCandidate"
+          }
+        },
+        "skipped": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "failed": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "failures": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/MailFailure"
+          }
+        },
+        "safetyWarnings": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        }
+      },
+      "required": [
+        "ok",
+        "command",
+        "mode",
+        "dryRun",
+        "scanned",
+        "candidates",
+        "skipped",
+        "failed"
+      ],
+      "additionalProperties": true
+    },
+    "MailImportPayload": {
+      "type": "object",
+      "properties": {
+        "ok": {
+          "const": true
+        },
+        "command": {
+          "const": "mail import"
+        },
+        "accountId": {
+          "type": "string"
+        },
+        "dryRun": {
+          "type": "boolean"
+        },
+        "files": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "scanned": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "inserted": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "skipped": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "failed": {
+          "type": "integer",
+          "minimum": 0
+        }
+      },
+      "required": [
+        "ok",
+        "command",
+        "accountId",
+        "dryRun",
+        "files",
+        "scanned",
+        "inserted",
+        "skipped",
+        "failed"
+      ],
+      "additionalProperties": true
+    },
+    "MailPurgePayload": {
+      "type": "object",
+      "properties": {
+        "ok": {
+          "const": true
+        },
+        "command": {
+          "const": "mail purge"
+        },
+        "dryRun": {
+          "type": "boolean"
+        },
+        "messagesPurged": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "wouldPurge": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "bytesFreed": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "bytesWouldFree": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "skippedPending": {
+          "type": "integer",
+          "minimum": 0
+        }
+      },
+      "required": [
+        "ok",
+        "command",
+        "dryRun",
+        "messagesPurged",
+        "bytesFreed",
+        "skippedPending"
+      ],
+      "additionalProperties": true
+    },
+    "ReceivableAddPayload": {
+      "type": "object",
+      "properties": {
+        "receivable": {
+          "oneOf": [
+            {
+              "$ref": "#/$defs/Receivable"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "commitment": {
+          "$ref": "#/$defs/Commitment"
+        },
+        "createdMatter": {
+          "type": "boolean"
+        }
+      },
+      "required": [
+        "receivable",
+        "commitment",
+        "createdMatter"
+      ],
+      "description": "0.4.0 additive write payload: `receivable add --json` returns the library payload directly (no ok/command envelope).",
+      "additionalProperties": true
+    },
+    "ReceivableEditPayload": {
+      "type": "object",
+      "properties": {
+        "receivable": {
+          "oneOf": [
+            {
+              "$ref": "#/$defs/Receivable"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "commitment": {
+          "$ref": "#/$defs/Commitment"
+        }
+      },
+      "required": [
+        "receivable",
+        "commitment"
+      ],
+      "description": "0.4.0 additive write payload: `receivable edit --json` returns the library payload directly.",
+      "additionalProperties": true
+    },
+    "ReceivableVoidPayload": {
+      "type": "object",
+      "properties": {
+        "receivable": {
+          "oneOf": [
+            {
+              "$ref": "#/$defs/Receivable"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "alreadyVoid": {
+          "type": "boolean"
+        },
+        "reopenedCommitment": {
+          "type": "boolean"
+        },
+        "droppedCommitment": {
+          "type": "boolean"
+        },
+        "reason": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "receivable",
+        "alreadyVoid",
+        "reopenedCommitment",
+        "droppedCommitment"
+      ],
+      "description": "0.4.0 additive write payload: `receivable void --json` returns the library payload directly.",
+      "additionalProperties": true
+    },
+    "ReceivableListPayload": {
+      "type": "object",
+      "properties": {
+        "ok": {
+          "const": true
+        },
+        "command": {
+          "const": "receivable ls"
+        },
+        "receivables": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/Receivable"
+          }
+        },
+        "totals": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/CurrencyTotals"
+          }
+        },
+        "total": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "truncated": {
+          "type": "boolean"
+        },
+        "limit": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "clearance": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 3
+        },
+        "protectedExcluded": {
+          "type": "integer",
+          "minimum": 0
+        }
+      },
+      "required": [
+        "ok",
+        "command",
+        "receivables",
+        "totals",
+        "total",
+        "truncated",
+        "limit",
+        "clearance",
+        "protectedExcluded"
+      ],
+      "additionalProperties": true
+    },
+    "ReceivableShowPayload": {
+      "type": "object",
+      "properties": {
+        "ok": {
+          "const": true
+        },
+        "command": {
+          "const": "receivable show"
+        },
+        "receivable": {
+          "$ref": "#/$defs/Receivable"
+        },
+        "payments": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/Payment"
+          }
+        },
+        "clearance": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 3
+        },
+        "protectedExcluded": {
+          "type": "integer",
+          "minimum": 0
+        }
+      },
+      "required": [
+        "ok",
+        "command",
+        "receivable",
+        "payments",
+        "clearance",
+        "protectedExcluded"
+      ],
+      "additionalProperties": true
+    },
+    "ReceivableSummaryPayload": {
+      "type": "object",
+      "properties": {
+        "ok": {
+          "const": true
+        },
+        "command": {
+          "const": "receivable summary"
+        },
+        "currency": {
+          "oneOf": [
+            {
+              "type": "string",
+              "enum": [
+                "CNY",
+                "USD",
+                "EUR",
+                "HKD"
+              ]
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "total": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "unsettled": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "settled": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "overdue": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "writtenOff": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "void": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "totals": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/CurrencyTotals"
+          }
+        },
+        "unmatchedPayments": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/UnmatchedPayment"
+          }
+        },
+        "nextDueAt": {
+          "oneOf": [
+            {
+              "type": "string",
+              "minLength": 4,
+              "description": "ISO-8601 timestamp string"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "clearance": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 3
+        },
+        "protectedExcluded": {
+          "type": "integer",
+          "minimum": 0
+        }
+      },
+      "required": [
+        "ok",
+        "command",
+        "currency",
+        "total",
+        "unsettled",
+        "settled",
+        "overdue",
+        "writtenOff",
+        "void",
+        "totals",
+        "unmatchedPayments",
+        "nextDueAt",
+        "clearance",
+        "protectedExcluded"
+      ],
+      "description": "0.4.0 additive: `receivable ls --aging --json` reconciliation summary envelope.",
+      "additionalProperties": true
+    },
+    "PaymentAddPayload": {
+      "type": "object",
+      "properties": {
+        "payment": {
+          "$ref": "#/$defs/Payment"
+        },
+        "receivable": {
+          "oneOf": [
+            {
+              "$ref": "#/$defs/Receivable"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "commitment": {
+          "oneOf": [
+            {
+              "$ref": "#/$defs/Commitment"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "completedCommitment": {
+          "type": "boolean"
+        }
+      },
+      "required": [
+        "payment",
+        "receivable",
+        "commitment",
+        "completedCommitment"
+      ],
+      "description": "0.4.0 additive write payload: `payment add --json` returns the library payload directly.",
+      "additionalProperties": true
+    },
+    "PaymentListPayload": {
+      "type": "object",
+      "properties": {
+        "ok": {
+          "const": true
+        },
+        "command": {
+          "const": "payment ls"
+        },
+        "payments": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/Payment"
+          }
+        },
+        "total": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "truncated": {
+          "type": "boolean"
+        },
+        "limit": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "clearance": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 3
+        },
+        "protectedExcluded": {
+          "type": "integer",
+          "minimum": 0
+        }
+      },
+      "required": [
+        "ok",
+        "command",
+        "payments",
+        "total",
+        "truncated",
+        "limit",
+        "clearance",
+        "protectedExcluded"
+      ],
+      "additionalProperties": true
+    },
+    "PaymentVoidPayload": {
+      "type": "object",
+      "properties": {
+        "payment": {
+          "$ref": "#/$defs/Payment"
+        },
+        "receivable": {
+          "oneOf": [
+            {
+              "$ref": "#/$defs/Receivable"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "alreadyVoid": {
+          "type": "boolean"
+        },
+        "reopenedCommitment": {
+          "type": "boolean"
+        },
+        "reason": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "payment",
+        "receivable",
+        "alreadyVoid",
+        "reopenedCommitment"
+      ],
+      "description": "0.4.0 additive write payload: `payment void --json` returns the library payload directly.",
+      "additionalProperties": true
+    },
+    "ConsentStatusPayload": {
+      "type": "object",
+      "properties": {
+        "ok": {
+          "const": true
+        },
+        "command": {
+          "const": "consent status"
+        },
+        "path": {
+          "type": "string"
+        },
+        "configured": {
+          "type": "boolean"
+        },
+        "entries": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/ConsentListEntry"
+          }
+        }
+      },
+      "required": [
+        "ok",
+        "command",
+        "path",
+        "configured",
+        "entries"
+      ],
+      "additionalProperties": true
+    },
+    "ConsentGrantPayload": {
+      "type": "object",
+      "properties": {
+        "ok": {
+          "const": true
+        },
+        "command": {
+          "const": "consent grant"
+        },
+        "version": {
+          "const": 1
+        },
+        "entry": {
+          "$ref": "#/$defs/ConsentStoredEntry"
+        },
+        "record": {
+          "$ref": "#/$defs/ConsentRecord"
+        },
+        "auditWritten": {
+          "type": "boolean"
+        }
+      },
+      "required": [
+        "ok",
+        "command",
+        "version",
+        "entry",
+        "record",
+        "auditWritten"
+      ],
+      "additionalProperties": true
+    },
+    "ConsentRevokePayload": {
+      "type": "object",
+      "properties": {
+        "ok": {
+          "const": true
+        },
+        "command": {
+          "const": "consent revoke"
+        },
+        "revoked": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "entries": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/ConsentStoredEntry"
+          }
+        },
+        "record": {
+          "oneOf": [
+            {
+              "$ref": "#/$defs/ConsentRecord"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "auditWritten": {
+          "type": "boolean"
+        }
+      },
+      "required": [
+        "ok",
+        "command",
+        "revoked",
+        "entries",
+        "record",
+        "auditWritten"
+      ],
+      "additionalProperties": true
+    },
+    "PrivacyMatrixPayload": {
+      "type": "object",
+      "properties": {
+        "ok": {
+          "const": true
+        },
+        "command": {
+          "const": "privacy --matrix"
+        },
+        "policyVersion": {
+          "const": 1
+        },
+        "rulesetVersion": {
+          "type": "string"
+        },
+        "generatedAt": {
+          "type": "string",
+          "minLength": 4,
+          "description": "ISO-8601 timestamp string"
+        },
+        "rows": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/PrivacyMatrixRow"
+          }
+        }
+      },
+      "required": [
+        "ok",
+        "command",
+        "policyVersion",
+        "rulesetVersion",
+        "generatedAt",
+        "rows"
+      ],
+      "additionalProperties": true
+    },
+    "ClientExportPackPayload": {
+      "type": "object",
+      "properties": {
+        "ok": {
+          "const": true
+        },
+        "command": {
+          "const": "client export --pack"
+        },
+        "format": {
+          "const": "advisers-client-status-pack"
+        },
+        "version": {
+          "const": 1
+        },
+        "scope": {
+          "const": "client"
+        },
+        "subject": {
+          "$ref": "#/$defs/ClientPackSubject"
+        },
+        "out": {
+          "type": "string"
+        },
+        "replaced": {
+          "oneOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "generatedAt": {
+          "type": "string",
+          "minLength": 4,
+          "description": "ISO-8601 timestamp string"
+        },
+        "counts": {
+          "type": "object",
+          "additionalProperties": true
+        },
+        "bytes": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "fileCount": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "checksumCount": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "manifestDigest": {
+          "type": "string",
+          "pattern": "^[0-9a-f]{64}$"
+        },
+        "verificationBasis": {
+          "const": "local-checksums-only"
+        },
+        "verification": {
+          "$ref": "#/$defs/ClientPackVerification"
+        },
+        "clearance": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 3
+        },
+        "protectedExcluded": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "disclaimer": {
+          "const": true
+        }
+      },
+      "required": [
+        "ok",
+        "command",
+        "format",
+        "version",
+        "scope",
+        "subject",
+        "out",
+        "replaced",
+        "generatedAt",
+        "counts",
+        "bytes",
+        "fileCount",
+        "checksumCount",
+        "manifestDigest",
+        "verificationBasis",
+        "verification",
+        "clearance",
+        "protectedExcluded",
+        "disclaimer"
+      ],
+      "description": "0.4.0 additive: `client export <id> --pack --json` client status pack v1 summary (no money fields).",
+      "additionalProperties": true
     }
+  },
+  "x-documented-additive": {
+    "release": "0.4.0",
+    "note": "Additive read models validated structurally (schemaRef/argv/metadata) by scripts/check-contracts.mjs --cli and never executed by the gate; each listed def carries accept+reject vectors in vectors/cli/read-models.vectors.json.",
+    "defs": [
+      "SearchPayload",
+      "KbAddPayload",
+      "KbListPayload",
+      "KbShowPayload",
+      "KbRmPayload",
+      "KbPurgePayload",
+      "KbReindexPayload",
+      "KbPageListPayload",
+      "KbPageShowPayload",
+      "KbPageRebuildPayload",
+      "KbPageDiffPayload",
+      "FactShowPayload",
+      "FactHistoryPayload",
+      "FactAsOfPayload",
+      "MailAccountAddPayload",
+      "MailAccountListPayload",
+      "MailAccountShowPayload",
+      "MailAccountRemovePayload",
+      "MailSyncPayload",
+      "MailListPayload",
+      "MailShowPayload",
+      "MailExtractPayload",
+      "MailImportPayload",
+      "MailPurgePayload",
+      "ReceivableAddPayload",
+      "ReceivableEditPayload",
+      "ReceivableVoidPayload",
+      "ReceivableListPayload",
+      "ReceivableShowPayload",
+      "ReceivableSummaryPayload",
+      "PaymentAddPayload",
+      "PaymentListPayload",
+      "PaymentVoidPayload",
+      "ConsentStatusPayload",
+      "ConsentGrantPayload",
+      "ConsentRevokePayload",
+      "PrivacyMatrixPayload",
+      "ClientExportPackPayload"
+    ]
   }
 }

@@ -483,7 +483,7 @@ Read-only fact views over the existing facts table (no migration). A fact row is
 
 - `fact show <id>` → `{ok, command:"fact show", fact, kbSources[], warnings[], includeDeleted}`.
   `kbSources` is additive and lists explicit KB links (`kb_fact_links`); manual
-  `kb link` is **not wired in the 0.4.0 CLI**, so the array is normally empty.
+  `kb link` / `kb unlink` are wired on main after the 0.4.0 release (next patch); in the 0.4.0 tarball they were not wired, so the array is normally empty there.
 - `fact history <id>` → `{ok, command:"fact history", rootId, items[], warnings[], counts:{items}, includeDeleted}`;
   walks `supersedes` back and `supersededBy` forward, tolerating broken links/cycles;
   tombstones are included by default (the chain is the audit history).
@@ -501,7 +501,7 @@ password is read from a TTY prompt or `--pass-stdin` (`--pass` is refused).
 - `mail account show <ref>` → `{ok, command:"mail account show", account:{...,hasCredential}}`.
 - `mail account rm <ref>` → `{ok, command:"mail account rm", accountId, removed:true, credentialRemoved, messagesDeleted}`.
 
-`mail account test`, `mail link` and `mail dismiss` are **not wired in the 0.4.0 CLI**
+`mail account test` remains unwired. `mail link` and `mail dismiss` are wired on main after the 0.4.0 release (next patch); they were **not wired in the 0.4.0 tarball**
 (0.4.x).
 
 ### `mail sync|ls|show|extract|import|purge --json` (0.4.0)
@@ -634,6 +634,12 @@ third-party attestation (`verificationBasis: "local-checksums-only"`).
   `timezone:"Asia/Shanghai"` and an optional per-reminder `urgency`. `--now ISO`
   fixes both the planning instant and the echoed `now`. `--json` is a pure read and
   never delivers notifications.
+- `remind --deliver --notify` (on main after the 0.4.0 release): `--quiet-hours
+  HH:MM-HH:MM` suppresses notification channels inside the window (the local
+  `reminders.log` line is still written and the recorded channel is
+  `quiet-suppressed`); a second delivery for the same commitment/bucket/rule/local
+  day is recorded as `deduped`; `--force-notify` bypasses both policies for one
+  explicit run. These are delivery side effects only; `--json` output is unchanged.
 - `evidence show --json`: additive `resolution`, `quoteVerified`, `notChecked[]`,
   `summary.notCheckedCount` and (for facts) `kbSources[]`. The four resolutions are
   `verified|missing|unverifiable|not_checked`; manual operator evidence stays

@@ -26,15 +26,15 @@ executable software: scripts and the CLI validate against it, and the checker
 | Artifact | Version | What it freezes |
 |---|---|---|
 | `versions-v1.json` | 1 | Manifest: every contract version + the expected `status.contracts` discovery payload. |
-| `cli/read-models-v1.schema.json` | 1 | JSON Schema `$defs` for the deterministic `--json` read payloads (status/today/commit/who/deliveries/agenda/morning/matter/evidence/privacy/tos/tick/remind). |
+| `cli/read-models-v1.schema.json` | 1 | JSON Schema `$defs` for the deterministic `--json` read payloads. The frozen 0.2.x/0.3.x set (status/today/commit/who/deliveries/agenda/morning/matter/evidence/privacy/tos/tick/remind) is extended by 0.4.0 **documented-additive** defs for kb/mail/money/consent/search/pack; see `x-documented-additive`. |
 | `cli/commands-v1.json` | 1 | command -> argv -> schema `$ref` map with determinism/needsKey/needsTos metadata and the fixture used by the checker. |
 | `cli/errors-v1.schema.json` | 1 | The stderr error envelope `{"error":{"code","message","hint?","details?"}}`. |
 | `cli/status-v1.json` | 1 | `advisers status --json` contract + the additive `contracts` discovery field rules. |
 | `cli/exit-codes-v1.json` | 1 | Exit codes 0/1/3 + probe commands that assert them. |
 | `cli/exit-codes-v2.draft.json` | 2-draft | Reserved 4/5/6 for the policy engine. **NOT ACTIVE**; scripts must key on `error.code`. |
 | `errors/codes.v1.json` | 1 | Generated error-code registry (source of truth: `packages/advisers/lib/error-codes.js`). |
-| `mcp/tools-v1.json` | 1 | 7 MCP tools: name, description snapshot, inputSchema, annotations, side effect. |
-| `mcp/resources-v1.json` | 1 | 4 MCP resources: URI, name, mimeType, payload schema ref. |
+| `mcp/tools-v1.json` | 1 | 8 MCP tools: name, description snapshot, inputSchema, annotations, side effect. |
+| `mcp/resources-v1.json` | 1 | 5 MCP resources: URI, name, mimeType, payload schema ref. |
 | `mcp/versions-v1.json` | 1 | Supported legacy protocol versions + negotiation status + methods. |
 | `mcp/errors-v1.json` | 1 | JSON-RPC error codes `-32600/-32601/-32602/-32603/-32700/-32002` + tool `isError` envelope. |
 | `mcp/responses-v1.schema.json` | 1 | JSON Schema for initialize/tools-list/resources-list/resources-read/tool-call/error responses and the JSON payloads inside them. |

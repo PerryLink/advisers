@@ -28,6 +28,8 @@ advisers morning [--json] [--now ISO] [--top 1..5]       # deterministic brief +
 advisers morning --archive [--keep 1..365] [--out f]    # archive under ~/.advisers/briefs/
 ```
 
+> Runtime quiet-hours/dedupe below are available on main after the 0.4.0 release (next patch); the 0.4.0 npm tarball only baked `--quiet-hours` into the scheduler script.
+
 ## Urgency v1 and `whyNow` (0.4.0, deterministic)
 
 Urgency is a **derived, explainable ordering aid**, never a priority verdict. It is
@@ -317,14 +319,19 @@ advisers remind status                  # scripts/logs + last runs (remind + mor
 - `uninstall` plans with `planSchedulerBlocks({ action: 'uninstall', markers })`
   (read-only crontab read, marker-delimited block removal) and removes the local
   scripts.
-- `--quiet-hours HH:MM-HH:MM` is **validated and baked into the generated
-  remind script only** (as `remind --deliver --notify --quiet-hours ...`);
-  `morning.sh`/`morning.ps1` always call `morning --archive`. 0.4.0 does **not**
-  implement runtime suppression: the `--quiet-hours` value is accepted by the
-  reminder parser but does not gate channels, and the OS scheduler still fires at
-  the configured time. A real quiet-hours gate (and notification dedupe
-  `--force-notify`) is a 0.5 item; do not claim that 0.4.0 suppresses notifications
-  at night.
+- `--quiet-hours HH:MM-HH:MM` is validated at install **and now gates runtime
+  delivery**: `remind --deliver --notify --quiet-hours ...` still appends the
+  local `reminders.log` line, but local/webhook notification channels are
+  suppressed when `--now` falls inside the window (cross-midnight supported) and
+  the channel is recorded as `quiet-suppressed` with an audit row. `--force-notify`
+  bypasses the window for one explicit run. The generated remind script bakes the
+  same flag in, so scheduled runs respect it too; `morning.sh`/`morning.ps1`
+  always call `morning --archive` and are not gated.
+- **Notification dedupe:** after a successful notify attempt the CLI records one
+  `notify:dedupe:<commitment>|<bucket>|<rule>|<localDay>` meta row per delivered
+  reminder (30-day pruning). A second `remind --deliver --notify` on the same local
+  day is recorded as `deduped` and sends nothing unless `--force-notify` is passed.
+  The log line is still written; dedupe state is local metadata only.
 - `status` prints the scheduler directory/logs, the `readSchedulerStatusV2()`
   record (both `remind` and `morning` sections), and both OS plans
   (`planCronStatus` with the live crontab text, or the `schtasks /Query` argv on

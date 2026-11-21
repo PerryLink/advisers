@@ -11,13 +11,19 @@
  *   --schema   every contracts/**\/*.schema.json parses, carries the required
  *              metadata ($schema/$id/version/x-license/x-*), uses only the
  *              supported keyword subset and has resolvable local $refs; every
- *              other contracts/**\/*.json parses.
+ *              other contracts/**\/*.json parses. The 0.4.0 documented-additive
+ *              declarations (schema x-documented-additive.defs vs the
+ *              commands-v1.json status entries) must agree.
  *   --vectors  every vectors file points at an existing schema, covers every
  *              top-level $def of that schema, has at least 3 accept/reject cases
- *              and every case validates (or fails to validate) as declared.
+ *              and every case validates (or fails to validate) as declared;
+ *              every documented-additive read-model $def carries accept+reject
+ *              vectors too.
  *   --cli      runs the deterministic --json commands from cli/commands-v1.json
  *              against the real CLI in a temporary ADVISERS_HOME; stdout is pure
- *              JSON and every payload matches its frozen $def.
+ *              JSON and every payload matches its frozen $def. Entries with
+ *              status "documented-additive" (0.4.0) are validated structurally
+ *              (argv/root/schemaRef/status metadata) and never executed.
  *   --status   "advisers status --json" works on a fresh home with no TOS
  *              acceptance and no credentials, matches StatusPayload, and the
  *              additive status.contracts discovery field (when present) equals
@@ -469,6 +475,7 @@ function checkSchemaArtifacts() {
   }
   if (refProblems.length) fail('schema.schemaRefs', firstErrors(refProblems, 4))
   else pass('schema.schemaRefs', 'catalogue schemaRefs resolve')
+  checkDocumentedAdditiveDeclarations()
 }
 
 /* ------------------------------------------------------------------ */
@@ -525,6 +532,43 @@ function checkVectors() {
   }
   if (failedFiles === 0) pass('vectors.artifacts', caseCount + ' conformance case(s) across ' + vectorFiles.length + ' vector file(s)')
   else fail('vectors.artifacts', failedFiles + ' vector file(s) invalid')
+
+  // 0.4.0: a documented-additive read model is only covered when its vectors
+  // include a negative control, so every declared additive $def must have an
+  // accept AND a reject case targeting it.
+  const additiveProblems = []
+  let additiveChecked = 0
+  try {
+    const readModels = readJson(join(contractsDir, 'cli/read-models-v1.schema.json'))
+    const commandsFile = readJson(join(contractsDir, 'cli/commands-v1.json'))
+    const additiveVectorsPath = join(contractsDir, 'vectors/cli/read-models.vectors.json')
+    const additiveVectors = existsSync(additiveVectorsPath) ? readJson(additiveVectorsPath) : { cases: [] }
+    const outcomes = new Map()
+    for (const testCase of Array.isArray(additiveVectors.cases) ? additiveVectors.cases : []) {
+      if (typeof testCase.target !== 'string') continue
+      const entry = outcomes.get(testCase.target) ?? { accept: 0, reject: 0 }
+      if (testCase.expect === 'accept') entry.accept += 1
+      if (testCase.expect === 'reject') entry.reject += 1
+      outcomes.set(testCase.target, entry)
+    }
+    const documented = documentedAdditiveCommands(commandsFile)
+    for (const command of documented) {
+      const schemaRef = String(command.schemaRef ?? '')
+      const pointer = schemaRef.includes('#') ? schemaRef.slice(schemaRef.indexOf('#')) : ''
+      if (!pointer || pointer === '#') { additiveProblems.push(String(command.id) + ': schemaRef has no $defs pointer'); continue }
+      const resolved = resolvePointer(readModels, pointer)
+      if (resolved.error) { additiveProblems.push(String(command.id) + ': ' + resolved.error); continue }
+      const counts = outcomes.get(pointer) ?? { accept: 0, reject: 0 }
+      if (counts.accept === 0) additiveProblems.push(String(command.id) + ' (' + pointer + '): no accept vector')
+      if (counts.reject === 0) additiveProblems.push(String(command.id) + ' (' + pointer + '): no reject vector')
+      additiveChecked += 1
+    }
+    if (!documented.length) additiveProblems.push('cli/commands-v1.json has no documented-additive commands')
+  } catch (error) {
+    additiveProblems.push('cannot cross-check documented-additive vectors: ' + error.message)
+  }
+  if (additiveProblems.length) fail('vectors.documented-additive', firstErrors(additiveProblems, 4))
+  else pass('vectors.documented-additive', additiveChecked + ' documented-additive payload(s) have accept and reject vectors')
 }
 
 /* ------------------------------------------------------------------ */
@@ -580,6 +624,92 @@ function readModelsSchema() {
   return readJson(join(contractsDir, 'cli/read-models-v1.schema.json'))
 }
 
+/** 0.4.0: read-model commands registered as documented-only (never executed). */
+function documentedAdditiveCommands(commandsFile) {
+  return (commandsFile.commands ?? []).filter((command) => command && command.status === 'documented-additive')
+}
+
+/** Defs a read-model schema declares as documented-additive. */
+function additiveDefNames(schema) {
+  const block = schema && schema['x-documented-additive']
+  return block && Array.isArray(block.defs) ? block.defs : []
+}
+
+/**
+ * Cross-check the schema's x-documented-additive.defs list against the
+ * documented-additive entries in commands-v1.json. --schema owns the
+ * declaration/registration sync; --vectors and --cli add vectors and shape
+ * checks on top.
+ */
+function checkDocumentedAdditiveDeclarations() {
+  const problems = []
+  let declared = []
+  let documented = []
+  try {
+    const readModels = readJson(join(contractsDir, 'cli/read-models-v1.schema.json'))
+    const commandsFile = readJson(join(contractsDir, 'cli/commands-v1.json'))
+    declared = additiveDefNames(readModels)
+    documented = documentedAdditiveCommands(commandsFile)
+    const defs = schemaDefs(readModels)
+    const top = new Set(topLevelDefs(readModels))
+    if (!declared.length) problems.push('read-models-v1.schema.json declares no x-documented-additive.defs')
+    for (const name of declared) {
+      if (!Object.hasOwn(defs, name)) problems.push('x-documented-additive.defs lists a missing $def: ' + name)
+      else if (!top.has(name)) problems.push('x-documented-additive def is not top-level: ' + name)
+    }
+    const used = new Set()
+    for (const command of documented) {
+      const schemaRef = String(command.schemaRef ?? '')
+      const match = /^read-models-v1\.schema\.json#\/\$defs\/([A-Za-z0-9_]+)$/.exec(schemaRef)
+      if (!match) { problems.push('documented-additive command ' + String(command.id) + ' has a non-additive schemaRef ' + schemaRef); continue }
+      if (!declared.includes(match[1])) problems.push('documented-additive command ' + String(command.id) + ' targets undeclared $def ' + match[1])
+      used.add(match[1])
+    }
+    for (const name of declared) if (!used.has(name)) problems.push('declared additive $def is not registered by any documented-additive command: ' + name)
+    if (!documented.length) problems.push('cli/commands-v1.json has no documented-additive commands')
+  } catch (error) {
+    problems.push('cannot cross-check documented-additive declarations: ' + error.message)
+  }
+  if (problems.length) fail('schema.documented-additive', firstErrors(problems, 4))
+  else pass('schema.documented-additive', declared.length + ' documented-additive $def(s) declared and registered')
+}
+
+/**
+ * Structural validation for entries the gate must not execute: argv/root/
+ * status/since/metadata and a schemaRef that resolves to a declared additive
+ * $def. Emits one PASS/FAIL per entry plus the caller's aggregate.
+ */
+function checkDocumentedAdditiveCommands(commandsFile, schema) {
+  const declared = new Set(additiveDefNames(schema))
+  const documented = documentedAdditiveCommands(commandsFile)
+  let checked = 0
+  let failed = 0
+  const seen = new Set()
+  for (const command of documented) {
+    const id = typeof command.id === 'string' && command.id ? command.id : '(missing-id)'
+    const problems = []
+    if (seen.has(id)) problems.push('duplicate command id')
+    seen.add(id)
+    if (!Array.isArray(command.argv) || command.argv.length === 0 || !command.argv.every((arg) => typeof arg === 'string' && arg.length > 0)) problems.push('argv must be a non-empty array of non-empty strings')
+    if (command.root !== 'object' && command.root !== 'array') problems.push('root must be object|array')
+    if (command.since !== '0.4.0') problems.push('since must be 0.4.0')
+    if (command.status !== 'documented-additive') problems.push('status must be documented-additive')
+    if (typeof command.deterministic !== 'boolean' || typeof command.needsKey !== 'boolean' || typeof command.needsTos !== 'boolean') problems.push('deterministic/needsKey/needsTos must be booleans')
+    const schemaRef = String(command.schemaRef ?? '')
+    const match = /^read-models-v1\.schema\.json#\/\$defs\/([A-Za-z0-9_]+)$/.exec(schemaRef)
+    if (!match) {
+      problems.push('schemaRef must be read-models-v1.schema.json#/$defs/<Name>, got ' + schemaRef)
+    } else {
+      const resolved = resolvePointer(schema, '#/$defs/' + match[1])
+      if (resolved.error) problems.push(resolved.error)
+      if (!declared.has(match[1])) problems.push('$def ' + match[1] + ' is not declared in x-documented-additive.defs')
+    }
+    if (problems.length) { fail('cli.contract.' + id, firstErrors(problems, 3)); failed += 1 }
+    else { pass('cli.contract.' + id); checked += 1 }
+  }
+  return { checked, failed }
+}
+
 /* ------------------------------------------------------------------ */
 /* --cli                                                              */
 /* ------------------------------------------------------------------ */
@@ -611,6 +741,9 @@ function checkCli() {
     let checked = 0
     const failedCommands = []
     for (const command of commandsFile.commands ?? []) {
+      // 0.4.0 documented-additive entries are contract-only: the gate validates
+      // their metadata/schemaRef below but must never execute them.
+      if (command && command.status === 'documented-additive') continue
       const argv = substitute(command.argv ?? [])
       const label = 'cli.' + command.id
       const result = runCliForJson(space, argv, label)
@@ -641,6 +774,9 @@ function checkCli() {
     }
     if (failedCommands.length === 0) pass('cli.commands', checked + ' deterministic --json command(s) match commands-v1.json')
     else fail('cli.commands', failedCommands.length + ' command(s) drifted: ' + failedCommands.join(', '))
+    const documented = checkDocumentedAdditiveCommands(commandsFile, schema)
+    if (documented.failed === 0) pass('cli.documented-additive', documented.checked + ' documented-additive command(s) validated structurally (not executed)')
+    else fail('cli.documented-additive', documented.failed + ' documented-additive command(s) invalid')
   } finally {
     cleanupWorkspace(space)
   }

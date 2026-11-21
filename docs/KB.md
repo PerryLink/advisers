@@ -34,7 +34,7 @@ Three consequences you can rely on:
    page content). `dataSha256` on `morning` is unaffected by KB.
 3. **Auditable references, not similarity scores.** Search hits carry stable
    `kb_doc`/`kb_chunk`/`kb_page` refs; facts link to KB documents through
-   `kb_fact_links` (manual `kb link` is **not wired in the 0.4.0 CLI**; the table
+   `kb_fact_links` (manual `kb link` is wired on main after the 0.4.0 release; the 0.4.0 tarball did not wire it, and the table
    and `evidence show --json.kbSources` are prepared for 0.4.x). A hit is a
    deterministic match against text you ingested, not a model's opinion.
 
@@ -155,7 +155,7 @@ advisers fact as-of <YYYY-MM-DD|ISO> [--matter <id>] [--client <id>] [--subject 
     [--predicate p] [--limit n] [--include-deleted] [--json]
 ```
 
-`kb link`/`kb unlink` (`kb_fact_links` maintenance) exist in the library but are
+`kb link`/`kb unlink` (`kb_fact_links` maintenance) are wired on main after the 0.4.0 release (the 0.4.0 tarball exposed the library only) and are
 **not wired into the 0.4.0 CLI**; they are a 0.4.x follow-up.
 
 ### 5.1 `kb add`

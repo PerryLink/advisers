@@ -321,8 +321,8 @@ export function mailLink(store, ref, options = {}) {
   mailDb.assertMailTables(store)
   const now = asDate(options.now)
   const message = mailDb.getMailMessage(store, ref)
-  const clientId = options.clientId == null ? message.clientId : String(options.clientId)
-  const projectId = options.projectId == null ? message.projectId : String(options.projectId)
+  const clientId = options.clientId == null ? (message.clientId ?? null) : String(options.clientId)
+  const projectId = options.projectId == null ? (message.projectId ?? null) : String(options.projectId)
   const audit = { actor: options.actor ?? 'local', action: 'mail.link', allowed: true, reason: message.id }
   const updated = store.mutate(() => mailDb.updateMailMessage(store, message.id, { clientId, projectId, status: 'linked' }, { now }), audit).result
   return { ok: true, command: 'mail link', message: updated }

@@ -407,9 +407,10 @@ address/domain, display name or message text matches a live client or project:
   hint. This preserves the 0.3.0 invariant "no automatic customer detection".
 - `basis`/`confidence` are the honest match reasons: address-domain (0.75), exact
   From display name (0.8), message text (0.6). They are heuristics, not identifiers.
-- Manual `mail link <id> --client/--project` is designed (41 §3.5) but **not wired
-  in the 0.4.0 CLI**; it stays a 0.4.x follow-up. Until then, record the association
-  through the candidate/commitment workflow or a `client note`.
+- Manual `mail link <id> --client/--project` / `mail dismiss <id>` are wired on main
+  after the 0.4.0 release (the 0.4.0 tarball left them unwired; design 41 §3.5).
+  In 0.4.0, record the association through the candidate/commitment workflow or a
+  `client note`.
 - Mail content is never exposed to MCP/DSH, receipts, client packs, Pet Brief or
   KB in 0.4.0. See [KB.md](KB.md) and [MCP.md](MCP.md).
 

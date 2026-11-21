@@ -10,7 +10,10 @@
  *   - the MCP stdio surface (legacy protocol echo, 8 tools, 5 resources, codes);
  *   - CLI JSON purity (one JSON document on stdout, errors as envelopes);
  *   - exit codes 0 / 1 / 3;
- *   - non-TTY output: no ANSI/clear-screen, no prompt/hang.
+ *   - non-TTY output: no ANSI/clear-screen, no prompt/hang;
+ *   - the 0.4.0 local surfaces: KB (add/ls/show/search/pages/fact as-of),
+ *     offline mail import + local extract, and the privacy/consent/evidence
+ *     policy surface (all offline, temp HOME, fixed fixture rows).
  *
  * Usage:
  *   node scripts/eval-det.mjs [--suite all|determinism,mcp,json,exit,tty|tui]
@@ -31,10 +34,13 @@ import jsonCases from '../eval/det/cases/json-purity.mjs'
 import exitCases from '../eval/det/cases/exit-codes.mjs'
 import ttyCases from '../eval/det/cases/non-tty.mjs'
 import tuiCases from '../eval/det/cases/tui.mjs'
+import kbCases from '../eval/det/cases/kb.mjs'
+import mailCases from '../eval/det/cases/mail.mjs'
+import policyCases from '../eval/det/cases/policy.mjs'
 
-const DEFAULT_SUITES = ['determinism', 'mcp', 'json', 'exit', 'tty']
+const DEFAULT_SUITES = ['determinism', 'mcp', 'json', 'exit', 'tty', 'kb', 'mail', 'policy']
 const OPT_IN_SUITES = ['tui']
-const ALL_CASES = [...determinismCases, ...mcpCases, ...jsonCases, ...exitCases, ...ttyCases, ...tuiCases]
+const ALL_CASES = [...determinismCases, ...mcpCases, ...jsonCases, ...exitCases, ...ttyCases, ...tuiCases, ...kbCases, ...mailCases, ...policyCases]
 
 function fail(message) {
   console.error('advisers eval:det: ' + message)
@@ -47,7 +53,7 @@ function parseArgs(argv) {
     const arg = argv[index]
     if (arg === '--help' || arg === '-h') {
       console.log([
-        'usage: node scripts/eval-det.mjs [--suite all|determinism,mcp,json,exit,tty|tui]',
+        'usage: node scripts/eval-det.mjs [--suite all|determinism,mcp,json,exit,tty|kb,mail,policy|tui]',
         '       [--out <file>] [--no-write] [--json] [--verbose] [--list] [--update-baseline]',
         '',
         '  --suite <list>      comma-separated groups; "all" = ' + DEFAULT_SUITES.join(',') + '; "tui" is opt-in',

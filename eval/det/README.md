@@ -1,6 +1,6 @@
 # eval/det — deterministic eval suite
 
-Machine gate for the deterministic 0.3.0 contract. No API key, no network, no
+Machine gate for the deterministic 0.3.0/0.4.0 contract. No API key, no network, no
 real `~/.advisers`, fixed timezone, temp HOME per case. Run it from the repo
 root:
 
@@ -21,7 +21,7 @@ add a case): [docs/EVAL.md](../../docs/EVAL.md).
 | `lib/report.mjs` | result schema v1, path scrubbing, result writer, console report |
 | `lib/runner.mjs` | sequential case runner + harness-wide checks |
 | `lib/baseline.mjs` | reads and re-records `baseline.json` |
-| `cases/*.mjs` | the gates, grouped `determinism` / `mcp` / `json` / `exit` / `tty` (+ opt-in `tui`) |
+| `cases/*.mjs` | the gates, grouped `determinism` / `mcp` / `json` / `exit` / `tty` / `kb` / `mail` / `policy` (+ opt-in `tui`); 30 cases / 277 checks in the default run on main after 0.4.0 |
 | `fixtures/morning-ledger.mjs` | deterministic ledger fixture (injected clock + ids) |
 | `baseline.json` | committed golden values and contract expectations |
 | `results/` | gitignored run output (`det-<stamp>.json`, `latest.json`) |

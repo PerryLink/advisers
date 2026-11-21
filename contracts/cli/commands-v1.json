@@ -239,6 +239,642 @@
       "needsKey": false,
       "needsTos": true,
       "since": "0.2.0"
+    },
+    {
+      "id": "search",
+      "argv": [
+        "search",
+        "报价",
+        "--scope",
+        "kb",
+        "--json"
+      ],
+      "root": "object",
+      "schemaRef": "read-models-v1.schema.json#/$defs/SearchPayload",
+      "deterministic": true,
+      "needsKey": false,
+      "needsTos": true,
+      "since": "0.4.0",
+      "status": "documented-additive"
+    },
+    {
+      "id": "kb-add",
+      "argv": [
+        "kb",
+        "add",
+        "quote.pdf",
+        "--json"
+      ],
+      "root": "object",
+      "schemaRef": "read-models-v1.schema.json#/$defs/KbAddPayload",
+      "deterministic": true,
+      "needsKey": false,
+      "needsTos": true,
+      "since": "0.4.0",
+      "status": "documented-additive"
+    },
+    {
+      "id": "kb-ls",
+      "argv": [
+        "kb",
+        "ls",
+        "--json"
+      ],
+      "root": "object",
+      "schemaRef": "read-models-v1.schema.json#/$defs/KbListPayload",
+      "deterministic": true,
+      "needsKey": false,
+      "needsTos": true,
+      "since": "0.4.0",
+      "status": "documented-additive"
+    },
+    {
+      "id": "kb-show",
+      "argv": [
+        "kb",
+        "show",
+        "{kbId}",
+        "--json"
+      ],
+      "root": "object",
+      "schemaRef": "read-models-v1.schema.json#/$defs/KbShowPayload",
+      "deterministic": true,
+      "needsKey": false,
+      "needsTos": true,
+      "since": "0.4.0",
+      "status": "documented-additive"
+    },
+    {
+      "id": "kb-rm",
+      "argv": [
+        "kb",
+        "rm",
+        "{kbId}",
+        "--json"
+      ],
+      "root": "object",
+      "schemaRef": "read-models-v1.schema.json#/$defs/KbRmPayload",
+      "deterministic": true,
+      "needsKey": false,
+      "needsTos": true,
+      "since": "0.4.0",
+      "status": "documented-additive"
+    },
+    {
+      "id": "kb-purge",
+      "argv": [
+        "kb",
+        "purge",
+        "{kbId}",
+        "--json"
+      ],
+      "root": "object",
+      "schemaRef": "read-models-v1.schema.json#/$defs/KbPurgePayload",
+      "deterministic": true,
+      "needsKey": false,
+      "needsTos": true,
+      "since": "0.4.0",
+      "status": "documented-additive"
+    },
+    {
+      "id": "kb-reindex",
+      "argv": [
+        "kb",
+        "reindex",
+        "--json"
+      ],
+      "root": "object",
+      "schemaRef": "read-models-v1.schema.json#/$defs/KbReindexPayload",
+      "deterministic": true,
+      "needsKey": false,
+      "needsTos": true,
+      "since": "0.4.0",
+      "status": "documented-additive"
+    },
+    {
+      "id": "kb-page-ls",
+      "argv": [
+        "kb",
+        "page",
+        "ls",
+        "--json"
+      ],
+      "root": "object",
+      "schemaRef": "read-models-v1.schema.json#/$defs/KbPageListPayload",
+      "deterministic": true,
+      "needsKey": false,
+      "needsTos": true,
+      "since": "0.4.0",
+      "status": "documented-additive"
+    },
+    {
+      "id": "kb-page-show",
+      "argv": [
+        "kb",
+        "page",
+        "show",
+        "{pageId}",
+        "--json"
+      ],
+      "root": "object",
+      "schemaRef": "read-models-v1.schema.json#/$defs/KbPageShowPayload",
+      "deterministic": true,
+      "needsKey": false,
+      "needsTos": true,
+      "since": "0.4.0",
+      "status": "documented-additive"
+    },
+    {
+      "id": "kb-page-rebuild",
+      "argv": [
+        "kb",
+        "page",
+        "rebuild",
+        "--json"
+      ],
+      "root": "object",
+      "schemaRef": "read-models-v1.schema.json#/$defs/KbPageRebuildPayload",
+      "deterministic": true,
+      "needsKey": false,
+      "needsTos": true,
+      "since": "0.4.0",
+      "status": "documented-additive"
+    },
+    {
+      "id": "kb-page-diff",
+      "argv": [
+        "kb",
+        "page",
+        "diff",
+        "{pageId}",
+        "--json"
+      ],
+      "root": "object",
+      "schemaRef": "read-models-v1.schema.json#/$defs/KbPageDiffPayload",
+      "deterministic": true,
+      "needsKey": false,
+      "needsTos": true,
+      "since": "0.4.0",
+      "status": "documented-additive"
+    },
+    {
+      "id": "fact-show",
+      "argv": [
+        "fact",
+        "show",
+        "{factId}",
+        "--json"
+      ],
+      "root": "object",
+      "schemaRef": "read-models-v1.schema.json#/$defs/FactShowPayload",
+      "deterministic": true,
+      "needsKey": false,
+      "needsTos": true,
+      "since": "0.4.0",
+      "status": "documented-additive"
+    },
+    {
+      "id": "fact-history",
+      "argv": [
+        "fact",
+        "history",
+        "{factId}",
+        "--json"
+      ],
+      "root": "object",
+      "schemaRef": "read-models-v1.schema.json#/$defs/FactHistoryPayload",
+      "deterministic": true,
+      "needsKey": false,
+      "needsTos": true,
+      "since": "0.4.0",
+      "status": "documented-additive"
+    },
+    {
+      "id": "fact-as-of",
+      "argv": [
+        "fact",
+        "as-of",
+        "2026-11-21",
+        "--json"
+      ],
+      "root": "object",
+      "schemaRef": "read-models-v1.schema.json#/$defs/FactAsOfPayload",
+      "deterministic": true,
+      "needsKey": false,
+      "needsTos": true,
+      "since": "0.4.0",
+      "status": "documented-additive"
+    },
+    {
+      "id": "mail-account-add",
+      "argv": [
+        "mail",
+        "account",
+        "add",
+        "--name",
+        "work",
+        "--host",
+        "imap.example.com",
+        "--username",
+        "me@example.com",
+        "--json"
+      ],
+      "root": "object",
+      "schemaRef": "read-models-v1.schema.json#/$defs/MailAccountAddPayload",
+      "deterministic": true,
+      "needsKey": false,
+      "needsTos": true,
+      "since": "0.4.0",
+      "status": "documented-additive"
+    },
+    {
+      "id": "mail-account-ls",
+      "argv": [
+        "mail",
+        "account",
+        "ls",
+        "--json"
+      ],
+      "root": "object",
+      "schemaRef": "read-models-v1.schema.json#/$defs/MailAccountListPayload",
+      "deterministic": true,
+      "needsKey": false,
+      "needsTos": true,
+      "since": "0.4.0",
+      "status": "documented-additive"
+    },
+    {
+      "id": "mail-account-show",
+      "argv": [
+        "mail",
+        "account",
+        "show",
+        "{accountRef}",
+        "--json"
+      ],
+      "root": "object",
+      "schemaRef": "read-models-v1.schema.json#/$defs/MailAccountShowPayload",
+      "deterministic": true,
+      "needsKey": false,
+      "needsTos": true,
+      "since": "0.4.0",
+      "status": "documented-additive"
+    },
+    {
+      "id": "mail-account-rm",
+      "argv": [
+        "mail",
+        "account",
+        "rm",
+        "{accountRef}",
+        "--json"
+      ],
+      "root": "object",
+      "schemaRef": "read-models-v1.schema.json#/$defs/MailAccountRemovePayload",
+      "deterministic": true,
+      "needsKey": false,
+      "needsTos": true,
+      "since": "0.4.0",
+      "status": "documented-additive"
+    },
+    {
+      "id": "mail-sync",
+      "argv": [
+        "mail",
+        "sync",
+        "{accountRef}",
+        "--json"
+      ],
+      "root": "object",
+      "schemaRef": "read-models-v1.schema.json#/$defs/MailSyncPayload",
+      "deterministic": true,
+      "needsKey": false,
+      "needsTos": true,
+      "since": "0.4.0",
+      "status": "documented-additive"
+    },
+    {
+      "id": "mail-ls",
+      "argv": [
+        "mail",
+        "ls",
+        "--json"
+      ],
+      "root": "object",
+      "schemaRef": "read-models-v1.schema.json#/$defs/MailListPayload",
+      "deterministic": true,
+      "needsKey": false,
+      "needsTos": true,
+      "since": "0.4.0",
+      "status": "documented-additive"
+    },
+    {
+      "id": "mail-show",
+      "argv": [
+        "mail",
+        "show",
+        "{messageId}",
+        "--json"
+      ],
+      "root": "object",
+      "schemaRef": "read-models-v1.schema.json#/$defs/MailShowPayload",
+      "deterministic": true,
+      "needsKey": false,
+      "needsTos": true,
+      "since": "0.4.0",
+      "status": "documented-additive"
+    },
+    {
+      "id": "mail-extract",
+      "argv": [
+        "mail",
+        "extract",
+        "--local",
+        "--json"
+      ],
+      "root": "object",
+      "schemaRef": "read-models-v1.schema.json#/$defs/MailExtractPayload",
+      "deterministic": true,
+      "needsKey": false,
+      "needsTos": true,
+      "since": "0.4.0",
+      "status": "documented-additive"
+    },
+    {
+      "id": "mail-import",
+      "argv": [
+        "mail",
+        "import",
+        "inbox.eml",
+        "--json"
+      ],
+      "root": "object",
+      "schemaRef": "read-models-v1.schema.json#/$defs/MailImportPayload",
+      "deterministic": true,
+      "needsKey": false,
+      "needsTos": true,
+      "since": "0.4.0",
+      "status": "documented-additive"
+    },
+    {
+      "id": "mail-purge",
+      "argv": [
+        "mail",
+        "purge",
+        "--json"
+      ],
+      "root": "object",
+      "schemaRef": "read-models-v1.schema.json#/$defs/MailPurgePayload",
+      "deterministic": true,
+      "needsKey": false,
+      "needsTos": true,
+      "since": "0.4.0",
+      "status": "documented-additive"
+    },
+    {
+      "id": "receivable-add",
+      "argv": [
+        "receivable",
+        "add",
+        "cl_1",
+        "--amount",
+        "8000.00",
+        "--label",
+        "尾款",
+        "--json"
+      ],
+      "root": "object",
+      "schemaRef": "read-models-v1.schema.json#/$defs/ReceivableAddPayload",
+      "deterministic": true,
+      "needsKey": false,
+      "needsTos": true,
+      "since": "0.4.0",
+      "status": "documented-additive"
+    },
+    {
+      "id": "receivable-ls",
+      "argv": [
+        "receivable",
+        "ls",
+        "--json"
+      ],
+      "root": "object",
+      "schemaRef": "read-models-v1.schema.json#/$defs/ReceivableListPayload",
+      "deterministic": true,
+      "needsKey": false,
+      "needsTos": true,
+      "since": "0.4.0",
+      "status": "documented-additive"
+    },
+    {
+      "id": "receivable-aging",
+      "argv": [
+        "receivable",
+        "ls",
+        "--aging",
+        "--json"
+      ],
+      "root": "object",
+      "schemaRef": "read-models-v1.schema.json#/$defs/ReceivableSummaryPayload",
+      "deterministic": true,
+      "needsKey": false,
+      "needsTos": true,
+      "since": "0.4.0",
+      "status": "documented-additive"
+    },
+    {
+      "id": "receivable-show",
+      "argv": [
+        "receivable",
+        "show",
+        "{receivableId}",
+        "--json"
+      ],
+      "root": "object",
+      "schemaRef": "read-models-v1.schema.json#/$defs/ReceivableShowPayload",
+      "deterministic": true,
+      "needsKey": false,
+      "needsTos": true,
+      "since": "0.4.0",
+      "status": "documented-additive"
+    },
+    {
+      "id": "receivable-edit",
+      "argv": [
+        "receivable",
+        "edit",
+        "{receivableId}",
+        "--amount",
+        "9000.00",
+        "--json"
+      ],
+      "root": "object",
+      "schemaRef": "read-models-v1.schema.json#/$defs/ReceivableEditPayload",
+      "deterministic": true,
+      "needsKey": false,
+      "needsTos": true,
+      "since": "0.4.0",
+      "status": "documented-additive"
+    },
+    {
+      "id": "receivable-void",
+      "argv": [
+        "receivable",
+        "void",
+        "{receivableId}",
+        "--reason",
+        "duplicate",
+        "--json"
+      ],
+      "root": "object",
+      "schemaRef": "read-models-v1.schema.json#/$defs/ReceivableVoidPayload",
+      "deterministic": true,
+      "needsKey": false,
+      "needsTos": true,
+      "since": "0.4.0",
+      "status": "documented-additive"
+    },
+    {
+      "id": "payment-add",
+      "argv": [
+        "payment",
+        "add",
+        "cl_1",
+        "--amount",
+        "4000.00",
+        "--receivable",
+        "{receivableId}",
+        "--json"
+      ],
+      "root": "object",
+      "schemaRef": "read-models-v1.schema.json#/$defs/PaymentAddPayload",
+      "deterministic": true,
+      "needsKey": false,
+      "needsTos": true,
+      "since": "0.4.0",
+      "status": "documented-additive"
+    },
+    {
+      "id": "payment-ls",
+      "argv": [
+        "payment",
+        "ls",
+        "--json"
+      ],
+      "root": "object",
+      "schemaRef": "read-models-v1.schema.json#/$defs/PaymentListPayload",
+      "deterministic": true,
+      "needsKey": false,
+      "needsTos": true,
+      "since": "0.4.0",
+      "status": "documented-additive"
+    },
+    {
+      "id": "payment-void",
+      "argv": [
+        "payment",
+        "void",
+        "{paymentId}",
+        "--json"
+      ],
+      "root": "object",
+      "schemaRef": "read-models-v1.schema.json#/$defs/PaymentVoidPayload",
+      "deterministic": true,
+      "needsKey": false,
+      "needsTos": true,
+      "since": "0.4.0",
+      "status": "documented-additive"
+    },
+    {
+      "id": "consent-status",
+      "argv": [
+        "consent",
+        "status",
+        "--json"
+      ],
+      "root": "object",
+      "schemaRef": "read-models-v1.schema.json#/$defs/ConsentStatusPayload",
+      "deterministic": true,
+      "needsKey": false,
+      "needsTos": false,
+      "since": "0.4.0",
+      "status": "documented-additive"
+    },
+    {
+      "id": "consent-grant",
+      "argv": [
+        "consent",
+        "grant",
+        "mail.extract",
+        "--data-class",
+        "mail",
+        "--provider",
+        "deepseek",
+        "--yes",
+        "--json"
+      ],
+      "root": "object",
+      "schemaRef": "read-models-v1.schema.json#/$defs/ConsentGrantPayload",
+      "deterministic": true,
+      "needsKey": false,
+      "needsTos": false,
+      "since": "0.4.0",
+      "status": "documented-additive"
+    },
+    {
+      "id": "consent-revoke",
+      "argv": [
+        "consent",
+        "revoke",
+        "mail.extract",
+        "--yes",
+        "--json"
+      ],
+      "root": "object",
+      "schemaRef": "read-models-v1.schema.json#/$defs/ConsentRevokePayload",
+      "deterministic": true,
+      "needsKey": false,
+      "needsTos": false,
+      "since": "0.4.0",
+      "status": "documented-additive"
+    },
+    {
+      "id": "privacy-matrix",
+      "argv": [
+        "privacy",
+        "--matrix",
+        "--json"
+      ],
+      "root": "object",
+      "schemaRef": "read-models-v1.schema.json#/$defs/PrivacyMatrixPayload",
+      "deterministic": true,
+      "needsKey": false,
+      "needsTos": false,
+      "since": "0.4.0",
+      "status": "documented-additive"
+    },
+    {
+      "id": "client-export-pack",
+      "argv": [
+        "client",
+        "export",
+        "cl_1",
+        "--pack",
+        "--json"
+      ],
+      "root": "object",
+      "schemaRef": "read-models-v1.schema.json#/$defs/ClientExportPackPayload",
+      "deterministic": true,
+      "needsKey": false,
+      "needsTos": true,
+      "since": "0.4.0",
+      "status": "documented-additive"
     }
-  ]
+  ],
+  "documentedAdditive": {
+    "release": "0.4.0",
+    "status": "documented-additive",
+    "executed": false,
+    "description": "0.4.0 additive read models. The gate validates each entry structurally (argv/root/status metadata and a schemaRef that resolves to a declared additive $def) but never executes these commands; the frozen v1 entries keep being executed exactly as before. See contracts/cli/read-models-v1.schema.json x-documented-additive."
+  }
 }

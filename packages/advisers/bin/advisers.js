@@ -1230,7 +1230,7 @@ Usage:
   advisers compact ls|rollback summary versions
   advisers today [--calendar] [--sources] [--json [--limit n]]
                               one-screen today/week/waiting view (+ local events)
-  advisers remind [--json] [--ics [path]] [--deliver [--notify]]  due reminders + ICS/VALARM export
+  advisers remind [--json] [--ics [path]] [--deliver [--notify]] [--quiet-hours HH:MM-HH:MM] [--force-notify]  due reminders + ICS/VALARM export
   advisers remind install|uninstall|status [--apply] [--schedule "0 9 * * *"]
                               scheduler scripts + OS plan (dry-run by default; --apply executes)
                               --morning adds the second morning block (--morning-time 08:30, --morning-days 1-5)
@@ -1600,7 +1600,7 @@ function purgeMatter(id, confirmed) {
 function parseFlags(args) {
   const flags = {}
   const positional = []
-  const booleanFlags = new Set(['web', 'deep', 'all', 'yes', 'json', 'list', 'force', 'apply', 'quiet', 'help', 'content', 'ics', 'deliver', 'install', 'uninstall', 'status', 'calendar', 'sources', 'pack', 'receipt', 'from-imap', 'remove', 'force', 'notify', 'no-remind', 'dry-run', 'unclassified', 'no-calendar', 'include-done', 'record-delivery', 'include-global', 'archive', 'morning', 'include-deleted', 'all-new', 'local', 'model', 'full', 'pass-stdin'])
+  const booleanFlags = new Set(['web', 'deep', 'all', 'yes', 'json', 'list', 'force', 'apply', 'quiet', 'help', 'content', 'ics', 'deliver', 'install', 'uninstall', 'status', 'calendar', 'sources', 'pack', 'receipt', 'from-imap', 'remove', 'force', 'notify', 'no-remind', 'dry-run', 'unclassified', 'no-calendar', 'include-done', 'record-delivery', 'include-global', 'archive', 'morning', 'include-deleted', 'all-new', 'local', 'model', 'full', 'pass-stdin', 'force-notify'])
   for (let i = 0; i < args.length; i++) {
     if (args[i].startsWith('--')) {
       const key = args[i].slice(2)
@@ -6799,6 +6799,8 @@ const KB_USAGE = [
   '       advisers kb reindex [--rebuild] [--json]',
   '       advisers kb search <query> [--scope kb|pages|all] [--limit n] [--clearance 0-3] [--json]',
   '       advisers kb page ls|show|rebuild|diff ... [--json]',
+  '       advisers kb link <doc-id> --fact <fact-id> [--relation source|mentions] [--chunk id] [--json]',
+  '       advisers kb unlink <doc-id> --fact <fact-id> [--relation source|mentions] [--json]',
 ].join('\n')
 
 function kbDocRowText(doc) {
@@ -7017,8 +7019,31 @@ async function kbCommand(rawArgs) {
     if (sub === 'reindex') return await kbReindexCommand(rawArgs.slice(1))
     if (sub === 'page') return await kbPageCommand(rawArgs.slice(1))
     if (sub === 'search') return await kbSearchCommand(rawArgs.slice(1))
+    if (sub === 'link') return await kbLinkCommand(rawArgs.slice(1), false)
+    if (sub === 'unlink') return await kbLinkCommand(rawArgs.slice(1), true)
     usageFail('unknown kb subcommand: ' + sub, KB_USAGE)
   } catch (error) { reportFamilyFailure(error) }
+}
+
+/** kb link/unlink: explicit fact <-> document provenance (0.4.x follow-up). */
+async function kbLinkCommand(rawArgs, unlink = false) {
+  const usage = unlink
+    ? 'usage: advisers kb unlink <doc-id> --fact <fact-id> [--relation source|mentions] [--json]'
+    : 'usage: advisers kb link <doc-id> --fact <fact-id> [--relation source|mentions] [--chunk id] [--json]'
+  const parsed = familyFlags(rawArgs, { booleans: ['json'], values: ['fact', 'relation', 'chunk'] }, usage)
+  if (!parsed) return
+  const docId = parsed.positional[0]
+  const factId = parsed.flags.fact
+  if (!docId) { usageFail('missing document id', usage); return }
+  if (!factId) { usageFail('--fact is required', usage); return }
+  const kb = await loadKb()
+  const store = familyStore({ write: true })
+  const result = unlink
+    ? kb.kbUnlink(store, { docId, factId, relation: parsed.flags.relation })
+    : kb.kbLink(store, { docId, factId, relation: parsed.flags.relation, chunkId: parsed.flags.chunk })
+  if (parsed.flags.json) { console.log(JSON.stringify(result, null, 2)); return }
+  if (unlink) console.log('unlinked ' + result.removed + ' link(s): ' + docId + ' x ' + factId)
+  else console.log('linked ' + docId + ' -> ' + factId + ' (' + result.link.relation + ')')
 }
 
 const FACT_USAGE = [
@@ -7211,6 +7236,8 @@ const MAIL_USAGE = [
   '       advisers mail extract [<id>...] [--all-new] [--local|--model] [--yes] [--matter id] [--limit n] [--dry-run] [--json]',
   '       advisers mail import <file|dir> [--limit n] [--dry-run] [--client id] [--project id] [--json]',
   '       advisers mail purge [--older-than 30d] [--dry-run|--yes] [--account a] [--json]',
+  '       advisers mail link <message> [--client id] [--project id] [--json]',
+  '       advisers mail dismiss <message> [--json]',
 ].join('\n')
 
 function mailHumanRow(message) {
@@ -7541,10 +7568,32 @@ async function mailCommand(rawArgs) {
     if (sub === 'extract') return await mailExtractCommand(rawArgs.slice(1))
     if (sub === 'import') return await mailImportCommand(rawArgs.slice(1))
     if (sub === 'purge') return await mailPurgeCommand(rawArgs.slice(1))
+    if (sub === 'link') return await mailLinkCommand(rawArgs.slice(1), false)
+    if (sub === 'dismiss') return await mailLinkCommand(rawArgs.slice(1), true)
     usageFail('unknown mail subcommand: ' + sub, MAIL_USAGE)
   } catch (error) { reportFamilyFailure(error) }
 }
 
+/** mail link/dismiss: explicit review decisions on one imported message (0.4.x follow-up). */
+async function mailLinkCommand(rawArgs, dismiss = false) {
+  const usage = dismiss
+    ? 'usage: advisers mail dismiss <message> [--json]'
+    : 'usage: advisers mail link <message> [--client id] [--project id] [--json]'
+  const parsed = familyFlags(rawArgs, { booleans: ['json'], values: ['client', 'project'] }, usage)
+  if (!parsed) return
+  const ref = parsed.positional[0]
+  if (!ref) { usageFail('missing message id', usage); return }
+  const mail = await loadMail()
+  const store = familyStore({ write: true })
+  const result = dismiss
+    ? mail.mailDismiss(store, ref, {})
+    : mail.mailLink(store, ref, { clientId: parsed.flags.client, projectId: parsed.flags.project })
+  if (parsed.flags.json) { console.log(JSON.stringify(result, null, 2)); return }
+  const message = result.message
+  console.log((dismiss ? 'dismissed ' : 'linked ') + message.id + '  [' + message.status + ']' + (message.clientId ? '  client=' + message.clientId : '') + (message.projectId ? '  project=' + message.projectId : ''))
+}
+
+/* ------------------------- receivable / payment ------------------------- */
 /* ------------------------- receivable / payment ------------------------- */
 
 const RECEIVABLE_USAGE = [
@@ -10118,6 +10167,46 @@ function parseQuietHours(value) {
   return { value: value }
 }
 
+const QUIET_HOURS_PARTS_RE = /^([01]\d|2[0-3]):([0-5]\d)-([01]\d|2[0-3]):([0-5]\d)$/
+
+/** Local minute-of-day in the agenda timezone (deterministic for --now tests). */
+function localMinuteOfDay(date) {
+  const parts = new Intl.DateTimeFormat('en-GB', { timeZone: AGENDA_TIMEZONE, hour: '2-digit', minute: '2-digit', hour12: false }).formatToParts(date)
+  const hour = Number(parts.find((part) => part.type === 'hour')?.value ?? 0) % 24
+  const minute = Number(parts.find((part) => part.type === 'minute')?.value ?? 0)
+  return hour * 60 + minute
+}
+
+/** True when `date` falls inside a validated HH:MM-HH:MM quiet window (cross-midnight supported). */
+function isInsideQuietHours(spec, date) {
+  const match = QUIET_HOURS_PARTS_RE.exec(String(spec ?? ''))
+  if (!match) return false
+  const start = Number(match[1]) * 60 + Number(match[2])
+  const end = Number(match[3]) * 60 + Number(match[4])
+  if (start === end) return false
+  const minute = localMinuteOfDay(date)
+  return start < end ? minute >= start && minute < end : minute >= start || minute < end
+}
+
+/** Dedupe key for one reminder notification scoped to a local day. */
+function reminderNotifyDedupeKey(reminder, localDay) {
+  return 'notify:dedupe:' + [reminder.commitmentId, reminder.bucket, reminder.ruleId, localDay].join('|')
+}
+
+function localDayOfInstant(date) {
+  return new Intl.DateTimeFormat('en-CA', { timeZone: AGENDA_TIMEZONE }).format(date)
+}
+
+/** Drop dedupe keys older than 30 local days (bounded metadata growth). */
+function pruneNotifyDedupe(store, nowDate) {
+  if (!store || typeof store.listMetaByPrefix !== 'function' || typeof store.deleteMeta !== 'function') return
+  const cutoff = nowDate.getTime() - 30 * 86400_000
+  for (const [key, value] of store.listMetaByPrefix('notify:dedupe:')) {
+    const at = Date.parse(String(value ?? ''))
+    if (Number.isFinite(at) && at < cutoff) store.deleteMeta(key)
+  }
+}
+
 const HHMM_RE = /^([01]\d|2[0-3]):([0-5]\d)$/
 function parseHhmm(value, flag) {
   if (typeof value !== 'string' || !HHMM_RE.test(value)) return { error: flag + ' must be HH:MM' }
@@ -10314,7 +10403,11 @@ async function remind(args) {
   // 0.4.0: --now pins planning and the echoed instant, so a fixed run is
   // byte-reproducible (the same value is used by reminders/ICS/JSON/webhook).
   const nowInfo = parseRemindNow(flags)
-  if (nowInfo.error) { usageFail(nowInfo.error, 'usage: advisers remind [--json] [--now ISO] [--ics [path]] [--deliver [--notify]]'); return }
+  if (nowInfo.error) { usageFail(nowInfo.error, 'usage: advisers remind [--json] [--now ISO] [--ics [path]] [--deliver [--notify]] [--quiet-hours HH:MM-HH:MM] [--force-notify]'); return }
+  if (flags['quiet-hours'] !== undefined) {
+    const quiet = parseQuietHours(flags['quiet-hours'])
+    if (quiet.error) { usageFail(quiet.error, 'usage: advisers remind [--json] [--now ISO] [--ics [path]] [--deliver [--notify]] [--quiet-hours HH:MM-HH:MM] [--force-notify]'); return }
+  }
   const nowDate = nowInfo.date
   // One prefix query instead of getMeta() per commitment (read-only store safe).
   const snoozed = {}
@@ -10355,20 +10448,46 @@ async function remind(args) {
     let channel = 'log'
     if (flags.notify) {
       const notify = await loadNotify()
-      const local = await notify.sendNotification({ title: 'Advisers · 到期提醒', body: reminders.length + ' 条承诺到期或即将到期' })
-      channel = local.sent ? local.channel : 'log-only'
-      const webhook = await notify.sendWebhookNotification(reminders, { now: nowDate })
-      if (webhook.sent) {
-        channel = channel === 'log-only' ? 'webhook' : channel + '+webhook'
-        // 0.4.0: remember whether the delivery was signed, without changing the
-        // payload bytes. A configured webhook with no secret still sends but says
-        // so exactly once per process (sanitised, no secret material).
-        if (typeof webhook.signing === 'string' && webhook.signing !== '') channel += '+signing:' + webhook.signing
-        if (webhook.warning === 'missing-secret' && !webhookSecretWarned) {
-          webhookSecretWarned = true
-          console.error(sanitizeConsoleText('webhook 已配置但未设置 ADVISERS_NOTIFY_WEBHOOK_SECRET：本次按未签名发送（signing=none）；建议设置 secret，否则接收端无法验证请求来源。', { max: 2000 }))
+      const forceNotify = flags['force-notify'] === true
+      const quietSpec = typeof flags['quiet-hours'] === 'string' ? flags['quiet-hours'] : (typeof process.env.ADVISERS_QUIET_HOURS === 'string' ? process.env.ADVISERS_QUIET_HOURS : null)
+      if (!forceNotify && quietSpec && isInsideQuietHours(quietSpec, nowDate)) {
+        // Quiet hours are a delivery policy, not an error: the log line above is
+        // still written, the channel is recorded as suppressed and the audit row
+        // records why. --force-notify bypasses (for an explicit one-off).
+        channel = 'quiet-suppressed'
+        console.log('通知已静默：当前处于安静时段 ' + quietSpec + '（本地日志已记录；--force-notify 可强制发送）')
+      } else {
+        const localDay = localDayOfInstant(nowDate)
+        let notifyList = reminders
+        if (!forceNotify && store && typeof store.listMetaByPrefix === 'function') {
+          const seen = new Set(store.listMetaByPrefix('notify:dedupe:').keys())
+          notifyList = reminders.filter((reminder) => !seen.has(reminderNotifyDedupeKey(reminder, localDay)))
+          if (!notifyList.length) {
+            channel = 'deduped'
+            console.log('通知已去重：本批提醒今天已经通知过（本地日志仍记录；--force-notify 可重发）')
+          }
         }
-      } else if (webhook.configured) { console.error(sanitizeConsoleText('webhook 未发送：' + (webhook.error ?? 'unknown') + (webhook.detail ? '（' + webhook.detail + '）' : ''), { max: 2000 })) }
+        if (channel !== 'deduped') {
+          const local = await notify.sendNotification({ title: 'Advisers · 到期提醒', body: notifyList.length + ' 条承诺到期或即将到期' })
+          channel = local.sent ? local.channel : 'log-only'
+          const webhook = await notify.sendWebhookNotification(notifyList, { now: nowDate })
+          if (webhook.sent) {
+            channel = channel === 'log-only' ? 'webhook' : channel + '+webhook'
+            // 0.4.0: remember whether the delivery was signed, without changing the
+            // payload bytes. A configured webhook with no secret still sends but says
+            // so exactly once per process (sanitised, no secret material).
+            if (typeof webhook.signing === 'string' && webhook.signing !== '') channel += '+signing:' + webhook.signing
+            if (webhook.warning === 'missing-secret' && !webhookSecretWarned) {
+              webhookSecretWarned = true
+              console.error(sanitizeConsoleText('webhook 已配置但未设置 ADVISERS_NOTIFY_WEBHOOK_SECRET：本次按未签名发送（signing=none）；建议设置 secret，否则接收端无法验证请求来源。', { max: 2000 }))
+            }
+          } else if (webhook.configured) { console.error(sanitizeConsoleText('webhook 未发送：' + (webhook.error ?? 'unknown') + (webhook.detail ? '（' + webhook.detail + '）' : ''), { max: 2000 })) }
+          if (store && typeof store.setMeta === 'function') {
+            for (const reminder of notifyList) store.setMeta(reminderNotifyDedupeKey(reminder, localDay), nowDate.toISOString())
+            pruneNotifyDedupe(store, nowDate)
+          }
+        }
+      }
     }
     store?.appendAudit({ actor: 'local', action: 'notify.delivered', allowed: true, reason: reminders.length + ' reminders channel=' + channel })
     recordReminderRun(scheduler, { count: reminders.length, channel })

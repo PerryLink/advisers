@@ -1,22 +1,60 @@
 {
   "version": 1,
   "schema": "../../cli/read-models-v1.schema.json",
-  "description": "Conformance vectors for the CLI read models. Every entry is either accepted or rejected by the frozen schema; values were captured from the real CLI at the freeze commit and normalized.",
+  "description": "Conformance vectors for the CLI read models. Every entry is either accepted or rejected by the frozen schema; frozen v1 values were captured from the real CLI at the freeze commit and normalized. The 0.4.0 documented-additive read models are validated structurally against the same schema (accept + reject per top-level def).",
   "covers": [
+    "#/$defs/AgendaPayload",
+    "#/$defs/ClientExportPackPayload",
+    "#/$defs/ConsentGrantPayload",
+    "#/$defs/ConsentRevokePayload",
+    "#/$defs/ConsentStatusPayload",
     "#/$defs/Delivery",
+    "#/$defs/EvidenceShowPayload",
+    "#/$defs/FactAsOfPayload",
+    "#/$defs/FactHistoryPayload",
+    "#/$defs/FactShowPayload",
+    "#/$defs/KbAddPayload",
+    "#/$defs/KbListPayload",
+    "#/$defs/KbPageDiffPayload",
+    "#/$defs/KbPageListPayload",
+    "#/$defs/KbPageRebuildPayload",
+    "#/$defs/KbPageShowPayload",
+    "#/$defs/KbPurgePayload",
+    "#/$defs/KbReindexPayload",
+    "#/$defs/KbRmPayload",
+    "#/$defs/KbShowPayload",
+    "#/$defs/MailAccountAddPayload",
+    "#/$defs/MailAccountListPayload",
+    "#/$defs/MailAccountRemovePayload",
+    "#/$defs/MailAccountShowPayload",
+    "#/$defs/MailExtractPayload",
+    "#/$defs/MailImportPayload",
+    "#/$defs/MailListPayload",
+    "#/$defs/MailPurgePayload",
+    "#/$defs/MailShowPayload",
+    "#/$defs/MailSyncPayload",
     "#/$defs/MatterRow",
+    "#/$defs/MatterShowPayload",
     "#/$defs/MemoryCandidate",
+    "#/$defs/MorningPayload",
+    "#/$defs/PaymentAddPayload",
+    "#/$defs/PaymentListPayload",
+    "#/$defs/PaymentVoidPayload",
+    "#/$defs/PrivacyMatrixPayload",
+    "#/$defs/PrivacyPayload",
+    "#/$defs/ReceivableAddPayload",
+    "#/$defs/ReceivableEditPayload",
+    "#/$defs/ReceivableListPayload",
+    "#/$defs/ReceivableShowPayload",
+    "#/$defs/ReceivableSummaryPayload",
+    "#/$defs/ReceivableVoidPayload",
+    "#/$defs/RemindPayload",
+    "#/$defs/SearchPayload",
     "#/$defs/StatusPayload",
     "#/$defs/TickPayload",
     "#/$defs/TodayPayload",
-    "#/$defs/RemindPayload",
-    "#/$defs/WhoPayload",
-    "#/$defs/AgendaPayload",
-    "#/$defs/MorningPayload",
-    "#/$defs/MatterShowPayload",
-    "#/$defs/EvidenceShowPayload",
-    "#/$defs/PrivacyPayload",
-    "#/$defs/TosStatusPayload"
+    "#/$defs/TosStatusPayload",
+    "#/$defs/WhoPayload"
   ],
   "cases": [
     {
@@ -1036,6 +1074,2464 @@
           "unverifiable": 1,
           "operatorEntered": 1
         }
+      }
+    },
+    {
+      "id": "search.valid",
+      "target": "#/$defs/SearchPayload",
+      "expect": "accept",
+      "value": {
+        "ok": true,
+        "command": "search",
+        "query": "报价",
+        "scope": "kb",
+        "limit": 20,
+        "clearance": 3,
+        "degraded": [
+          "short_query_like"
+        ],
+        "counts": {
+          "turns": 0,
+          "kbDocs": 1,
+          "kbChunks": 3,
+          "kbPages": 0,
+          "facts": 0,
+          "preferences": 0
+        },
+        "hits": [
+          {
+            "kind": "kb_chunk",
+            "ref": {
+              "kind": "kb_chunk",
+              "id": "chk_1"
+            },
+            "docId": "kb_1",
+            "title": "报价单",
+            "snippet": "…报价…",
+            "highlights": [
+              {
+                "start": 0,
+                "end": 2
+              }
+            ],
+            "matchPath": "like"
+          }
+        ],
+        "total": 4,
+        "truncated": false,
+        "protectedExcluded": 0
+      }
+    },
+    {
+      "id": "search.reject-missing-ok",
+      "target": "#/$defs/SearchPayload",
+      "expect": "reject",
+      "value": {
+        "command": "search",
+        "query": "报价",
+        "scope": "kb",
+        "limit": 20,
+        "clearance": 3,
+        "degraded": [
+          "short_query_like"
+        ],
+        "counts": {
+          "turns": 0,
+          "kbDocs": 1,
+          "kbChunks": 3,
+          "kbPages": 0,
+          "facts": 0,
+          "preferences": 0
+        },
+        "hits": [
+          {
+            "kind": "kb_chunk",
+            "ref": {
+              "kind": "kb_chunk",
+              "id": "chk_1"
+            },
+            "docId": "kb_1",
+            "title": "报价单",
+            "snippet": "…报价…",
+            "highlights": [
+              {
+                "start": 0,
+                "end": 2
+              }
+            ],
+            "matchPath": "like"
+          }
+        ],
+        "total": 4,
+        "truncated": false,
+        "protectedExcluded": 0
+      }
+    },
+    {
+      "id": "kb-add.valid",
+      "target": "#/$defs/KbAddPayload",
+      "expect": "accept",
+      "value": {
+        "ok": true,
+        "command": "kb add",
+        "counts": {
+          "added": 1,
+          "skipped": 0,
+          "failed": 0,
+          "chunks": 16,
+          "textBytes": 12000
+        },
+        "added": [
+          {
+            "id": "kb_1",
+            "kind": "contract",
+            "title": "报价单",
+            "status": "active",
+            "clientId": "cl_1",
+            "sourceName": "quote.pdf",
+            "sourceSha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+            "sizeBytes": 10123,
+            "extractor": "pdf",
+            "secrecy": 0,
+            "needsOcr": false,
+            "truncated": false,
+            "textBytes": 12000,
+            "chunkCount": 16,
+            "createdAt": "2026-11-21T00:00:00.000Z",
+            "capturedAt": "2026-11-21T00:00:00.000Z"
+          }
+        ],
+        "skipped": [],
+        "failed": [],
+        "truncated": 0,
+        "needsOcr": 0
+      }
+    },
+    {
+      "id": "kb-add.reject-missing-ok",
+      "target": "#/$defs/KbAddPayload",
+      "expect": "reject",
+      "value": {
+        "command": "kb add",
+        "counts": {
+          "added": 1,
+          "skipped": 0,
+          "failed": 0,
+          "chunks": 16,
+          "textBytes": 12000
+        },
+        "added": [
+          {
+            "id": "kb_1",
+            "kind": "contract",
+            "title": "报价单",
+            "status": "active",
+            "clientId": "cl_1",
+            "sourceName": "quote.pdf",
+            "sourceSha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+            "sizeBytes": 10123,
+            "extractor": "pdf",
+            "secrecy": 0,
+            "needsOcr": false,
+            "truncated": false,
+            "textBytes": 12000,
+            "chunkCount": 16,
+            "createdAt": "2026-11-21T00:00:00.000Z",
+            "capturedAt": "2026-11-21T00:00:00.000Z"
+          }
+        ],
+        "skipped": [],
+        "failed": [],
+        "truncated": 0,
+        "needsOcr": 0
+      }
+    },
+    {
+      "id": "kb-list.valid",
+      "target": "#/$defs/KbListPayload",
+      "expect": "accept",
+      "value": {
+        "ok": true,
+        "command": "kb ls",
+        "documents": [
+          {
+            "id": "kb_1",
+            "kind": "contract",
+            "title": "报价单",
+            "status": "active",
+            "clientId": "cl_1",
+            "sourceName": "quote.pdf",
+            "sourceSha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+            "sizeBytes": 10123,
+            "extractor": "pdf",
+            "secrecy": 0,
+            "needsOcr": false,
+            "truncated": false,
+            "textBytes": 12000,
+            "chunkCount": 16,
+            "createdAt": "2026-11-21T00:00:00.000Z",
+            "capturedAt": "2026-11-21T00:00:00.000Z"
+          }
+        ],
+        "total": 1,
+        "truncated": false,
+        "limit": 50,
+        "clearance": 3,
+        "protectedExcluded": 0
+      }
+    },
+    {
+      "id": "kb-list.reject-missing-ok",
+      "target": "#/$defs/KbListPayload",
+      "expect": "reject",
+      "value": {
+        "command": "kb ls",
+        "documents": [
+          {
+            "id": "kb_1",
+            "kind": "contract",
+            "title": "报价单",
+            "status": "active",
+            "clientId": "cl_1",
+            "sourceName": "quote.pdf",
+            "sourceSha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+            "sizeBytes": 10123,
+            "extractor": "pdf",
+            "secrecy": 0,
+            "needsOcr": false,
+            "truncated": false,
+            "textBytes": 12000,
+            "chunkCount": 16,
+            "createdAt": "2026-11-21T00:00:00.000Z",
+            "capturedAt": "2026-11-21T00:00:00.000Z"
+          }
+        ],
+        "total": 1,
+        "truncated": false,
+        "limit": 50,
+        "clearance": 3,
+        "protectedExcluded": 0
+      }
+    },
+    {
+      "id": "kb-show.valid",
+      "target": "#/$defs/KbShowPayload",
+      "expect": "accept",
+      "value": {
+        "ok": true,
+        "command": "kb show",
+        "document": {
+          "id": "kb_1",
+          "kind": "contract",
+          "title": "报价单",
+          "status": "active",
+          "clientId": "cl_1",
+          "sourceName": "quote.pdf",
+          "sourceSha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+          "sizeBytes": 10123,
+          "extractor": "pdf",
+          "secrecy": 0,
+          "needsOcr": false,
+          "truncated": false,
+          "textBytes": 12000,
+          "chunkCount": 16,
+          "createdAt": "2026-11-21T00:00:00.000Z",
+          "capturedAt": "2026-11-21T00:00:00.000Z"
+        },
+        "chunks": [
+          {
+            "id": "chk_1",
+            "seq": 0,
+            "charCount": 400,
+            "text": "预览",
+            "truncated": false
+          }
+        ],
+        "chunksTotal": 16,
+        "clearance": 3
+      }
+    },
+    {
+      "id": "kb-show.reject-missing-ok",
+      "target": "#/$defs/KbShowPayload",
+      "expect": "reject",
+      "value": {
+        "command": "kb show",
+        "document": {
+          "id": "kb_1",
+          "kind": "contract",
+          "title": "报价单",
+          "status": "active",
+          "clientId": "cl_1",
+          "sourceName": "quote.pdf",
+          "sourceSha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+          "sizeBytes": 10123,
+          "extractor": "pdf",
+          "secrecy": 0,
+          "needsOcr": false,
+          "truncated": false,
+          "textBytes": 12000,
+          "chunkCount": 16,
+          "createdAt": "2026-11-21T00:00:00.000Z",
+          "capturedAt": "2026-11-21T00:00:00.000Z"
+        },
+        "chunks": [
+          {
+            "id": "chk_1",
+            "seq": 0,
+            "charCount": 400,
+            "text": "预览",
+            "truncated": false
+          }
+        ],
+        "chunksTotal": 16,
+        "clearance": 3
+      }
+    },
+    {
+      "id": "kb-rm.valid",
+      "target": "#/$defs/KbRmPayload",
+      "expect": "accept",
+      "value": {
+        "ok": true,
+        "command": "kb rm",
+        "removed": true,
+        "document": {
+          "id": "kb_1",
+          "kind": "contract",
+          "title": "报价单",
+          "status": "deleted",
+          "clientId": "cl_1",
+          "sourceName": "quote.pdf",
+          "sourceSha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+          "sizeBytes": 10123,
+          "extractor": "pdf",
+          "secrecy": 0,
+          "needsOcr": false,
+          "truncated": false,
+          "textBytes": 12000,
+          "chunkCount": 16,
+          "createdAt": "2026-11-21T00:00:00.000Z",
+          "capturedAt": "2026-11-21T00:00:00.000Z",
+          "deletedAt": "2026-11-21T00:00:00.000Z"
+        },
+        "counts": {
+          "chunks": 16
+        }
+      }
+    },
+    {
+      "id": "kb-rm.reject-missing-ok",
+      "target": "#/$defs/KbRmPayload",
+      "expect": "reject",
+      "value": {
+        "command": "kb rm",
+        "removed": true,
+        "document": {
+          "id": "kb_1",
+          "kind": "contract",
+          "title": "报价单",
+          "status": "deleted",
+          "clientId": "cl_1",
+          "sourceName": "quote.pdf",
+          "sourceSha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+          "sizeBytes": 10123,
+          "extractor": "pdf",
+          "secrecy": 0,
+          "needsOcr": false,
+          "truncated": false,
+          "textBytes": 12000,
+          "chunkCount": 16,
+          "createdAt": "2026-11-21T00:00:00.000Z",
+          "capturedAt": "2026-11-21T00:00:00.000Z",
+          "deletedAt": "2026-11-21T00:00:00.000Z"
+        },
+        "counts": {
+          "chunks": 16
+        }
+      }
+    },
+    {
+      "id": "kb-purge.valid",
+      "target": "#/$defs/KbPurgePayload",
+      "expect": "accept",
+      "value": {
+        "ok": true,
+        "command": "kb purge",
+        "dryRun": true,
+        "purged": false,
+        "document": {
+          "id": "kb_1",
+          "kind": "contract",
+          "title": "报价单",
+          "status": "deleted",
+          "clientId": "cl_1",
+          "sourceName": "quote.pdf",
+          "sourceSha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+          "sizeBytes": 10123,
+          "extractor": "pdf",
+          "secrecy": 0,
+          "needsOcr": false,
+          "truncated": false,
+          "textBytes": 12000,
+          "chunkCount": 16,
+          "createdAt": "2026-11-21T00:00:00.000Z",
+          "capturedAt": "2026-11-21T00:00:00.000Z",
+          "deletedAt": "2026-11-21T00:00:00.000Z"
+        },
+        "counts": {
+          "chunks": 16,
+          "factLinks": 0
+        },
+        "hint": "pass --yes to delete permanently"
+      }
+    },
+    {
+      "id": "kb-purge.reject-missing-ok",
+      "target": "#/$defs/KbPurgePayload",
+      "expect": "reject",
+      "value": {
+        "command": "kb purge",
+        "dryRun": true,
+        "purged": false,
+        "document": {
+          "id": "kb_1",
+          "kind": "contract",
+          "title": "报价单",
+          "status": "deleted",
+          "clientId": "cl_1",
+          "sourceName": "quote.pdf",
+          "sourceSha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+          "sizeBytes": 10123,
+          "extractor": "pdf",
+          "secrecy": 0,
+          "needsOcr": false,
+          "truncated": false,
+          "textBytes": 12000,
+          "chunkCount": 16,
+          "createdAt": "2026-11-21T00:00:00.000Z",
+          "capturedAt": "2026-11-21T00:00:00.000Z",
+          "deletedAt": "2026-11-21T00:00:00.000Z"
+        },
+        "counts": {
+          "chunks": 16,
+          "factLinks": 0
+        },
+        "hint": "pass --yes to delete permanently"
+      }
+    },
+    {
+      "id": "kb-reindex.valid",
+      "target": "#/$defs/KbReindexPayload",
+      "expect": "accept",
+      "value": {
+        "ok": true,
+        "command": "kb reindex",
+        "rebuilt": [],
+        "integrity": {
+          "ok": true,
+          "tokenizer": "trigram",
+          "degraded": [],
+          "tables": {}
+        },
+        "counts": {
+          "documents": 1,
+          "chunks": 16,
+          "pages": 2
+        },
+        "degraded": []
+      }
+    },
+    {
+      "id": "kb-reindex.reject-missing-ok",
+      "target": "#/$defs/KbReindexPayload",
+      "expect": "reject",
+      "value": {
+        "command": "kb reindex",
+        "rebuilt": [],
+        "integrity": {
+          "ok": true,
+          "tokenizer": "trigram",
+          "degraded": [],
+          "tables": {}
+        },
+        "counts": {
+          "documents": 1,
+          "chunks": 16,
+          "pages": 2
+        },
+        "degraded": []
+      }
+    },
+    {
+      "id": "kb-page-list.valid",
+      "target": "#/$defs/KbPageListPayload",
+      "expect": "accept",
+      "value": {
+        "ok": true,
+        "command": "kb page ls",
+        "pages": [
+          {
+            "id": "page_client_cl_1",
+            "kind": "client",
+            "subjectId": "cl_1",
+            "title": "王工",
+            "generatedAt": "2026-11-21T00:00:00.000Z",
+            "status": "generated",
+            "inputsSha256": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+            "stale": null
+          }
+        ],
+        "total": 1,
+        "truncated": false,
+        "limit": 50,
+        "clearance": 3,
+        "protectedExcluded": 0,
+        "staleCount": 0
+      }
+    },
+    {
+      "id": "kb-page-list.reject-missing-ok",
+      "target": "#/$defs/KbPageListPayload",
+      "expect": "reject",
+      "value": {
+        "command": "kb page ls",
+        "pages": [
+          {
+            "id": "page_client_cl_1",
+            "kind": "client",
+            "subjectId": "cl_1",
+            "title": "王工",
+            "generatedAt": "2026-11-21T00:00:00.000Z",
+            "status": "generated",
+            "inputsSha256": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+            "stale": null
+          }
+        ],
+        "total": 1,
+        "truncated": false,
+        "limit": 50,
+        "clearance": 3,
+        "protectedExcluded": 0,
+        "staleCount": 0
+      }
+    },
+    {
+      "id": "kb-page-show.valid",
+      "target": "#/$defs/KbPageShowPayload",
+      "expect": "accept",
+      "value": {
+        "ok": true,
+        "command": "kb page show",
+        "page": {
+          "id": "page_client_cl_1",
+          "kind": "client",
+          "subjectId": "cl_1",
+          "title": "王工",
+          "markdown": "# 王工",
+          "data": {
+            "owner": {
+              "clientId": "cl_1"
+            }
+          },
+          "sourceRefs": [],
+          "inputsSha256": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+          "generatedAt": "2026-11-21T00:00:00.000Z",
+          "status": "generated"
+        },
+        "live": {
+          "inputsSha256": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+          "markdown": "# 王工",
+          "data": {},
+          "sourceRefs": []
+        },
+        "stale": false,
+        "stored": {
+          "exists": true,
+          "inputsSha256": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+          "generatedAt": "2026-11-21T00:00:00.000Z",
+          "status": "generated"
+        },
+        "clearance": 3
+      }
+    },
+    {
+      "id": "kb-page-show.reject-missing-ok",
+      "target": "#/$defs/KbPageShowPayload",
+      "expect": "reject",
+      "value": {
+        "command": "kb page show",
+        "page": {
+          "id": "page_client_cl_1",
+          "kind": "client",
+          "subjectId": "cl_1",
+          "title": "王工",
+          "markdown": "# 王工",
+          "data": {
+            "owner": {
+              "clientId": "cl_1"
+            }
+          },
+          "sourceRefs": [],
+          "inputsSha256": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+          "generatedAt": "2026-11-21T00:00:00.000Z",
+          "status": "generated"
+        },
+        "live": {
+          "inputsSha256": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+          "markdown": "# 王工",
+          "data": {},
+          "sourceRefs": []
+        },
+        "stale": false,
+        "stored": {
+          "exists": true,
+          "inputsSha256": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+          "generatedAt": "2026-11-21T00:00:00.000Z",
+          "status": "generated"
+        },
+        "clearance": 3
+      }
+    },
+    {
+      "id": "kb-page-rebuild.valid",
+      "target": "#/$defs/KbPageRebuildPayload",
+      "expect": "accept",
+      "value": {
+        "ok": true,
+        "command": "kb page rebuild",
+        "dryRun": true,
+        "counts": {
+          "built": 2,
+          "written": 1,
+          "unchanged": 1,
+          "skipped": 0
+        },
+        "pages": [
+          {
+            "id": "page_client_cl_1",
+            "kind": "client"
+          }
+        ],
+        "degraded": [],
+        "clearance": 3
+      }
+    },
+    {
+      "id": "kb-page-rebuild.reject-missing-ok",
+      "target": "#/$defs/KbPageRebuildPayload",
+      "expect": "reject",
+      "value": {
+        "command": "kb page rebuild",
+        "dryRun": true,
+        "counts": {
+          "built": 2,
+          "written": 1,
+          "unchanged": 1,
+          "skipped": 0
+        },
+        "pages": [
+          {
+            "id": "page_client_cl_1",
+            "kind": "client"
+          }
+        ],
+        "degraded": [],
+        "clearance": 3
+      }
+    },
+    {
+      "id": "kb-page-diff.valid",
+      "target": "#/$defs/KbPageDiffPayload",
+      "expect": "accept",
+      "value": {
+        "ok": true,
+        "command": "kb page diff",
+        "pageId": "page_client_cl_1",
+        "stale": true,
+        "diff": "- 旧\n+ 新"
+      }
+    },
+    {
+      "id": "kb-page-diff.reject-missing-ok",
+      "target": "#/$defs/KbPageDiffPayload",
+      "expect": "reject",
+      "value": {
+        "command": "kb page diff",
+        "pageId": "page_client_cl_1",
+        "stale": true,
+        "diff": "- 旧\n+ 新"
+      }
+    },
+    {
+      "id": "fact-show.valid",
+      "target": "#/$defs/FactShowPayload",
+      "expect": "accept",
+      "value": {
+        "ok": true,
+        "command": "fact show",
+        "fact": {
+          "id": "fact_1",
+          "subject": "王工",
+          "predicate": "预算",
+          "object": "8000",
+          "matterId": "matter_1",
+          "clientId": "cl_1",
+          "authority": "operator",
+          "confidence": 1,
+          "status": "active",
+          "recordedAt": "2026-11-21T00:00:00.000Z",
+          "evidence": [
+            {
+              "quote": "预算 8000"
+            }
+          ],
+          "fallback": {
+            "validFromFromRecordedAt": true
+          }
+        },
+        "kbSources": [
+          {
+            "docId": "kb_1",
+            "title": "报价单",
+            "relation": "source"
+          }
+        ],
+        "warnings": [],
+        "includeDeleted": false
+      }
+    },
+    {
+      "id": "fact-show.reject-missing-ok",
+      "target": "#/$defs/FactShowPayload",
+      "expect": "reject",
+      "value": {
+        "command": "fact show",
+        "fact": {
+          "id": "fact_1",
+          "subject": "王工",
+          "predicate": "预算",
+          "object": "8000",
+          "matterId": "matter_1",
+          "clientId": "cl_1",
+          "authority": "operator",
+          "confidence": 1,
+          "status": "active",
+          "recordedAt": "2026-11-21T00:00:00.000Z",
+          "evidence": [
+            {
+              "quote": "预算 8000"
+            }
+          ],
+          "fallback": {
+            "validFromFromRecordedAt": true
+          }
+        },
+        "kbSources": [
+          {
+            "docId": "kb_1",
+            "title": "报价单",
+            "relation": "source"
+          }
+        ],
+        "warnings": [],
+        "includeDeleted": false
+      }
+    },
+    {
+      "id": "fact-history.valid",
+      "target": "#/$defs/FactHistoryPayload",
+      "expect": "accept",
+      "value": {
+        "ok": true,
+        "command": "fact history",
+        "rootId": "fact_1",
+        "items": [
+          {
+            "id": "fact_1",
+            "subject": "王工",
+            "predicate": "预算",
+            "object": "8000",
+            "matterId": "matter_1",
+            "clientId": "cl_1",
+            "authority": "operator",
+            "confidence": 1,
+            "status": "active",
+            "recordedAt": "2026-11-21T00:00:00.000Z",
+            "evidence": [
+              {
+                "quote": "预算 8000"
+              }
+            ],
+            "fallback": {
+              "validFromFromRecordedAt": true
+            }
+          }
+        ],
+        "warnings": [],
+        "counts": {
+          "items": 1
+        },
+        "includeDeleted": true
+      }
+    },
+    {
+      "id": "fact-history.reject-missing-ok",
+      "target": "#/$defs/FactHistoryPayload",
+      "expect": "reject",
+      "value": {
+        "command": "fact history",
+        "rootId": "fact_1",
+        "items": [
+          {
+            "id": "fact_1",
+            "subject": "王工",
+            "predicate": "预算",
+            "object": "8000",
+            "matterId": "matter_1",
+            "clientId": "cl_1",
+            "authority": "operator",
+            "confidence": 1,
+            "status": "active",
+            "recordedAt": "2026-11-21T00:00:00.000Z",
+            "evidence": [
+              {
+                "quote": "预算 8000"
+              }
+            ],
+            "fallback": {
+              "validFromFromRecordedAt": true
+            }
+          }
+        ],
+        "warnings": [],
+        "counts": {
+          "items": 1
+        },
+        "includeDeleted": true
+      }
+    },
+    {
+      "id": "fact-as-of.valid",
+      "target": "#/$defs/FactAsOfPayload",
+      "expect": "accept",
+      "value": {
+        "ok": true,
+        "command": "fact as-of",
+        "at": "2026-11-21T00:00:00.000Z",
+        "asOfLocalDay": "2026-11-21",
+        "items": [
+          {
+            "id": "fact_1",
+            "subject": "王工",
+            "predicate": "预算",
+            "object": "8000",
+            "matterId": "matter_1",
+            "clientId": "cl_1",
+            "authority": "operator",
+            "confidence": 1,
+            "status": "active",
+            "recordedAt": "2026-11-21T00:00:00.000Z",
+            "evidence": [
+              {
+                "quote": "预算 8000"
+              }
+            ],
+            "fallback": {
+              "validFromFromRecordedAt": true
+            },
+            "effectiveFrom": "2026-11-21T00:00:00.000Z"
+          }
+        ],
+        "counts": {
+          "groups": 1,
+          "candidates": 1,
+          "overlappingGroups": 0
+        },
+        "warnings": [],
+        "degraded": [],
+        "includeDeleted": false,
+        "truncated": false
+      }
+    },
+    {
+      "id": "fact-as-of.reject-missing-ok",
+      "target": "#/$defs/FactAsOfPayload",
+      "expect": "reject",
+      "value": {
+        "command": "fact as-of",
+        "at": "2026-11-21T00:00:00.000Z",
+        "asOfLocalDay": "2026-11-21",
+        "items": [
+          {
+            "id": "fact_1",
+            "subject": "王工",
+            "predicate": "预算",
+            "object": "8000",
+            "matterId": "matter_1",
+            "clientId": "cl_1",
+            "authority": "operator",
+            "confidence": 1,
+            "status": "active",
+            "recordedAt": "2026-11-21T00:00:00.000Z",
+            "evidence": [
+              {
+                "quote": "预算 8000"
+              }
+            ],
+            "fallback": {
+              "validFromFromRecordedAt": true
+            },
+            "effectiveFrom": "2026-11-21T00:00:00.000Z"
+          }
+        ],
+        "counts": {
+          "groups": 1,
+          "candidates": 1,
+          "overlappingGroups": 0
+        },
+        "warnings": [],
+        "degraded": [],
+        "includeDeleted": false,
+        "truncated": false
+      }
+    },
+    {
+      "id": "mail-account-add.valid",
+      "target": "#/$defs/MailAccountAddPayload",
+      "expect": "accept",
+      "value": {
+        "ok": true,
+        "command": "mail account add",
+        "account": {
+          "id": "acct_1",
+          "name": "work",
+          "host": "imap.example.com",
+          "port": 993,
+          "tls": "tls",
+          "username": "me@example.com",
+          "mailbox": "INBOX",
+          "status": "active",
+          "retentionDays": 30,
+          "createdAt": "2026-11-21T00:00:00.000Z",
+          "updatedAt": "2026-11-21T00:00:00.000Z",
+          "hasCredential": true
+        }
+      }
+    },
+    {
+      "id": "mail-account-add.reject-missing-ok",
+      "target": "#/$defs/MailAccountAddPayload",
+      "expect": "reject",
+      "value": {
+        "command": "mail account add",
+        "account": {
+          "id": "acct_1",
+          "name": "work",
+          "host": "imap.example.com",
+          "port": 993,
+          "tls": "tls",
+          "username": "me@example.com",
+          "mailbox": "INBOX",
+          "status": "active",
+          "retentionDays": 30,
+          "createdAt": "2026-11-21T00:00:00.000Z",
+          "updatedAt": "2026-11-21T00:00:00.000Z",
+          "hasCredential": true
+        }
+      }
+    },
+    {
+      "id": "mail-account-list.valid",
+      "target": "#/$defs/MailAccountListPayload",
+      "expect": "accept",
+      "value": {
+        "ok": true,
+        "command": "mail account ls",
+        "accounts": [
+          {
+            "id": "acct_1",
+            "name": "work",
+            "host": "imap.example.com",
+            "port": 993,
+            "tls": "tls",
+            "username": "me@example.com",
+            "mailbox": "INBOX",
+            "status": "active",
+            "retentionDays": 30,
+            "createdAt": "2026-11-21T00:00:00.000Z",
+            "updatedAt": "2026-11-21T00:00:00.000Z",
+            "hasCredential": true
+          }
+        ],
+        "total": 1
+      }
+    },
+    {
+      "id": "mail-account-list.reject-missing-ok",
+      "target": "#/$defs/MailAccountListPayload",
+      "expect": "reject",
+      "value": {
+        "command": "mail account ls",
+        "accounts": [
+          {
+            "id": "acct_1",
+            "name": "work",
+            "host": "imap.example.com",
+            "port": 993,
+            "tls": "tls",
+            "username": "me@example.com",
+            "mailbox": "INBOX",
+            "status": "active",
+            "retentionDays": 30,
+            "createdAt": "2026-11-21T00:00:00.000Z",
+            "updatedAt": "2026-11-21T00:00:00.000Z",
+            "hasCredential": true
+          }
+        ],
+        "total": 1
+      }
+    },
+    {
+      "id": "mail-account-show.valid",
+      "target": "#/$defs/MailAccountShowPayload",
+      "expect": "accept",
+      "value": {
+        "ok": true,
+        "command": "mail account show",
+        "account": {
+          "id": "acct_1",
+          "name": "work",
+          "host": "imap.example.com",
+          "port": 993,
+          "tls": "tls",
+          "username": "me@example.com",
+          "mailbox": "INBOX",
+          "status": "active",
+          "retentionDays": 30,
+          "createdAt": "2026-11-21T00:00:00.000Z",
+          "updatedAt": "2026-11-21T00:00:00.000Z",
+          "hasCredential": true
+        }
+      }
+    },
+    {
+      "id": "mail-account-show.reject-missing-ok",
+      "target": "#/$defs/MailAccountShowPayload",
+      "expect": "reject",
+      "value": {
+        "command": "mail account show",
+        "account": {
+          "id": "acct_1",
+          "name": "work",
+          "host": "imap.example.com",
+          "port": 993,
+          "tls": "tls",
+          "username": "me@example.com",
+          "mailbox": "INBOX",
+          "status": "active",
+          "retentionDays": 30,
+          "createdAt": "2026-11-21T00:00:00.000Z",
+          "updatedAt": "2026-11-21T00:00:00.000Z",
+          "hasCredential": true
+        }
+      }
+    },
+    {
+      "id": "mail-account-remove.valid",
+      "target": "#/$defs/MailAccountRemovePayload",
+      "expect": "accept",
+      "value": {
+        "ok": true,
+        "command": "mail account rm",
+        "accountId": "acct_1",
+        "removed": true,
+        "credentialRemoved": true,
+        "messagesDeleted": 0
+      }
+    },
+    {
+      "id": "mail-account-remove.reject-missing-ok",
+      "target": "#/$defs/MailAccountRemovePayload",
+      "expect": "reject",
+      "value": {
+        "command": "mail account rm",
+        "accountId": "acct_1",
+        "removed": true,
+        "credentialRemoved": true,
+        "messagesDeleted": 0
+      }
+    },
+    {
+      "id": "mail-sync.valid",
+      "target": "#/$defs/MailSyncPayload",
+      "expect": "accept",
+      "value": {
+        "ok": true,
+        "command": "mail sync",
+        "accountId": "acct_1",
+        "mailbox": "INBOX",
+        "uidValidity": "77",
+        "fetched": 3,
+        "inserted": 2,
+        "skipped": 1,
+        "failed": 0,
+        "duplicates": 1,
+        "needsResync": false,
+        "dryRun": false,
+        "full": false,
+        "durationMs": 120
+      }
+    },
+    {
+      "id": "mail-sync.reject-missing-results",
+      "target": "#/$defs/MailSyncPayload",
+      "expect": "reject",
+      "value": {
+        "ok": true,
+        "command": "mail sync"
+      }
+    },
+    {
+      "id": "mail-list.valid",
+      "target": "#/$defs/MailListPayload",
+      "expect": "accept",
+      "value": {
+        "ok": true,
+        "command": "mail ls",
+        "messages": [
+          {
+            "id": "msg_1",
+            "accountId": "acct_1",
+            "mailbox": "INBOX",
+            "uid": 42,
+            "messageId": "<m@example.com>",
+            "dedupeKey": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+            "from": "王工 <wang@example.com>",
+            "subject": "报价",
+            "receivedAt": "2026-11-21T00:00:00.000Z",
+            "retained": true,
+            "attachments": [
+              {
+                "name": "quote.pdf",
+                "size": 100,
+                "mime": "application/pdf"
+              }
+            ],
+            "status": "new",
+            "candidateIds": [],
+            "createdAt": "2026-11-21T00:00:00.000Z",
+            "updatedAt": "2026-11-21T00:00:00.000Z"
+          }
+        ],
+        "total": 1,
+        "limit": 50,
+        "offset": 0,
+        "truncated": false
+      }
+    },
+    {
+      "id": "mail-list.reject-missing-ok",
+      "target": "#/$defs/MailListPayload",
+      "expect": "reject",
+      "value": {
+        "command": "mail ls",
+        "messages": [
+          {
+            "id": "msg_1",
+            "accountId": "acct_1",
+            "mailbox": "INBOX",
+            "uid": 42,
+            "messageId": "<m@example.com>",
+            "dedupeKey": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+            "from": "王工 <wang@example.com>",
+            "subject": "报价",
+            "receivedAt": "2026-11-21T00:00:00.000Z",
+            "retained": true,
+            "attachments": [
+              {
+                "name": "quote.pdf",
+                "size": 100,
+                "mime": "application/pdf"
+              }
+            ],
+            "status": "new",
+            "candidateIds": [],
+            "createdAt": "2026-11-21T00:00:00.000Z",
+            "updatedAt": "2026-11-21T00:00:00.000Z"
+          }
+        ],
+        "total": 1,
+        "limit": 50,
+        "offset": 0,
+        "truncated": false
+      }
+    },
+    {
+      "id": "mail-show.valid",
+      "target": "#/$defs/MailShowPayload",
+      "expect": "accept",
+      "value": {
+        "ok": true,
+        "command": "mail show",
+        "message": {
+          "id": "msg_1",
+          "accountId": "acct_1",
+          "mailbox": "INBOX",
+          "uid": 42,
+          "messageId": "<m@example.com>",
+          "dedupeKey": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+          "from": "王工 <wang@example.com>",
+          "subject": "报价",
+          "receivedAt": "2026-11-21T00:00:00.000Z",
+          "retained": true,
+          "attachments": [
+            {
+              "name": "quote.pdf",
+              "size": 100,
+              "mime": "application/pdf"
+            }
+          ],
+          "status": "new",
+          "candidateIds": [],
+          "createdAt": "2026-11-21T00:00:00.000Z",
+          "updatedAt": "2026-11-21T00:00:00.000Z",
+          "bodyText": "正文"
+        }
+      }
+    },
+    {
+      "id": "mail-show.reject-missing-ok",
+      "target": "#/$defs/MailShowPayload",
+      "expect": "reject",
+      "value": {
+        "command": "mail show",
+        "message": {
+          "id": "msg_1",
+          "accountId": "acct_1",
+          "mailbox": "INBOX",
+          "uid": 42,
+          "messageId": "<m@example.com>",
+          "dedupeKey": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+          "from": "王工 <wang@example.com>",
+          "subject": "报价",
+          "receivedAt": "2026-11-21T00:00:00.000Z",
+          "retained": true,
+          "attachments": [
+            {
+              "name": "quote.pdf",
+              "size": 100,
+              "mime": "application/pdf"
+            }
+          ],
+          "status": "new",
+          "candidateIds": [],
+          "createdAt": "2026-11-21T00:00:00.000Z",
+          "updatedAt": "2026-11-21T00:00:00.000Z",
+          "bodyText": "正文"
+        }
+      }
+    },
+    {
+      "id": "mail-extract.valid",
+      "target": "#/$defs/MailExtractPayload",
+      "expect": "accept",
+      "value": {
+        "ok": true,
+        "command": "mail extract",
+        "mode": "local",
+        "dryRun": false,
+        "scanned": 1,
+        "candidates": [
+          {
+            "id": "cand_1",
+            "kind": "commitment",
+            "payload": {
+              "action": "发报价"
+            },
+            "evidence": [
+              {
+                "quote": "周五前发报价"
+              }
+            ],
+            "status": "pending",
+            "createdAt": "2026-11-21T00:00:00.000Z",
+            "mode": "local"
+          }
+        ],
+        "skipped": 0,
+        "failed": 0
+      }
+    },
+    {
+      "id": "mail-extract.reject-missing-ok",
+      "target": "#/$defs/MailExtractPayload",
+      "expect": "reject",
+      "value": {
+        "command": "mail extract",
+        "mode": "local",
+        "dryRun": false,
+        "scanned": 1,
+        "candidates": [
+          {
+            "id": "cand_1",
+            "kind": "commitment",
+            "payload": {
+              "action": "发报价"
+            },
+            "evidence": [
+              {
+                "quote": "周五前发报价"
+              }
+            ],
+            "status": "pending",
+            "createdAt": "2026-11-21T00:00:00.000Z",
+            "mode": "local"
+          }
+        ],
+        "skipped": 0,
+        "failed": 0
+      }
+    },
+    {
+      "id": "mail-import.valid",
+      "target": "#/$defs/MailImportPayload",
+      "expect": "accept",
+      "value": {
+        "ok": true,
+        "command": "mail import",
+        "accountId": "acct_local",
+        "dryRun": false,
+        "files": 1,
+        "scanned": 2,
+        "inserted": 1,
+        "skipped": 1,
+        "failed": 0
+      }
+    },
+    {
+      "id": "mail-import.reject-missing-ok",
+      "target": "#/$defs/MailImportPayload",
+      "expect": "reject",
+      "value": {
+        "command": "mail import",
+        "accountId": "acct_local",
+        "dryRun": false,
+        "files": 1,
+        "scanned": 2,
+        "inserted": 1,
+        "skipped": 1,
+        "failed": 0
+      }
+    },
+    {
+      "id": "mail-purge.valid",
+      "target": "#/$defs/MailPurgePayload",
+      "expect": "accept",
+      "value": {
+        "ok": true,
+        "command": "mail purge",
+        "dryRun": true,
+        "messagesPurged": 0,
+        "wouldPurge": 3,
+        "bytesFreed": 0,
+        "bytesWouldFree": 1200,
+        "skippedPending": 1
+      }
+    },
+    {
+      "id": "mail-purge.reject-missing-ok",
+      "target": "#/$defs/MailPurgePayload",
+      "expect": "reject",
+      "value": {
+        "command": "mail purge",
+        "dryRun": true,
+        "messagesPurged": 0,
+        "wouldPurge": 3,
+        "bytesFreed": 0,
+        "bytesWouldFree": 1200,
+        "skippedPending": 1
+      }
+    },
+    {
+      "id": "receivable-add.valid",
+      "target": "#/$defs/ReceivableAddPayload",
+      "expect": "accept",
+      "value": {
+        "receivable": {
+          "id": "rcv_1",
+          "commitmentId": "cm_1",
+          "label": "尾款",
+          "kind": "milestone",
+          "clientId": "cl_1",
+          "clientName": "王工",
+          "amountMinor": 800000,
+          "amount": "8000.00",
+          "currency": "CNY",
+          "paidMinor": 0,
+          "paid": "0.00",
+          "outstandingMinor": 800000,
+          "outstanding": "8000.00",
+          "state": "open",
+          "dueAt": "2026-12-01",
+          "overdueDays": null,
+          "payments": {
+            "count": 0
+          },
+          "createdAt": "2026-11-21T00:00:00.000Z"
+        },
+        "commitment": {
+          "id": "cm_1",
+          "matterId": "matter_1",
+          "debtor": "third:王工",
+          "creditor": "me",
+          "action": "回款跟进",
+          "dueAt": "2026-12-01",
+          "timezone": "Asia/Shanghai",
+          "status": "open",
+          "evidence": [],
+          "capability": "todo"
+        },
+        "createdMatter": false
+      }
+    },
+    {
+      "id": "receivable-add.reject-missing-receivable",
+      "target": "#/$defs/ReceivableAddPayload",
+      "expect": "reject",
+      "value": {
+        "commitment": {
+          "id": "cm_1",
+          "matterId": "matter_1",
+          "debtor": "third:王工",
+          "creditor": "me",
+          "action": "回款跟进",
+          "dueAt": "2026-12-01",
+          "timezone": "Asia/Shanghai",
+          "status": "open",
+          "evidence": [],
+          "capability": "todo"
+        },
+        "createdMatter": false
+      }
+    },
+    {
+      "id": "receivable-edit.valid",
+      "target": "#/$defs/ReceivableEditPayload",
+      "expect": "accept",
+      "value": {
+        "receivable": {
+          "id": "rcv_1",
+          "commitmentId": "cm_1",
+          "label": "尾款",
+          "kind": "milestone",
+          "clientId": "cl_1",
+          "clientName": "王工",
+          "amountMinor": 800000,
+          "amount": "8000.00",
+          "currency": "CNY",
+          "paidMinor": 0,
+          "paid": "0.00",
+          "outstandingMinor": 800000,
+          "outstanding": "8000.00",
+          "state": "open",
+          "dueAt": "2026-12-01",
+          "overdueDays": null,
+          "payments": {
+            "count": 0
+          },
+          "createdAt": "2026-11-21T00:00:00.000Z"
+        },
+        "commitment": {
+          "id": "cm_1",
+          "matterId": "matter_1",
+          "debtor": "third:王工",
+          "creditor": "me",
+          "action": "回款跟进",
+          "dueAt": "2026-12-01",
+          "timezone": "Asia/Shanghai",
+          "status": "open",
+          "evidence": [],
+          "capability": "todo"
+        }
+      }
+    },
+    {
+      "id": "receivable-edit.reject-missing-receivable",
+      "target": "#/$defs/ReceivableEditPayload",
+      "expect": "reject",
+      "value": {
+        "commitment": {
+          "id": "cm_1",
+          "matterId": "matter_1",
+          "debtor": "third:王工",
+          "creditor": "me",
+          "action": "回款跟进",
+          "dueAt": "2026-12-01",
+          "timezone": "Asia/Shanghai",
+          "status": "open",
+          "evidence": [],
+          "capability": "todo"
+        }
+      }
+    },
+    {
+      "id": "receivable-void.valid",
+      "target": "#/$defs/ReceivableVoidPayload",
+      "expect": "accept",
+      "value": {
+        "receivable": {
+          "id": "rcv_1",
+          "commitmentId": "cm_1",
+          "label": "尾款",
+          "kind": "milestone",
+          "clientId": "cl_1",
+          "clientName": "王工",
+          "amountMinor": 800000,
+          "amount": "8000.00",
+          "currency": "CNY",
+          "paidMinor": 0,
+          "paid": "0.00",
+          "outstandingMinor": 800000,
+          "outstanding": "8000.00",
+          "state": "void",
+          "dueAt": "2026-12-01",
+          "overdueDays": null,
+          "payments": {
+            "count": 0
+          },
+          "createdAt": "2026-11-21T00:00:00.000Z",
+          "deletedAt": "2026-11-21T00:00:00.000Z"
+        },
+        "alreadyVoid": false,
+        "reopenedCommitment": false,
+        "droppedCommitment": true
+      }
+    },
+    {
+      "id": "receivable-void.reject-missing-receivable",
+      "target": "#/$defs/ReceivableVoidPayload",
+      "expect": "reject",
+      "value": {
+        "alreadyVoid": false,
+        "reopenedCommitment": false,
+        "droppedCommitment": true
+      }
+    },
+    {
+      "id": "receivable-list.valid",
+      "target": "#/$defs/ReceivableListPayload",
+      "expect": "accept",
+      "value": {
+        "ok": true,
+        "command": "receivable ls",
+        "receivables": [
+          {
+            "id": "rcv_1",
+            "commitmentId": "cm_1",
+            "label": "尾款",
+            "kind": "milestone",
+            "clientId": "cl_1",
+            "clientName": "王工",
+            "amountMinor": 800000,
+            "amount": "8000.00",
+            "currency": "CNY",
+            "paidMinor": 0,
+            "paid": "0.00",
+            "outstandingMinor": 800000,
+            "outstanding": "8000.00",
+            "state": "open",
+            "dueAt": "2026-12-01",
+            "overdueDays": null,
+            "payments": {
+              "count": 0
+            },
+            "createdAt": "2026-11-21T00:00:00.000Z"
+          }
+        ],
+        "totals": [
+          {
+            "currency": "CNY",
+            "amountMinor": 800000,
+            "paidMinor": 0,
+            "outstandingMinor": 800000,
+            "overdueMinor": 0,
+            "overpaidMinor": 0,
+            "unmatchedMinor": 0,
+            "count": 1,
+            "unsettledCount": 1,
+            "settledCount": 0,
+            "overdueCount": 0,
+            "writtenOffCount": 0,
+            "voidCount": 0,
+            "aging": {
+              "notDue": 1,
+              "0_30": 0,
+              "31_60": 0,
+              "61_90": 0,
+              "90plus": 0,
+              "noDue": 0
+            }
+          }
+        ],
+        "total": 1,
+        "truncated": false,
+        "limit": 50,
+        "clearance": 3,
+        "protectedExcluded": 0
+      }
+    },
+    {
+      "id": "receivable-list.reject-missing-ok",
+      "target": "#/$defs/ReceivableListPayload",
+      "expect": "reject",
+      "value": {
+        "command": "receivable ls",
+        "receivables": [
+          {
+            "id": "rcv_1",
+            "commitmentId": "cm_1",
+            "label": "尾款",
+            "kind": "milestone",
+            "clientId": "cl_1",
+            "clientName": "王工",
+            "amountMinor": 800000,
+            "amount": "8000.00",
+            "currency": "CNY",
+            "paidMinor": 0,
+            "paid": "0.00",
+            "outstandingMinor": 800000,
+            "outstanding": "8000.00",
+            "state": "open",
+            "dueAt": "2026-12-01",
+            "overdueDays": null,
+            "payments": {
+              "count": 0
+            },
+            "createdAt": "2026-11-21T00:00:00.000Z"
+          }
+        ],
+        "totals": [
+          {
+            "currency": "CNY",
+            "amountMinor": 800000,
+            "paidMinor": 0,
+            "outstandingMinor": 800000,
+            "overdueMinor": 0,
+            "overpaidMinor": 0,
+            "unmatchedMinor": 0,
+            "count": 1,
+            "unsettledCount": 1,
+            "settledCount": 0,
+            "overdueCount": 0,
+            "writtenOffCount": 0,
+            "voidCount": 0,
+            "aging": {
+              "notDue": 1,
+              "0_30": 0,
+              "31_60": 0,
+              "61_90": 0,
+              "90plus": 0,
+              "noDue": 0
+            }
+          }
+        ],
+        "total": 1,
+        "truncated": false,
+        "limit": 50,
+        "clearance": 3,
+        "protectedExcluded": 0
+      }
+    },
+    {
+      "id": "receivable-show.valid",
+      "target": "#/$defs/ReceivableShowPayload",
+      "expect": "accept",
+      "value": {
+        "ok": true,
+        "command": "receivable show",
+        "receivable": {
+          "id": "rcv_1",
+          "commitmentId": "cm_1",
+          "label": "尾款",
+          "kind": "milestone",
+          "clientId": "cl_1",
+          "clientName": "王工",
+          "amountMinor": 800000,
+          "amount": "8000.00",
+          "currency": "CNY",
+          "paidMinor": 0,
+          "paid": "0.00",
+          "outstandingMinor": 800000,
+          "outstanding": "8000.00",
+          "state": "open",
+          "dueAt": "2026-12-01",
+          "overdueDays": null,
+          "payments": {
+            "count": 0
+          },
+          "createdAt": "2026-11-21T00:00:00.000Z"
+        },
+        "payments": [
+          {
+            "id": "pay_1",
+            "clientId": "cl_1",
+            "commitmentId": "cm_1",
+            "amountMinor": 800000,
+            "amount": "8000.00",
+            "currency": "CNY",
+            "paidAt": "2026-11-21T00:00:00.000Z",
+            "method": "bank",
+            "createdAt": "2026-11-21T00:00:00.000Z"
+          }
+        ],
+        "clearance": 3,
+        "protectedExcluded": 0
+      }
+    },
+    {
+      "id": "receivable-show.reject-missing-ok",
+      "target": "#/$defs/ReceivableShowPayload",
+      "expect": "reject",
+      "value": {
+        "command": "receivable show",
+        "receivable": {
+          "id": "rcv_1",
+          "commitmentId": "cm_1",
+          "label": "尾款",
+          "kind": "milestone",
+          "clientId": "cl_1",
+          "clientName": "王工",
+          "amountMinor": 800000,
+          "amount": "8000.00",
+          "currency": "CNY",
+          "paidMinor": 0,
+          "paid": "0.00",
+          "outstandingMinor": 800000,
+          "outstanding": "8000.00",
+          "state": "open",
+          "dueAt": "2026-12-01",
+          "overdueDays": null,
+          "payments": {
+            "count": 0
+          },
+          "createdAt": "2026-11-21T00:00:00.000Z"
+        },
+        "payments": [
+          {
+            "id": "pay_1",
+            "clientId": "cl_1",
+            "commitmentId": "cm_1",
+            "amountMinor": 800000,
+            "amount": "8000.00",
+            "currency": "CNY",
+            "paidAt": "2026-11-21T00:00:00.000Z",
+            "method": "bank",
+            "createdAt": "2026-11-21T00:00:00.000Z"
+          }
+        ],
+        "clearance": 3,
+        "protectedExcluded": 0
+      }
+    },
+    {
+      "id": "receivable-summary.valid",
+      "target": "#/$defs/ReceivableSummaryPayload",
+      "expect": "accept",
+      "value": {
+        "ok": true,
+        "command": "receivable summary",
+        "currency": null,
+        "total": 1,
+        "unsettled": 1,
+        "settled": 0,
+        "overdue": 0,
+        "writtenOff": 0,
+        "void": 0,
+        "totals": [
+          {
+            "currency": "CNY",
+            "amountMinor": 800000,
+            "paidMinor": 0,
+            "outstandingMinor": 800000,
+            "overdueMinor": 0,
+            "overpaidMinor": 0,
+            "unmatchedMinor": 0,
+            "count": 1,
+            "unsettledCount": 1,
+            "settledCount": 0,
+            "overdueCount": 0,
+            "writtenOffCount": 0,
+            "voidCount": 0,
+            "aging": {
+              "notDue": 1,
+              "0_30": 0,
+              "31_60": 0,
+              "61_90": 0,
+              "90plus": 0,
+              "noDue": 0
+            }
+          }
+        ],
+        "unmatchedPayments": [
+          {
+            "currency": "USD",
+            "amountMinor": 500,
+            "amount": "5.00",
+            "count": 1
+          }
+        ],
+        "nextDueAt": "2026-12-01T15:59:59.999+08:00",
+        "clearance": 3,
+        "protectedExcluded": 0
+      }
+    },
+    {
+      "id": "receivable-summary.reject-missing-ok",
+      "target": "#/$defs/ReceivableSummaryPayload",
+      "expect": "reject",
+      "value": {
+        "command": "receivable summary",
+        "currency": null,
+        "total": 1,
+        "unsettled": 1,
+        "settled": 0,
+        "overdue": 0,
+        "writtenOff": 0,
+        "void": 0,
+        "totals": [
+          {
+            "currency": "CNY",
+            "amountMinor": 800000,
+            "paidMinor": 0,
+            "outstandingMinor": 800000,
+            "overdueMinor": 0,
+            "overpaidMinor": 0,
+            "unmatchedMinor": 0,
+            "count": 1,
+            "unsettledCount": 1,
+            "settledCount": 0,
+            "overdueCount": 0,
+            "writtenOffCount": 0,
+            "voidCount": 0,
+            "aging": {
+              "notDue": 1,
+              "0_30": 0,
+              "31_60": 0,
+              "61_90": 0,
+              "90plus": 0,
+              "noDue": 0
+            }
+          }
+        ],
+        "unmatchedPayments": [
+          {
+            "currency": "USD",
+            "amountMinor": 500,
+            "amount": "5.00",
+            "count": 1
+          }
+        ],
+        "nextDueAt": "2026-12-01T15:59:59.999+08:00",
+        "clearance": 3,
+        "protectedExcluded": 0
+      }
+    },
+    {
+      "id": "payment-add.valid",
+      "target": "#/$defs/PaymentAddPayload",
+      "expect": "accept",
+      "value": {
+        "payment": {
+          "id": "pay_1",
+          "clientId": "cl_1",
+          "commitmentId": "cm_1",
+          "amountMinor": 800000,
+          "amount": "8000.00",
+          "currency": "CNY",
+          "paidAt": "2026-11-21T00:00:00.000Z",
+          "method": "bank",
+          "createdAt": "2026-11-21T00:00:00.000Z"
+        },
+        "receivable": {
+          "id": "rcv_1",
+          "commitmentId": "cm_1",
+          "label": "尾款",
+          "kind": "milestone",
+          "clientId": "cl_1",
+          "clientName": "王工",
+          "amountMinor": 800000,
+          "amount": "8000.00",
+          "currency": "CNY",
+          "paidMinor": 0,
+          "paid": "0.00",
+          "outstandingMinor": 800000,
+          "outstanding": "8000.00",
+          "state": "open",
+          "dueAt": "2026-12-01",
+          "overdueDays": null,
+          "payments": {
+            "count": 0
+          },
+          "createdAt": "2026-11-21T00:00:00.000Z"
+        },
+        "commitment": {
+          "id": "cm_1",
+          "matterId": "matter_1",
+          "debtor": "third:王工",
+          "creditor": "me",
+          "action": "回款跟进",
+          "dueAt": "2026-12-01",
+          "timezone": "Asia/Shanghai",
+          "status": "open",
+          "evidence": [],
+          "capability": "todo"
+        },
+        "completedCommitment": false
+      }
+    },
+    {
+      "id": "payment-add.reject-missing-payment",
+      "target": "#/$defs/PaymentAddPayload",
+      "expect": "reject",
+      "value": {
+        "receivable": {
+          "id": "rcv_1",
+          "commitmentId": "cm_1",
+          "label": "尾款",
+          "kind": "milestone",
+          "clientId": "cl_1",
+          "clientName": "王工",
+          "amountMinor": 800000,
+          "amount": "8000.00",
+          "currency": "CNY",
+          "paidMinor": 0,
+          "paid": "0.00",
+          "outstandingMinor": 800000,
+          "outstanding": "8000.00",
+          "state": "open",
+          "dueAt": "2026-12-01",
+          "overdueDays": null,
+          "payments": {
+            "count": 0
+          },
+          "createdAt": "2026-11-21T00:00:00.000Z"
+        },
+        "commitment": {
+          "id": "cm_1",
+          "matterId": "matter_1",
+          "debtor": "third:王工",
+          "creditor": "me",
+          "action": "回款跟进",
+          "dueAt": "2026-12-01",
+          "timezone": "Asia/Shanghai",
+          "status": "open",
+          "evidence": [],
+          "capability": "todo"
+        },
+        "completedCommitment": false
+      }
+    },
+    {
+      "id": "payment-list.valid",
+      "target": "#/$defs/PaymentListPayload",
+      "expect": "accept",
+      "value": {
+        "ok": true,
+        "command": "payment ls",
+        "payments": [
+          {
+            "id": "pay_1",
+            "clientId": "cl_1",
+            "commitmentId": "cm_1",
+            "amountMinor": 800000,
+            "amount": "8000.00",
+            "currency": "CNY",
+            "paidAt": "2026-11-21T00:00:00.000Z",
+            "method": "bank",
+            "createdAt": "2026-11-21T00:00:00.000Z",
+            "receivableId": "rcv_1"
+          }
+        ],
+        "total": 1,
+        "truncated": false,
+        "limit": 50,
+        "clearance": 3,
+        "protectedExcluded": 0
+      }
+    },
+    {
+      "id": "payment-list.reject-missing-ok",
+      "target": "#/$defs/PaymentListPayload",
+      "expect": "reject",
+      "value": {
+        "command": "payment ls",
+        "payments": [
+          {
+            "id": "pay_1",
+            "clientId": "cl_1",
+            "commitmentId": "cm_1",
+            "amountMinor": 800000,
+            "amount": "8000.00",
+            "currency": "CNY",
+            "paidAt": "2026-11-21T00:00:00.000Z",
+            "method": "bank",
+            "createdAt": "2026-11-21T00:00:00.000Z",
+            "receivableId": "rcv_1"
+          }
+        ],
+        "total": 1,
+        "truncated": false,
+        "limit": 50,
+        "clearance": 3,
+        "protectedExcluded": 0
+      }
+    },
+    {
+      "id": "payment-void.valid",
+      "target": "#/$defs/PaymentVoidPayload",
+      "expect": "accept",
+      "value": {
+        "payment": {
+          "id": "pay_1",
+          "clientId": "cl_1",
+          "commitmentId": "cm_1",
+          "amountMinor": 800000,
+          "amount": "8000.00",
+          "currency": "CNY",
+          "paidAt": "2026-11-21T00:00:00.000Z",
+          "method": "bank",
+          "createdAt": "2026-11-21T00:00:00.000Z",
+          "deletedAt": "2026-11-21T00:00:00.000Z"
+        },
+        "receivable": {
+          "id": "rcv_1",
+          "commitmentId": "cm_1",
+          "label": "尾款",
+          "kind": "milestone",
+          "clientId": "cl_1",
+          "clientName": "王工",
+          "amountMinor": 800000,
+          "amount": "8000.00",
+          "currency": "CNY",
+          "paidMinor": 0,
+          "paid": "0.00",
+          "outstandingMinor": 800000,
+          "outstanding": "8000.00",
+          "state": "open",
+          "dueAt": "2026-12-01",
+          "overdueDays": null,
+          "payments": {
+            "count": 0
+          },
+          "createdAt": "2026-11-21T00:00:00.000Z"
+        },
+        "alreadyVoid": false,
+        "reopenedCommitment": false
+      }
+    },
+    {
+      "id": "payment-void.reject-missing-payment",
+      "target": "#/$defs/PaymentVoidPayload",
+      "expect": "reject",
+      "value": {
+        "receivable": {
+          "id": "rcv_1",
+          "commitmentId": "cm_1",
+          "label": "尾款",
+          "kind": "milestone",
+          "clientId": "cl_1",
+          "clientName": "王工",
+          "amountMinor": 800000,
+          "amount": "8000.00",
+          "currency": "CNY",
+          "paidMinor": 0,
+          "paid": "0.00",
+          "outstandingMinor": 800000,
+          "outstanding": "8000.00",
+          "state": "open",
+          "dueAt": "2026-12-01",
+          "overdueDays": null,
+          "payments": {
+            "count": 0
+          },
+          "createdAt": "2026-11-21T00:00:00.000Z"
+        },
+        "alreadyVoid": false,
+        "reopenedCommitment": false
+      }
+    },
+    {
+      "id": "consent-status.valid",
+      "target": "#/$defs/ConsentStatusPayload",
+      "expect": "accept",
+      "value": {
+        "ok": true,
+        "command": "consent status",
+        "path": "/tmp/advisers-home/consent.json",
+        "configured": true,
+        "entries": [
+          {
+            "surface": "mail.extract",
+            "dataClass": "mail",
+            "provider": "deepseek",
+            "baseUrl": null,
+            "grantedAt": "2026-11-21T00:00:00.000Z",
+            "channel": "flag",
+            "revokedAt": null,
+            "active": true
+          }
+        ]
+      }
+    },
+    {
+      "id": "consent-status.reject-missing-ok",
+      "target": "#/$defs/ConsentStatusPayload",
+      "expect": "reject",
+      "value": {
+        "command": "consent status",
+        "path": "/tmp/advisers-home/consent.json",
+        "configured": true,
+        "entries": [
+          {
+            "surface": "mail.extract",
+            "dataClass": "mail",
+            "provider": "deepseek",
+            "baseUrl": null,
+            "grantedAt": "2026-11-21T00:00:00.000Z",
+            "channel": "flag",
+            "revokedAt": null,
+            "active": true
+          }
+        ]
+      }
+    },
+    {
+      "id": "consent-grant.valid",
+      "target": "#/$defs/ConsentGrantPayload",
+      "expect": "accept",
+      "value": {
+        "ok": true,
+        "command": "consent grant",
+        "version": 1,
+        "entry": {
+          "surface": "mail.extract",
+          "dataClass": "mail",
+          "provider": "deepseek",
+          "grantedAt": "2026-11-21T00:00:00.000Z",
+          "channel": "flag"
+        },
+        "record": {
+          "version": 1,
+          "entries": [
+            {
+              "surface": "mail.extract",
+              "dataClass": "mail",
+              "provider": "deepseek",
+              "grantedAt": "2026-11-21T00:00:00.000Z",
+              "channel": "flag"
+            }
+          ]
+        },
+        "auditWritten": true
+      }
+    },
+    {
+      "id": "consent-grant.reject-missing-ok",
+      "target": "#/$defs/ConsentGrantPayload",
+      "expect": "reject",
+      "value": {
+        "command": "consent grant",
+        "version": 1,
+        "entry": {
+          "surface": "mail.extract",
+          "dataClass": "mail",
+          "provider": "deepseek",
+          "grantedAt": "2026-11-21T00:00:00.000Z",
+          "channel": "flag"
+        },
+        "record": {
+          "version": 1,
+          "entries": [
+            {
+              "surface": "mail.extract",
+              "dataClass": "mail",
+              "provider": "deepseek",
+              "grantedAt": "2026-11-21T00:00:00.000Z",
+              "channel": "flag"
+            }
+          ]
+        },
+        "auditWritten": true
+      }
+    },
+    {
+      "id": "consent-revoke.valid",
+      "target": "#/$defs/ConsentRevokePayload",
+      "expect": "accept",
+      "value": {
+        "ok": true,
+        "command": "consent revoke",
+        "revoked": 1,
+        "entries": [
+          {
+            "surface": "mail.extract",
+            "dataClass": "mail",
+            "provider": "deepseek",
+            "grantedAt": "2026-11-21T00:00:00.000Z",
+            "channel": "flag",
+            "revokedAt": "2026-11-21T00:00:00.000Z"
+          }
+        ],
+        "record": {
+          "version": 1,
+          "entries": [
+            {
+              "surface": "mail.extract",
+              "dataClass": "mail",
+              "provider": "deepseek",
+              "grantedAt": "2026-11-21T00:00:00.000Z",
+              "channel": "flag",
+              "revokedAt": "2026-11-21T00:00:00.000Z"
+            }
+          ]
+        },
+        "auditWritten": true
+      }
+    },
+    {
+      "id": "consent-revoke.reject-missing-ok",
+      "target": "#/$defs/ConsentRevokePayload",
+      "expect": "reject",
+      "value": {
+        "command": "consent revoke",
+        "revoked": 1,
+        "entries": [
+          {
+            "surface": "mail.extract",
+            "dataClass": "mail",
+            "provider": "deepseek",
+            "grantedAt": "2026-11-21T00:00:00.000Z",
+            "channel": "flag",
+            "revokedAt": "2026-11-21T00:00:00.000Z"
+          }
+        ],
+        "record": {
+          "version": 1,
+          "entries": [
+            {
+              "surface": "mail.extract",
+              "dataClass": "mail",
+              "provider": "deepseek",
+              "grantedAt": "2026-11-21T00:00:00.000Z",
+              "channel": "flag",
+              "revokedAt": "2026-11-21T00:00:00.000Z"
+            }
+          ]
+        },
+        "auditWritten": true
+      }
+    },
+    {
+      "id": "privacy-matrix.valid",
+      "target": "#/$defs/PrivacyMatrixPayload",
+      "expect": "accept",
+      "value": {
+        "ok": true,
+        "command": "privacy --matrix",
+        "policyVersion": 1,
+        "rulesetVersion": "2026.11.4",
+        "generatedAt": "2026-11-21T00:00:00.000Z",
+        "rows": [
+          {
+            "surface": "mail.extract",
+            "description": "mail candidate extraction (local rules or explicit model opt-in)",
+            "actions": [
+              "read",
+              "model-egress"
+            ],
+            "dataClass": "mail",
+            "sink": "model",
+            "default": "off",
+            "gate": "enforced-policy",
+            "tosRef": "docs/TOS.md#9.3",
+            "doc": "docs/ARCHITECTURE.md"
+          }
+        ]
+      }
+    },
+    {
+      "id": "privacy-matrix.reject-missing-ok",
+      "target": "#/$defs/PrivacyMatrixPayload",
+      "expect": "reject",
+      "value": {
+        "command": "privacy --matrix",
+        "policyVersion": 1,
+        "rulesetVersion": "2026.11.4",
+        "generatedAt": "2026-11-21T00:00:00.000Z",
+        "rows": [
+          {
+            "surface": "mail.extract",
+            "description": "mail candidate extraction (local rules or explicit model opt-in)",
+            "actions": [
+              "read",
+              "model-egress"
+            ],
+            "dataClass": "mail",
+            "sink": "model",
+            "default": "off",
+            "gate": "enforced-policy",
+            "tosRef": "docs/TOS.md#9.3",
+            "doc": "docs/ARCHITECTURE.md"
+          }
+        ]
+      }
+    },
+    {
+      "id": "client-export-pack.valid",
+      "target": "#/$defs/ClientExportPackPayload",
+      "expect": "accept",
+      "value": {
+        "ok": true,
+        "command": "client export --pack",
+        "format": "advisers-client-status-pack",
+        "version": 1,
+        "scope": "client",
+        "subject": {
+          "kind": "client",
+          "id": "cl_1",
+          "name": "王工"
+        },
+        "out": "/tmp/exports/client-cl_1",
+        "replaced": null,
+        "generatedAt": "2026-11-21T00:00:00.000Z",
+        "counts": {
+          "matters": 1,
+          "mattersArchived": 0,
+          "openMine": 2,
+          "openWaiting": 0,
+          "overdue": 0,
+          "deliveries": 3,
+          "notes": 1
+        },
+        "bytes": 12000,
+        "fileCount": 5,
+        "checksumCount": 5,
+        "manifestDigest": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "verificationBasis": "local-checksums-only",
+        "verification": {
+          "ok": true,
+          "code": null,
+          "errors": [],
+          "warnings": [
+            "verification basis is local-checksums-only: SHA-256 proves pack internal consistency only, not authorship or generation time"
+          ],
+          "dir": "/tmp/exports/client-cl_1",
+          "format": "advisers-client-status-pack",
+          "version": 1,
+          "subject": {
+            "kind": "client",
+            "id": "cl_1",
+            "name": "王工"
+          },
+          "scope": "client",
+          "verificationBasis": "local-checksums-only",
+          "fileCount": 5,
+          "checksumCount": 5,
+          "files": [
+            "README.txt",
+            "SHA256SUMS",
+            "manifest.json",
+            "status.json",
+            "status.md"
+          ],
+          "checksums": {
+            "README.txt": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+          },
+          "manifest": {
+            "format": "advisers-client-status-pack",
+            "version": 1
+          },
+          "totalBytes": 12000,
+          "limits": {},
+          "limitViolation": null
+        },
+        "clearance": 0,
+        "protectedExcluded": 0,
+        "disclaimer": true
+      }
+    },
+    {
+      "id": "client-export-pack.reject-missing-ok",
+      "target": "#/$defs/ClientExportPackPayload",
+      "expect": "reject",
+      "value": {
+        "command": "client export --pack",
+        "format": "advisers-client-status-pack",
+        "version": 1,
+        "scope": "client",
+        "subject": {
+          "kind": "client",
+          "id": "cl_1",
+          "name": "王工"
+        },
+        "out": "/tmp/exports/client-cl_1",
+        "replaced": null,
+        "generatedAt": "2026-11-21T00:00:00.000Z",
+        "counts": {
+          "matters": 1,
+          "mattersArchived": 0,
+          "openMine": 2,
+          "openWaiting": 0,
+          "overdue": 0,
+          "deliveries": 3,
+          "notes": 1
+        },
+        "bytes": 12000,
+        "fileCount": 5,
+        "checksumCount": 5,
+        "manifestDigest": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "verificationBasis": "local-checksums-only",
+        "verification": {
+          "ok": true,
+          "code": null,
+          "errors": [],
+          "warnings": [
+            "verification basis is local-checksums-only: SHA-256 proves pack internal consistency only, not authorship or generation time"
+          ],
+          "dir": "/tmp/exports/client-cl_1",
+          "format": "advisers-client-status-pack",
+          "version": 1,
+          "subject": {
+            "kind": "client",
+            "id": "cl_1",
+            "name": "王工"
+          },
+          "scope": "client",
+          "verificationBasis": "local-checksums-only",
+          "fileCount": 5,
+          "checksumCount": 5,
+          "files": [
+            "README.txt",
+            "SHA256SUMS",
+            "manifest.json",
+            "status.json",
+            "status.md"
+          ],
+          "checksums": {
+            "README.txt": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+          },
+          "manifest": {
+            "format": "advisers-client-status-pack",
+            "version": 1
+          },
+          "totalBytes": 12000,
+          "limits": {},
+          "limitViolation": null
+        },
+        "clearance": 0,
+        "protectedExcluded": 0,
+        "disclaimer": true
       }
     }
   ]
