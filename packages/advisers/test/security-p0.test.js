@@ -5,6 +5,7 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import test from 'node:test'
+import { skipOnWindows } from './win-compat.mjs'
 import { tosEnv } from './tos-fixture.js'
 import { Ledger } from '../../core/dist/index.js'
 import { SqliteStore } from '../lib/sqlite.js'
@@ -27,7 +28,7 @@ function script(dir, name, body) {
   return file
 }
 
-test('P0 security: audit chain stays keyed after office/ocr/timestamp commands', () => {
+test('P0 security: audit chain stays keyed after office/ocr/timestamp commands', (t) => {
   const root = mkdtempSync(join(tmpdir(), 'advisers-p0-audit-'))
   const home = join(root, 'home')
   try {
@@ -36,6 +37,9 @@ test('P0 security: audit chain stays keyed after office/ocr/timestamp commands',
     writeFileSync(join(root, 'image.png'), 'not really an image')
     cli(home, ['office', 'docx', 'spec.json', 'out.docx'], {}, root)
     assert.match(cli(home, ['audit'], {}, root), /verified \(1 entries\)/)
+    // The office/audit half above still runs on Windows; only the OCR/timestamp
+    // subprocess probes (POSIX shebang fixtures) are a Windows platform gap.
+    if (skipOnWindows(t, 'OCR external adapter commands are spawned as a single executable path on Windows, so a POSIX #!/bin/sh probe cannot run (quoted-argv adapter contract tracked; docs/WINDOWS.md section 8, windows triage B)')) return
 
     const ocr = script(root, 'fake-ocr.sh', 'echo ocr text')
     cli(home, ['ocr', 'image.png'], { ADVISERS_OCR_CMD: ocr }, root)

@@ -7,6 +7,7 @@ import { join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import test from 'node:test'
 import { tosEnv } from './tos-fixture.js'
+import { assertPrivateMode } from './win-compat.mjs'
 import { Ledger } from '../../core/dist/index.js'
 import { SqliteStore } from '../lib/sqlite.js'
 
@@ -99,11 +100,6 @@ function outboxReplies(bridgeDir) {
   return outboxFiles(bridgeDir).filter((name) => name.endsWith('.json'))
 }
 
-function bridgeMode(bridgeDir, relPath) {
-  const target = join(bridgeDir, relPath)
-  return existsSync(target) ? statSync(target).mode & 0o777 : null
-}
-
 test('bridge: secrecy>0 denies the model call, permits stay guarded and the outbox is private', async () => {
   const root = mkdtempSync(join(tmpdir(), 'advisers-bin-bridge-deny-'))
   const home = join(root, 'home')
@@ -124,9 +120,9 @@ test('bridge: secrecy>0 denies the model call, permits stay guarded and the outb
     assert.equal(provider.requests.length, 0, 'a protected matter must not reach the model provider')
 
     await stopBridge(child)
-    assert.equal(statSync(join(bridgeDir, 'outbox', 'advisers', outboxReplies(bridgeDir)[0])).mode & 0o777, 0o600)
+    assertPrivateMode(join(bridgeDir, 'outbox', 'advisers', outboxReplies(bridgeDir)[0]), 0o600, 'bridge outbox reply')
     for (const rel of ['inbox/advisers', 'outbox/advisers', 'status/advisers', 'registry', 'quarantine/advisers']) {
-      assert.equal(bridgeMode(bridgeDir, rel), 0o700, rel + ' must be 0700')
+      assertPrivateMode(join(bridgeDir, rel), 0o700, rel + ' bridge directory')
     }
     const store = new SqliteStore(join(home, 'state.db'))
     try {
@@ -160,7 +156,7 @@ test('bridge: oversized inbox files are quarantined, never read by the bridge', 
     const quarantine = join(bridgeDir, 'quarantine', 'advisers')
     assert.ok(await waitFor(() => existsSync(join(quarantine, 'huge.json'))), 'oversized inbox file was not quarantined')
     assert.equal(existsSync(join(inbox, 'huge.json')), false)
-    assert.equal(statSync(join(quarantine, 'huge.json')).mode & 0o777, 0o600)
+    assertPrivateMode(join(quarantine, 'huge.json'), 0o600, 'quarantined inbox file')
     assert.equal(provider.requests.length, 0)
     assert.equal(outboxFiles(bridgeDir).length, 0, 'a quarantined message must not produce a reply')
   } finally {

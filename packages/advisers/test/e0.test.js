@@ -6,6 +6,7 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import test from 'node:test'
+import { rmrf } from './win-compat.mjs'
 import { tosEnv } from './tos-fixture.js'
 import { Ledger } from '../../core/dist/index.js'
 import { buildDocx } from '../../office/dist/index.js'
@@ -71,14 +72,22 @@ test('E0-T2: memory accept preserves a real source turn and rejects dangling evi
     cli(home, ['memory', 'accept', legacy.id])
 
     const verifyStore = new SqliteStore(join(home, 'state.db'))
-    const verifyLedger = Ledger.fromJSON(verifyStore.load())
-    const commitments = verifyLedger.listCommitments()
-    const real = commitments.find((c) => c.action === '发报价' && c.evidence?.[0]?.sessionId === 'conv_real')
-    assert.ok(real, 'real evidence should retain sessionId')
-    assert.ok(verifyStore.getTurn(real.evidence[0].turnId), 'real turn should exist')
-    const old = commitments.find((c) => c.evidence?.[0]?.quote === '旧候选')
-    assert.equal(old.evidence[0].sessionId, 'legacy')
-  } finally { rmSync(root, { recursive: true, force: true }) }
+    try {
+      const verifyLedger = Ledger.fromJSON(verifyStore.load())
+      const commitments = verifyLedger.listCommitments()
+      const real = commitments.find((c) => c.action === '发报价' && c.evidence?.[0]?.sessionId === 'conv_real')
+      assert.ok(real, 'real evidence should retain sessionId')
+      assert.ok(verifyStore.getTurn(real.evidence[0].turnId), 'real turn should exist')
+      const old = commitments.find((c) => c.evidence?.[0]?.quote === '旧候选')
+      assert.equal(old.evidence[0].sessionId, 'legacy')
+    } finally {
+      // Windows refuses to delete a directory while SQLite still holds an open
+      // handle (Linux unlinks it happily), so close the verification store
+      // before the rmrf() below; rmrf() also retries/clears read-only residue
+      // (windows triage J).
+      verifyStore.close?.()
+    }
+  } finally { rmrf(root) }
 })
 
 test('E9: privacy --prove and secret-matter capture fail closed without network', () => {

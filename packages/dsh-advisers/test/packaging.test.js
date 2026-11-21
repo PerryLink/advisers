@@ -104,10 +104,13 @@ test('manifest publishes the bundle files and the Node 22.16 floor', () => {
 })
 
 test('npm pack dry-run ships the entry point and depends on advisers', () => {
+  // Windows has no "npm" executable on PATH, only npm.cmd: execFileSync needs a
+  // shell there (same pattern as scripts/pack-smoke.mjs; windows triage F).
   const raw = execFileSync('npm', ['pack', '--dry-run', '--json'], {
     cwd: pkgDir,
     encoding: 'utf8',
     stdio: ['ignore', 'pipe', 'pipe'],
+    shell: process.platform === 'win32',
   })
   const files = new Set(JSON.parse(raw)[0].files.map((file) => file.path))
   assert.ok(files.has('index.js'), 'tarball must contain index.js')

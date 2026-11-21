@@ -6,6 +6,7 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import test from 'node:test'
+import { assertPrivateMode } from './win-compat.mjs'
 import { tosEnv } from './tos-fixture.js'
 import { Ledger } from '../../core/dist/index.js'
 import { SqliteStore } from '../lib/sqlite.js'
@@ -442,8 +443,7 @@ test('pet-brief: --out writer is atomic, parses back, and is mode 600', () => {
     const brief = buildPetBrief(fixture().ledger, { now: NOW_MS })
     const target = join(work, 'nested', 'pet-brief.json')
     assert.equal(writePetBriefAtomic(target, brief), target)
-    const mode = statSync(target).mode & 0o777
-    assert.equal(mode, 0o600, `mode was ${mode.toString(8)}`)
+    assertPrivateMode(target, 0o600, 'pet-brief --out file')
     assert.deepEqual(JSON.parse(readFileSync(target, 'utf8')), JSON.parse(JSON.stringify(brief)))
     assert.deepEqual(readdirSync(join(work, 'nested')), ['pet-brief.json'], 'no temp file may survive')
     writePetBriefAtomic(target, { ...brief, mood: 'calm' })
@@ -485,7 +485,7 @@ test('pet-brief CLI: --out writes a 0600 brief atomically', () => {
     const target = join(work, 'pet-brief.json')
     const out = run(home, ['pet-brief', '--out', target], work)
     assert.match(out, /wrote /)
-    assert.equal(statSync(target).mode & 0o777, 0o600)
+    assertPrivateMode(target, 0o600, 'pet-brief --out file')
     assert.equal(validatePetBrief(readFileSync(target, 'utf8'), { now: Date.now() }).ok, true)
     assert.deepEqual(readdirSync(work), ['pet-brief.json'])
   } finally {

@@ -154,4 +154,130 @@ export default [
       })
     },
   },
+  {
+    id: 'det.mcp.modern-dual-era',
+    group: 'mcp',
+    title: 'modern 2026-07-28 era answers behind the v2 envelope with byte-identical payloads (dual-era)',
+    async run() {
+      const baseline = readBaseline()
+      const contract = baseline.contract.mcp
+      // Modern era shapes are hard-coded here on purpose: they are a 0.4.0
+      // additive contract and must not move by editing eval/det/baseline.json.
+      const MODERN_VERSION = '2026-07-28'
+      const MODERN_TTL_MS = 300000
+      const MODERN_META = {
+        'io.modelcontextprotocol/protocolVersion': MODERN_VERSION,
+        'io.modelcontextprotocol/clientCapabilities': {},
+      }
+      const modernParams = (params = {}) => ({ ...params, _meta: MODERN_META })
+      return withSeededHome('mcp-modern', async (workdir) => {
+        const checks = []
+        const session = runMcp(workdir, [
+          { jsonrpc: '2.0', id: 1, method: 'initialize', params: { protocolVersion: '2024-11-05', capabilities: {}, clientInfo: { name: 'eval-det', version: '1' } } },
+          { jsonrpc: '2.0', id: 2, method: 'server/discover', params: modernParams() },
+          { jsonrpc: '2.0', id: 3, method: 'tools/list', params: {} },
+          { jsonrpc: '2.0', id: 4, method: 'tools/list', params: modernParams() },
+          { jsonrpc: '2.0', id: 5, method: 'resources/list', params: {} },
+          { jsonrpc: '2.0', id: 6, method: 'resources/list', params: modernParams() },
+          { jsonrpc: '2.0', id: 7, method: 'resources/read', params: { uri: 'advisers://today' } },
+          { jsonrpc: '2.0', id: 8, method: 'resources/read', params: modernParams({ uri: 'advisers://today' }) },
+          { jsonrpc: '2.0', id: 9, method: 'tools/call', params: { name: 'advisers_today', arguments: {} } },
+          { jsonrpc: '2.0', id: 10, method: 'tools/call', params: modernParams({ name: 'advisers_today', arguments: {} }) },
+          { jsonrpc: '2.0', id: 11, method: 'tools/list', params: { _meta: { 'io.modelcontextprotocol/protocolVersion': '2025-11-25', 'io.modelcontextprotocol/clientCapabilities': {} } } },
+          { jsonrpc: '2.0', id: 12, method: 'tools/list', params: { _meta: { 'io.modelcontextprotocol/protocolVersion': MODERN_VERSION } } },
+          { jsonrpc: '2.0', id: 13, method: 'ping', params: modernParams() },
+          { jsonrpc: '2.0', id: 14, method: 'tools/list', params: modernParams({ cursor: 'next' }) },
+          { jsonrpc: '2.0', id: 15, method: 'resources/read', params: modernParams({ uri: 'advisers://does-not-exist' }) },
+          { jsonrpc: '2.0', id: 16, method: 'resources/read', params: { uri: 'advisers://does-not-exist' } },
+          { jsonrpc: '2.0', method: 'notifications/initialized', params: modernParams() },
+          { jsonrpc: '2.0', id: 17, method: 'tools/list', params: modernParams() },
+        ])
+        check(checks, 'session-exit-0', () => {
+          if (session.status !== 0) throw new Error('exit ' + session.status + ': ' + session.stderr.slice(0, 300))
+        })
+        check(checks, 'stderr-empty', () => {
+          if (session.stderr.trim() !== '') throw new Error(session.stderr.slice(0, 300))
+        })
+        check(checks, 'stdout-is-ndjson', () => {
+          if (session.unparsable.length) throw new Error('unparsable line(s): ' + JSON.stringify(session.unparsable.slice(0, 2)))
+        })
+        check(checks, 'modern-notification-not-answered', () => {
+          if (session.responses.length !== 17) throw new Error('expected 17 responses (one per request with id), got ' + session.responses.length)
+          if (session.responses.some((response) => response?.id === null || response?.id === undefined)) throw new Error('a notification was answered')
+        })
+        check(checks, 'modern-discover-envelope', () => {
+          const result = session.response(2)?.result
+          if (result?.resultType !== 'complete') throw new Error('resultType=' + JSON.stringify(result?.resultType))
+          if (!Array.isArray(result?.supportedVersions) || !result.supportedVersions.includes(MODERN_VERSION)) throw new Error('supportedVersions=' + JSON.stringify(result?.supportedVersions))
+          if (result?.ttlMs !== MODERN_TTL_MS) throw new Error('ttlMs=' + JSON.stringify(result?.ttlMs))
+          if (result?.cacheScope !== 'public') throw new Error('cacheScope=' + JSON.stringify(result?.cacheScope))
+          if (result?._meta?.['io.modelcontextprotocol/serverInfo']?.name !== 'advisers') throw new Error('serverInfo=' + JSON.stringify(result?._meta))
+        })
+        check(checks, 'modern-tools-list-same-catalogue', () => {
+          const legacy = session.response(3)?.result?.tools
+          const modern = session.response(4)?.result
+          if (modern?.resultType !== 'complete' || modern?.ttlMs !== MODERN_TTL_MS || modern?.cacheScope !== 'public') throw new Error('bad modern tools/list envelope: ' + JSON.stringify(Object.keys(modern ?? {})))
+          if (JSON.stringify(modern?.tools) !== JSON.stringify(legacy)) throw new Error('modern tools/list payload differs from legacy')
+          const names = (modern?.tools ?? []).map((tool) => tool?.name)
+          const missing = (contract.requiredTools ?? []).filter((name) => !names.includes(name))
+          if (missing.length) throw new Error('missing tool(s): ' + missing.join(', '))
+        })
+        check(checks, 'modern-resources-list-same-catalogue', () => {
+          const legacy = session.response(5)?.result?.resources
+          const modern = session.response(6)?.result
+          if (modern?.resultType !== 'complete' || modern?.ttlMs !== MODERN_TTL_MS || modern?.cacheScope !== 'public') throw new Error('bad modern resources/list envelope')
+          if (JSON.stringify(modern?.resources) !== JSON.stringify(legacy)) throw new Error('modern resources/list payload differs from legacy')
+          const uris = (modern?.resources ?? []).map((resource) => resource?.uri)
+          const missing = (contract.requiredResources ?? []).filter((uri) => !uris.includes(uri))
+          if (missing.length) throw new Error('missing resource(s): ' + missing.join(', '))
+        })
+        check(checks, 'modern-resource-read-same-text', () => {
+          const legacy = session.response(7)?.result?.contents?.[0]?.text
+          const modern = session.response(8)?.result
+          if (modern?.resultType !== 'complete' || modern?.ttlMs !== 0 || modern?.cacheScope !== 'private') throw new Error('bad modern resources/read envelope')
+          if (typeof modern?.contents?.[0]?.text !== 'string' || modern.contents[0].text !== legacy) throw new Error('modern resources/read text is not byte-identical to legacy')
+        })
+        check(checks, 'modern-tool-call-same-text', () => {
+          const legacy = session.response(9)?.result?.content?.[0]?.text
+          const modern = session.response(10)?.result
+          if (modern?.resultType !== 'complete') throw new Error('resultType=' + JSON.stringify(modern?.resultType))
+          if (Object.hasOwn(modern ?? {}, 'ttlMs')) throw new Error('tools/call must not be cacheable (ttlMs present)')
+          if (modern?.isError !== false) throw new Error('isError=' + JSON.stringify(modern?.isError))
+          if (typeof modern?.content?.[0]?.text !== 'string' || modern.content[0].text !== legacy) throw new Error('modern tools/call text is not byte-identical to legacy')
+        })
+        check(checks, 'unsupported-version-32022', () => {
+          const error = session.response(11)?.error
+          if (error?.code !== -32022) throw new Error('code=' + JSON.stringify(error?.code))
+          if (!(error?.data?.supported ?? []).includes(MODERN_VERSION)) throw new Error('data.supported=' + JSON.stringify(error?.data?.supported))
+          if (error?.data?.requested !== '2025-11-25') throw new Error('data.requested=' + JSON.stringify(error?.data?.requested))
+        })
+        check(checks, 'missing-client-capabilities-32602', () => {
+          const code = session.response(12)?.error?.code
+          if (code !== -32602) throw new Error('code=' + JSON.stringify(code))
+        })
+        check(checks, 'modern-ping-32601', () => {
+          const code = session.response(13)?.error?.code
+          if (code !== -32601) throw new Error('code=' + JSON.stringify(code))
+        })
+        check(checks, 'modern-cursor-32602', () => {
+          const code = session.response(14)?.error?.code
+          if (code !== -32602) throw new Error('code=' + JSON.stringify(code))
+        })
+        check(checks, 'unknown-resource-error-split', () => {
+          const modern = session.response(15)?.error?.code
+          const legacy = session.response(16)?.error?.code
+          if (modern !== -32602) throw new Error('modern unknown resource code=' + JSON.stringify(modern))
+          if (legacy !== -32002) throw new Error('legacy unknown resource code=' + JSON.stringify(legacy))
+        })
+        check(checks, 'modern-marker-answered', () => {
+          const result = session.response(17)?.result
+          if (result?.resultType !== 'complete') throw new Error('tools/list after a notification did not answer with resultType=complete')
+        })
+        check(checks, 'no-network', () => {
+          if (session.network.length) throw new Error(JSON.stringify(session.network))
+        })
+        return { checks }
+      })
+    },
+  },
 ]

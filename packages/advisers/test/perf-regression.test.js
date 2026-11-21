@@ -335,11 +335,11 @@ test('opening a database adds the secondary indexes without a schema bump from t
       assert.match(plan('SELECT * FROM nudges WHERE commitment_id = ? ORDER BY at DESC LIMIT 3', 'cm_1'), /USING INDEX idx_nudges_commitment_at/)
       assert.match(plan('SELECT * FROM deliveries ORDER BY created_at DESC LIMIT 20'), /idx_deliveries_created/)
       assert.equal(reopened.getMeta('schema_version'), String(SCHEMA_VERSION))
-      // v21 adds the customer entities/ownership columns and their indexes
-      // (see test/migration-v20.test.js); every pre-existing secondary index is
-      // still layout only and is not the reason for the bump -- recreating one
-      // without a version change stays supported.
-      assert.equal(SCHEMA_VERSION, 21, 'the v21 bump is the customer entity layout, not an index')
+      // The v21/v22 bumps add entity layouts (customer, then KB/mail/money);
+      // every pre-existing secondary index is still layout only and is not a
+      // reason for a bump -- recreating one without a version change stays
+      // supported (see test/schema-migrations.test.js).
+      assert.equal(SCHEMA_VERSION, 22, 'the schema bump is the entity layout, not a secondary index')
       assert.ok(matter.id)
     } finally {
       reopened.close()

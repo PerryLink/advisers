@@ -6,6 +6,7 @@ import { join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import test from 'node:test'
 import { tosEnv } from './tos-fixture.js'
+import { IS_WINDOWS, assertPrivateMode } from './win-compat.mjs'
 
 // 0.2.3 Wave 1 (robustness audit P1-2): bin durable writes go through
 // lib/fs-safe.js. A short write/ENOSPC must fail the command instead of
@@ -182,17 +183,23 @@ test('backup/import copies use the retrying fs helpers and fail closed on an unw
     const backupFile = join(root, 'backup.db')
     runOk(home, ['backup', backupFile])
     assert.equal(statSync(backupFile).size, statSync(join(home, 'state.db')).size)
-    assert.equal(statSync(backupFile).mode & 0o777, 0o600)
+    assertPrivateMode(backupFile, 0o600, 'backup')
 
-    const lockedDir = join(root, 'locked')
-    mkdirSync(lockedDir, { mode: 0o500 })
-    try {
-      const failed = run(home, ['backup', join(lockedDir, 'b.db')])
-      assert.equal(failed.status, 1, failed.stderr)
-      assert.match(failed.stderr, /backup failed/)
-      assert.equal(existsSync(join(lockedDir, 'b.db')), false, 'no partial backup may be left behind')
-    } finally {
-      chmodSync(lockedDir, 0o700)
+    // POSIX-only: chmod(0o500) makes a directory unwritable on POSIX, but on
+    // Windows the read-only attribute on a directory does not block creating
+    // files inside it (ACLs are the real control). The unwritable-target
+    // contract stays covered by the POSIX run; see docs/WINDOWS.md section 6.
+    if (!IS_WINDOWS) {
+      const lockedDir = join(root, 'locked')
+      mkdirSync(lockedDir, { mode: 0o500 })
+      try {
+        const failed = run(home, ['backup', join(lockedDir, 'b.db')])
+        assert.equal(failed.status, 1, failed.stderr)
+        assert.match(failed.stderr, /backup failed/)
+        assert.equal(existsSync(join(lockedDir, 'b.db')), false, 'no partial backup may be left behind')
+      } finally {
+        chmodSync(lockedDir, 0o700)
+      }
     }
 
     // import --replace writes a pre-import backup (copy + fsync) before saving.

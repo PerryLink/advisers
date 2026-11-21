@@ -3,6 +3,7 @@ import { mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, statSync, wr
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import test from 'node:test'
+import { assertPrivateMode } from './win-compat.mjs'
 import { SqliteStore } from '../lib/sqlite.js'
 import {
   AUDIT_ANCHOR_FILE,
@@ -101,7 +102,7 @@ test('writeAuditAnchor writes a 0600 atomic anchor that verifies as match', () =
     assert.equal(anchor.keyed, true)
     assert.match(anchor.hmac, /^[0-9a-f]{64}$/)
     assert.equal(validateAuditAnchor(anchor).ok, true)
-    assert.equal(statSync(path).mode & 0o777, 0o600)
+    assertPrivateMode(path, 0o600, 'audit anchor')
     assert.equal(readdirSync(home).some((name) => name.includes('.tmp-')), false, 'atomic write leaves no temp files')
 
     const verified = verifyAuditAgainstAnchor({ home, store, key: KEY })

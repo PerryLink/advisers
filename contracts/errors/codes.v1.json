@@ -5,7 +5,7 @@
   "frozenAt": "2026-11-20",
   "sourceCommit": "35a51c3",
   "sourceVersion": "0.2.4",
-  "release": "0.3.0",
+  "release": "0.4.0",
   "baseline": {
     "commit": "35a51c3",
     "codeCount": 50
@@ -644,6 +644,17 @@
       "doc": "docs/CLIENTS.md"
     },
     {
+      "code": "E_CLIENT_HAS_OPEN_RECEIVABLES",
+      "category": "state",
+      "exit": 1,
+      "surfaces": [
+        "lib"
+      ],
+      "since": "0.4.0",
+      "stable": true,
+      "remedy": "The client still has open receivables. Settle or void them (or use an explicit supported override) before archiving the client."
+    },
+    {
       "code": "E_CLIENT_INVALID",
       "category": "usage",
       "exit": 1,
@@ -709,6 +720,39 @@
       "doc": "docs/CLIENTS.md"
     },
     {
+      "code": "E_CLIENT_PACK_INVALID",
+      "category": "usage",
+      "exit": 1,
+      "surfaces": [
+        "lib"
+      ],
+      "since": "0.4.0",
+      "stable": true,
+      "remedy": "The client status pack input, manifest or checksum file is invalid (schema, missing/extra files or a forbidden money-like field). Fix the flagged field/file; a v1 pack never carries receivable/payment amounts."
+    },
+    {
+      "code": "E_CLIENT_PACK_LIMIT",
+      "category": "verify",
+      "exit": 1,
+      "surfaces": [
+        "lib"
+      ],
+      "since": "0.4.0",
+      "stable": true,
+      "remedy": "The client status pack exceeds a verification resource limit (entry count, depth, single-file or total size). The pack is not trusted; ask the sender for a normal-size pack or verify it manually."
+    },
+    {
+      "code": "E_CLIENT_PACK_RECEIVABLES_UNSUPPORTED",
+      "category": "policy",
+      "exit": 1,
+      "surfaces": [
+        "lib"
+      ],
+      "since": "0.4.0",
+      "stable": true,
+      "remedy": "Client status pack v1 must not include receivable/payment amounts (reserved for 0.4.1 pending legal review). Keep money columns local and drop --include-receivables."
+    },
+    {
       "code": "E_CONFIDENCE",
       "category": "schema",
       "exit": 1,
@@ -721,6 +765,30 @@
       "doc": "docs/PET-BRIEF-PRODUCER.md"
     },
     {
+      "code": "E_CONSENT_CONFIRMATION_UNAVAILABLE",
+      "category": "policy",
+      "exit": 1,
+      "surfaces": [
+        "cli",
+        "lib"
+      ],
+      "since": "0.4.0",
+      "stable": true,
+      "remedy": "A non-interactive consent grant needs an explicit --yes (or ADVISERS_CONSENT_<SURFACE>=1). Read advisers tos show and docs/PRIVACY.md first; this is a separate model-egress consent, not TOS acceptance."
+    },
+    {
+      "code": "E_CONTENT_SAFETY_BLOCKED",
+      "category": "content",
+      "exit": 1,
+      "surfaces": [
+        "cli",
+        "lib"
+      ],
+      "since": "0.4.0",
+      "stable": true,
+      "remedy": "The local content-safety classifier blocked this content. Do not retry the same content; review it first."
+    },
+    {
       "code": "E_COUNTS",
       "category": "schema",
       "exit": 1,
@@ -731,6 +799,17 @@
       "stable": true,
       "remedy": "Pet Brief counts must be integers and match the array lengths.",
       "doc": "docs/PET-BRIEF-PRODUCER.md"
+    },
+    {
+      "code": "E_CREDENTIALS_INSECURE",
+      "category": "policy",
+      "exit": 1,
+      "surfaces": [
+        "lib"
+      ],
+      "since": "0.4.0",
+      "stable": true,
+      "remedy": "The local IMAP credential file is unsafe (group/other-readable, a symlink, corrupt or wrong format). chmod 700 the credentials directory and 600 the file, or delete it and re-add the account; advisers refuses to read it."
     },
     {
       "code": "E_DB_CORRUPT",
@@ -818,6 +897,17 @@
       "doc": "docs/PET-BRIEF-PRODUCER.md"
     },
     {
+      "code": "E_FACT_NOT_FOUND",
+      "category": "state",
+      "exit": 1,
+      "surfaces": [
+        "lib"
+      ],
+      "since": "0.4.0",
+      "stable": true,
+      "remedy": "Unknown or deleted fact at this clearance. Run `advisers fact ls` (or pass --include-deleted to inspect a tombstone) and use an existing fact id."
+    },
+    {
       "code": "E_FORBIDDEN_FIELD",
       "category": "schema",
       "exit": 1,
@@ -852,6 +942,72 @@
       "remedy": "Pet Brief items must carry a non-empty string id."
     },
     {
+      "code": "E_IMAP_AUTH",
+      "category": "config",
+      "exit": 1,
+      "surfaces": [
+        "lib"
+      ],
+      "since": "0.4.0",
+      "stable": true,
+      "remedy": "IMAP authentication failed. Check the account username and app password; providers may require an app password (OAuth is not supported in 0.4.0)."
+    },
+    {
+      "code": "E_IMAP_PROTOCOL",
+      "category": "config",
+      "exit": 1,
+      "surfaces": [
+        "lib"
+      ],
+      "since": "0.4.0",
+      "stable": true,
+      "remedy": "The IMAP server sent an unparseable/rejected response or a non-read-only command was refused. Check server compatibility and retry; advisers only reads mail."
+    },
+    {
+      "code": "E_IMAP_TIMEOUT",
+      "category": "state",
+      "exit": 1,
+      "surfaces": [
+        "lib"
+      ],
+      "since": "0.4.0",
+      "stable": true,
+      "remedy": "The IMAP request timed out. Check the network/server and retry; advisers never falls back to cleartext."
+    },
+    {
+      "code": "E_IMAP_TLS",
+      "category": "config",
+      "exit": 1,
+      "surfaces": [
+        "lib"
+      ],
+      "since": "0.4.0",
+      "stable": true,
+      "remedy": "The IMAP TLS connection or STARTTLS upgrade failed, or the server certificate is not valid for the configured host. Fix the server/certificate or use implicit TLS on 993; advisers never falls back to cleartext."
+    },
+    {
+      "code": "E_IMAP_UIDVALIDITY",
+      "category": "state",
+      "exit": 1,
+      "surfaces": [
+        "lib"
+      ],
+      "since": "0.4.0",
+      "stable": true,
+      "remedy": "The mailbox UIDVALIDITY changed, so the sync cursor needs a full rescan. Run `advisers mail sync <account> --full`; no local messages are deleted."
+    },
+    {
+      "code": "E_INTERNAL",
+      "category": "internal",
+      "exit": 1,
+      "surfaces": [
+        "lib"
+      ],
+      "since": "0.4.0",
+      "stable": false,
+      "remedy": "A KB batch item failed without a coded error; this is a fallback label, not a stable contract. Retry the file alone and report the message if it persists."
+    },
+    {
       "code": "E_IO",
       "category": "fs",
       "exit": 1,
@@ -883,6 +1039,116 @@
       "since": "0.3.0",
       "stable": false,
       "remedy": "A JSON input file is malformed; fix the file (or regenerate it) before retrying."
+    },
+    {
+      "code": "E_KB_DUPLICATE",
+      "category": "state",
+      "exit": 1,
+      "surfaces": [
+        "lib"
+      ],
+      "since": "0.4.0",
+      "stable": true,
+      "remedy": "This document is already indexed. Re-run with --replace to re-index it, or skip the file."
+    },
+    {
+      "code": "E_KB_EMPTY",
+      "category": "content",
+      "exit": 1,
+      "surfaces": [
+        "lib"
+      ],
+      "since": "0.4.0",
+      "stable": true,
+      "remedy": "No extractable text was found. A scanned/image file is reported as needs-OCR and is not indexed in 0.4.0; store a text-based version or a PDF with a text layer."
+    },
+    {
+      "code": "E_KB_ENCODING",
+      "category": "content",
+      "exit": 1,
+      "surfaces": [
+        "lib"
+      ],
+      "since": "0.4.0",
+      "stable": true,
+      "remedy": "The file bytes are neither valid UTF-8 nor decodable as GB18030, so nothing was indexed. Convert the file to UTF-8 and retry."
+    },
+    {
+      "code": "E_KB_INVALID",
+      "category": "usage",
+      "exit": 1,
+      "surfaces": [
+        "lib"
+      ],
+      "since": "0.4.0",
+      "stable": true,
+      "remedy": "Invalid KB input (file path, kind/relation/scope, symlink or page id). Pass an existing regular file and a documented kind/relation/scope; see `advisers kb add --help`."
+    },
+    {
+      "code": "E_KB_LIMIT",
+      "category": "usage",
+      "exit": 1,
+      "surfaces": [
+        "lib"
+      ],
+      "since": "0.4.0",
+      "stable": true,
+      "remedy": "At most 200 files can be indexed in one KB batch. Split the batch and retry."
+    },
+    {
+      "code": "E_KB_NOT_FOUND",
+      "category": "state",
+      "exit": 1,
+      "surfaces": [
+        "lib"
+      ],
+      "since": "0.4.0",
+      "stable": true,
+      "remedy": "Unknown, hidden-above-clearance or tombstoned KB document. Run `advisers kb ls` and use an active document id."
+    },
+    {
+      "code": "E_KB_PAGE_NOT_FOUND",
+      "category": "state",
+      "exit": 1,
+      "surfaces": [
+        "lib"
+      ],
+      "since": "0.4.0",
+      "stable": true,
+      "remedy": "Unknown, hidden-above-clearance or not-yet-built KB page. Rebuild/derive the page (`advisers kb page rebuild`) or use an existing page id."
+    },
+    {
+      "code": "E_KB_READ",
+      "category": "fs",
+      "exit": 1,
+      "surfaces": [
+        "lib"
+      ],
+      "since": "0.4.0",
+      "stable": true,
+      "remedy": "The KB source file cannot be read (missing, permission or I/O error), so nothing was indexed. Check the path and permissions and retry."
+    },
+    {
+      "code": "E_KB_TOO_LARGE",
+      "category": "fs",
+      "exit": 1,
+      "surfaces": [
+        "lib"
+      ],
+      "since": "0.4.0",
+      "stable": true,
+      "remedy": "The file or an archive member exceeds the KB ingestion budget (50 MB file, 2 MB text, 500 PDF pages, ZIP entry/expansion caps). Split or shrink the file; limits are reported, never silently dropped."
+    },
+    {
+      "code": "E_KB_UNSUPPORTED",
+      "category": "usage",
+      "exit": 1,
+      "surfaces": [
+        "lib"
+      ],
+      "since": "0.4.0",
+      "stable": true,
+      "remedy": "Unsupported file type for KB ingest. Index md/txt/docx/xlsx/pptx/ofd/pdf/eml files; scanned images need no OCR in 0.4.0."
     },
     {
       "code": "E_LEDGER_ABSENT",
@@ -938,6 +1204,94 @@
       "since": "0.2.x",
       "stable": false,
       "remedy": "A contract string field is outside its min/max length; truncate or split it."
+    },
+    {
+      "code": "E_MAIL_ACCOUNT_NOT_FOUND",
+      "category": "state",
+      "exit": 1,
+      "surfaces": [
+        "lib"
+      ],
+      "since": "0.4.0",
+      "stable": true,
+      "remedy": "Unknown mail account. Run `advisers mail account ls` and use an active account name or id."
+    },
+    {
+      "code": "E_MAIL_CONFIG",
+      "category": "config",
+      "exit": 1,
+      "surfaces": [
+        "lib"
+      ],
+      "since": "0.4.0",
+      "stable": true,
+      "remedy": "Invalid mail account/import configuration (host, port, TLS mode, retention or dates). Fix the flagged field; cleartext IMAP is refused, use implicit TLS on 993 or STARTTLS."
+    },
+    {
+      "code": "E_MAIL_CREDENTIALS_MISSING",
+      "category": "config",
+      "exit": 1,
+      "surfaces": [
+        "lib"
+      ],
+      "since": "0.4.0",
+      "stable": true,
+      "remedy": "No stored credential for this mail account. Run `advisers mail account add` again and enter the password through the TTY prompt or --pass-stdin (never argv)."
+    },
+    {
+      "code": "E_MAIL_MESSAGE_NOT_FOUND",
+      "category": "state",
+      "exit": 1,
+      "surfaces": [
+        "lib"
+      ],
+      "since": "0.4.0",
+      "stable": true,
+      "remedy": "Unknown mail message. Run `advisers mail ls` and use an existing message id."
+    },
+    {
+      "code": "E_MAIL_MODEL_DISABLED",
+      "category": "policy",
+      "exit": 1,
+      "surfaces": [
+        "lib"
+      ],
+      "since": "0.4.0",
+      "stable": true,
+      "remedy": "Model extraction is opt-in and disabled here (needs --model --yes and ADVISERS_API_KEY, and is refused for protected/secrecy>0 matters). Use the default local extraction or grant the model path explicitly."
+    },
+    {
+      "code": "E_MAIL_MODEL_OPT_IN",
+      "category": "policy",
+      "exit": 1,
+      "surfaces": [
+        "cli"
+      ],
+      "since": "0.4.0",
+      "stable": true,
+      "remedy": "mail extract --model sends message text to the model provider and needs an explicit --yes. The default local path is offline; pass --model --yes only after consent."
+    },
+    {
+      "code": "E_MAIL_NOT_RETAINED",
+      "category": "state",
+      "exit": 1,
+      "surfaces": [
+        "lib"
+      ],
+      "since": "0.4.0",
+      "stable": true,
+      "remedy": "The message body was not retained (metadata-only row or purged by retention). Metadata and body_sha256 are kept; re-sync the mailbox to read the body again."
+    },
+    {
+      "code": "E_MAIL_TOO_LARGE",
+      "category": "fs",
+      "exit": 1,
+      "surfaces": [
+        "lib"
+      ],
+      "since": "0.4.0",
+      "stable": true,
+      "remedy": "An IMAP message/response exceeded the size limit; oversize messages keep header-only metadata. Raise --max-message-bytes only if the server is trusted and memory allows."
     },
     {
       "code": "E_MALFORMED_JSON",
@@ -1047,6 +1401,226 @@
       "doc": "docs/FAULT-INJECTION.md"
     },
     {
+      "code": "E_PAYMENT_INVALID",
+      "category": "usage",
+      "exit": 1,
+      "surfaces": [
+        "lib"
+      ],
+      "since": "0.4.0",
+      "stable": true,
+      "remedy": "Invalid payment input (amount, currency, method or paid date). Fix the flagged field and retry; a payment currency must equal its receivable currency."
+    },
+    {
+      "code": "E_PAYMENT_NOT_FOUND",
+      "category": "state",
+      "exit": 1,
+      "surfaces": [
+        "lib"
+      ],
+      "since": "0.4.0",
+      "stable": true,
+      "remedy": "Unknown payment id. Run `advisers payment ls` and use an existing id."
+    },
+    {
+      "code": "E_POLICY_AUDIT_UNAVAILABLE",
+      "category": "policy",
+      "exit": 1,
+      "surfaces": [
+        "cli",
+        "lib"
+      ],
+      "since": "0.4.0",
+      "stable": true,
+      "remedy": "The policy intent/result audit could not be written, so the side effect was refused. Fix the audit sink/ledger and retry; if details.effectCompleted is true the effect already ran unaudited, so reconcile manually."
+    },
+    {
+      "code": "E_POLICY_CONFIRMATION_UNAVAILABLE",
+      "category": "policy",
+      "exit": 1,
+      "surfaces": [
+        "cli",
+        "lib"
+      ],
+      "since": "0.4.0",
+      "stable": true,
+      "remedy": "Untrusted content would drive a side effect, but no interactive confirmation channel is available. Re-run interactively (TTY) or use an explicitly authorized non-interactive path; do not bypass confirmation."
+    },
+    {
+      "code": "E_POLICY_CONSENT_REQUIRED",
+      "category": "policy",
+      "exit": 1,
+      "surfaces": [
+        "cli",
+        "lib"
+      ],
+      "since": "0.4.0",
+      "stable": true,
+      "remedy": "Explicit consent for this surface + data class + provider is required before model egress. Record a consent grant for those exact fields (and base URL) and retry."
+    },
+    {
+      "code": "E_POLICY_DENIED",
+      "category": "policy",
+      "exit": 1,
+      "surfaces": [
+        "cli",
+        "lib"
+      ],
+      "since": "0.4.0",
+      "stable": true,
+      "remedy": "The policy engine denied this side effect (surface/action/data class). Read the decision code/hint, run advisers privacy --matrix, and grant the explicit consent or fix the facts; do not bypass the gate."
+    },
+    {
+      "code": "E_POLICY_EFFECT_FAILED",
+      "category": "internal",
+      "exit": 1,
+      "surfaces": [
+        "lib"
+      ],
+      "since": "0.4.0",
+      "stable": false,
+      "remedy": "Internal fallback recorded when an audited effect threw an uncoded error; not a stable contract. Read the original error, retry the action and report it with diagnostics if it persists."
+    },
+    {
+      "code": "E_POLICY_EGRESS_UNREGISTERED",
+      "category": "policy",
+      "exit": 1,
+      "surfaces": [
+        "cli",
+        "lib"
+      ],
+      "since": "0.4.0",
+      "stable": true,
+      "remedy": "This egress sink/path is not registered (or is ambiguous), so egress fails closed. Register the path or pass a registered meta.id disambiguator."
+    },
+    {
+      "code": "E_POLICY_INVALID_FACTS",
+      "category": "policy",
+      "exit": 1,
+      "surfaces": [
+        "cli",
+        "lib"
+      ],
+      "since": "0.4.0",
+      "stable": true,
+      "remedy": "Policy facts are malformed or incomplete, so the decision fails closed. Pass the documented fact fields with valid types and re-evaluate."
+    },
+    {
+      "code": "E_POLICY_PROTECTED_PATH",
+      "category": "policy",
+      "exit": 1,
+      "surfaces": [
+        "cli",
+        "lib"
+      ],
+      "since": "0.4.0",
+      "stable": true,
+      "remedy": "The target path is a protected or persistence location (credentials/config/HOME persistence). Choose a workspace path instead."
+    },
+    {
+      "code": "E_POLICY_SAFETY_REQUIRED",
+      "category": "policy",
+      "exit": 1,
+      "surfaces": [
+        "cli",
+        "lib"
+      ],
+      "since": "0.4.0",
+      "stable": true,
+      "remedy": "A content-safety verdict is required before this action but was not supplied. Run the configured content-safety check and pass its verdict."
+    },
+    {
+      "code": "E_POLICY_SURFACE_NOT_ENABLED",
+      "category": "policy",
+      "exit": 1,
+      "surfaces": [
+        "cli",
+        "lib"
+      ],
+      "since": "0.4.0",
+      "stable": true,
+      "remedy": "The surface is registered but not wired/enabled in this release, so the action fails closed. Do not bypass the gate; wire/enable the surface first."
+    },
+    {
+      "code": "E_POLICY_TOKEN_EFFECT_MISMATCH",
+      "category": "policy",
+      "exit": 1,
+      "surfaces": [
+        "lib"
+      ],
+      "since": "0.4.0",
+      "stable": true,
+      "remedy": "The effect does not match the effect digest the decision was issued for. Authorize the actual effect and pass matching effect metadata."
+    },
+    {
+      "code": "E_POLICY_TOKEN_EXPIRED",
+      "category": "policy",
+      "exit": 1,
+      "surfaces": [
+        "lib"
+      ],
+      "since": "0.4.0",
+      "stable": true,
+      "remedy": "The decision token expired before the effect ran. Authorize again and execute promptly."
+    },
+    {
+      "code": "E_POLICY_TOKEN_INVALID",
+      "category": "policy",
+      "exit": 1,
+      "surfaces": [
+        "lib"
+      ],
+      "since": "0.4.0",
+      "stable": true,
+      "remedy": "The decision token is malformed or was tampered with. Authorize again and use the returned token unchanged."
+    },
+    {
+      "code": "E_POLICY_TOKEN_REPLAY",
+      "category": "policy",
+      "exit": 1,
+      "surfaces": [
+        "lib"
+      ],
+      "since": "0.4.0",
+      "stable": true,
+      "remedy": "The one-shot decision token was already consumed. Authorize the action again instead of reusing the token."
+    },
+    {
+      "code": "E_POLICY_TOKEN_UNKNOWN",
+      "category": "policy",
+      "exit": 1,
+      "surfaces": [
+        "lib"
+      ],
+      "since": "0.4.0",
+      "stable": true,
+      "remedy": "The decision token was not issued by this process (or was cleared). Authorize the action again."
+    },
+    {
+      "code": "E_POLICY_UNKNOWN_SURFACE",
+      "category": "policy",
+      "exit": 1,
+      "surfaces": [
+        "cli",
+        "lib"
+      ],
+      "since": "0.4.0",
+      "stable": true,
+      "remedy": "The surface/action is not registered in the policy matrix, so the action fails closed. Use a registered surface/action and register new integration points before use."
+    },
+    {
+      "code": "E_POLICY_WORKSPACE_ESCAPE",
+      "category": "policy",
+      "exit": 1,
+      "surfaces": [
+        "cli",
+        "lib"
+      ],
+      "since": "0.4.0",
+      "stable": true,
+      "remedy": "The target path escapes the workspace boundary. Keep the target inside the workspace or widen it explicitly."
+    },
+    {
       "code": "E_PROJECT_ARCHIVED",
       "category": "state",
       "exit": 1,
@@ -1112,6 +1686,17 @@
       "doc": "docs/CLIENTS.md"
     },
     {
+      "code": "E_QUERY_TOO_LONG",
+      "category": "usage",
+      "exit": 1,
+      "surfaces": [
+        "lib"
+      ],
+      "since": "0.4.0",
+      "stable": true,
+      "remedy": "The KB search query is longer than 200 characters. Shorten the query and retry."
+    },
+    {
       "code": "E_READ",
       "category": "fs",
       "exit": 1,
@@ -1144,6 +1729,28 @@
       "since": "0.3.0",
       "stable": true,
       "remedy": "The receipt/evidence pack exceeds a verification resource limit (entries, depth, file size or total bytes); ask the sender for a normal pack or verify it manually — the pack was not trusted."
+    },
+    {
+      "code": "E_RECEIVABLE_INVALID",
+      "category": "usage",
+      "exit": 1,
+      "surfaces": [
+        "lib"
+      ],
+      "since": "0.4.0",
+      "stable": true,
+      "remedy": "Invalid receivable input (amount, currency, due date, kind or memo). Fix the flagged field and retry; amounts are decimal strings within the minor-unit cap and one of CNY/USD/EUR/HKD."
+    },
+    {
+      "code": "E_RECEIVABLE_NOT_FOUND",
+      "category": "state",
+      "exit": 1,
+      "surfaces": [
+        "lib"
+      ],
+      "since": "0.4.0",
+      "stable": true,
+      "remedy": "Unknown or hidden-above-clearance receivable id. Run `advisers receivable ls` and use an active id."
     },
     {
       "code": "E_RESTORE_BUSY",
@@ -1352,6 +1959,18 @@
       "doc": "docs/PET-BRIEF-PRODUCER.md"
     },
     {
+      "code": "E_STORE_REQUIRED",
+      "category": "state",
+      "exit": 1,
+      "surfaces": [
+        "cli",
+        "lib"
+      ],
+      "since": "0.4.0",
+      "stable": true,
+      "remedy": "This family command needs the SQLite ledger (KB/mail/money tables live there). Unset ADVISERS_STORE=json and run advisers doctor; the JSON fallback keeps only the nine-table wire ledger."
+    },
+    {
       "code": "E_TEMPLATE_INVALID",
       "category": "template",
       "exit": 1,
@@ -1385,6 +2004,17 @@
       "since": "0.2.x",
       "stable": false,
       "remedy": "Unknown template. Use `quote` or `proposal`."
+    },
+    {
+      "code": "E_TERM_REQUIRED",
+      "category": "usage",
+      "exit": 1,
+      "surfaces": [
+        "cli"
+      ],
+      "since": "0.4.0",
+      "stable": true,
+      "remedy": "A terminal is required for the hidden secret prompt. Run on a TTY, or pipe one line with --pass-stdin; never put a password in argv."
     },
     {
       "code": "E_TIME_FORMAT",

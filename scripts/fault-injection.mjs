@@ -8,7 +8,7 @@
  *
  *   - crash     : SIGKILL a commit add while its write transaction is open
  *                 (before COMMIT) and right after COMMIT (before checkpoint);
- *   - migration : SIGKILL a schema v19 -> v21 migration mid-transaction, and
+ *   - migration : SIGKILL a schema v19 -> v22 migration mid-transaction, and
  *                 inject a migration-step error; both must roll back, leave a
  *                 verifiable pre-migration backup, and retry cleanly;
  *   - WAL       : corrupt (zeroed header) and truncated (torn frame) WAL files
@@ -347,7 +347,7 @@ async function killAtMarker(home, cliArgs, options = {}) {
   }
 }
 
-/** Turn the current v20 fixture into the pre-migration v19 shape. */
+/** Turn the current fixture into the pre-migration v19 shape. */
 function downgradeToV19(home) {
   inspectDb(home, (db) => {
     db.exec('DROP TABLE IF EXISTS schema_migrations')
@@ -445,10 +445,10 @@ async function migrationInterrupted() {
   verifyMigrationBackup(home, backups[0], beforeRows.length)
 
   mustCli(home, ['status'])
-  check(schemaVersion(home) === 21, 'retry did not migrate to schema 21')
+  check(schemaVersion(home) === 22, 'retry did not migrate to schema 22')
   check(hasTable(home, 'schema_migrations'), 'retry did not create the migration ledger')
   check(commitmentRows(home).length === beforeRows.length, 'retry lost commitment rows')
-  return 'SIGKILL inside the v19->v20 migration transaction: schema stayed 19, rollback clean, verified backup, retry migrated to 20'
+  return 'SIGKILL inside the v19->v22 migration transaction: schema stayed 19, rollback clean, verified backup, retry migrated to 22'
 }
 
 async function migrationFailureRollback() {
@@ -473,9 +473,9 @@ async function migrationFailureRollback() {
   verifyMigrationBackup(home, backups[0], beforeRows.length)
 
   mustCli(home, ['status'])
-  check(schemaVersion(home) === 21, 'retry after a failed migration did not reach schema 21')
+  check(schemaVersion(home) === 22, 'retry after a failed migration did not reach schema 22')
   check(commitmentRows(home).length === beforeRows.length, 'retry after a failed migration lost commitment rows')
-  return 'injected v20 step error rolled back (schema 19, verified backup); retry migrated to 20 with rows intact'
+  return 'injected v20 step error rolled back (schema 19, verified backup); retry migrated to 22 with rows intact'
 }
 
 async function makeCommittedWalHome(label) {

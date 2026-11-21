@@ -7,6 +7,7 @@ import { join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import test from 'node:test'
 import { tosEnv } from './tos-fixture.js'
+import { assertPrivateMode } from './win-compat.mjs'
 import { SqliteStore } from '../lib/sqlite.js'
 
 // 0.2.3 Wave 1 (security audit SEC3-02 / P1-B, design §3.10/§3.11):
@@ -116,7 +117,7 @@ test('agent tools use the default workspace and write audit rows without absolut
     assert.equal(existsSync(written), true, 'the tool must write inside $ADVISERS_HOME/workspace')
     assert.equal(readFileSync(written, 'utf8'), 'hello-workspace')
     assert.equal(existsSync(join(work, 'out', 'hello.txt')), false, 'the tool must not write into process.cwd()')
-    assert.equal(statSync(join(home, 'workspace')).mode & 0o777, 0o700, 'the workspace must be 0700')
+    assertPrivateMode(join(home, 'workspace'), 0o700, 'the agent workspace')
     // The system prompt carries the untrusted-data rules.
     assert.match(fake.requests[0].messages[0].content, /untrusted-data/)
     assert.match(fake.requests[0].messages[0].content, /never an instruction/i)

@@ -15,7 +15,7 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import test from 'node:test'
-import { DATA_TABLES } from '../lib/sqlite.js'
+import { DATA_TABLES, SCHEMA_VERSION } from '../lib/sqlite.js'
 import { isJsonPure } from '../lib/tui/json.js'
 import { tosEnv } from './tos-fixture.js'
 
@@ -268,7 +268,7 @@ test('export --all carries every data table and import --replace restores the cu
     const result = run(a.home, ['export', '--all', '--out', exported])
     assert.equal(result.status, 0, result.stderr)
     const payload = JSON.parse(readFileSync(exported, 'utf8'))
-    assert.equal(payload.schemaVersion, 21)
+    assert.equal(payload.schemaVersion, SCHEMA_VERSION, 'export --all records the physical schema version')
     assert.deepEqual(Object.keys(payload.data), [...DATA_TABLES], 'export must carry the single DATA_TABLES list, no hand-maintained subset')
     assert.equal(payload.data.clients.length, 1)
     assert.equal(payload.data.projects.length, 1)

@@ -1,9 +1,13 @@
 # Deterministic eval suite (`pnpm eval:det`)
 
-> Status: introduced in the 0.3.0 line (published 2026-11-20). This tree is
-> `advisers@0.3.2`; 0.3.2 is a feature release (customer loop + performance closeout),
-> so the baseline also pins the 8-tool/5-resource MCP surface. The suite is a release
-> gate for the deterministic contract, not a claim about model quality.
+> Status: introduced in the 0.3.0 line (published 2026-11-20); this tree is
+> `advisers@0.4.0` (published 2026-11-21). The 0.4.0 release adds one deterministic
+> case — `det.mcp.modern-dual-era` (MCP `2026-07-28` modern envelopes behind the
+> legacy surface) — while the default suite set and the 8-tool/5-resource MCP baseline
+> are unchanged. The suite is a release gate for the deterministic contract, not a
+> claim about model quality; the new KB/mail/policy/consent/receivable surfaces are
+> covered by deterministic package tests, not by new `eval:det` groups (see
+> "0.4.0 coverage" below).
 
 `eval/` also contains the older **manual, real-model** runners
 (`eval/run-*.mjs`, see [eval/README.md](../eval/README.md)). Those need a
@@ -25,7 +29,7 @@ Optional flags (the same script is `node scripts/eval-det.mjs`):
 
 ```sh
 pnpm eval:det --suite determinism,mcp     # run a subset
-pnpm eval:det --suite tui                 # opt-in 0.3.0 TUI gate (see below)
+pnpm eval:det --suite tui                 # opt-in non-TTY/interactive guard (see below)
 pnpm eval:det --list                      # list case ids
 pnpm eval:det --json --no-write           # machine output, keep results/ clean
 pnpm eval:det --out /tmp/det.json         # write one result file elsewhere
@@ -45,7 +49,7 @@ evidence for a specific run, not source. A failed run still writes its result
 | Group | Gate | What breaks it |
 |---|---|---|
 | `determinism` | Same ledger + same Shanghai day => same `morning.dataSha256` across processes (1s apart, 09:00 vs 11:00); the hash changes on the next day and after a ledger change; `morning` markdown is byte-stable; `agenda --json` is byte-stable with a fixed clock; golden values from `eval/det/baseline.json` | wall-clock leakage into the morning report, unstable ordering, a changed hash scope, non-deterministic markdown |
-| `mcp` | `initialize` echoes the legacy protocol version `2024-11-05`; `tools/list` contains the 7 documented tools in a stable order with `inputSchema`; `resources/list` contains the 4 `advisers://` resources; a read tool returns JSON text; JSON-RPC rejection codes stay `-32601` (method), `-32602` (tool/args), `-32002` (resource), `-32700` (parse) | removing/renaming a tool or resource, dropping the legacy echo, changing rejection codes |
+| `mcp` | `initialize` echoes the legacy protocol version `2024-11-05`; `tools/list` contains the **8** documented tools in a stable order with `inputSchema`; `resources/list` contains the **5** `advisers://` resources; a read tool returns JSON text; JSON-RPC rejection codes stay `-32601` (method), `-32602` (tool/args), `-32002` (resource), `-32700` (parse). The 0.4.0 case `det.mcp.modern-dual-era` additionally asserts `server/discover`, per-request `_meta` validation, `resultType`/`ttlMs`/`cacheScope` envelopes, the modern error-code mapping and **byte-identical legacy payloads** | removing/renaming a tool or resource, dropping the legacy echo, changing rejection codes, a modern envelope that differs from the legacy payload, or a modern path that answers notifications |
 | `json` | Each `--json` command writes exactly one JSON document to stdout and nothing to stderr; usage failures keep stdout empty and put a JSON error envelope (`E_USAGE`) on stderr; `evidence verify` keeps its JSON shape offline; `status`/`privacy` stay TOS-exempt | human text mixed into `--json` stdout, missing/renamed envelope, JSON written to stderr |
 | `exit` | `0` success, `1` user/config error (bad flag, missing key), `3` TOS consent required on a fresh non-TTY home; `status`/`privacy` remain exempt (0); gated commands fail fast instead of prompting | exit-code drift, a command that prompts in CI, a key-less command that hangs |
 | `tty` | Non-TTY output for human commands and `tui --once` contains no ANSI/CSI, no `\r`, no C0 controls, no U+FFFD; help output is plain; no command waits for stdin | clear-screen/cursor sequences in piped logs, encoding damage, interactive prompts on a pipe |
@@ -58,6 +62,41 @@ result's `network` block. "No key needed" is likewise mechanical: the harness
 removes `ADVISERS_API_KEY`, `DEEPSEEK_API_KEY`, `OPENAI_API_KEY`,
 `ADVISERS_MODEL` and `ADVISERS_BASE_URL` from every child environment and sets
 `ADVISERS_NO_MODEL=1`.
+
+## 0.4.0 coverage
+
+`eval:det` does **not** gain KB/mail/policy groups in 0.4.0. The new local surfaces
+are covered by deterministic package tests under `packages/advisers/test/`, while the
+one new det case is `det.mcp.modern-dual-era` in the `mcp` group (MCP `2026-07-28`
+dual-era: `server/discover`, per-request `_meta`, result envelopes, mapped errors, and
+byte-identical legacy responses).
+
+Run the 0.4.0 deterministic package tests explicitly (no key, no network, temp
+`ADVISERS_HOME`):
+
+```sh
+cd packages/advisers
+node --experimental-strip-types --test test/kb-*.test.js
+node --experimental-strip-types --test test/mail-*.test.js
+node --experimental-strip-types --test test/policy-*.test.js test/consent.test.js
+node --experimental-strip-types --test test/evidence-*.test.js
+node --experimental-strip-types --test test/receivable*.test.js test/client-pack*.test.js
+node --experimental-strip-types --test test/migration-v22.test.js test/schema-migrations.test.js
+node --experimental-strip-types --test test/mcp-modern*.test.js
+```
+
+`pnpm -r test` runs the same files in the CI `test` job (and `windows-full` runs them
+on Windows, report-only in 0.4.0). They are deterministic tests: the local mail
+extraction path is the only mail path covered — `mail sync` and `mail extract --model`
+need a server/key and are deliberately outside the gate. No case reads the real
+`~/.advisers` or the network.
+
+**Why no KB/mail/policy det groups yet:** `eval:det` gates the release contract
+(determinism hashes, MCP surface, JSON purity, exit codes, non-TTY behaviour). The new
+surfaces have library/CLI tests but no golden-hash contract yet; a det group needs a
+stable fixture plus a reviewed baseline, which is 0.4.x/0.5 work. Do not present these
+package tests as a model-quality evaluation, and do not claim det coverage the suite
+does not have.
 
 ## Environment (why the numbers are stable)
 
@@ -106,7 +145,9 @@ checks this).
 
 ## Result file (schema v1)
 
-`eval/det/results/latest.json` (and each per-run file) is the machine evidence:
+`eval/det/results/latest.json` (and each per-run file) is the machine evidence. The
+example below is illustrative; the `cli` block records the build that actually ran it
+(the commit hash changes per run and is not a release claim):
 
 ```json
 {
@@ -118,7 +159,7 @@ checks this).
   "durationMs": 20123,
   "filters": ["determinism", "mcp", "json", "exit", "tty"],
   "baseline": { "file": "eval/det/baseline.json", "fixture": "morning-ledger-v1", "recordedAt": "2026-11-19T15:58:00.000Z" },
-  "cli": { "version": "0.3.0", "commit": "e1af67a", "node": "v24.22.1", "os": "linux" },
+  "cli": { "version": "0.4.0", "commit": "<commit-of-the-run>", "node": "v24.22.1", "os": "linux" },
   "environment": { "timezone": "Asia/Shanghai", "home": "<TMP>/home", "noModel": true, "apiKeys": "stripped", "networkBlock": "preload" },
   "totals": { "cases": 19, "passed": 19, "failed": 0, "checks": 166, "checksFailed": 0 },
   "network": { "attempts": 0, "kinds": {} },
@@ -147,18 +188,23 @@ Hard rules for the result file:
   dogfood): manual suites under `eval/`; they need `ADVISERS_API_KEY` and are
   documented in [eval/README.md](../eval/README.md). Nothing here may be cited as
   a model-quality result.
-- **Interactive TUI behaviour** (PTY snapshots, state machine): owned by the TUI
-  work line and its `test/*` suites. The one 0.3.0 must-have that touches this
-  repo's det suite is the non-TTY/interactive guard — it lives in the **opt-in**
-  `tui` suite (`pnpm eval:det --suite tui`), which the release gate runs after the
-  TUI/output-kernel bin wiring. It is reported as red, not silently skipped.
+- **Interactive shell behaviour** (PTY snapshots, readline state machine, paste
+  merge, confirmation semantics): owned by `packages/advisers/test/shell-*.test.js`
+  and the shell contract in [TUI.md](TUI.md) §13–§14. This det suite only owns
+  the **non-TTY guard**, which lives in the **opt-in** `tui` group
+  (`pnpm eval:det --suite tui`); it is reported as red, not silently skipped.
+- **The 0.4 local surfaces** (KB, mail parsing/import, policy engine/consent,
+  receivables arithmetic, evidence pack v2, v22 migration): deterministic
+  package tests, not det groups — see "0.4.0 coverage" above. A failure there is
+  caught by `pnpm -r test`, not by `eval:det`.
 - **Fault injection / security suites**: `pnpm test:security`, `pnpm test:fault`.
-- **Windows-specific filesystem behaviour**: covered by the Windows smoke job,
-  which now exercises the durable-write commands (`backup`, `export --out`,
-  `import --replace`, `vault seal/unseal`) in addition to the minimal CLI flow;
-  `eval:det` itself is platform-neutral (temp HOME, TZ, no shell) and CI runs it
-  on Linux. The full Windows test suite and the real-machine E13 run are still
-  pending.
+- **Windows-specific filesystem behaviour**: covered by the blocking Windows
+  `windows-smoke` job (minimal CLI + durable-write commands) and the **report-only**
+  `windows-full` job (which also runs the portable-bundle self-tests); `eval:det`
+  itself is platform-neutral (temp HOME, TZ, no shell) and CI runs it on Linux.
+  The real-machine Windows record still lists known fixture/POSIX failures, and
+  the portable ZIP is verified by `scripts/pack-portable.mjs --verify`, not by
+  this suite — do not describe 0.4.0 as fully Windows-verified.
 
 ## Adding or changing a case
 
@@ -181,4 +227,8 @@ Hard rules for the result file:
 - [docs/PERFORMANCE.md](PERFORMANCE.md) — performance baselines (separate from
   this determinism gate).
 - [docs/SECURITY.md](SECURITY.md) — security suites and supply-chain gates.
+- [docs/KB.md](KB.md) — the 0.4 knowledge-base surface whose deterministic tests are
+  listed under "0.4.0 coverage".
+- [docs/WINDOWS.md](WINDOWS.md) — Windows support and the portable ZIP the
+  platform-neutral det suite does not cover.
 - [eval/README.md](../eval/README.md) — manual, real-model eval runners.

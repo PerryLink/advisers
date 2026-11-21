@@ -64,9 +64,9 @@ const V2_SAMPLES = [
   },
 ]
 
-test('normalizeSource: the four source types round-trip field-for-field', () => {
+test('normalizeSource: source types round-trip field-for-field', () => {
   assert.equal(SOURCE_VERSION, 2)
-  assert.deepEqual([...SOURCE_TYPES], ['conversation', 'mail', 'calendar', 'transcript'])
+  assert.deepEqual([...SOURCE_TYPES], ['conversation', 'mail', 'calendar', 'transcript', 'kb_chunk', 'kb_page', 'web', 'tool'])
   for (const { type, source } of V2_SAMPLES) {
     const normalized = normalizeSource(source)
     assert.deepEqual(normalized, source, type)

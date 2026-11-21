@@ -6,6 +6,7 @@ import { join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import test from 'node:test'
 import { tosEnv } from './tos-fixture.js'
+import { assertPrivateMode } from './win-compat.mjs'
 
 // Robustness audit P1-1/P1-2/P2-1: sealed vault visibility, plaintext copy
 // cleanup on `vault seal --remove`, and 0600 WAL/SHM sidecars.
@@ -127,7 +128,7 @@ test('bin vault: WAL/SHM sidecar files are 0600 while the database is open', asy
     for (const name of ['state.db', 'state.db-wal', 'state.db-shm']) {
       const file = join(home, name)
       if (!existsSync(file)) continue
-      assert.equal(statSync(file).mode & 0o777, 0o600, `${name} must be 0600 while the DB is open`)
+      assertPrivateMode(file, 0o600, name + ' (open database file)')
     }
   } finally {
     child.kill('SIGINT')

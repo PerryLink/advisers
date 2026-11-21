@@ -7,6 +7,7 @@ import { join } from "node:path"
 import { fileURLToPath, pathToFileURL } from "node:url"
 import test from "node:test"
 import { DatabaseSync } from "node:sqlite"
+import { IS_WINDOWS, assertPrivateMode } from "./win-compat.mjs"
 import { tosEnv } from "./tos-fixture.js"
 import { encryptJson } from "../lib/vault.js"
 import { SqliteStore, instanceLockPath, readInstanceLock } from "../lib/sqlite.js"
@@ -132,9 +133,17 @@ function startMcp(home) {
     },
     stderr: () => stderr,
     stop: async () => {
-      child.kill("SIGTERM")
-      await Promise.race([new Promise((resolve) => child.once("close", resolve)), sleep(8000)])
-      if (child.exitCode === null) child.kill("SIGKILL")
+      // Graceful MCP shutdown: closing stdin delivers EOF to the stdio server,
+      // which exits through its normal path and releases the instance lock.
+      // This is also the only portable close path on Windows, where
+      // child.kill("SIGTERM") is a hard TerminateProcess (windows triage I2).
+      if (child.exitCode !== null) return
+      try { child.stdin.end() } catch {}
+      const closed = await Promise.race([
+        new Promise((resolve) => child.once("close", () => resolve(true))),
+        sleep(8000).then(() => false),
+      ])
+      if (closed !== true && child.exitCode === null) child.kill("SIGKILL")
     },
   }
 }
@@ -154,7 +163,7 @@ test("instance lock: a running writer CLI holds ~/.advisers/instance.lock with p
       assert.equal(info.record.pid, mcp.child.pid, "instance lock must name the running CLI pid")
       assert.ok(info.record.startedAt, "instance lock must record startedAt")
       assert.match(info.record.command, /mcp --stdio/, "instance lock must record the command")
-      assert.equal(statSync(lockPath).mode & 0o777, 0o600, "instance lock must be 0600")
+      assertPrivateMode(lockPath, 0o600, "instance lock")
       // Lock-free read path: pure reads work while the writer holds the lock.
       const read = cliOk(home, ["status"])
       assert.match(read.stdout, /store\s+sqlite/)
@@ -261,35 +270,48 @@ test("instance lock: an unrefreshed lock older than the stale threshold is recla
   } finally { rmSync(root, { recursive: true, force: true }) }
 })
 
-test("instance lock: SIGTERM/SIGINT release the lock; a SIGKILLed writer is reclaimed by the next command", async () => {
+test("instance lock: SIGTERM/SIGINT release the lock; a SIGKILLed writer is reclaimed by the next command", async (t) => {
   const root = mkdtempSync(join(tmpdir(), "advisers-lock-signal-"))
   const homeTerm = join(root, "home-term")
   const homeKill = join(root, "home-kill")
   const homeInt = join(root, "home-int")
   try {
-    const term = startMcp(homeTerm)
-    assert.ok(await term.ready(), "mcp did not take the lock: " + term.stderr())
-    term.child.kill("SIGTERM")
-    const termResult = await Promise.race([new Promise((resolve) => term.child.once("close", resolve)), sleep(8000).then(() => "timeout")])
-    assert.notEqual(termResult, "timeout", "mcp did not exit on SIGTERM")
-    assert.equal(existsSync(lockFile(homeTerm)), false, "SIGTERM must release the instance lock")
-    cliOk(homeTerm, ["commit", "add", "after sigterm", "--quote", "q"])
+    // POSIX-only: Windows has no deliverable SIGTERM/SIGINT. child.kill() is
+    // TerminateProcess there, so the process never runs the exit hook that
+    // releases the lock; the supported Windows contract is that a hard kill
+    // leaves a stale lock and the NEXT write reclaims it after the pid/age
+    // staleness check (docs/WINDOWS.md sections 6/7; windows triage I1).
+    await t.test("SIGTERM/SIGINT release the instance lock", {
+      skip: IS_WINDOWS
+        ? "Windows has no POSIX signals: child.kill(SIGTERM/SIGINT) is TerminateProcess, so the exit hook cannot release the lock; the next write reclaims the stale lock (windows triage I1)"
+        : false,
+    }, async () => {
+      const term = startMcp(homeTerm)
+      assert.ok(await term.ready(), "mcp did not take the lock: " + term.stderr())
+      term.child.kill("SIGTERM")
+      const termResult = await Promise.race([new Promise((resolve) => term.child.once("close", resolve)), sleep(8000).then(() => "timeout")])
+      assert.notEqual(termResult, "timeout", "mcp did not exit on SIGTERM")
+      assert.equal(existsSync(lockFile(homeTerm)), false, "SIGTERM must release the instance lock")
+      cliOk(homeTerm, ["commit", "add", "after sigterm", "--quote", "q"])
 
-    const interrupted = startMcp(homeInt)
-    assert.ok(await interrupted.ready(), "mcp did not take the lock: " + interrupted.stderr())
-    interrupted.child.kill("SIGINT")
-    await Promise.race([new Promise((resolve) => interrupted.child.once("close", resolve)), sleep(8000)])
-    if (interrupted.child.exitCode === null) interrupted.child.kill("SIGKILL")
-    assert.equal(existsSync(lockFile(homeInt)), false, "SIGINT must release the instance lock")
+      const interrupted = startMcp(homeInt)
+      assert.ok(await interrupted.ready(), "mcp did not take the lock: " + interrupted.stderr())
+      interrupted.child.kill("SIGINT")
+      await Promise.race([new Promise((resolve) => interrupted.child.once("close", resolve)), sleep(8000)])
+      if (interrupted.child.exitCode === null) interrupted.child.kill("SIGKILL")
+      assert.equal(existsSync(lockFile(homeInt)), false, "SIGINT must release the instance lock")
+    })
 
-    const killed = startMcp(homeKill)
-    assert.ok(await killed.ready(), "mcp did not take the lock: " + killed.stderr())
-    killed.child.kill("SIGKILL")
-    await Promise.race([new Promise((resolve) => killed.child.once("close", resolve)), sleep(8000)])
-    assert.equal(existsSync(lockFile(homeKill)), true, "SIGKILL leaves the lock file behind (stale)")
-    const reclaim = cli(homeKill, ["commit", "add", "after sigkill", "--quote", "q"], { ADVISERS_LOCK_TIMEOUT_MS: "3000" })
-    assert.equal(reclaim.status, 0, "the next command must reclaim a SIGKILLed holder's lock: " + reclaim.stderr)
-    assert.equal(existsSync(lockFile(homeKill)), false)
+    await t.test("a hard-killed writer leaves a stale lock the next command reclaims", async () => {
+      const killed = startMcp(homeKill)
+      assert.ok(await killed.ready(), "mcp did not take the lock: " + killed.stderr())
+      killed.child.kill("SIGKILL")
+      await Promise.race([new Promise((resolve) => killed.child.once("close", resolve)), sleep(8000)])
+      assert.equal(existsSync(lockFile(homeKill)), true, "SIGKILL leaves the lock file behind (stale)")
+      const reclaim = cli(homeKill, ["commit", "add", "after sigkill", "--quote", "q"], { ADVISERS_LOCK_TIMEOUT_MS: "3000" })
+      assert.equal(reclaim.status, 0, "the next command must reclaim a SIGKILLed holder's lock: " + reclaim.stderr)
+      assert.equal(existsSync(lockFile(homeKill)), false)
+    })
   } finally { rmSync(root, { recursive: true, force: true }) }
 })
 
@@ -299,7 +321,7 @@ test("instance lock: --version/help create neither the home directory nor a lock
     const home = join(root, "never-created")
     const version = spawnSync(process.execPath, [bin, "--version"], { env: { ...baseEnv, ADVISERS_HOME: home }, encoding: "utf8" })
     assert.equal(version.status, 0, version.stderr)
-    assert.match(version.stdout, /^0\.3\./)
+    assert.match(version.stdout, /^\d+\.\d+\.\d+\n?$/)
     assert.equal(existsSync(home), false, "--version must not create ADVISERS_HOME")
     const help = spawnSync(process.execPath, [bin, "help"], { env: { ...baseEnv, ADVISERS_HOME: home }, encoding: "utf8" })
     assert.equal(help.status, 0, help.stderr)

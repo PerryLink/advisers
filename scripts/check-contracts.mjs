@@ -64,6 +64,7 @@ import {
   ERROR_CODES_SOURCE_VERSION,
   ERROR_CODES_BASELINE_COUNT,
   ERROR_CODES_RELEASE,
+  ERROR_CODES_ADDITIVE_RELEASES,
   DSH_ERROR_CODES,
 } from '../packages/advisers/lib/error-codes.js'
 
@@ -79,6 +80,13 @@ const dshIndexPath = join(root, 'packages/dsh-advisers/index.js')
 const petBriefSchemaPath = join(docsDir, 'pet-brief/schema-v0.2.json')
 const GITHUB_CONTRACTS = 'https://github.com/PerryLink/advisers/contracts'
 const TEST_TIMEOUT_MS = 120000
+/**
+ * Allowed `since` layers: the frozen 0.2.x baseline plus every additive release
+ * the registry declares (0.4.0 adds the KB/mail/policy/receivables wave). Adding
+ * a release is a registry-side change (lib/error-codes.js); the checker follows
+ * ERROR_CODES_ADDITIVE_RELEASES instead of hardcoding a second list.
+ */
+const ERROR_SINCE_LAYERS = Object.freeze(['0.2.x', ...ERROR_CODES_ADDITIVE_RELEASES])
 
 const ALL_CHECKS = ['schema', 'vectors', 'cli', 'status', 'exit', 'mcp', 'errors', 'docs']
 const CHECK_FLAGS = {
@@ -764,10 +772,10 @@ function checkExitCodes() {
 /* --mcp                                                              */
 /* ------------------------------------------------------------------ */
 
-function mcpSession(space, input) {
+function mcpSession(space, input, envOverrides = {}) {
   return spawnSync(process.execPath, [binPath, 'mcp', '--stdio'], {
     cwd: space.work,
-    env: cliEnv(space.home, { acceptTos: true }),
+    env: { ...cliEnv(space.home, { acceptTos: true }), ...envOverrides },
     encoding: 'utf8',
     input,
     timeout: TEST_TIMEOUT_MS,
@@ -966,6 +974,183 @@ function checkMcp() {
     } else {
       info('MCP negotiation is pending-integration-wave: checker only requires the answered version to be in the supported list')
     }
+    /* -------------------- modern (2026-07-28) dual-era -------------------- */
+    // The modern era is stateless, so the era is selected per request by the
+    // required _meta keys and never by a prior handshake. One stdio session mixes
+    // legacy and modern requests to prove the v2 envelope, byte-identical payloads
+    // and that neither era leaks into the other (a modern notification must stay
+    // unanswered, modern ping/initialize are removed methods).
+    const modernVersions = readJson(join(contractsDir, 'mcp/versions-v2.json'))
+    const modernSchema = readJson(join(contractsDir, 'mcp/responses-v2.schema.json'))
+    const modern = modernVersions.modern ?? {}
+    const modernProblems = []
+    const modernMetaKeys = Object.keys(modern.requiredRequestMeta ?? {})
+    const META_VERSION = modernMetaKeys.find((key) => key.endsWith('/protocolVersion'))
+    const META_CAPS = modernMetaKeys.find((key) => key.endsWith('/clientCapabilities'))
+    const SERVER_INFO_KEY = modern.resultEnvelope?.resultMeta?.key ?? 'io.modelcontextprotocol/serverInfo'
+    const ENVELOPE_KEYS = ['resultType', 'ttlMs', 'cacheScope', '_meta']
+    const stripEnvelope = (envelope) => {
+      const result = {}
+      for (const [key, value] of Object.entries(envelope?.result ?? {})) if (!ENVELOPE_KEYS.includes(key)) result[key] = value
+      return { jsonrpc: envelope?.jsonrpc, id: envelope?.id, result }
+    }
+    if (!META_VERSION || !META_CAPS) {
+      modernProblems.push('mcp/versions-v2.json modern.requiredRequestMeta must name the protocolVersion and clientCapabilities keys')
+    } else {
+      const modernMeta = () => ({ [META_VERSION]: modern.protocolVersion, [META_CAPS]: {} })
+      const modernParams = (params = {}) => ({ ...params, _meta: modernMeta() })
+      const todayResource = resourcesContract.resources.find((resource) => resource.uri === 'advisers://today')
+      const todayTool = catalog.tools.find((tool) => tool.name === 'advisers_today')
+      const modernRequests = [
+        { jsonrpc: '2.0', id: 99, method: 'initialize', params: { protocolVersion: protocol.defaultProtocolVersion, capabilities: {}, clientInfo: { name: 'check-contracts', version: '1' } } },
+        { jsonrpc: '2.0', id: 100, method: 'server/discover', params: modernParams() },
+        { jsonrpc: '2.0', id: 101, method: 'tools/list', params: {} },
+        { jsonrpc: '2.0', id: 102, method: 'tools/list', params: modernParams() },
+        { jsonrpc: '2.0', id: 103, method: 'resources/list', params: {} },
+        { jsonrpc: '2.0', id: 104, method: 'resources/list', params: modernParams() },
+        { jsonrpc: '2.0', id: 105, method: 'resources/read', params: { uri: todayResource.uri } },
+        { jsonrpc: '2.0', id: 106, method: 'resources/read', params: modernParams({ uri: todayResource.uri }) },
+        { jsonrpc: '2.0', id: 107, method: 'tools/call', params: { name: 'advisers_today', arguments: {} } },
+        { jsonrpc: '2.0', id: 108, method: 'tools/call', params: modernParams({ name: 'advisers_today', arguments: {} }) },
+        { jsonrpc: '2.0', id: 110, method: 'tools/list', params: { _meta: { [META_VERSION]: '2025-11-25', [META_CAPS]: {} } } },
+        { jsonrpc: '2.0', id: 111, method: 'tools/list', params: { _meta: { [META_VERSION]: modern.protocolVersion } } },
+        { jsonrpc: '2.0', id: 112, method: 'ping', params: modernParams() },
+        { jsonrpc: '2.0', id: 113, method: 'tools/list', params: modernParams({ cursor: 'next-page' }) },
+        { jsonrpc: '2.0', id: 114, method: 'resources/read', params: modernParams({ uri: 'advisers://does-not-exist' }) },
+        { jsonrpc: '2.0', id: 115, method: 'resources/read', params: { uri: 'advisers://does-not-exist' } },
+        { jsonrpc: '2.0', method: 'notifications/initialized', params: modernParams() },
+        { jsonrpc: '2.0', id: 117, method: 'tools/list', params: modernParams() },
+      ]
+      const expectedIds = [99, 100, 101, 102, 103, 104, 105, 106, 107, 108, 110, 111, 112, 113, 114, 115, 117]
+      const modernInput = modernRequests.map((request) => JSON.stringify(request)).join('\n') + '\n'
+      const modernSession = mcpSession(space, modernInput)
+      if (modernSession.status !== 0) {
+        modernProblems.push('modern session exited ' + modernSession.status + ' (stderr: ' + String(modernSession.stderr ?? '').trim().slice(0, 300) + ')')
+      } else {
+        let modernLines = []
+        try {
+          modernLines = String(modernSession.stdout ?? '').trim().split('\n').filter(Boolean).map((line) => JSON.parse(line))
+        } catch (error) {
+          modernProblems.push('modern stdout is not one JSON-RPC object per line: ' + error.message)
+        }
+        const modernById = new Map()
+        for (const line of modernLines) if (line && line.id !== undefined && line.id !== null) modernById.set(line.id, line)
+        const modernResponse = (id) => modernById.get(id)
+        if (modernLines.length !== expectedIds.length) modernProblems.push('modern session wrote ' + modernLines.length + ' response line(s) for ' + expectedIds.length + ' request(s) with an id (a modern notification must not be answered)')
+        for (const id of expectedIds) if (!modernById.has(id)) modernProblems.push('no response for modern request id ' + id)
+        if (modernLines.some((line) => line?.id === null || line?.id === undefined)) modernProblems.push('a modern notification was answered; no response is allowed')
+        const cacheOf = (method) => modern.caching?.[method] ?? {}
+        const checkCacheHints = (id, method) => {
+          const envelope = modernResponse(id)
+          if (!envelope?.result) return
+          const cache = cacheOf(method)
+          if (envelope.result.ttlMs !== cache.ttlMs) modernProblems.push(method + ' ttlMs ' + String(envelope.result.ttlMs) + ' != contract ' + String(cache.ttlMs))
+          if (envelope.result.cacheScope !== cache.cacheScope) modernProblems.push(method + ' cacheScope ' + String(envelope.result.cacheScope) + ' != contract ' + String(cache.cacheScope))
+        }
+        const checkModernEnvelope = (id, def) => {
+          const envelope = modernResponse(id)
+          if (!envelope) return false
+          modernProblems.push(...validateTarget(envelope, modernSchema, def).map((error) => 'modern id ' + id + ' (' + def + '): ' + error))
+          return true
+        }
+        const discover = modernResponse(100)
+        if (checkModernEnvelope(100, '#/$defs/DiscoverResult')) {
+          const supported = discover.result?.supportedVersions
+          if (!deepEqual(supported, modern.supportedVersions)) modernProblems.push('server/discover supportedVersions ' + JSON.stringify(supported) + ' != mcp/versions-v2.json ' + JSON.stringify(modern.supportedVersions))
+          const serverInfo = discover.result?._meta?.[SERVER_INFO_KEY]
+          if (serverInfo?.name !== protocol.serverInfo.name) modernProblems.push('server/discover serverInfo.name must be ' + protocol.serverInfo.name)
+          if (serverInfo?.version !== cliVersion) modernProblems.push('server/discover serverInfo.version ' + String(serverInfo?.version) + ' must equal packages/advisers/package.json ' + cliVersion)
+          checkCacheHints(100, 'server/discover')
+        }
+        const modernTools = modernResponse(102)
+        const legacyTools = modernResponse(101)
+        if (checkModernEnvelope(102, '#/$defs/ToolsListResult') && legacyTools) {
+          modernProblems.push(...validateTarget(stripEnvelope(modernTools), schema, '#/$defs/ToolsListResult').map((error) => 'modern tools/list payload: ' + error))
+          if (!deepEqual(stripEnvelope(modernTools).result, legacyTools.result)) modernProblems.push('modern tools/list payload differs from the legacy tools/list payload')
+          checkCacheHints(102, 'tools/list')
+        }
+        const modernResources = modernResponse(104)
+        const legacyResources = modernResponse(103)
+        if (checkModernEnvelope(104, '#/$defs/ResourcesListResult') && legacyResources) {
+          modernProblems.push(...validateTarget(stripEnvelope(modernResources), schema, '#/$defs/ResourcesListResult').map((error) => 'modern resources/list payload: ' + error))
+          if (!deepEqual(stripEnvelope(modernResources).result, legacyResources.result)) modernProblems.push('modern resources/list payload differs from the legacy resources/list payload')
+          checkCacheHints(104, 'resources/list')
+        }
+        const modernRead = modernResponse(106)
+        const legacyRead = modernResponse(105)
+        if (checkModernEnvelope(106, '#/$defs/ResourceReadResult') && legacyRead) {
+          modernProblems.push(...validateTarget(stripEnvelope(modernRead), schema, '#/$defs/ResourceReadResult').map((error) => 'modern resources/read payload: ' + error))
+          const modernText = modernRead.result?.contents?.[0]?.text
+          const legacyText = legacyRead.result?.contents?.[0]?.text
+          if (typeof modernText !== 'string' || modernText !== legacyText) modernProblems.push('modern resources/read contents[0].text is not byte-identical to legacy')
+          else if (todayResource) {
+            const pointer = todayResource.schemaRef.split('#')[1]
+            let payload
+            try { payload = JSON.parse(modernText) } catch (error) { modernProblems.push('modern resources/read text is not JSON: ' + error.message) }
+            if (payload !== undefined) modernProblems.push(...validateTarget(payload, schema, '#' + pointer).map((error) => 'modern resources/read JSON payload: ' + error))
+          }
+          checkCacheHints(106, 'resources/read')
+        }
+        const modernCall = modernResponse(108)
+        const legacyCall = modernResponse(107)
+        if (checkModernEnvelope(108, '#/$defs/ToolCallResult') && legacyCall) {
+          modernProblems.push(...validateTarget(stripEnvelope(modernCall), schema, '#/$defs/ToolCallResult').map((error) => 'modern tools/call payload: ' + error))
+          const modernText = modernCall.result?.content?.[0]?.text
+          const legacyText = legacyCall.result?.content?.[0]?.text
+          if (typeof modernText !== 'string' || modernText !== legacyText) modernProblems.push('modern tools/call content[0].text is not byte-identical to legacy')
+          if (modernCall.result?.isError !== legacyCall.result?.isError) modernProblems.push('modern tools/call isError differs from legacy')
+          if (todayTool && modernCall.result?.isError === false && typeof modernText === 'string') {
+            const pointer = todayTool.responseSchemaRef.split('#')[1]
+            let payload
+            try { payload = JSON.parse(modernText) } catch (error) { modernProblems.push('modern tools/call text is not JSON: ' + error.message) }
+            if (payload !== undefined) modernProblems.push(...validateTarget(payload, schema, '#' + pointer).map((error) => 'modern tools/call JSON payload: ' + error))
+          }
+        }
+        const unsupported = modernResponse(110)
+        if (checkModernEnvelope(110, '#/$defs/UnsupportedProtocolVersionError')) {
+          const code = unsupported.error?.code
+          if (code !== modern.errorMapping?.unsupportedProtocolVersion?.code) modernProblems.push('unsupported-version error code ' + String(code) + ' != contract')
+          if (unsupported.result !== undefined) modernProblems.push('an unsupported-version error must not carry a result/resultType')
+          const data = unsupported.error?.data
+          if (!deepEqual(data?.supported, modern.supportedVersions)) modernProblems.push('unsupported-version data.supported ' + JSON.stringify(data?.supported) + ' != ' + JSON.stringify(modern.supportedVersions))
+          if (typeof data?.requested !== 'string' || !data.requested) modernProblems.push('unsupported-version error must echo data.requested')
+        }
+        const missingCaps = modernResponse(111)
+        if (missingCaps) {
+          modernProblems.push(...validateTarget(missingCaps, schema, '#/$defs/JsonRpcErrorResponse').map((error) => 'missing clientCapabilities: ' + error))
+          if (missingCaps.error?.code !== modern.errorMapping?.malformedMeta?.code) modernProblems.push('missing clientCapabilities code ' + String(missingCaps.error?.code) + ' must be ' + String(modern.errorMapping?.malformedMeta?.code))
+        }
+        const modernPing = modernResponse(112)
+        if (modernPing?.error?.code !== modern.errorMapping?.unknownMethod?.code) modernProblems.push('modern ping must be ' + String(modern.errorMapping?.unknownMethod?.code) + ', got ' + String(modernPing?.error?.code))
+        const cursor = modernResponse(113)
+        if (cursor?.error?.code !== modern.errorMapping?.invalidParams?.code) modernProblems.push('a modern cursor must be rejected with ' + String(modern.errorMapping?.invalidParams?.code) + ', got ' + String(cursor?.error?.code))
+        const modernUnknown = modernResponse(114)
+        if (modernUnknown?.error?.code !== modern.errorMapping?.unknownResource?.code) modernProblems.push('modern unknown resource must be ' + String(modern.errorMapping?.unknownResource?.code) + ', got ' + String(modernUnknown?.error?.code))
+        if (modernUnknown) modernProblems.push(...validateTarget(modernUnknown, schema, '#/$defs/JsonRpcErrorResponse').map((error) => 'modern unknown resource error: ' + error))
+        const legacyUnknown = modernResponse(115)
+        if (legacyUnknown?.error?.code !== modern.errorMapping?.unknownResource?.legacyCodeForSameRequest) modernProblems.push('legacy unknown resource must stay ' + String(modern.errorMapping?.unknownResource?.legacyCodeForSameRequest) + ', got ' + String(legacyUnknown?.error?.code))
+        const marker = modernResponse(117)
+        if (!marker?.result) modernProblems.push('the modern tools/list marker after a notification did not answer')
+        else if (marker.result.resultType !== 'complete') modernProblems.push('modern success results must carry resultType=complete')
+        const offSession = mcpSession(space, [
+          { jsonrpc: '2.0', id: 200, method: 'server/discover', params: modernParams() },
+          { jsonrpc: '2.0', id: 201, method: 'tools/list', params: modernParams() },
+        ].map((request) => JSON.stringify(request)).join('\n') + '\n', { ADVISERS_MCP_MODERN: 'off' })
+        if (offSession.status !== 0) {
+          modernProblems.push('ADVISERS_MCP_MODERN=off session exited ' + offSession.status)
+        } else {
+          const offLines = String(offSession.stdout ?? '').trim().split('\n').filter(Boolean).map((line) => JSON.parse(line))
+          const offById = new Map(offLines.filter((line) => line?.id !== undefined && line?.id !== null).map((line) => [line.id, line]))
+          const offDiscover = offById.get(200)
+          const offTools = offById.get(201)
+          if (offDiscover?.error?.code !== -32601) modernProblems.push('with ADVISERS_MCP_MODERN=off server/discover must fall back to the legacy -32601, got ' + JSON.stringify(offDiscover?.result ?? offDiscover?.error ?? null))
+          if (!offTools?.result || !Array.isArray(offTools.result.tools)) modernProblems.push('with ADVISERS_MCP_MODERN=off tools/list must answer the legacy payload')
+          else if (Object.hasOwn(offTools.result, 'resultType')) modernProblems.push('with ADVISERS_MCP_MODERN=off the legacy result must not carry resultType')
+        }
+      }
+    }
+    if (modernProblems.length) fail('mcp.modern', firstErrors(modernProblems, 5))
+    else pass('mcp.modern', 'server/discover + dual-era tools/resources/call, -32022 unsupported version, -32602 missing clientCapabilities/cursor, -32601 modern ping, notification silence, byte-identical payloads, ADVISERS_MCP_MODERN=off fallback')
     if (problems.length) fail('mcp.surface', firstErrors(problems, 5))
     else pass('mcp.surface', catalog.tools.length + ' tools, ' + resourcesContract.resources.length + ' resources, resources/read, tool calls, ' + errorsContract.probes.length + ' error probes, catalogue deep-equal')
   } finally {
@@ -977,7 +1162,12 @@ function checkMcp() {
 /* error registry scan + generated files                              */
 /* ------------------------------------------------------------------ */
 
-const CODE_LITERAL_RE = /\bE_[A-Z][A-Z0-9_]*\b/g
+/**
+ * A real error-code literal, not a prose prefix: the code must END with an
+ * alphanumeric, so wildcard/comment mentions like `E_KB_*`, `E_POLICY_*` or
+ * `E_POLICY_TOKEN_*` (trailing underscore) are not mistaken for registrations.
+ */
+const CODE_LITERAL_RE = /\bE_[A-Z][A-Z0-9_]*[A-Z0-9]\b/g
 const SOURCE_PREFIXES = ['packages/advisers/lib/', 'packages/advisers/bin/']
 const REGISTRY_SELF = 'packages/advisers/lib/error-codes.js'
 
@@ -1090,6 +1280,14 @@ function buildRegistryJson() {
   }
 }
 
+/** "82 0.3.0 + 51 0.4.0" — additive layers by their own `since`, never relabelled. */
+function additiveLayerSummary(entries) {
+  const groups = ERROR_CODES_ADDITIVE_RELEASES
+    .map((release) => ({ release, count: entries.filter((entry) => entry.since === release).length }))
+    .filter((group) => group.count > 0)
+  return groups.map((group) => group.count + ' ' + group.release).join(' + ')
+}
+
 function renderErrorCodesDoc() {
   const bt = String.fromCharCode(96)
   const fence = bt + bt + bt
@@ -1100,7 +1298,7 @@ function renderErrorCodesDoc() {
   lines.push('<!-- generated by scripts/check-contracts.mjs --update from packages/advisers/lib/error-codes.js; do not edit by hand -->')
   lines.push('')
   lines.push('Baseline: ' + registry.baseline.codeCount + ' codes frozen from committed 0.2.4 source at git ' + bt + registry.baseline.commit + bt + ' (package ' + registry.sourceVersion + '), frozen ' + registry.frozenAt + '.')
-  lines.push('Plus ' + (registry.codes.length - registry.baseline.codeCount) + ' additive ' + bt + registry.release + bt + ' codes extracted from modules landing in the same release (provisional until their modules are committed).')
+  lines.push('Plus ' + additiveLayerSummary(registry.codes) + ' additive codes extracted from the modules landing in those releases (provisional until their modules are committed).')
   lines.push('')
   lines.push('The registry is the single source of truth: CLI, MCP and library error handling must use codes listed here,')
   lines.push('and a new ' + bt + 'E_*' + bt + ' literal in tracked source fails ' + bt + 'node scripts/check-contracts.mjs --errors' + bt + ' until it is registered.')
@@ -1175,17 +1373,18 @@ function checkErrorRegistry() {
     if (!Array.isArray(entry.surfaces) || entry.surfaces.length === 0 || !entry.surfaces.every((surface) => ERROR_SURFACES.includes(surface))) problems.push(code + ': surfaces must be a non-empty subset of ' + ERROR_SURFACES.join('|'))
     if (typeof entry.remedy !== 'string' || entry.remedy.length < 10) problems.push(code + ': remedy must be an actionable sentence')
     if (typeof entry.stable !== 'boolean') problems.push(code + ': stable must be boolean')
-    if (entry.since !== '0.2.x' && entry.since !== '0.3.0') problems.push(code + ': since must be 0.2.x|0.3.0')
+    if (!ERROR_SINCE_LAYERS.includes(entry.since)) problems.push(code + ': since must be one of ' + ERROR_SINCE_LAYERS.join('|'))
     if (entry.doc && (!existsSync(join(root, entry.doc)) || !readText(join(root, entry.doc)).includes(code))) problems.push(code + ': doc ' + entry.doc + ' is missing or does not mention the code')
     if (!tracked.has(code) && !worktree.has(code)) problems.push(code + ': registered but present in neither committed nor working-tree source (stale entry?)')
     if (entry.exit !== (code === 'E_TOS_REQUIRED' ? 3 : 1)) problems.push(code + ': exit ' + entry.exit + ' does not match the frozen map (3 for E_TOS_REQUIRED, 1 otherwise)')
   }
   if (!deepEqual([...ERROR_CODE_LIST].sort(), Object.keys(ERROR_CODES).sort())) problems.push('ERROR_CODE_LIST is not the sorted key set')
   if (problems.length) fail('errors.registry', firstErrors(problems, 5))
-  else pass('errors.registry', ERROR_CODE_LIST.length + ' codes structurally valid (' + ERROR_CODES_BASELINE_COUNT + ' baseline + ' + (ERROR_CODE_LIST.length - ERROR_CODES_BASELINE_COUNT) + ' ' + ERROR_CODES_RELEASE + ' additive)')
+  else pass('errors.registry', ERROR_CODE_LIST.length + ' codes structurally valid (' + ERROR_CODES_BASELINE_COUNT + ' baseline + ' + additiveLayerSummary(Object.values(ERROR_CODES)) + ' additive)')
   const provisional = ERROR_CODE_LIST.filter((code) => !tracked.has(code) && worktree.has(code))
   if (provisional.length) {
-    info(provisional.length + ' ' + ERROR_CODES_RELEASE + ' code(s) are registered ahead of their module commit (provisional; the gate fails only if a code exists nowhere): ' + provisional.slice(0, 8).join(', ') + (provisional.length > 8 ? ', ...' : ''))
+    const layers = additiveLayerSummary(provisional.map((code) => ERROR_CODES[code]))
+    info(provisional.length + ' additive code(s) registered ahead of their module commit (' + layers + '; the gate fails only if a code exists nowhere): ' + provisional.slice(0, 8).join(', ') + (provisional.length > 8 ? ', ...' : ''))
   }
 
   const unregistered = [...allSource.keys()].filter((code) => !registered.has(code)).sort()
@@ -1232,6 +1431,7 @@ function checkDocs() {
   for (const artifact of Object.values(versions.artifacts ?? {})) {
     for (const rel of artifact.files ?? []) artifactPaths.push(rel)
     if (artifact.draft) artifactPaths.push(artifact.draft)
+    if (artifact.vectors) artifactPaths.push(artifact.vectors)
   }
   for (const rel of artifactPaths) {
     if (!existsSync(join(contractsDir, rel))) problems.push('artifact file missing: contracts/' + rel)
@@ -1264,6 +1464,18 @@ function checkDocs() {
   if (!mcpVersions.supportedProtocolVersions.includes(expected.mcpProtocol)) problems.push('discovery.mcpProtocol ' + expected.mcpProtocol + ' is not supported by mcp/versions-v1.json')
   if (expected.petBrief !== petBrief.properties?.schemaVersion?.const) problems.push('discovery.petBrief ' + expected.petBrief + ' != docs/pet-brief schemaVersion.const')
   if (expected.dshTools !== artifactVersion('dshTools')) problems.push('discovery.dshTools ' + expected.dshTools + ' != artifacts.dshTools.version ' + artifactVersion('dshTools'))
+  const modernManifest = versions.artifacts?.mcpModern
+  if (modernManifest) {
+    const mcpVersionsV2 = readJson(join(contractsDir, 'mcp/versions-v2.json'))
+    const responsesV2 = readJson(join(contractsDir, 'mcp/responses-v2.schema.json'))
+    if (modernManifest.version !== mcpVersionsV2.version) problems.push('artifacts.mcpModern.version ' + modernManifest.version + ' != mcp/versions-v2.json version ' + mcpVersionsV2.version)
+    if (modernManifest.version !== responsesV2.version) problems.push('artifacts.mcpModern.version ' + modernManifest.version + ' != mcp/responses-v2.schema.json version ' + responsesV2.version)
+    if (!deepEqual(modernManifest.supported, mcpVersionsV2.modern?.supportedVersions)) problems.push('artifacts.mcpModern.supported must equal mcp/versions-v2.json modern.supportedVersions')
+    if (!modernManifest.files?.includes(mcpVersionsV2.conformance?.schema)) problems.push('artifacts.mcpModern.files must include mcp/versions-v2.json conformance.schema')
+    if (modernManifest.vectors !== mcpVersionsV2.conformance?.vectors) problems.push('artifacts.mcpModern.vectors must equal mcp/versions-v2.json conformance.vectors')
+    if (expected.mcpModern !== undefined) problems.push('discovery.expected must not gain mcpModern: the modern era is discovered through server/discover, so status.contracts stays at mcpProtocol ' + String(expected.mcpProtocol))
+    if (expected.mcpProtocol === mcpVersionsV2.modern?.protocolVersion) problems.push('discovery.mcpProtocol must stay the legacy default, not the modern protocol version')
+  }
   if (dshTools.size !== 6) problems.push('expected the frozen 6 DSH tools, found ' + dshTools.size + ' in packages/dsh-advisers/index.js')
   const consumers = JSON.parse(readText(join(contractsDir, 'CONSUMERS.json')))
   if (!Array.isArray(consumers.consumers) || consumers.consumers.length === 0) problems.push('contracts/CONSUMERS.json has no consumers')

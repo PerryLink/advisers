@@ -7,6 +7,14 @@ the provenance and left the `v0.3.0` tag pointing at a tree that was not the
 published tree. 0.3.1 corrected that by committing the docs first and publishing
 from `refs/tags/v0.3.1`. Never repeat the 0.3.0 order.
 
+**0.4.0 (published 2026-11-21) followed the corrected order** — docs first, main
+push, CI green, annotated `v0.4.0` tag, tag-ref dispatch, then the post-publish
+`verify-release` check and the Windows portable ZIP — and is the reference release
+for the 0.4 line (see §13). One runbook detail is easy to get wrong: the portable
+ZIP is assembled **after** the npm publish from the published tarballs, because
+`pack-portable.mjs` installs `advisers@<version>` and `advisers-office@<version>`
+from the registry.
+
 Audience: the repository owner / release operator. Agents may prepare a release
 (version bump, docs, gates, commit, tag) but **must not publish, unpublish,
 deprecate, move a tag or edit a GitHub Release without explicit owner approval**.
@@ -44,14 +52,21 @@ deprecate, move a tag or edit a GitHub Release without explicit owner approval**
 ## 1. Choose the version
 
 - Patch/minor per semver; never reuse a published number. The release-metadata
-  patch 0.3.1 is the only exception in history; the next feature release after
-  0.3.1 is **0.3.2**.
+  patch 0.3.1 is the only exception in history. The 0.4 line shipped as one
+  release, **0.4.0** (2026-11-21); later fixes are 0.4.x patch releases, and the
+  next feature line is 0.5.
 - All eight workspace packages are lockstep; six are published
   (`advisers`, `advisers-core`, `advisers-office`, `advisers-policy-strict`,
   `advisers-bridge-hermes`, `dsh-advisers`), two link packages stay private but
   version-locked.
 - Freeze code before touching versions. The release commit must contain the
   final docs, CHANGELOG and version constants.
+- **A release that adds a schema migration is a compatibility event**, not only a
+  version bump: state the `SCHEMA_VERSION`, the one-way rule (older binaries fail
+  with `E_SCHEMA_NEWER`), the pre-migration copy name (`state.db.before-migrate-v*`)
+  and the restore/export→import rollback in CHANGELOG/README/QUICKSTART. 0.4.0
+  added v22 (KB/mail/money) in one transactional step; a downgrade is a restore,
+  never a reverse migration.
 
 ## 2. Version bump and contract artifacts
 
@@ -66,8 +81,13 @@ Then update every current-version reference: `CHANGELOG.md` (top section),
 `README.md`, `README-zh.md`, the package READMEs, and the status headers in
 `docs/ARCHITECTURE.md`, `docs/QUICKSTART.md`, `docs/PERFORMANCE.md`,
 `docs/MCP.md`, `docs/SECURITY.md`, `docs/SBOM.md`, `docs/EVAL.md`,
-`docs/CONTRACTS.md` and `docs/PRIVACY.md` when the data surface changes.
-Historical sections keep their original version numbers.
+`docs/CONTRACTS.md`, `docs/RELEASING.md` and `docs/PRIVACY.md` when the data
+surface changes; the 0.4 line also added `docs/WINDOWS.md`, `docs/KB.md`,
+`docs/TUI.md` and `docs/CLIENTS.md`. Historical sections keep their original
+version numbers. The legal texts are versioned separately in
+`packages/advisers/lib/tos/manifest.json`; `check-tos --release` compares them to
+`docs/TOS.md`/`PRIVACY.md` and the packaged copies, so a legal revision is its
+own release-gate step (0.4.0 shipped v2026.11.4, effective 2026-11-21).
 
 If the release changes the machine contracts (MCP tools/resources, CLI JSON,
 error registry, consumers):
@@ -99,6 +119,8 @@ node scripts/check-deps.mjs
 node scripts/security-suite.mjs
 node scripts/check-contracts.mjs
 node scripts/check-provenance.mjs --self-test
+node scripts/portable-zip.mjs --self-test
+node scripts/pack-portable.mjs --self-test
 pnpm eval:det
 pnpm run sbom && pnpm run check:sbom
 ```
@@ -109,8 +131,12 @@ tree is clean (`git status --short` prints nothing).
 Note: the **publish workflow gate runs a subset** of this list (install, build,
 typecheck, test, pack-smoke, check-js, check-docs, check-release, contracts,
 SBOM, licenses, TOS, security, office, deps (warn)). It is not a substitute for
-this local list; `eval:det` and `fault-injection` stay local/CI only unless
-added there.
+this local list; `eval:det`, `fault-injection` and the portable-bundle self-tests
+stay local/CI only unless added there. CI also has a `windows-full` job that is
+**report-only** in 0.4.0 (`continue-on-error`) while the Windows fixture triage
+is open — a red `windows-full` is tracked work, not a release blocker, but
+`windows-smoke` must be green. The real-machine Windows checklist is in
+[docs/WINDOWS.md](WINDOWS.md) §8.
 
 ## 4. Commit, push main, wait for CI, tag
 
@@ -202,6 +228,54 @@ gh release create vX.Y.Z --verify-tag \
   artifacts/SHA256SUMS-X.Y.Z.txt#SHA256SUMS-X.Y.Z.txt
 ```
 
+### 6.1 Windows portable ZIP (build after the npm publish succeeds)
+
+The ZIP is the **offline channel**, not a second official channel, and it is
+assembled from the **published** tarballs: `pack-portable.mjs` resolves
+`advisers@<version>` and `advisers-office@<version>` from the registry, so it must
+run after step 6's registry checks, never from an unpublished source tree.
+Consumer/verification docs: [docs/WINDOWS.md](WINDOWS.md) §3.4 and §8.
+
+Release path (Windows x64 machine with Node >= 22.16):
+
+```powershell
+# 1) install the two published packages into a fresh app tree
+$app = Join-Path $env:TEMP "advisers-portable-X.Y.Z"
+New-Item -ItemType Directory -Path $app -Force | Out-Null
+npm install --omit=dev --no-audit --no-fund --prefix $app --registry=https://registry.npmjs.org advisers@X.Y.Z advisers-office@X.Y.Z
+
+# 2) build and re-verify the deterministic ZIP + sidecar + portable SHA256SUMS
+node scripts/pack-portable.mjs --payload $app --out-dir artifacts
+node scripts/pack-portable.mjs --verify artifacts/advisers-X.Y.Z-win-x64.zip --smoke
+```
+
+- Output: `artifacts/advisers-X.Y.Z-win-x64.zip`, its `.sha256` sidecar and
+  `artifacts/SHA256SUMS-X.Y.Z-portable.txt`. The verifier re-reads every ZIP
+  entry (CRC-32), checks the required files/licenses/version and the native
+  binaries' win32-x64 platform, then optionally runs the bundled CLI
+  (`--smoke`).
+- `--cross-install` on Linux resolves the win32-x64 optional dependencies for a
+  **layout-only** check; a releasable artifact still requires the Windows smoke
+  run.
+- The ZIP contains no Node.js; the launcher fails with a clear message below
+  Node 22.16. It is **not covered by npm provenance** and is not code-signed.
+- Attach the ZIP and `SHA256SUMS-X.Y.Z-portable.txt` to the GitHub Release (and a
+  GitHub artifact attestation when the operator can produce one):
+
+```sh
+gh release upload vX.Y.Z \
+  artifacts/advisers-X.Y.Z-win-x64.zip \
+  artifacts/SHA256SUMS-X.Y.Z-portable.txt
+# when available: gh attestation verify artifacts/advisers-X.Y.Z-win-x64.zip --repo PerryLink/advisers
+```
+
+- `verify-release.mjs` does **not** check the ZIP (its scope is the npm
+  tarballs/SBOM/provenance); the portable verifier above is the ZIP gate.
+- Windows status at release time: `windows-smoke` is blocking,
+  `windows-full` is report-only until the fixture triage lands, and the
+  real-machine record (docs/WINDOWS.md §8) must be re-run; do not describe the
+  release as "fully Windows-verified" from CI alone.
+
 ## 7. dist-tags and deprecation (owner only)
 
 ```sh
@@ -252,6 +326,7 @@ or store the token.
 | `npm dist-tag` / `npm deprecate` | **owner** (owner credentials) |
 | `npm unpublish` | **owner** (2FA) |
 | GitHub Release create/edit + assets | owner (or agent on explicit instruction) |
+| Windows portable ZIP build/verify + attach (after npm publish) | agent on a Windows release machine (owner reviews the assets) |
 | registry/attestation/SBOM/hash verification | agent (read-only) |
 
 ## 11. Credentials
@@ -274,5 +349,47 @@ body or a log. CI publishing uses GitHub OIDC only.
   audits). `verify-release.mjs` supplies the checked-out tag automatically.
 - `node scripts/verify-release.mjs` — the post-publish gate: registry,
   tarballs, dist-tags, gitHead, provenance, SBOM, clean-prefix install/import.
+  It does not check the Windows portable ZIP.
+- `node scripts/portable-zip.mjs --self-test` / `node scripts/pack-portable.mjs
+  --self-test` — the dependency-free ZIP codec and portable-bundle builder
+  (no publish; output is gitignored `artifacts/`).
 - `CONTRIBUTING.md` Releases section, `docs/SECURITY.md` §3–§4,
-  `docs/SBOM.md`.
+  `docs/SBOM.md`, `docs/WINDOWS.md` §3.4/§8.
+
+## 13. Release records
+
+A short factual record per release; keep it terse and do not turn it into a
+changelog copy.
+
+### 0.4.0 (2026-11-21)
+
+- **Published:** npm `latest` = 0.4.0, `next` = 0.4.0; all eight workspace
+  packages lockstep at 0.4.0 (six published). Tag: `v0.4.0` (annotated,
+  tag-ref publish; record the tag object and commit SHAs here when archiving the
+  release evidence).
+- **Release shape:** single 0.4 feature release — KB/schema v22, mail entry,
+  interactive shell, proactive briefs, policy/evidence 2.0 subset (decision
+  tokens, consent), receivables/payments + client status packs, MCP modern
+  dual-era, Windows CI + portable ZIP, v2026.11.4 legal revision.
+- **Schema:** v22, one `kb-mail-payment-entities` migration, one-way; a 0.3.2
+  binary fails with `E_SCHEMA_NEWER`; rollback = restore
+  `state.db.before-migrate-v21-*` or export → fresh import into a 0.3.x home.
+- **Contracts:** additive — `contracts/mcp/versions-v2.json`,
+  `responses-v2.schema.json`, `contracts/vectors/mcp/modern.vectors.json`, new
+  CLI read models/commands and error codes; frozen v1 artifacts keep their
+  meaning. Three new files, no renames.
+- **Artifacts:** CycloneDX SBOM, `SHA256SUMS` for the six tarballs, and the
+  Windows portable ZIP `advisers-0.4.0-win-x64.zip` +
+  `SHA256SUMS-0.4.0-portable.txt` (offline channel; verify the hash/attestation,
+  it is not npm-provenance-covered).
+- **Verification:** record the 0.4.0 `verify-release` check count from the actual
+  run (do not reuse 0.3.0's 222), the tag object/commit SHAs, the portable ZIP
+  sha256 and the `windows-smoke` result. `windows-full` is report-only.
+- **Release notes / assets:**
+  <https://github.com/PerryLink/advisers/releases/tag/v0.4.0>.
+
+### 0.3.2 (2026-11-21, superseded)
+
+- Customer loop + performance closeout; additive contracts, no schema migration;
+  published from `refs/tags/v0.3.2`. Superseded by 0.4.0; its tarballs and
+  Release assets stay in place.

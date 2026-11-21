@@ -133,13 +133,13 @@ test('save()/load() still round-trip every entity field (wire v1 unchanged)', ()
   } finally { rmSync(root, { recursive: true, force: true }) }
 });
 
-test('the physical schema version (21) is independent from the wire version (1)', () => {
+test('the physical schema version (22) is independent from the wire version (1)', () => {
   const { root, db } = setup('advisers-contract-versions-');
   try {
     const store = new SqliteStore(db);
     try {
-      assert.equal(SCHEMA_VERSION, 21, 'physical schema');
-      assert.equal(store.getMeta('schema_version'), '21');
+      assert.equal(SCHEMA_VERSION, 22, 'physical schema');
+      assert.equal(store.getMeta('schema_version'), '22');
       const snapshot = store.load();
       assert.equal(snapshot.version, 1, 'LedgerSnapshot wire version stays 1');
       assert.deepEqual(Object.keys(snapshot).sort(), ['version', ...LEDGER_SNAPSHOT_TABLES].sort());

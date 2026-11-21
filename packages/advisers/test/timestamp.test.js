@@ -5,17 +5,19 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import test from 'node:test'
+import { skipOnWindows } from './win-compat.mjs'
 import { tosEnv } from './tos-fixture.js'
 import { runLocalTimestamp } from '../lib/timestamp.js'
 
 const bin = fileURLToPath(new URL('../bin/advisers.js', import.meta.url))
 
-test('P2: local timestamp adapter is opt-in and works with a local command', async () => {
+test('P2: local timestamp adapter is opt-in and works with a local command', async (t) => {
   const root = mkdtempSync(join(tmpdir(), 'advisers-ts-'))
   const old = process.env.ADVISERS_TIMESTAMP_CMD
   try {
     writeFileSync(join(root, 'pack.txt'), 'evidence')
     await assert.rejects(() => runLocalTimestamp('pack.txt', { cwd: root, cmd: '' }), /not configured/)
+    if (skipOnWindows(t, 'timestamp external adapter commands are spawned as a single executable path on Windows, so a POSIX #!/bin/sh probe cannot run (quoted-argv adapter contract tracked; docs/WINDOWS.md section 8, windows triage B)')) return
     const script = join(root, 'fake-ts.sh')
     writeFileSync(script, '#!/bin/sh\necho "TSA fake proof for $(basename "$1")"\n')
     chmodSync(script, 0o700)

@@ -1,8 +1,9 @@
 import assert from 'node:assert/strict'
-import { mkdtempSync, mkdirSync, rmSync, symlinkSync, writeFileSync } from 'node:fs'
+import { mkdtempSync, mkdirSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import test from 'node:test'
+import { symlinkOrSkip } from './win-compat.mjs'
 import {
   executeTool,
   normalizePolicyPath,
@@ -105,15 +106,18 @@ test('persistence targets are write-denied (read-only listing is not the point)'
   }
 })
 
-test('symlinks cannot escape the workspace', async () => {
+test('symlinks cannot escape the workspace', async (t) => {
   const cwd = mkdtempSync(join(tmpdir(), 'adv023-policy-'))
   const outside = mkdtempSync(join(tmpdir(), 'adv023-outside-'))
   try {
     writeFileSync(join(outside, 'secret.txt'), 'worker-secret')
-    symlinkSync(outside, join(cwd, 'linkdir'))
-    symlinkSync(join(outside, 'secret.txt'), join(cwd, 'linkfile.txt'))
+    // Windows without Developer Mode or an elevated shell cannot create
+    // symlinks (SeCreateSymbolicLinkPrivilege); skip with an auditable reason
+    // instead of failing the fixture (windows triage C1).
+    if (!symlinkOrSkip(t, outside, join(cwd, 'linkdir'), 'dir')) return
+    if (!symlinkOrSkip(t, join(outside, 'secret.txt'), join(cwd, 'linkfile.txt'))) return
     writeFileSync(join(cwd, 'real.txt'), 'inside')
-    symlinkSync(join(cwd, 'real.txt'), join(cwd, 'inside-link.txt'))
+    if (!symlinkOrSkip(t, join(cwd, 'real.txt'), join(cwd, 'inside-link.txt'))) return
     await assert.rejects(() => executeTool('file_write', { path: 'linkdir/pwn.txt', content: 'x' }, { cwd }), /symlink/)
     await assert.rejects(() => executeTool('file_read', { path: 'linkfile.txt' }, { cwd }), /symlink/)
     await assert.rejects(() => executeTool('file_write', { path: 'inside-link.txt', content: 'x' }, { cwd }), /symlink/)

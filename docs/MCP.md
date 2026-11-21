@@ -1,13 +1,15 @@
-# MCP 接入（stdio；legacy 协议协商 2024-11-05 / 2025-06-18 / 2025-11-25）
+# MCP 接入（stdio；legacy 协商 2024-11-05 / 2025-06-18 / 2025-11-25 + modern 2026-07-28 dual-era）
 
-状态（2026-11-21，0.3.2 **已发布**；包版本为 `0.3.2`——0.3.2 是客户闭环 + 性能收尾 feature release，MCP 侧新增只读客户投影（8 工具/5 resources）与窄承诺读模型；0.3.1 是 0.3.0 的发布面修复版（运行时不变）；更早的 `0.2.4` 是已被 0.3.0 取代的未发布 candidate，npm `latest` = `0.3.2`、`next` 也为 `0.3.2`，发布由 GitHub Actions OIDC/Trusted Publishing 完成并带 SLSA provenance）：
+状态（2026-11-21，包版本 **0.4.0**）：0.4.0 把 MCP 从“仅 legacy”升级为 **dual-era** 服务器——同一进程既服务 legacy `initialize` 生命周期，也服务无状态的 modern `2026-07-28` 请求（`server/discover` + 每请求 `_meta` + `resultType` envelope）；**工具面不变**（8 工具 / 5 resources），KB 与邮件在 0.4.0 **不暴露**给 MCP/DSH。legacy 面的名字、参数、payload 形状与 0.3.2 逐字节一致；`ADVISERS_MCP_MODERN=off` 可一键退回 0.3.2 行为。
 
 - **0.2.0 库**：MCP server 已从 `bin/advisers.js` 抽成可测试库 `packages/advisers/lib/mcp-server.js`（工厂 `createMcpServer({store, ledger | loadLedger, version, audit, clearance})`）。0.3.2 起库提供 **6 个只读工具 + 2 个白名单工具 + 5 个只读 resources**（客户只读投影见 §3.4）。
 - **CLI 入口（已接线，2026-11-17）**：`advisers mcp --stdio` 与库是同一实现——`bin/advisers.js` 只负责注入 home/store/ledger/version/audit，然后调用 `createMcpServer(...).serve()`；8 工具 + 5 resources 均从 CLI 可用，并自 `0.2.0` 起随 npm 包发布（2026-11-17 已上 `latest`）。仓库内的 `node scripts/mcp-dev.mjs` 保留为开发/双进程冒烟入口，不再是试用新接口的前提。
 - **0.2.3 变化（性能/健壮性，协议面不变）**：`initialize` 只做协议初始化，不再预加载整个账本——可写 store 与逐工具的部分加载推迟到首次 `tools/call`（200k 行账本上 init 从 1.85s 降到 91ms）；只读调用走无锁只读快照，可在 `ui` 等长期写者持锁时工作；协议面当时仍是 7 工具 + 4 resources（0.3.2 起为 8 工具 + 5 resources）。
-- **0.3.0 变化（新，见 §3.1/§5.1）**：
-  1. **legacy 协议协商**：`initialize` 回显客户端请求的受支持版本（2024-11-05 / 2025-06-18 / 2025-11-25）；缺失或未知版本回退 **2024-11-05**。现代无状态修订 2026-07-28 **未实现**，也不广告 `server/discover`。
+- **0.3.0 变化（见 §3.1/§5.1）**：
+  1. **legacy 协议协商**：`initialize` 回显客户端请求的受支持版本（2024-11-05 / 2025-06-18 / 2025-11-25）；缺失或未知版本回退 **2024-11-05**。
   2. **列表输出上限**：每个列表型工具**先做 per-item clearance 过滤、再截断、再计数**，返回 additive 的 `total`/`truncated`（`who` 用 `mineTotal`/`waitingTotal`）与 `clearance`/`protectedExcluded`；大账本上 today/commit_ls/remind 不再因内容分类器 100k 字符上限返回 `CONTENT_BLOCKED`，小账本行为逐字段不变。
+- **0.4.0 变化（dual-era，见 §5.1）**：新增 modern 无状态 `2026-07-28` 服务路径（`server/discover`、每请求 `_meta`、`resultType`/`ttlMs`/`cacheScope` envelope、`-32022` 版本错误），与 legacy 同进程并存；modern 只由显式方法 allowlist 服务，payload 与 legacy 同源、逐字节一致。契约新增 `contracts/mcp/versions-v2.json` + `responses-v2.schema.json` + `vectors/mcp/modern.vectors.json`（additive，v1 冻结件不动）。
+- **0.4.0 边界：KB/邮件不暴露**：MCP/DSH 工具与 resources **没有**新增 KB 或邮件面；KB 内容与邮件正文只在本地 CLI/账本中存在（见 [KB.md](KB.md)、[CLI-JSON.md](CLI-JSON.md)）。
 - **性质**：stdio、本地、只读为主；不联网、不调模型、不读 API key，也不含 MCP client（不做通用 ingest/编排）。
 
 ## 0. 一句话
@@ -193,33 +195,54 @@ resources 与对应工具读同一份**已做 clearance 过滤 + 上限截断**�
 
 ## 5. 协议与错误码
 
-### 5.1 协议版本协商（0.3.0 legacy 协商）
+### 5.1 协议版本：legacy 协商 + modern dual-era（0.4.0）
 
-`initialize` 的 `params.protocolVersion` 按以下规则协商（实现：`lib/mcp-server.js` 的 `SUPPORTED_PROTOCOL_VERSIONS` / `initializeResult`）：
+服务器对每个请求**按请求形态**选择 era，不依赖连接状态：
+
+| 请求形态 | era | 处理 |
+|---|---|---|
+| `method="initialize"`（即使带杂散 modern `_meta`） | legacy | 走 0.3.2 的 `initializeResult` 回显/回退矩阵，字节不变 |
+| `params._meta` 含 `io.modelcontextprotocol/protocolVersion` 或 `.../clientCapabilities`，且方法不是 `initialize` | modern | 无状态服务；缺必填 `_meta`/类型错 → `-32602` |
+| 其它（含只有 `progressToken` 等无关 `_meta`） | legacy | 保守走 0.3.2 路径，不猜 era |
+
+legacy 协商（不变，`contracts/mcp/versions-v1.json`）：
 
 | 客户端请求 | 服务端回显 | 说明 |
 |---|---|---|
 | `2024-11-05` | `2024-11-05` | 0.2.x 默认，行为不变 |
 | `2025-06-18` | `2025-06-18` | 同一 initialize/tools/resources 生命周期 |
 | `2025-11-25` | `2025-11-25` | 本 server 支持的最新 legacy 修订 |
-| 缺失 / 未知 / `2026-07-28` | `2024-11-05` | active-fallback；旧客户端不受影响 |
+| 缺失 / 未知 | `2024-11-05` | active-fallback；旧客户端不受影响 |
 
-- 支持的是 **legacy 生命周期**（initialize → tools/list → tools/call → resources/list → resources/read）；现代无状态修订 2026-07-28（`server/discover`、每请求 `_meta`、`resultType`）**没有实现**，也不广告。现代客户端探测 `server/discover` 会得到未知方法错误后回退 `initialize`——这是有意的兼容取舍，不是"支持 modern"。
-- 三种 legacy 版本的可用方法、工具、resources 与错误码完全相同；协商结果只影响 `initialize` 回显（与审计口径），不改变读模型/上限。
-- 契约工件：`contracts/mcp/versions-v1.json`（supported/default/negotiation）与 `contracts/versions-v1.json` 的 `discovery.expected.mcpProtocol`（默认值 `2024-11-05`）；`node scripts/check-contracts.mjs --mcp` 会验证回显与回退。
+modern（`2026-07-28`，无状态；`contracts/mcp/versions-v2.json` 是唯一权威规则表）：
+
+- 每个 modern 请求必须在 `params._meta` 自带 `io.modelcontextprotocol/protocolVersion`（字符串）与 `io.modelcontextprotocol/clientCapabilities`（对象）；缺失/类型错 → `-32602`。
+- **`server/discover`** 返回 `DiscoverResult`：`resultType:"complete"`、`supportedVersions:["2026-07-28"]`、`capabilities:{tools:{listChanged:false},resources:{listChanged:false}}`、`_meta["io.modelcontextprotocol/serverInfo"]`、`ttlMs:300000`、`cacheScope:"public"`；**不发送** `instructions`。
+- 方法 allowlist 只含 `server/discover`、`tools/list`、`tools/call`、`resources/list`、`resources/read`；modern 的 `initialize`/`ping`/`notifications/*`/`resources/subscribe`/`logging/*`/`prompts/*`/`resources/templates/list` 一律 `-32601`（通知不响应）。**不会**把 modern 请求 fall-through 给 legacy 分发。
+- 所有成功结果必带 `resultType:"complete"`（包括 `isError:true` 的工具结果）；每个 modern 成功结果带 `_meta["io.modelcontextprotocol/serverInfo"]={name:"advisers",version}`。
+- 缓存：`server/discover`/`tools/list`/`resources/list` 为 `ttlMs:300000` + `cacheScope:"public"`；`resources/read` 为 `ttlMs:0` + `cacheScope:"private"`；`tools/call` 不可缓存（无 ttl 字段）。
+- 版本不符：well-formed 但 `protocolVersion` 不是 `2026-07-28` → `-32022`（`Unsupported protocol version`），`data:{supported:["2026-07-28"],requested}`；modern 未知 resource → `-32602`（legacy 同请求仍是 `-32002`）；`tools/list`/`resources/list` 带 `cursor` → `-32602`（单页实现，不发 `nextCursor`）。
+- **payload 同源**：modern `tools/list`/`tools/call`/`resources/list`/`resources/read` 调用与 legacy 完全相同的读模型与审计函数，envelope 之外逐字节一致（`tools/call` 的 `content[0].text`、`resources/read` 的 `contents[0].text` 有测试断言）；clearance 过滤、`protectedExcluded`、8 工具/5 resources 目录、64 KiB 字节预算与 1 MiB 行上限全部沿用。
+- **回退开关**：`ADVISERS_MCP_MODERN=off|0|false|no|disabled` → 所有请求走 legacy（`server/discover` 回到 `-32601`，modern `_meta` 被忽略），一次进程重启即可回到 0.3.2 行为。
+
+客户端矩阵（2026-11-21 时点）：Claude Code v2 runtime 探测到 `DiscoverResult` 后走 modern；Cursor 仍只支持 legacy（会回退 `initialize`，不受影响）；MCP Inspector 可切换 `legacy|auto|modern`。Claude Code 对探测失败有最多 7 天的缓存，升级后若仍走 legacy，重连/重启客户端或设置 `MCP_PROTOCOL_NEGOTIATION=auto`。
 
 ### 5.2 方法与错误码
 
-支持方法：`initialize`、`notifications/initialized`、`ping`、`tools/list`、`tools/call`、`resources/list`、`resources/read`。
+支持方法：
+
+- legacy：`initialize`、`notifications/initialized`、`ping`、`tools/list`、`tools/call`、`resources/list`、`resources/read`。
+- modern：`server/discover`、`tools/list`、`tools/call`、`resources/list`、`resources/read`（显式 allowlist；其余方法 `-32601`）。
 
 | 码 | 含义 |
 |---|---|
 | `-32600` | 非法请求；stdio 单行超过 1 MiB 也用它 |
-| `-32601` | 未知方法 |
-| `-32602` | 参数类型/取值错误、未知工具（不回显原始参数） |
+| `-32601` | 未知方法（modern 下的 `initialize`/`ping` 等也走这里） |
+| `-32602` | 参数类型/取值错误、未知工具、modern 缺必填 `_meta`、modern 未知 resource/cursor（不回显原始参数） |
+| `-32022` | modern：不支持的协议版本（`data.supported`/`data.requested`） |
 | `-32700` | 非法 JSON |
 | `-32603` | 未预期内部错误（固定文案，不带堆栈） |
-| `-32002` | 未知 resource URI |
+| `-32002` | legacy：未知 resource URI（modern 同请求为 `-32602`） |
 
 工具执行失败（如证据 id 前缀未知、目录不存在）走 MCP 约定：`result.isError = true`，`content[0].text` 是固定/净化后的文案。实现强制“一行一个请求、UTF-8、≤1 MiB”，超限的行被丢弃并返回 `-32600`。
 
@@ -231,11 +254,13 @@ resources 与对应工具读同一份**已做 clearance 过滤 + 上限截断**�
 - 错误信息不回显原始参数、引文或绝对路径。
 - 回执校验拒绝符号链接、超大文件与 `SHA256SUMS` 中不安全的路径。
 
-## 7. 未做（避免误解）
+## 7. 未做 / 明确不暴露（避免误解）
 
-- 不做 MCP client / 上游会议或邮件 ingest / OAuth / 订阅（`resources/subscribe`）。
-- 不提供 HTTP/SSE 传输，不做多租户或远程暴露。
-- **不实现 MCP 现代（stateless 2026-07-28）修订**：没有 `server/discover`、每请求 `_meta`、`resultType` 或 modern 错误语义；0.3.0 只承诺 legacy 三版本协商。工具面也不做 `readonly` profile 切换或分页游标（cap + `total`/`truncated` 足够本版本）。
+- 不做 MCP client / 上游会议或邮件 ingest / OAuth / 订阅（`resources/subscribe`、`subscriptions/listen`）。
+- 不提供 HTTP/SSE 传输，不做多租户或远程暴露；只有 stdio。
+- modern 面只做 §5.1 的 5 个方法：不做 `prompts/*`、`resources/templates/list`、分页（不发 `nextCursor`，带 cursor 即 `-32602`）、多轮请求（`resultType` 只有 `complete`，没有 `input_required`）、sampling/elicitation/roots、logging。
+- **0.4.0 不向 MCP/DSH 暴露 KB 与邮件**：工具仍是 8 个、resources 仍是 5 个，没有新增 KB/邮件工具、resource 或字段；KB 正文、邮件正文与金额只存在于本地账本/CLI（金额也从不进入 MCP/DSH）。暴露 KB/邮件需要 opt-in + clearance 0 + untrusted 边界 + 法务文本，属于 0.4.x/0.5。
+- 不捆绑 `--tools=readonly|standard` profile：那不是 MCP 协议特性（规范只有 `annotations.readOnlyHint`），是 Advisers 自订信任边界，另立项。
 
 ## 8. bin 接线（已完成 2026-11-17）
 
@@ -256,6 +281,7 @@ async function mcpServer() {
     version: VERSION,
     audit: (entry) => store?.appendAudit(entry),
     // clearance is a process decision, never a tool argument; 0 is the default
+    // 0.4.0: modern defaults on; ADVISERS_MCP_MODERN=off reverts to legacy-only
   })
   process.stdout.on('error', (e) => { if (e?.code === 'EPIPE') process.exit(0) })
   await server.serve(process.stdin, process.stdout)
@@ -287,14 +313,28 @@ printf '%s\n' \
 
 ```sh
 cd packages/advisers
-node --experimental-strip-types --test test/mcp-server.test.js       # 库协议面
+node --experimental-strip-types --test test/mcp-server.test.js       # 库协议面（legacy）
 node --experimental-strip-types --test test/mcp-clearance.test.js    # 0.2.5 per-item clearance（A-2）
 node --experimental-strip-types --test test/mcp-output-caps.test.js  # 0.3.0 上限/截断/协商
 node --experimental-strip-types --test test/mcp-clients.test.js      # 0.3.2 客户只读投影
+node --experimental-strip-types --test test/mcp-modern.test.js       # 0.4.0 dual-era 全矩阵
+node --experimental-strip-types --test test/mcp-modern-cli.test.js   # modern 的真实 stdio 会话
+node --experimental-strip-types --test test/mcp-modern-contract.test.js # v2 契约/向量
 node --experimental-strip-types --test test/cli-mcp-json.test.js     # 真实 CLI stdio 接线
 cd ../..
-node scripts/check-contracts.mjs --mcp   # 目录/响应与 contracts/mcp/* 对齐（真实 stdio）
-node scripts/check-contracts.mjs --status  # status --json 的 contracts 发现字段（已接线并断言）
+node scripts/check-contracts.mjs --mcp   # legacy 目录/响应 + modern envelope 与契约对齐
+node scripts/check-contracts.mjs --status  # status --json 的 contracts 发现字段
+```
+
+modern 手工验收（无需客户端）：
+
+```sh
+printf '%s\n' \
+  '{"jsonrpc":"2.0","id":1,"method":"server/discover","params":{"_meta":{"io.modelcontextprotocol/protocolVersion":"2026-07-28","io.modelcontextprotocol/clientCapabilities":{}}}}' \
+  '{"jsonrpc":"2.0","id":2,"method":"tools/list","params":{"_meta":{"io.modelcontextprotocol/protocolVersion":"2026-07-28","io.modelcontextprotocol/clientCapabilities":{}}}}' \
+  | advisers mcp --stdio
+# 期望：discover resultType=complete + supportedVersions 2026-07-28 + ttlMs/cacheScope；tools/list 仍 8 工具
+# ADVISERS_MCP_MODERN=off 时同一 discover 请求应得到 -32601（0.3.2 行为）
 ```
 
 覆盖：initialize/tools/list（8）/resources/list（5）/resources/read、三个 legacy 协议版本回显与未知版本回退、capture 只产生 pending 候选且不动账本、审计回调与 fail-closed 回滚、参数错误码、回执目录校验与篡改检测、1 MiB 行上限、`scripts/mcp-dev.mjs` 的真实 stdio 双进程冒烟；`mcp-output-caps` 覆盖大账本（1,200 open）下三读工具不 `CONTENT_BLOCKED`、`total/truncated/limit` 语义、resources 与 tools 同口径、64 KiB 最后一道字节预算；`cli-mcp-json` 另在真实 `advisers mcp --stdio` 上覆盖同一协议面（8 工具/5 resources/错误码/审计行/行上限）；`mcp-clients` 覆盖客户只读投影（list/show、secrecy、未知客户、JSON store 错误、上限、resource、审计）。

@@ -3,15 +3,17 @@ import { chmodSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import test from 'node:test'
+import { skipOnWindows } from './win-compat.mjs'
 import { extractAttachment } from '../lib/attachments.js'
 import { runLocalOcr } from '../lib/ocr.js'
 
-test('E7-T3: local OCR adapter fails closed without config and works with a local command', async () => {
+test('E7-T3: local OCR adapter fails closed without config and works with a local command', async (t) => {
   const root = mkdtempSync(join(tmpdir(), 'advisers-ocr-'))
   const old = process.env.ADVISERS_OCR_CMD
   try {
     writeFileSync(join(root, 'scan.png'), Buffer.from([0x89, 0x50, 0x4e, 0x47]))
     await assert.rejects(() => runLocalOcr('scan.png', { cwd: root, cmd: '' }), /not configured/)
+    if (skipOnWindows(t, 'OCR external adapter commands are spawned as a single executable path on Windows, so a POSIX #!/bin/sh probe cannot run (quoted-argv adapter contract tracked; docs/WINDOWS.md section 8, windows triage B)')) return
     const script = join(root, 'fake-ocr.sh')
     writeFileSync(script, '#!/bin/sh\necho "识别文本：周五前发报价"\n')
     chmodSync(script, 0o700)

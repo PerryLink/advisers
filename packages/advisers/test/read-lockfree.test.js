@@ -6,6 +6,7 @@ import { join } from 'node:path'
 import { fileURLToPath, pathToFileURL } from 'node:url'
 import test from 'node:test'
 import { DatabaseSync } from 'node:sqlite'
+import { skipOnWindows } from './win-compat.mjs'
 import { downgradeToV19 } from './schema-fixtures.js'
 import { openReadStore, SCHEMA_VERSION, SqliteStore } from '../lib/sqlite.js'
 
@@ -244,8 +245,14 @@ test('a read-only open recovers a WAL left by a SIGKILLed writer', async () => {
   } finally { rmSync(root, { recursive: true, force: true }) }
 });
 
-test('a read-only directory (read-only volume) needs existing WAL sidecars and degrades clearly otherwise', () => {
+test('a read-only directory (read-only volume) needs existing WAL sidecars and degrades clearly otherwise', (t) => {
   if (typeof process.getuid === 'function' && process.getuid() === 0) return; // root ignores permissions
+  // POSIX-only: "read-only directory" is an ACL concept on Windows and chmod()
+  // cannot make a directory unwritable there (the read-only attribute does not
+  // block creating files inside it). The POSIX run keeps this coverage; the
+  // real Windows ACL case is in the manual release checklist (docs/WINDOWS.md
+  // section 6, windows triage G2).
+  if (skipOnWindows(t, 'read-only directories are ACL-based on Windows; the chmod(0o555) fixture cannot express them (windows triage G2)')) return;
   const { root, db } = setup('advisers-readonly-dir-');
   try {
     seed(db);

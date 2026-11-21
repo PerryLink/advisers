@@ -12,17 +12,17 @@ SQLite/FTS persistence lives in the `advisers` distribution; this package has no
 
 ## Status
 
-`0.3.2` was published on 2026-11-21 (npm `latest` = `0.3.2`; `next` is also `0.3.2`).
-0.3.2 is the current feature release (lockstep version); this package's public surface is
-unchanged from 0.3.1 — the customer-loop and performance work lives in `advisers` and
-`dsh-advisers`. 0.3.1 was a release-metadata patch for 0.3.0, and the 0.2.4 candidate
-superseded by the 0.3.0 line was never published. The 0.2.3 baseline
-added pure ledger operations (`ops.ts`: commit add/edit/done/snooze, correct, decay,
-forget, memory accept/reject) and a partial-snapshot contract so the CLI can write
-incrementally and read only the tables it needs; 0.3.0 keeps those contracts additive and
-shares the read-model, error-code-registry and contract artifacts documented in the
-`advisers` package. `0.2.2`/`0.2.1`/`0.2.0` remain installable by pinning. The API is
-stabilizing but may still change within 0.x.
+`0.4.0` was published on 2026-11-21 (npm `latest` = `0.4.0`; `next` is also `0.4.0`).
+0.4.0 is the current feature release (lockstep version); this package's public surface is
+unchanged from 0.3.2 — the 0.4 work (knowledge base, mail entry, interactive shell,
+receivables, policy/evidence subset) lives in `advisers` and `dsh-advisers`. 0.3.1 was a
+release-metadata patch for 0.3.0, and the 0.2.4 candidate superseded by the 0.3.0 line was
+never published. The 0.2.3 baseline added pure ledger operations (`ops.ts`: commit
+add/edit/done/snooze, correct, decay, forget, memory accept/reject) and a partial-snapshot
+contract so the CLI can write incrementally and read only the tables it needs; 0.3.0+ keeps
+those contracts additive and shares the read-model, error-code-registry and contract
+artifacts documented in the `advisers` package. `0.2.2`/`0.2.1`/`0.2.0` remain installable
+by pinning. The API is stabilizing but may still change within 0.x.
 
 ## License
 

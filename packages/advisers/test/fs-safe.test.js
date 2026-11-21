@@ -4,6 +4,7 @@ import { existsSync, mkdtempSync, readdirSync, readFileSync, rmSync, statSync, u
 import { tmpdir } from 'node:os'
 import { basename, dirname, join } from 'node:path'
 import test from 'node:test'
+import { assertPrivateMode } from './win-compat.mjs'
 import {
   atomicWriteFileSync,
   commitTempFileSync,
@@ -228,15 +229,19 @@ test('fs-safe: copy/rm helpers retry transient errors and tolerate a missing rm 
     copyFileWithRetrySync(source, target, { fs: flakyFs, sleep: () => {} })
     assert.equal(copyCalls, 2)
     assert.equal(statSync(target).size, 1024)
-    assert.equal(statSync(target).mode & 0o777, 0o600, 'backups are private')
+    assertPrivateMode(target, 0o600, 'backups are private')
     assert.equal(rmWithRetrySync(join(dir, 'missing.bin'), { fs: realFs }), true)
   } finally { rmSync(dir, { recursive: true, force: true }) }
 })
 
 test('fs-safe: temp naming is hidden, same-directory and discoverable by its prefix', () => {
-  const file = '/home/user/.advisers/state.db.vault'
+  // Platform-independent absolute path: a hardcoded POSIX path compares the
+  // POSIX dirname on Linux but a "\\home\\user\\.advisers" dirname on Windows
+  // (synthetic Windows root). The contract is "temp lives in the target's
+  // directory", so assert that instead of a literal path.
+  const file = join(tmpdir(), 'adv-home', 'user', '.advisers', 'state.db.vault')
   const tmp = tempPathForSync(file)
-  assert.equal(dirname(tmp), '/home/user/.advisers', 'rename must stay on the same filesystem')
+  assert.equal(dirname(tmp), dirname(file), 'rename must stay on the same filesystem')
   assert.ok(basename(tmp).startsWith('.state.db.vault.tmp-'), `unexpected temp name ${tmp}`)
   assert.ok(tmp.startsWith(tempPrefixForSync(file)))
 })
@@ -331,7 +336,7 @@ test('fs-safe: backup/import copy+fsync leaves the copy byte-identical (the bin 
     fsyncFileSync(backup, { retries: 0 }) // the exact step bin/backup and import --replace use
     assert.deepEqual(readFileSync(backup), before)
     assert.equal(statSync(backup).size, before.length)
-    assert.equal(statSync(backup).mode & 0o777, 0o600, 'backups stay private')
+    assertPrivateMode(backup, 0o600, 'backups stay private')
   } finally { rmSync(dir, { recursive: true, force: true }) }
 })
 

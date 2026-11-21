@@ -18,7 +18,7 @@ executable software: scripts and the CLI validate against it, and the checker
 | Freeze commit | `35a51c3` (published 0.2.4 code base; version is not bumped by this change) |
 | Frozen at | 2026-11-20 |
 | Contract tree version | v1 (`versions-v1.json`) |
-| Compat mode | `backward` for CLI JSON; `additive` for MCP tools/resources; exit codes are frozen v1 (v2 is a draft) |
+| Compat mode | `backward` for CLI JSON; `additive` for MCP tools/resources; the MCP modern (2026-07-28) era is additive v2 next to the frozen legacy v1; exit codes are frozen v1 (v2 is a draft) |
 | License | Intended: CC BY-NC-SA 4.0 (see `LICENSE` and the status note below) |
 
 ## Artifact index
@@ -38,6 +38,9 @@ executable software: scripts and the CLI validate against it, and the checker
 | `mcp/versions-v1.json` | 1 | Supported legacy protocol versions + negotiation status + methods. |
 | `mcp/errors-v1.json` | 1 | JSON-RPC error codes `-32600/-32601/-32602/-32603/-32700/-32002` + tool `isError` envelope. |
 | `mcp/responses-v1.schema.json` | 1 | JSON Schema for initialize/tools-list/resources-list/resources-read/tool-call/error responses and the JSON payloads inside them. |
+| `mcp/versions-v2.json` | 2 | MCP dual-era rulebook (0.4.0): legacy matrix reference + the stateless modern 2026-07-28 era (per-request `_meta`, `server/discover`, `resultType`/`ttlMs`/`cacheScope`, error mapping, `ADVISERS_MCP_MODERN` switch). Additive; no frozen v1 artifact changed. |
+| `mcp/responses-v2.schema.json` | 2 | JSON Schema for the modern result/error envelopes only; the payload inside tools-list/tools-call/resources-list/resources-read stays byte-identical and is validated against the frozen `responses-v1.schema.json` `$defs`. |
+| `vectors/mcp/modern.vectors.json` | 1 | Accept/reject conformance vectors for every top-level `$def` of `responses-v2.schema.json`. |
 | `vectors/cli/read-models.vectors.json` | 1 | Accept/reject conformance vectors for every top-level read-model payload. |
 | `vectors/cli/errors.vectors.json` | 1 | Accept/reject vectors for the error envelope. |
 | `vectors/mcp/responses.vectors.json` | 1 | Accept/reject vectors for MCP envelopes and payloads. |
@@ -70,6 +73,10 @@ node scripts/check-contracts.mjs --update   # regenerate errors/codes.v1.json + 
 
 The checker runs offline, with a temporary `ADVISERS_HOME` and no credentials:
 `--schema`, `--vectors`, `--cli`, `--status`, `--exit`, `--mcp`, `--errors`, `--docs`.
+`--mcp` starts one real stdio session and probes **both eras**: the legacy handshake
+(unchanged bytes) and the modern 2026-07-28 path (`server/discover`, each modern
+method, `-32022`/`-32602`/`-32601`, cursor rejection, notification silence,
+byte-identical payloads, and the `ADVISERS_MCP_MODERN=off` fallback).
 
 ## License status
 

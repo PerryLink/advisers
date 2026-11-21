@@ -8,20 +8,22 @@ import { DatabaseSync } from 'node:sqlite'
 import { SCHEMA_VERSION, SqliteStore } from '../lib/sqlite.js'
 import { downgradeToV19, downgradeToV20 } from './schema-fixtures.js'
 
-// 0.3.0 schema v21 (customer entities) migration contract.
+// Schema migration chain (v20 -> v21 -> v22) migration contract.
 //
-// The v20 step (persistence v2) is pinned here together with the new v21 step
-// so the whole chain is covered by one fixture set:
-//  - a genuine v20 database upgrades to v21: customer tables, ownership columns
-//    and delivery-lineage columns appear, every pre-existing row is untouched,
-//    and the pre-migration backup is taken at v20 and verified;
-//  - v19 -> v21 records BOTH steps (20 and 21) and one backup taken at v19;
-//  - v18 -> v21 runs the legacy base block and the two steps in one transaction;
+// The v20 step (persistence v2) and the v21 customer step are pinned here
+// together with the v22 (0.4.0 KB/mail/money) step so the whole chain is
+// covered by one fixture set:
+//  - a genuine v20 database upgrades to the current version: customer tables,
+//    ownership columns, delivery-lineage columns and the v22 tables/indexes/FTS
+//    appear, every pre-existing row is untouched, and the pre-migration backup
+//    is taken at v20 and verified;
+//  - v19 -> current records ALL steps (20, 21, 22) and one backup at v19;
+//  - v18 -> current runs the legacy base block and the steps in one transaction;
 //  - a failing v21 step rolls back atomically and leaves the v20 database
-//    retryable (no half-migrated customer table, no v21 ledger row);
+//    retryable (no half-migrated customer table, no later ledger row);
 //  - a backup verification failure refuses the migration (fail closed);
 //  - a committed WAL-only row is folded into the backup before the upgrade;
-//  - a future schema (v22) is refused and the file is never modified.
+//  - a future schema is refused and the file is never modified.
 
 const NOW = '2026-11-01T00:00:00.000Z'
 const SAMPLE_TABLES = ['matters', 'facts', 'commitments', 'preferences', 'audit']
@@ -31,9 +33,22 @@ const V21_INDEX_NAMES = [
   'idx_projects_client_name_active', 'idx_client_notes_client_at', 'idx_matters_client',
   'idx_matters_project', 'idx_commitments_matter', 'idx_deliveries_matter',
 ]
+const V22_INDEX_NAMES = [
+  'idx_kb_source_active', 'idx_kb_source_unique', 'idx_kb_client_status', 'idx_kb_matter_status',
+  'idx_kb_chunks_doc', 'idx_kb_fact_links_fact', 'idx_kb_pages_kind',
+  'idx_mail_dedupe', 'idx_mail_uid', 'idx_mail_client',
+  'idx_receivables_client', 'idx_payments_client_day', 'idx_payments_commitment',
+]
 const CUSTOMER_TABLES = ['clients', 'projects', 'client_notes']
+const V22_TABLES = [
+  'kb_documents', 'kb_chunks', 'kb_fact_links', 'kb_pages',
+  'mail_accounts', 'mail_cursors', 'mail_messages', 'mail_sync_runs',
+  'receivables', 'payments',
+]
+const V22_FTS_TABLES = ['kb_fts', 'kb_pages_fts']
 const STEP20 = 'incremental-writes-readonly-reads'
 const STEP21 = 'client-project-entities-delivery-lineage'
+const STEP22 = 'kb-mail-payment-entities'
 const V20_META_KEYS = ['schema_migrated_from', 'schema_migrated_at', 'schema_migrated_app', 'schema_migration_backup']
 
 function setup(prefix = 'advisers-migration-v21-') {
@@ -69,7 +84,7 @@ function countsOf(dbPath) {
   } finally { raw.close() }
 }
 
-/** Seed a complete, current (v21) database with data in every sampled table. */
+/** Seed a complete, current database with data in every sampled table. */
 function createSeed(dbPath) {
   const store = new SqliteStore(dbPath)
   try {
@@ -121,28 +136,29 @@ function fileHash(path) {
   return createHash('sha256').update(readFileSync(path)).digest('hex')
 }
 
-test('v20 -> v21: version, both migration rows, customer layout, data and verified backup', () => {
+test('v20 -> current: version, every later migration row, customer + v22 layout, data and verified backup', () => {
   const { root, db } = setup()
   try {
     const beforeCounts = createSeed(db)
     downgradeToV20(db)
     assert.equal(tableNames(db).has('clients'), false, 'fixture: a genuine v20 database has no customer tables')
     assert.equal(columnsOf(db, 'matters').includes('client_id'), false, 'fixture: v20 matters have no ownership columns')
+    assert.equal(tableNames(db).has('kb_documents'), false, 'fixture: a genuine v20 database has no KB tables')
     const raw = readRaw(db)
     try { assert.equal(raw.prepare("SELECT value FROM meta WHERE key = 'schema_version'").get().value, '20') } finally { raw.close() }
 
     const store = new SqliteStore(db)
     try {
-      assert.equal(SCHEMA_VERSION, 21)
-      assert.equal(store.getMeta('schema_version'), '21')
-      assert.equal(store.schemaVersion(), 21)
+      assert.equal(SCHEMA_VERSION, 22)
+      assert.equal(store.getMeta('schema_version'), '22')
+      assert.equal(store.schemaVersion(), 22)
       const rows = migrationRows(store)
-      assert.equal(rows.length, 2, 'the v20 row survives and exactly the v21 step is appended')
-      assert.deepEqual(rows.map((row) => row.version), [20, 21])
-      assert.equal(rows[0].name, STEP20)
+      assert.equal(rows.length, 3, 'the v20 row survives and exactly the v21+v22 steps are appended')
+      assert.deepEqual(rows.map((row) => row.version), [20, 21, 22])
+      assert.deepEqual(rows.map((row) => row.name), [STEP20, STEP21, STEP22])
       assert.equal(rows[0].backup_path, null, 'the v20 step was applied to a fresh database: no backup')
-      assert.equal(rows[1].name, STEP21)
       assert.match(rows[1].backup_path, /state\.db\.before-migrate-v20-\d+$/)
+      assert.equal(rows[2].backup_path, rows[1].backup_path, 'one verified backup covers the whole upgrade run')
       assert.match(rows[1].applied_at, /^\d{4}-\d{2}-\d{2}T/)
       assert.ok(Number.isInteger(rows[1].duration_ms) && rows[1].duration_ms >= 0)
       assert.equal(store.getMeta('schema_migrated_from'), '20')
@@ -150,17 +166,22 @@ test('v20 -> v21: version, both migration rows, customer layout, data and verifi
 
       const tables = tableNames(db)
       for (const table of CUSTOMER_TABLES) assert.ok(tables.has(table), 'missing table ' + table)
+      for (const table of V22_TABLES) assert.ok(tables.has(table), 'missing v22 table ' + table)
+      for (const table of V22_FTS_TABLES) assert.ok(tables.has(table), 'missing v22 FTS table ' + table)
       for (const column of ['client_id', 'project_id']) assert.ok(columnsOf(db, 'matters').includes(column), 'missing matters.' + column)
       assert.ok(columnsOf(db, 'commitments').includes('created_at'), 'missing commitments.created_at')
       for (const column of ['client_id', 'project_id', 'template_name', 'template_version', 'quote_no', 'data_sha256']) {
         assert.ok(columnsOf(db, 'deliveries').includes(column), 'missing deliveries.' + column)
       }
       assert.deepEqual(indexNames(store, V21_INDEX_NAMES), V21_INDEX_NAMES.slice().sort())
+      assert.deepEqual(indexNames(store, V22_INDEX_NAMES), V22_INDEX_NAMES.slice().sort())
       assert.deepEqual(indexNames(store, V20_INDEX_NAMES), V20_INDEX_NAMES.slice().sort(), 'the v20 indexes stay')
-      assert.deepEqual([...tables].filter((name) => CUSTOMER_TABLES.includes(name)).length, CUSTOMER_TABLES.length)
 
       assert.deepEqual(countsOf(db), beforeCounts, 'migrating must not change any ledger row count')
-      assert.equal(store.searchTurns('预算总额').length, 1, 'the v19 FTS index is not rebuilt by v21')
+      assert.equal(store.searchTurns('预算总额').length, 1, 'the v19 FTS index survives the chain')
+      const ftsReport = store.verifyFtsIntegrity()
+      assert.equal(ftsReport.ok, true, JSON.stringify(ftsReport.errors))
+      assert.equal(ftsReport.tables.kb_fts.exists, true)
 
       // Pre-v21 rows keep their exact old JSON shape (no invented lineage).
       const deliveries = store.listDeliveries(10)
@@ -172,7 +193,7 @@ test('v20 -> v21: version, both migration rows, customer layout, data and verifi
       assert.equal(commitment.action, '发报价')
       assert.equal('createdAt' in commitment, false, 'an old commitment has no creation instant to invent')
       const matter = store.getMatter('m1')
-      assert.equal('clientId' in matter, false)
+      assert.equal('clientId' in matter, false, 'the v21 step adds the column; the old row keeps NULL')
       assert.equal('projectId' in matter, false)
     } finally { store.close() }
 
@@ -188,7 +209,8 @@ test('v20 -> v21: version, both migration rows, customer layout, data and verifi
       assert.equal(backup.prepare('PRAGMA quick_check').get().quick_check, 'ok')
       assert.equal(backup.prepare("SELECT value FROM meta WHERE key = 'schema_version'").get().value, '20')
       assert.equal(Number(backup.prepare("SELECT COUNT(*) AS n FROM sqlite_master WHERE name = 'clients'").get().n), 0)
-      assert.equal(backup.prepare("SELECT COUNT(*) AS n FROM sqlite_master WHERE name = 'schema_migrations'").get().n, 1)
+      assert.equal(Number(backup.prepare("SELECT COUNT(*) AS n FROM sqlite_master WHERE name = 'kb_documents'").get().n), 0)
+      assert.equal(Number(backup.prepare("SELECT COUNT(*) AS n FROM sqlite_master WHERE name = 'schema_migrations'").get().n), 1)
       assert.equal(Number(backup.prepare('SELECT COUNT(*) AS n FROM deliveries').get().n), 1)
       for (const table of SAMPLE_TABLES) {
         assert.equal(Number(backup.prepare('SELECT COUNT(*) AS n FROM ' + table).get().n), beforeCounts[table], 'backup ' + table + ' count')
@@ -197,7 +219,7 @@ test('v20 -> v21: version, both migration rows, customer layout, data and verifi
   } finally { rmSync(root, { recursive: true, force: true }) }
 })
 
-test('v19 -> v21: the chain records both steps and keeps one v19 backup', () => {
+test('v19 -> current: the chain records every step and keeps one v19 backup', () => {
   const { root, db } = setup('advisers-migration-v19-')
   try {
     const beforeCounts = createSeed(db)
@@ -207,37 +229,42 @@ test('v19 -> v21: the chain records both steps and keeps one v19 backup', () => 
     try { assert.equal(raw.prepare("SELECT value FROM meta WHERE key = 'schema_version'").get().value, '19') } finally { raw.close() }
     const store = new SqliteStore(db)
     try {
-      assert.equal(store.getMeta('schema_version'), '21')
+      assert.equal(store.getMeta('schema_version'), '22')
       assert.equal(store.getMeta('schema_migrated_from'), '19')
       const rows = migrationRows(store)
-      assert.deepEqual(rows.map((row) => row.version), [20, 21])
-      assert.deepEqual(rows.map((row) => row.name), [STEP20, STEP21])
+      assert.deepEqual(rows.map((row) => row.version), [20, 21, 22])
+      assert.deepEqual(rows.map((row) => row.name), [STEP20, STEP21, STEP22])
       assert.match(rows[0].backup_path, /before-migrate-v19-\d+$/)
-      assert.equal(rows[0].backup_path, rows[1].backup_path, 'one verified backup covers both steps of the run')
+      assert.equal(rows[0].backup_path, rows[1].backup_path, 'one verified backup covers every step of the run')
+      assert.equal(rows[0].backup_path, rows[2].backup_path)
       assert.equal(store.searchTurns('预算总额').length, 1)
       assert.deepEqual(countsOf(db), beforeCounts)
       for (const table of CUSTOMER_TABLES) assert.ok(tableNames(db).has(table), 'missing table ' + table)
+      for (const table of V22_TABLES) assert.ok(tableNames(db).has(table), 'missing v22 table ' + table)
+      assert.equal(store.verifyFtsIntegrity().ok, true)
     } finally { store.close() }
     assert.equal(backupsIn(root).length, 1)
     assert.match(backupsIn(root)[0], /before-migrate-v19-/)
   } finally { rmSync(root, { recursive: true, force: true }) }
 })
 
-test('v18 -> v21: legacy base tables + both steps migrate and record from=18', () => {
+test('v18 -> current: legacy base tables + every step migrate and record from=18', () => {
   const { root, db } = setup('advisers-migration-v18-')
   try {
     createV18Database(db)
     const store = new SqliteStore(db)
     try {
-      assert.equal(store.getMeta('schema_version'), '21')
+      assert.equal(store.getMeta('schema_version'), '22')
       assert.equal(store.getMeta('schema_migrated_from'), '18')
       assert.equal(store.ftsTokenizer, 'trigram')
       assert.equal(store.searchTurns('预算总额').length, 1)
       assert.equal(store.searchSummaries('预算总额').length, 1)
       const rows = migrationRows(store)
-      assert.deepEqual(rows.map((row) => row.version), [20, 21], 'the legacy block has no ledger row; both version steps do')
+      assert.deepEqual(rows.map((row) => row.version), [20, 21, 22], 'the legacy block has no ledger row; every version step does')
       assert.match(rows[0].backup_path, /before-migrate-v18-\d+$/)
       for (const table of CUSTOMER_TABLES) assert.ok(tableNames(db).has(table), 'missing table ' + table)
+      for (const table of V22_TABLES) assert.ok(tableNames(db).has(table), 'missing v22 table ' + table)
+      assert.equal(store.verifyFtsIntegrity().ok, true)
     } finally { store.close() }
     assert.equal(backupsIn(root).length, 1)
   } finally { rmSync(root, { recursive: true, force: true }) }
@@ -263,6 +290,7 @@ test('a failed v21 step rolls back atomically and leaves the v20 database retrya
       assert.equal(raw.prepare("SELECT value FROM meta WHERE key = 'schema_version'").get().value, '20', 'DDL and the version stamp roll back together')
       assert.equal(Number(raw.prepare("SELECT COUNT(*) AS n FROM sqlite_master WHERE name IN ('clients','projects','client_notes')").get().n), 0, 'no half-created customer table may survive')
       assert.equal(Number(raw.prepare("SELECT COUNT(*) AS n FROM sqlite_master WHERE name = 'schema_migrations'").get().n), 1, 'only the v20 row remains')
+      assert.equal(Number(raw.prepare("SELECT COUNT(*) AS n FROM sqlite_master WHERE name = 'kb_documents'").get().n), 0, 'the rolled-back transaction leaves no v22 table either')
       const matterColumns = raw.prepare('PRAGMA table_info(matters)').all().map((row) => row.name)
       assert.equal(matterColumns.includes('client_id'), false)
       const deliveryColumns = raw.prepare('PRAGMA table_info(deliveries)').all().map((row) => row.name)
@@ -273,10 +301,13 @@ test('a failed v21 step rolls back atomically and leaves the v20 database retrya
 
     const retry = new SqliteStore(db)
     try {
-      assert.equal(retry.getMeta('schema_version'), '21')
-      assert.deepEqual(migrationRows(retry).map((row) => row.version), [20, 21])
+      assert.equal(retry.getMeta('schema_version'), '22')
+      assert.deepEqual(migrationRows(retry).map((row) => row.version), [20, 21, 22])
       for (const table of CUSTOMER_TABLES) assert.ok(tableNames(db).has(table), 'missing table ' + table)
+      for (const table of V22_TABLES) assert.ok(tableNames(db).has(table), 'missing v22 table ' + table)
       assert.deepEqual(indexNames(retry, V21_INDEX_NAMES), V21_INDEX_NAMES.slice().sort())
+      assert.deepEqual(indexNames(retry, V22_INDEX_NAMES), V22_INDEX_NAMES.slice().sort())
+      assert.equal(retry.verifyFtsIntegrity().ok, true)
     } finally { retry.close() }
   } finally { rmSync(root, { recursive: true, force: true }) }
 })
@@ -315,11 +346,11 @@ test('a verification failure during the migration refuses it and deletes the par
     try { assert.equal(raw.prepare("SELECT value FROM meta WHERE key = 'schema_version'").get().value, '20') } finally { raw.close() }
     assert.deepEqual(countsOf(db), beforeCounts)
     const retry = new SqliteStore(db)
-    try { assert.equal(retry.getMeta('schema_version'), '21') } finally { retry.close() }
+    try { assert.equal(retry.getMeta('schema_version'), '22') } finally { retry.close() }
   } finally { rmSync(root, { recursive: true, force: true }) }
 })
 
-test('the v21 migration backup folds a committed WAL-only row into the copy', () => {
+test('the migration backup folds a committed WAL-only row into the copy', () => {
   const source = setup('advisers-migration-wal-src-')
   const target = setup('advisers-migration-wal-')
   try {
@@ -341,7 +372,7 @@ test('the v21 migration backup folds a committed WAL-only row into the copy', ()
     writeFileSync(target.db + '-wal', walBytes)
     const store = new SqliteStore(target.db)
     try {
-      assert.equal(store.getMeta('schema_version'), '21')
+      assert.equal(store.getMeta('schema_version'), '22')
       assert.equal(store.countCommitments(), 2, 'the WAL-only row survived the migration')
     } finally { store.close() }
     const backups = backupsIn(target.root)
@@ -359,18 +390,18 @@ test('the v21 migration backup folds a committed WAL-only row into the copy', ()
   }
 })
 
-test('a future schema (v22) is refused with E_SCHEMA_NEWER and the file is not modified', () => {
+test('a future schema is refused with E_SCHEMA_NEWER and the file is not modified', () => {
   const { root, db } = setup('advisers-migration-future-')
   try {
     const store = new SqliteStore(db)
     store.close()
     const raw = new DatabaseSync(db)
-    raw.prepare("INSERT OR REPLACE INTO meta(key,value) VALUES('schema_version','22')").run()
+    raw.prepare("INSERT OR REPLACE INTO meta(key,value) VALUES('schema_version','23')").run()
     raw.close()
     const before = fileHash(db)
     assert.throws(() => new SqliteStore(db), (error) => {
       assert.equal(error.code, 'E_SCHEMA_NEWER')
-      assert.match(error.message, /database schema v22 is newer than this CLI \(v21\)/)
+      assert.match(error.message, /database schema v23 is newer than this CLI \(v22\)/)
       return true
     })
     assert.equal(fileHash(db), before, 'a refused future schema must not change any byte')

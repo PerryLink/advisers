@@ -13,7 +13,7 @@ import {
   openReadStore,
 } from '../lib/sqlite.js'
 
-// 0.3.0 schema v21: customer/provider entities (clients, projects,
+// 0.3.0 schema v21 (current v22): customer/provider entities (clients, projects,
 // client_notes), matter ownership and delivery lineage — store CRUD, the
 // derived timeline sources and the export data shape.
 
@@ -38,13 +38,13 @@ function seedCommitment(store, row) {
   }))
 }
 
-test('fresh v21 database exposes the customer tables, ownership columns and partial unique indexes', () => {
+test('fresh database exposes the customer tables, ownership columns and partial unique indexes', () => {
   const { root, db } = setup()
   try {
     const store = new SqliteStore(db)
     try {
-      assert.equal(SCHEMA_VERSION, 21)
-      assert.equal(store.getMeta('schema_version'), '21')
+      assert.equal(SCHEMA_VERSION, 22)
+      assert.equal(store.getMeta('schema_version'), '22')
       const tables = new Set(store.db.prepare("SELECT name FROM sqlite_master WHERE type = 'table'").all().map((row) => row.name))
       for (const table of ['clients', 'projects', 'client_notes']) assert.ok(tables.has(table), 'missing table ' + table)
       const columns = (table) => store.db.prepare('PRAGMA table_info(' + table + ')').all().map((row) => row.name)
@@ -470,7 +470,7 @@ test('customer entities survive a reopen without a migration row or backup', () 
     store.close()
     const reopened = new SqliteStore(db)
     try {
-      assert.equal(reopened.getMeta('schema_version'), '21')
+      assert.equal(reopened.getMeta('schema_version'), '22')
       assert.equal(reopened.db.prepare('SELECT COUNT(*) AS n FROM schema_migrations').get().n, migrations)
       assert.equal(reopened.getClient(client.id).name, '王工')
       assert.deepEqual(reopened.getClient(client.id).aliases, ['王总'])

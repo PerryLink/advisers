@@ -1,7 +1,7 @@
 # Legal notice code template（扩展点合规注释模板）
 
 > 用途：给 Advisers 的代码扩展点、第三方扩展与衍生项目提供统一的法务提示注释。
-> 版本：与 `docs/TOS.md` 同步（当前 **v2026.11.3**，清单见 `packages/advisers/lib/tos/manifest.json`）。
+> 版本：与 `docs/TOS.md` 同步（当前 **v2026.11.4**，清单见 `packages/advisers/lib/tos/manifest.json`）。
 > 适用：新增或修改扩展点（Link/通知外发/Office 模板/工具注册/策略包/DLC 加载器/TTS 合成入口等）时，把对应语言的注释块放到实现文件顶部或扩展点入口处。
 > 注意：注释不是运行期门禁；运行期确认与 manifest 校验由对应功能实现。**不得因为加了注释就省略同意门、审计与 AI 标识。**
 
@@ -9,7 +9,7 @@
 
 | 字段 | 说明 | 示例 |
 |---|---|---|
-| `TOS_VERSION` | 注释所依据的 TOS 版本，必须与 `lib/tos/manifest.json` 的 `version` 一致 | `2026.11.3` |
+| `TOS_VERSION` | 注释所依据的 TOS 版本，必须与 `lib/tos/manifest.json` 的 `version` 一致 | `2026.11.4` |
 | `EXTENSION_POINT` | 扩展点标识（稳定、可检索；未来可登记到扩展点注册表） | `ep:link.send`、`ep:office.template` |
 | `LICENSE` | 该文件的许可证（软件类文件为 PolyForm NC 1.0.0） | `PolyForm-Noncommercial-1.0.0` |
 
@@ -40,7 +40,7 @@
 ```js
 /* ADVISERS-LEGAL-NOTICE v1
  * Extension point: ep:link.send
- * TOS: Advisers Terms of Service v2026.11.3 (docs/TOS.md);
+ * TOS: Advisers Terms of Service v2026.11.4 (docs/TOS.md);
  *      license: PolyForm Noncommercial 1.0.0 (noncommercial use only; see LICENSE/LICENSING.md).
  * ...
  */
@@ -84,7 +84,7 @@ export interface LinkProvider {
   "version": "1.0.0",
   "author": "Name <contact@example.com>",
   "license": "PolyForm-Noncommercial-1.0.0",
-  "tosVersion": "2026.11.3",
+  "tosVersion": "2026.11.4",
   "permissions": ["fs.read", "net"],
   "contentSafety": { "reviewed": true, "languages": ["zh-CN"], "notes": "..." }
 }

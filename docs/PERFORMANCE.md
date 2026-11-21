@@ -1,15 +1,18 @@
 # Performance
 
-> Status: `0.3.2` (published 2026-11-21) is the current npm `latest` (`next` is also
-> `0.3.2`). The repository is at package version `0.3.2`. `0.3.2` is a feature release
-> (customer loop + performance closeout) and adds the opt-in bounded paths
-> `today --json --limit` and the narrow MCP commitment read model — see "0.3.2" below.
-> The earlier `0.3.1` was a release-metadata patch over `0.3.0` with no runtime change,
-> so the 0.3.0 measurements apply to that tree; `0.2.4` was an unpublished candidate that
-> the 0.3.0 line supersedes. The numbers below are marked with the tree they were measured
-> on; the 0.3.0 section is release-time evidence from the published tree, not a
-> service-level guarantee. `0.2.2`, `0.2.1` and `0.2.0` are "before" baselines where a
-> comparison says so.
+> Status: `0.4.0` (published 2026-11-21) is the current npm `latest` (`next` is also
+> `0.4.0`) and the repository is at package version `0.4.0`. `0.4.0` is the single 0.4
+> feature release: KB (schema **v22**), mail entry, interactive shell, proactive briefs,
+> policy/evidence 2.0 subset, receivables/payments, MCP modern dual-era and the Windows
+> portable ZIP. It ships **one schema migration** (v21 → v22) and **no hot-path
+> read-model rewrite**; the 0.3.0/0.3.2 numbers below were not re-measured on the 0.4.0
+> tree, so they stay labelled as history rather than reused as 0.4.0 claims. The new 0.4
+> surfaces are either off the default path (`mail sync` is an explicit, user-invoked
+> network command) or bounded local queries; see "0.4.0" below for budgets and known
+> limits. Every number here is marked with the tree it was measured on, is one shared
+> host's measurement, and is not a service-level guarantee. `0.3.2`/`0.3.1`/`0.3.0` are
+> historical baselines in this page; `0.2.4` was an unpublished candidate superseded by
+> the 0.3.0 line.
 
 How Advisers performs on the hot paths, how to reproduce the numbers, and which
 behaviour the regression tests pin. This is a developer/operator reference, not
@@ -85,7 +88,7 @@ current rounds of 3 fresh children per scenario** (so it is a small-sample media
 distribution), and the synthetic ledger has **no FTS/turns content** — this section
 measures read-model/SQL cost, not search.
 
-## 0.3.0 (published 2026-11-20): 200k read A/B and the T1 write-amplification fix
+## 0.3.0 (published 2026-11-20; historical measurement): 200k read A/B and the T1 write-amplification fix
 
 Two changes on the 0.3.0 tree are measured here. 0.3.0 was published on 2026-11-20;
 these are release-time measurements, subject to the shared-host caveats above.
@@ -435,6 +438,12 @@ stable on shared runners):
   produce byte-identical output from projected rows (including the pet-brief v0.2
   vectors).
 
+0.4.0 adds **no wall-clock regression test**. The new suites are behavioural and
+deterministic rather than timing-based: KB FTS integrity/degraded fallback, the v22
+migration + rollback, mail cursor/credential handling, policy/consent and receivables
+arithmetic. If a future change makes a 0.4 surface a hot path, add a write-byte/no-spill
+case as above instead of a timing threshold.
+
 ```sh
 cd packages/advisers
 node --experimental-strip-types --test test/perf-no-spill.test.js
@@ -446,7 +455,7 @@ Note for future changes: the **write-byte budget is the regression signal**, not
 time. If a new read path reintroduces `ORDER BY rowid` after a status predicate, the
 no-spill suite fails even when a fast machine hides the cost.
 
-## 0.3.2
+## 0.3.2 (historical measurement; superseded by 0.4.0)
 
 0.3.2 adds two opt-in bounded paths; the flagless CLI output stays v1-compatible.
 Measured 2026-11-20 on an ext4 copy of the tree (Node 24.22.1, shared host) against
@@ -479,6 +488,89 @@ is the 0.3.2 tree, one process at a time (the ±10–20% host caveat above appli
 - Both paths are read-only; `today --json` still writes only the ~28–32 KB
   snapshot bytes (T1 fix unchanged). No schema/index/migration change.
 
+## 0.4.0 (published 2026-11-21): new surfaces, budgets and known limits
+
+0.4.0 does **not** rewrite a hot read path. It adds one schema migration and several
+opt-in/local surfaces; this section records what was measured, what is a design budget, and
+what is explicitly not on the default path. The 0.4.0 release did **not** re-run the 200k
+read benchmark, so the budgets below are engineering targets and the 0.3.0/0.3.2 A/B tables
+remain the latest release-time evidence. No CI job asserts wall-clock thresholds for any
+0.4.0 surface.
+
+### Schema v22 migration (one-time cost)
+
+- One transactional migration (`kb-mail-payment-entities`) adds the KB, mail and money
+  tables plus the two KB FTS indexes. It is **DDL only** and does not rewrite existing
+  tables. Design budget for the DDL step: **≤200 ms on a 200k-row ledger** (derived, not
+  release-measured).
+- The dominant one-time cost is the pre-migration full-database copy
+  (`state.db.before-migrate-v21-*`), which scales with database size (the 200k-read
+  fixture DB was ≈124 MB). The copy is verified before the migration proceeds and is disk
+  I/O, not CPU. It runs once per home, not once per command.
+- New/empty FTS indexes are created inside the step; existing rows are not re-indexed.
+  `kb reindex --rebuild` is the explicit verify/repair path.
+- One-way upgrade: a 0.3.2 binary refuses a v22 database with `E_SCHEMA_NEWER`; the
+  rollback is restoring the pre-migration copy (or export → fresh import into a 0.3.x
+  home), not a reverse migration.
+
+### KB search: FTS5 trigram plus an honest degraded fallback
+
+0.4 design-research measurements (20k-chunk / 46.4 MB-text corpus; **not** a release gate):
+
+| What | Measured |
+|---|---|
+| `kb_fts` size | ≈30.5 MB (≈0.66× of the indexed text) |
+| whole database | ≈109.6 MB (≈2.4× the text) |
+| 2-character CJK `MATCH` | 0 rows (trigram needs 3+ characters) → `LIKE` fallback |
+| full-corpus 2-character `LIKE` | 16.8 ms / 20k chunks (≈0.8 ms per 1k chunks) |
+| `ORDER BY rank`, popular term (20k hits) / rare term | 8.34 ms / 0.04 ms |
+| insert 50k chunks / `kb reindex --rebuild` | ≈2.4 s / ≈666 ms |
+| FTS `integrity-check` | 473 ms / 20k chunks |
+
+Design budgets at 10k docs / 50k chunks (no wall-clock test pins these; CI asserts the
+behaviour and the indexes, not the timings):
+
+- `search --scope kb` p95 ≤50 ms for `MATCH` (3+ characters), ≤150 ms for the 2-character
+  `LIKE` path; the JSON reports `degraded` instead of silently returning zero rows;
+- `kb add` 100 md/txt files ≤3 s; `kb ls`/`kb show` p95 ≤50 ms;
+- `kb reindex --rebuild` 50k chunks ≤2 s; `doctor --check-db` with both KB indexes ≤3 s.
+
+Known KB limits: the trigram index is large (chunks are raw extracted text; in the
+measurement above `kb_fts` is ≈0.66× the indexed text and ≈28% of the whole database —
+comparable to, and in that corpus a little larger than, the ≈19–20% share of the turn FTS);
+a 2-character `LIKE` is a linear scan (extrapolated ≈170 ms at 200k chunks); extraction is
+I/O/PDF-complexity bound
+(`maxFileBytes=50MB`, `maxTextBytes=2MB`, `maxPdfPages=500`), a truncated document sets
+`truncated`, and image-only files are marked `needsOcr` rather than silently indexed. There
+is no model or vector path in 0.4.0.
+
+### Mail sync is not on the default path
+
+`mail sync` is the only new network command and the only mail path that contacts a server.
+It is user-invoked, TLS-only, read-only (`EXAMINE`/`FETCH BODY.PEEK[]`), restart-safe via a
+UIDVALIDITY/UID cursor, and has no daemon, timer or retry loop. Every other mail command
+(`import`, `ls`, `show`, `extract --local`, `purge`) is local-only. No wall-clock number is
+recorded for sync: transfer time is dominated by the remote IMAP server and the network;
+the local cost is per-message parsing plus bounded row inserts in one transaction. Body
+retention defaults to 30 days; purge runs only when invoked.
+
+### Shell, MCP modern and the new local commands
+
+- The interactive shell is one process (`node` + `readline`) and pays normal CLI startup
+  plus the initial read-only ledger load; it has no preloading, background refresh or
+  persisted history, and it is not on any `--json`/non-TTY path (piped stdin keeps the old
+  one-shot/help behaviour).
+- MCP modern dual-era adds per-request `_meta` validation and a result envelope
+  (`resultType`, optional `ttlMs`/`cacheScope`) but no new tool catalogue and no additional
+  ledger load; legacy responses stay byte-identical in tests. No A/B latency measurement
+  was recorded for the modern path.
+- Receivables/payments, consent and client status packs are indexed reads and bounded file
+  hashing; money amounts never enter MCP or receipt packs. Receipt pack v2 evidence counts
+  are linear in the packed entries, and the existing 2000-entry evidence cap and receipt
+  resource caps are unchanged (`docs/DELIVERY-RECEIPT.md`).
+- The Windows portable ZIP is a packaging step (`scripts/pack-portable.mjs` /
+  `scripts/portable-zip.mjs`), not a runtime path.
+
 ## Known limits
 
 - Synthetic data: the generators mirror the audit ledger shape (facts,
@@ -495,10 +587,15 @@ is the 0.3.2 tree, one process at a time (the ±10–20% host caveat above appli
   `receipt`, `deliveries`, and since 0.2.3 also `ls`, `memory search`, `evidence show`,
   `tui`, `remind`, `digest`, `pet-brief`, the MCP first call and the read-only `ui`
   snapshot); `tick`, `export`/`import` and delivery packs still need the whole ledger.
-- 0.3.0 read-model work is **not a schema change**: the tree is schema v21 from the
-  additive customer-entity migration, and the measured queries/indexes are unchanged;
-  the planned v21 `commitments.due_ms` time-window migration is not part of this
-  change, so date filtering still runs in JS for `today`/`remind`/`agenda`.
+- 0.3.0 read-model work is **not a schema change** on that tree: the 0.3.0 tree is schema
+  v21 from the additive customer-entity migration, and the measured queries/indexes are
+  unchanged. The planned `commitments.due_ms` time-window migration is still not part of
+  any release, so date filtering still runs in JS for `today`/`remind`/`agenda` on the
+  **0.4.0 tree (schema v22)** too.
+- 0.4.0 has **no fresh 200k A/B**: the v22 migration, KB FTS growth and shell startup were
+  not re-measured on the release tree, and no 0.4.0 number in this page is a release-time
+  measurement. The T1 write-byte budget (`test/perf-no-spill.test.js`) and the narrow
+  projection suites are unchanged and still pin behaviour, not wall time.
 - After 0.3.2, the remaining 200k item is the **flagless** `today --json` wall time
   (output-bound: ~27 MB stdout, write side fixed); use `--limit` for the bounded
   path. The 0.3.2 MCP first-call target is met on the measured host (today 97 ms,
@@ -508,6 +605,8 @@ is the 0.3.2 tree, one process at a time (the ±10–20% host caveat above appli
 - `pet-brief`'s 29–32 MB write amplification is fixed (now ~32 KB/run). `memory search`
   still writes several MB during a run at 200k rows; that path was not part of T1 and
   large-ledger FTS IO remains backlog.
-- The write-command numbers in the 0.2.3 section were not re-measured on the 0.3.0
-  tree in this round; the incremental-write design is unchanged, so they are expected
-  to hold, but a release re-measurement is required before any release claim.
+- The write-command numbers in the 0.2.3 section were not re-measured on the 0.3.0 or
+  0.4.0 trees; the incremental-write design is unchanged, so they are expected to hold,
+  but a release re-measurement is required before any release claim.
+- On Windows there is no `/proc/<pid>/io`, so the write-byte budget suite skips and the
+  T1 metric is Linux-only (see `test/perf-no-spill.test.js`).

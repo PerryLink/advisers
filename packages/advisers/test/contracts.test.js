@@ -18,6 +18,7 @@ import {
   ERROR_CODE_LIST,
   ERROR_CODE_VERSION,
   ERROR_CODES,
+  ERROR_CODES_ADDITIVE_RELEASES,
   ERROR_CODES_BASELINE_COUNT,
   ERROR_CODES_FROZEN_AT,
   ERROR_CODES_RELEASE,
@@ -44,13 +45,17 @@ const readText = (rel) => readFileSync(join(root, rel), 'utf8')
 
 test('contracts: the error registry is structurally valid', () => {
   assert.equal(ERROR_CODE_VERSION, 1)
-  assert.equal(ERROR_CODES_RELEASE, '0.3.0')
+  assert.equal(ERROR_CODES_RELEASE, '0.4.0')
   assert.equal(ERROR_CODES_BASELINE_COUNT, 50, 'the 0.2.4 committed baseline count is frozen')
   assert.match(ERROR_CODES_FROZEN_AT, /^\d{4}-\d{2}-\d{2}$/)
+  assert.deepEqual([...ERROR_CODES_ADDITIVE_RELEASES], ['0.3.0', '0.4.0'])
   const baseline = ERROR_CODE_LIST.filter((code) => ERROR_CODES[code].since === '0.2.x')
-  const additive = ERROR_CODE_LIST.filter((code) => ERROR_CODES[code].since === '0.3.0')
+  const additive = ERROR_CODE_LIST.filter((code) => ERROR_CODES_ADDITIVE_RELEASES.includes(ERROR_CODES[code].since))
+  const sinceCount = (release) => ERROR_CODE_LIST.filter((code) => ERROR_CODES[code].since === release).length
   assert.equal(baseline.length, ERROR_CODES_BASELINE_COUNT, 'since: 0.2.x entries must equal the baseline count')
-  assert.ok(additive.length >= 50, '0.3.0 additive codes are registered ahead of their module commit')
+  assert.ok(sinceCount('0.3.0') >= 50, '0.3.0 additive codes are registered ahead of their module commit')
+  assert.ok(sinceCount('0.4.0') >= 40, '0.4.0 additive codes (KB/mail/policy/receivables) are registered ahead of their module commit')
+  assert.equal(additive.length, ERROR_CODE_LIST.length - baseline.length, 'every non-baseline code declares a known additive layer')
   assert.deepEqual(ERROR_CODE_LIST, [...ERROR_CODE_LIST].sort(), 'ERROR_CODE_LIST must be sorted')
   assert.equal(ERROR_CODE_LIST.length, Object.keys(ERROR_CODES).length, 'the code list and object must agree')
 
@@ -65,7 +70,7 @@ test('contracts: the error registry is structurally valid', () => {
     assert.equal(typeof entry.remedy, 'string')
     assert.ok(entry.remedy.length >= 10, code + ' needs an actionable remedy')
     assert.equal(typeof entry.stable, 'boolean')
-    assert.ok(entry.since === '0.2.x' || entry.since === '0.3.0', code + ' has an unknown since layer')
+    assert.ok(entry.since === '0.2.x' || ERROR_CODES_ADDITIVE_RELEASES.includes(entry.since), code + ' has an unknown since layer')
     if (entry.doc) {
       assert.ok(existsSync(join(root, entry.doc)), code + ' doc is missing: ' + entry.doc)
       assert.ok(readText(entry.doc).includes(code), code + ' doc does not mention the code: ' + entry.doc)
@@ -157,7 +162,7 @@ test('contracts: schema keyword audit fails closed', () => {
 
 test('contracts: generated registry/docs are in sync with the single source', () => {
   const registry = buildRegistryJson()
-  assert.equal(registry.release, '0.3.0')
+  assert.equal(registry.release, '0.4.0')
   assert.deepEqual(registry.baseline, { commit: '35a51c3', codeCount: ERROR_CODES_BASELINE_COUNT })
   assert.deepEqual(registry, readJson('contracts/errors/codes.v1.json'), 'contracts/errors/codes.v1.json is stale; run node scripts/check-contracts.mjs --update')
   assert.equal(renderErrorCodesDoc(), readText('docs/ERROR-CODES.md'), 'docs/ERROR-CODES.md is stale; run node scripts/check-contracts.mjs --update')

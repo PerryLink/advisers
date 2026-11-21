@@ -52,11 +52,20 @@ import {
 import { dirname, join, resolve } from 'node:path'
 
 import { secrecyLevel } from './egress.js'
+import { canonicalSourceType, describeSourcePointer } from './source.js'
 
 /** Quotes are verbatim evidence but capped, so a pack never carries a full body. */
 export const MAX_QUOTE_CHARS = 500
 export const MANIFEST_FORMAT = 'advisers-evidence-pack'
-export const MANIFEST_VERSION = 1
+/**
+ * Evidence pack manifest version. v2 (0.4) adds byKind/notCheckedCount/
+ * verificationBasis and typed source rows (kind/type/resolution).
+ * lib/receipt-verify.js accepts v1 packs (strict legacy schema) and v2 packs
+ * (counts cross-checked against the entries).
+ */
+export const MANIFEST_VERSION = 2
+/** Manifest versions the offline receipt verifier accepts. */
+export const EVIDENCE_PACK_VERSIONS = Object.freeze([1, 2])
 /**
  * Default cap for the "pack everything" path (0.2.0 performance audit P0-3).
  * A pack built from every row in a large ledger is slow and huge; callers must
@@ -534,103 +543,495 @@ function resolvePointerTurn(store, sessionId, turnId, quote) {
   return { source: { sessionId: normalizedSessionId, turnId, quote, turn: lookup.turn } }
 }
 
-function resolveSourceRefs(store, items) {
-  const sources = []
-  const missing = []
-  const unverifiable = []
-  for (const item of items) {
-    if (!item || typeof item !== 'object' || Array.isArray(item)) {
-      missing.push({ reason: 'invalid_source' })
-      continue
-    }
-    if (isManualEvidence(item)) {
-      unverifiable.push(manualEvidenceSource(item))
-      continue
-    }
-    const quote = typeof item.quote === 'string' ? item.quote : ''
-    const ref = typeof item.ref === 'string' ? item.ref : ''
-    if (!ref) {
-      missing.push({ quote, reason: 'no_ref' })
-      continue
-    }
-    const parsed = parseSourceRef(ref)
-    if (!parsed) {
-      missing.push({ ref, quote, reason: 'unparseable_ref' })
-      continue
-    }
-    const resolved = resolvePointerTurn(store, parsed.sessionId, parsed.turnId, quote)
-    if (resolved.missing) {
-      missing.push({ ref, ...resolved.missing })
-      continue
-    }
-    sources.push(resolved.source)
+// ---------------------------------------------------------------------------
+// typed source resolution (Evidence 2.0, 0.4 subset)
+//
+// Four states (0.4 vocabulary):
+//   verified      locally resolved AND the quote matched (build time)
+//   missing       should have resolved but did not (turn/chunk/page/record
+//                 gone, session mismatch, quote mismatch, unparseable ref)
+//   unverifiable  cannot be locally verified by design (manual operator entry,
+//                 mail body purged / never retained, web page never cached,
+//                 tool result never stored)
+//   not_checked   no local lookup capability was supplied for this run
+//
+// "verified" means "resolved against the local ledger when the pack was built".
+// A receipt pack is offline, so receipt-verify cannot replay the turns; the pack
+// therefore declares verificationBasis: 'build-time' and never claims external
+// verification. Manual sources are unverifiable by construction and a pack that
+// marks them verified must fail verification.
+// ---------------------------------------------------------------------------
+
+/** The four resolution states (also used by receipt-verify for pack v2). */
+export const EVIDENCE_RESOLUTIONS = Object.freeze(['verified', 'missing', 'unverifiable', 'not_checked'])
+/** Evidence taxonomy: how a source came into the ledger. */
+export const EVIDENCE_KINDS = Object.freeze(['observed', 'derived', 'inferred', 'manual'])
+/** What an offline pack can honestly claim: local build-time resolution only. */
+export const VERIFICATION_BASIS = 'build-time'
+export const VERIFICATION_BASES = Object.freeze(['build-time', 'offline-consistency-only'])
+
+/** Ref schemes recognised without a `source` v2 object. */
+const SOURCE_REF_SCHEMES = Object.freeze([
+  ['mail:', 'mail'],
+  ['imap:', 'mail'],
+  ['eml:', 'mail'],
+  ['kb_chunk:', 'kb_chunk'],
+  ['kb:', 'kb_chunk'],
+  ['kb_page:', 'kb_page'],
+  ['web:', 'web'],
+  ['tool:', 'tool'],
+  ['calendar:', 'calendar'],
+  ['transcript:', 'transcript'],
+  ['document:', 'document'],
+  ['ledger:', 'ledger'],
+  ['manual:', 'manual'],
+])
+
+/** Source type implied by a ref scheme ('' when the scheme is unknown). */
+export function sourceTypeFromRef(ref) {
+  if (typeof ref !== 'string') return ''
+  const text = ref.trim()
+  if (!text) return ''
+  const lower = text.toLowerCase()
+  if (lower.startsWith('http://') || lower.startsWith('https://')) return 'web'
+  for (const [prefix, type] of SOURCE_REF_SCHEMES) {
+    if (lower.startsWith(prefix)) return type
   }
-  return { sources, missing, unverifiable }
+  return ''
+}
+
+function trimmedText(value) {
+  return typeof value === 'string' ? value.trim() : ''
 }
 
 /**
- * Trace a commitment's evidence back to real turns.
- *
- * @returns {{ commitment: object|undefined,
- *             sources: Array<{sessionId: string, turnId: string, quote: string, turn: object}>,
- *             missing: Array<{sessionId?: string, turnId?: string, quote?: string, id?: string, reason: string}> }}
+ * Kind of one evidence item: explicit kind wins, manual is forced, a
+ * `derivedFrom` list implies 'derived', everything else is 'observed'.
  */
-export function evidenceForCommitment(store, ledger, commitmentId, index) {
-  const commitment = findCommitment(ledger, commitmentId, index)
-  if (!commitment) {
-    return { schemaVersion: 2, commitment: undefined, sources: [], missing: [{ id: commitmentId, reason: 'commitment_not_found' }], unverifiable: [] }
+export function evidenceKindOf(item) {
+  if (!item || typeof item !== 'object' || Array.isArray(item)) return 'observed'
+  const explicit = trimmedText(item.kind)
+  if (EVIDENCE_KINDS.includes(explicit)) return explicit
+  if (isManualEvidence(item)) return 'manual'
+  if (Array.isArray(item.derivedFrom) && item.derivedFrom.length) return 'derived'
+  return 'observed'
+}
+
+/**
+ * Normalise an evidence item (legacy pointer, source v2 object, or a bare typed
+ * source) into the pointer description the resolvers consume.
+ *
+ * Priority: nested `source` v2 > legacy pointer fields. A source is never
+ * invented: a missing ref/typed pointer stays missing.
+ *
+ * @returns {{type: string, quote: string, ref?: string, messageId?: string,
+ *            subject?: string, docId?: string, pageId?: string, chunkIndex?: number,
+ *            url?: string, tool?: string, retained?: boolean, derivedFrom?: string[]}}
+ */
+export function evidenceDescriptor(item) {
+  if (!item || typeof item !== 'object' || Array.isArray(item)) return null
+  const outer = describeSourcePointer(item) ?? { type: '' }
+  const nested = item.source && typeof item.source === 'object' && !Array.isArray(item.source) ? describeSourcePointer(item.source) : null
+  const pointer = { ...outer, ...(nested ?? {}) }
+  let type = canonicalSourceType(item.source && typeof item.source === 'object' ? item.source.type : undefined)
+  if (!type) type = canonicalSourceType(item.type)
+  if (!type) type = sourceTypeFromRef(pointer.ref)
+  if (!type && (outer.ref || item.sessionId || item.turnId)) type = 'conversation'
+  pointer.type = type || ''
+  if (typeof item.quote === 'string') pointer.quote = item.quote
+  else if (!(typeof pointer.quote === 'string' && pointer.quote)) pointer.quote = ''
+  const derived = Array.isArray(item.derivedFrom)
+    ? item.derivedFrom
+    : item.source && typeof item.source === 'object' && Array.isArray(item.source.derivedFrom)
+      ? item.source.derivedFrom
+      : null
+  if (derived) pointer.derivedFrom = derived
+  return pointer
+}
+
+function pickRow(value) {
+  if (Array.isArray(value)) {
+    if (!value.length) return { row: null }
+    if (value.length === 1) return { row: value[0] }
+    return { ambiguous: true }
   }
+  return { row: value ?? null }
+}
+
+/**
+ * Optional local lookup capability. Stores that do not expose the method are
+ * "unavailable" (honest not_checked/unverifiable), never "missing".
+ */
+function localLookup(store, methods, selector, direct) {
+  if (typeof direct === 'function') {
+    try {
+      return { status: 'ok', value: direct(selector) }
+    } catch {
+      return { status: 'error' }
+    }
+  }
+  if (!store || typeof store !== 'object') return { status: 'unavailable' }
+  for (const method of methods) {
+    if (typeof store[method] !== 'function') continue
+    try {
+      return { status: 'ok', value: store[method](selector) }
+    } catch {
+      return { status: 'error' }
+    }
+  }
+  return { status: 'unavailable' }
+}
+
+function mailSelector(pointer) {
+  const selector = {}
+  if (pointer.messageId) selector.messageId = pointer.messageId
+  if (pointer.subject) selector.subject = pointer.subject
+  const ref = typeof pointer.ref === 'string' ? pointer.ref.trim() : ''
+  if (ref) {
+    selector.ref = ref
+    const mailRef = /^mail:(.+)$/i.exec(ref)
+    if (mailRef && !selector.messageId) selector.messageId = mailRef[1]
+    const imapRef = /^imap:([^:]*):([^:]*):([^:]*)$/i.exec(ref)
+    if (imapRef) {
+      selector.accountId = imapRef[1]
+      selector.uidvalidity = imapRef[2]
+      const uid = Number(imapRef[3])
+      if (Number.isInteger(uid)) selector.uid = uid
+    }
+  }
+  return selector
+}
+
+function rowBody(row) {
+  if (!row || typeof row !== 'object') return ''
+  for (const key of ['body_text', 'bodyText', 'text', 'body']) {
+    if (typeof row[key] === 'string') return row[key]
+  }
+  return ''
+}
+
+function resolveMail(ctx) {
+  const pointer = ctx.pointer
+  const base = {}
+  if (pointer.messageId) base.messageId = pointer.messageId
+  if (pointer.subject) base.subject = pointer.subject
+  if (pointer.ref) base.ref = pointer.ref
+  else if (pointer.messageId) base.ref = 'mail:' + pointer.messageId
+  const lookup = localLookup(ctx.store, ['getMailMessage', 'findMailMessage', 'lookupMailMessage'], mailSelector(pointer), ctx.lookup?.mail)
+  const retained = pointer.retained === true
+  if (lookup.status === 'unavailable') {
+    return retained
+      ? { resolution: 'not_checked', reason: 'mail_lookup_unavailable', extra: base }
+      : { resolution: 'unverifiable', reason: 'source_not_retained', extra: base }
+  }
+  if (lookup.status === 'error') return { resolution: 'missing', reason: 'lookup_failed' }
+  const picked = pickRow(lookup.value)
+  if (picked.ambiguous) return { resolution: 'missing', reason: 'ambiguous_source' }
+  const row = picked.row
+  const messageId = (row && (row.message_id ?? row.messageId)) || pointer.messageId || undefined
+  const subject = (row && row.subject) || pointer.subject || undefined
+  if (messageId) base.messageId = messageId
+  if (subject) base.subject = subject
+  if (pointer.ref) base.ref = pointer.ref
+  else if (messageId) base.ref = 'mail:' + messageId
+  if (!row) {
+    return retained
+      ? { resolution: 'missing', reason: 'message_not_found', extra: base }
+      : { resolution: 'unverifiable', reason: 'source_not_retained', extra: base }
+  }
+  if (row.purged_at || row.purgedAt || row.status === 'purged') {
+    return { resolution: 'unverifiable', reason: 'mail_body_purged', extra: { ...base, retained: false } }
+  }
+  const body = rowBody(row)
+  if (!body) {
+    return row.retained === false
+      ? { resolution: 'unverifiable', reason: 'source_not_retained', extra: { ...base, retained: false } }
+      : { resolution: 'unverifiable', reason: 'source_not_retained', extra: base }
+  }
+  if (ctx.quote && !body.normalize('NFC').includes(ctx.quote.normalize('NFC'))) {
+    return { resolution: 'missing', reason: 'quote_mismatch', extra: base }
+  }
+  return {
+    resolution: 'verified',
+    extra: {
+      ...base,
+      messageId,
+      subject,
+      retained: true,
+      quoteVerified: ctx.quote.length > 0,
+      sourceDigest: sha256Hex(body),
+    },
+  }
+}
+
+function kbSelector(pointer) {
+  const selector = {}
+  if (pointer.docId) selector.docId = pointer.docId
+  if (pointer.pageId) selector.pageId = pointer.pageId
+  if (typeof pointer.chunkIndex === 'number') selector.chunkIndex = pointer.chunkIndex
+  if (pointer.ref) selector.ref = pointer.ref
+  const ref = typeof pointer.ref === 'string' ? pointer.ref.trim() : ''
+  const kbRef = /^kb:(.+?)(?:#(\d+))?$/i.exec(ref)
+  if (kbRef && !selector.docId) {
+    selector.docId = kbRef[1]
+    if (kbRef[2] !== undefined && selector.chunkIndex === undefined) selector.chunkIndex = Number(kbRef[2])
+  }
+  return selector
+}
+
+function resolveKbChunk(ctx) {
+  const unavailableExtra = {}
+  if (ctx.pointer.ref) unavailableExtra.ref = ctx.pointer.ref
+  if (ctx.pointer.docId) unavailableExtra.docId = ctx.pointer.docId
+  if (typeof ctx.pointer.chunkIndex === 'number') unavailableExtra.chunkIndex = ctx.pointer.chunkIndex
+  const lookup = localLookup(ctx.store, ['getKbChunk', 'findKbChunk', 'lookupKbChunk'], kbSelector(ctx.pointer), ctx.lookup?.kbChunk)
+  if (lookup.status === 'unavailable') return { resolution: 'not_checked', reason: 'kb_lookup_unavailable', extra: unavailableExtra }
+  if (lookup.status === 'error') return { resolution: 'missing', reason: 'lookup_failed' }
+  const picked = pickRow(lookup.value)
+  if (picked.ambiguous) return { resolution: 'missing', reason: 'ambiguous_source' }
+  const row = picked.row
+  const extra = {}
+  if (ctx.pointer.ref) extra.ref = ctx.pointer.ref
+  if (row && row.id) extra.chunkId = row.id
+  if (row && row.doc_id) extra.docId = row.doc_id
+  if (row && Number.isInteger(row.seq)) extra.chunkIndex = row.seq
+  else if (typeof ctx.pointer.chunkIndex === 'number') extra.chunkIndex = ctx.pointer.chunkIndex
+  if (!row) return { resolution: 'missing', reason: 'chunk_not_found', extra }
+  if (row.deleted_at || row.deletedAt || row.status === 'deleted') {
+    return { resolution: 'missing', reason: 'chunk_not_found', extra }
+  }
+  const text = rowBody(row)
+  if (!text) return { resolution: 'unverifiable', reason: 'source_not_retained', extra: { ...extra, retained: false } }
+  if (ctx.quote && !text.normalize('NFC').includes(ctx.quote.normalize('NFC'))) {
+    return { resolution: 'missing', reason: 'quote_mismatch', extra }
+  }
+  return { resolution: 'verified', extra: { ...extra, retained: true, quoteVerified: ctx.quote.length > 0, sourceDigest: sha256Hex(text) } }
+}
+
+function resolveKbPage(ctx) {
+  const unavailableExtra = {}
+  if (ctx.pointer.ref) unavailableExtra.ref = ctx.pointer.ref
+  if (ctx.pointer.pageId) unavailableExtra.pageId = ctx.pointer.pageId
+  const lookup = localLookup(ctx.store, ['getKbPage', 'findKbPage', 'lookupKbPage'], kbSelector(ctx.pointer), ctx.lookup?.kbPage)
+  if (lookup.status === 'unavailable') return { resolution: 'not_checked', reason: 'kb_lookup_unavailable', extra: unavailableExtra }
+  if (lookup.status === 'error') return { resolution: 'missing', reason: 'lookup_failed' }
+  const picked = pickRow(lookup.value)
+  if (picked.ambiguous) return { resolution: 'missing', reason: 'ambiguous_source' }
+  const row = picked.row
+  const extra = {}
+  if (ctx.pointer.ref) extra.ref = ctx.pointer.ref
+  if (ctx.pointer.pageId) extra.pageId = ctx.pointer.pageId
+  else if (row && row.id) extra.pageId = row.id
+  if (!row) return { resolution: 'missing', reason: 'page_not_found', extra }
+  if (row.deleted_at || row.deletedAt || row.status === 'deleted') {
+    return { resolution: 'missing', reason: 'page_not_found', extra }
+  }
+  const text = typeof row.markdown === 'string' ? row.markdown : typeof row.title === 'string' ? row.title : ''
+  if (!text) return { resolution: 'unverifiable', reason: 'source_not_retained', extra: { ...extra, retained: false } }
+  if (ctx.quote && !text.normalize('NFC').includes(ctx.quote.normalize('NFC'))) {
+    return { resolution: 'missing', reason: 'quote_mismatch', extra }
+  }
+  return { resolution: 'verified', extra: { ...extra, retained: true, quoteVerified: ctx.quote.length > 0, sourceDigest: sha256Hex(text) } }
+}
+
+function resolveLedger(ctx) {
+  const ref = typeof ctx.pointer.ref === 'string' ? ctx.pointer.ref.replace(/^ledger:/i, '') : ''
+  if (!ref) return { resolution: 'missing', reason: ctx.noPointerReason }
+  const found =
+    findCommitment(ctx.ledger, ref, ctx.index) ??
+    findFact(ctx.ledger, ref, ctx.index) ??
+    findPreference(ctx.ledger, ref, ctx.index)
+  if (!found) {
+    if (!ctx.ledger) return { resolution: 'not_checked', reason: 'ledger_unavailable', extra: { ref } }
+    return { resolution: 'missing', reason: 'record_not_found', extra: { ref } }
+  }
+  return { resolution: 'verified', extra: { ref, quoteVerified: false } }
+}
+
+function resolveConversation(ctx) {
+  const pointer = ctx.pointer
+  const ref = typeof pointer.ref === 'string' ? pointer.ref.trim() : ''
+  if (!ref) return { resolution: 'missing', reason: ctx.noPointerReason, extra: {} }
+  const parsed = parseSourceRef(ref)
+  if (!parsed) return { resolution: 'missing', reason: 'unparseable_ref', extra: { ref } }
+  const resolved = resolvePointerTurn(ctx.store, parsed.sessionId, parsed.turnId, ctx.quote)
+  if (resolved.missing) return { resolution: 'missing', reason: resolved.missing.reason, extra: { ...resolved.missing } }
+  return { resolution: 'verified', extra: { ...resolved.source, quoteVerified: ctx.quote.length > 0 } }
+}
+
+function unretainedResolver(reason) {
+  return (ctx) => ({ resolution: 'unverifiable', reason, extra: ctx.pointer.ref ? { ref: ctx.pointer.ref } : {} })
+}
+
+const SOURCE_RESOLVERS = Object.freeze({
+  conversation: resolveConversation,
+  mail: resolveMail,
+  kb_chunk: resolveKbChunk,
+  kb_page: resolveKbPage,
+  ledger: resolveLedger,
+  web: unretainedResolver('source_not_retained'),
+  tool: unretainedResolver('tool_result_not_retained'),
+  calendar: unretainedResolver('source_not_retained'),
+  transcript: unretainedResolver('source_not_retained'),
+  document: unretainedResolver('source_not_retained'),
+})
+
+/**
+ * Resolve one evidence item to its four-state resolution.
+ *
+ * Store capabilities (all optional; absence is honest not_checked/unverifiable,
+ * never missing): `getMailMessage/findMailMessage/lookupMailMessage`,
+ * `getKbChunk/findKbChunk/lookupKbChunk`, `getKbPage/findKbPage/lookupKbPage`.
+ * The mail/KB data lines wire these methods into the SqliteStore later; the
+ * resolver is the frozen interface.
+ *
+ * @param {object} store SqliteStore-like (conversation turns + optional typed lookups)
+ * @param {object} item stored evidence item
+ * @param {{ledger?: object, index?: object, noPointerReason?: string}} [options]
+ * @returns {{resolution: 'verified'|'missing'|'unverifiable'|'not_checked',
+ *            kind: string, type: string, entry?: object, item?: object, reason?: string}}
+ */
+export function resolveEvidenceSource(store, item, options = {}) {
+  if (!item || typeof item !== 'object' || Array.isArray(item)) {
+    return { resolution: 'missing', kind: 'observed', type: 'unknown', item: { reason: 'invalid_source', resolution: 'missing' } }
+  }
+  const pointer = evidenceDescriptor(item)
+  const kind = evidenceKindOf(item)
+  const quote = typeof pointer.quote === 'string' ? pointer.quote : ''
+  if (isManualEvidence(item) || pointer.type === 'manual') {
+    return { resolution: 'unverifiable', kind: 'manual', type: 'manual', item: manualEvidenceSource(item) }
+  }
+  const context = {
+    store,
+    ledger: options.ledger,
+    index: options.index,
+    lookup: options.lookup && typeof options.lookup === 'object' ? options.lookup : {},
+    noPointerReason: typeof options.noPointerReason === 'string' ? options.noPointerReason : 'no_ref',
+    pointer,
+    quote,
+  }
+  const resolver = SOURCE_RESOLVERS[pointer.type]
+  if (!resolver) {
+    const itemOut = { reason: context.noPointerReason, kind, type: pointer.type || 'unknown', resolution: 'missing' }
+    if (quote) itemOut.quote = quote
+    if (pointer.ref) itemOut.ref = pointer.ref
+    return { resolution: 'missing', kind, type: pointer.type || 'unknown', item: itemOut }
+  }
+  let result
+  try {
+    result = resolver(context)
+  } catch {
+    result = { resolution: 'missing', reason: 'lookup_failed', extra: {} }
+  }
+  const type = pointer.type || 'unknown'
+  if (result.resolution === 'verified') {
+    return {
+      resolution: 'verified',
+      kind,
+      type,
+      entry: { kind, type, resolution: 'verified', quote, quoteVerified: quote.length > 0, ...(result.extra ?? {}) },
+    }
+  }
+  const itemOut = { reason: result.reason || 'unknown', kind, type, resolution: result.resolution, quoteVerified: false }
+  if (quote) itemOut.quote = quote
+  for (const key of ['ref', 'sessionId', 'turnId', 'messageId', 'subject', 'retained', 'docId', 'pageId', 'chunkIndex', 'url', 'tool', 'chunkId']) {
+    if (result.extra && result.extra[key] !== undefined) itemOut[key] = result.extra[key]
+  }
+  return { resolution: result.resolution, kind, type, item: itemOut }
+}
+
+/** Partition stored evidence items into the four resolution buckets. */
+function resolveSourceItems(store, items, options) {
   const sources = []
   const missing = []
   const unverifiable = []
-  const evidence = Array.isArray(commitment.evidence) ? commitment.evidence : []
-  for (const item of evidence) {
-    if (isManualEvidence(item)) {
-      unverifiable.push(manualEvidenceSource(item))
-      continue
-    }
-    const sessionId = typeof item?.sessionId === 'string' ? item.sessionId : ''
-    const turnId = typeof item?.turnId === 'string' ? item.turnId : ''
-    const quote = typeof item?.quote === 'string' ? item.quote : ''
-    if (!sessionId || !turnId) {
-      missing.push({
-        sessionId: sessionId || undefined,
-        turnId: turnId || undefined,
-        quote,
-        reason: 'invalid_evidence',
-      })
-      continue
-    }
-    const resolved = resolvePointerTurn(store, sessionId, turnId, quote)
-    if (resolved.missing) {
-      missing.push(resolved.missing)
-      continue
-    }
-    sources.push(resolved.source)
+  const notChecked = []
+  for (const item of Array.isArray(items) ? items : []) {
+    const result = resolveEvidenceSource(store, item, options)
+    if (result.resolution === 'verified') sources.push(result.entry)
+    else if (result.resolution === 'unverifiable') unverifiable.push(result.item)
+    else if (result.resolution === 'not_checked') notChecked.push(result.item)
+    else missing.push(result.item)
   }
-  return { schemaVersion: 2, commitment, sources, missing, unverifiable }
+  return { sources, missing, unverifiable, notChecked }
 }
 
-/** Trace a fact's `SourceRef[]` (plus its primary `source`) back to turns. */
-export function evidenceForFact(store, ledger, factId, index) {
+function emptyByKind() {
+  const byKind = {}
+  for (const kind of EVIDENCE_KINDS) byKind[kind] = 0
+  return byKind
+}
+
+/**
+ * Tally the evidence taxonomy across every item of one traceback (sources,
+ * missing, unverifiable AND not_checked). Unknown kinds count as 'observed'.
+ * The pack verifier recomputes the same identity from the packed entries.
+ */
+export function evidenceByKind(buckets) {
+  const byKind = emptyByKind()
+  for (const list of [buckets.sources, buckets.missing, buckets.unverifiable, buckets.notChecked]) {
+    for (const item of Array.isArray(list) ? list : []) {
+      const kind = EVIDENCE_KINDS.includes(item?.kind) ? item.kind : 'observed'
+      byKind[kind] += 1
+    }
+  }
+  return byKind
+}
+
+/** Summary fields every traceback/pack shares (Evidence pack v2). */
+export function evidenceResolutionSummary(buckets) {
+  const notChecked = Array.isArray(buckets.notChecked) ? buckets.notChecked : []
+  return {
+    byKind: evidenceByKind(buckets),
+    notCheckedCount: notChecked.length,
+    verificationBasis: VERIFICATION_BASIS,
+  }
+}
+
+/**
+ * Trace a commitment's evidence back to its sources.
+ *
+ * Commitment items have carried three shapes over time: `{sessionId,turnId,quote}`
+ * (conversation turn), `{quote,source}` (mail/KB import; no turn exists) and
+ * manual operator entries. All three now go through the same typed resolver.
+ *
+ * @returns {{ commitment: object|undefined, sources: object[], missing: object[],
+ *             unverifiable: object[], notChecked: object[], byKind: object,
+ *             notCheckedCount: number, verificationBasis: string }}
+ */
+export function evidenceForCommitment(store, ledger, commitmentId, index, options = {}) {
+  const buckets = { sources: [], missing: [], unverifiable: [], notChecked: [] }
+  const commitment = findCommitment(ledger, commitmentId, index)
+  if (!commitment) {
+    buckets.missing.push({ id: commitmentId, reason: 'commitment_not_found', kind: 'observed' })
+    return { schemaVersion: 2, commitment: undefined, ...buckets, ...evidenceResolutionSummary(buckets) }
+  }
+  const resolved = resolveSourceItems(store, commitment.evidence, { ledger, index, lookup: options.lookup, noPointerReason: 'invalid_evidence' })
+  return { schemaVersion: 2, commitment, ...resolved, ...evidenceResolutionSummary(resolved) }
+}
+
+/** Trace a fact's `SourceRef[]` (plus its primary `source`) back to its sources. */
+export function evidenceForFact(store, ledger, factId, index, options = {}) {
   const fact = findFact(ledger, factId, index)
   if (!fact) {
-    return { schemaVersion: 2, fact: undefined, sources: [], missing: [{ id: factId, reason: 'fact_not_found' }], unverifiable: [] }
+    const buckets = { sources: [], missing: [{ id: factId, reason: 'fact_not_found', kind: 'observed' }], unverifiable: [], notChecked: [] }
+    return { schemaVersion: 2, fact: undefined, ...buckets, ...evidenceResolutionSummary(buckets) }
   }
-  const refs = collectSourceRefs(fact.evidence, primarySourceCandidates(fact.source))
-  const resolved = resolveSourceRefs(store, refs)
-  return { schemaVersion: 2, fact, sources: resolved.sources, missing: resolved.missing, unverifiable: resolved.unverifiable }
+  const items = collectSourceRefs(fact.evidence, primarySourceCandidates(fact.source))
+  const resolved = resolveSourceItems(store, items, { ledger, index, lookup: options.lookup, noPointerReason: 'no_ref' })
+  return { schemaVersion: 2, fact, ...resolved, ...evidenceResolutionSummary(resolved) }
 }
 
-/** Trace a preference's `SourceRef[]` (plus its primary `source`) back to turns. */
-export function evidenceForPreference(store, ledger, preferenceId, index) {
+/** Trace a preference's `SourceRef[]` (plus its primary `source`) back to its sources. */
+export function evidenceForPreference(store, ledger, preferenceId, index, options = {}) {
   const preference = findPreference(ledger, preferenceId, index)
   if (!preference) {
-    return { schemaVersion: 2, preference: undefined, sources: [], missing: [{ id: preferenceId, reason: 'preference_not_found' }], unverifiable: [] }
+    const buckets = { sources: [], missing: [{ id: preferenceId, reason: 'preference_not_found', kind: 'observed' }], unverifiable: [], notChecked: [] }
+    return { schemaVersion: 2, preference: undefined, ...buckets, ...evidenceResolutionSummary(buckets) }
   }
-  const refs = collectSourceRefs(preference.evidence, primarySourceCandidates(preference.source))
-  const resolved = resolveSourceRefs(store, refs)
-  return { schemaVersion: 2, preference, sources: resolved.sources, missing: resolved.missing, unverifiable: resolved.unverifiable }
+  const items = collectSourceRefs(preference.evidence, primarySourceCandidates(preference.source))
+  const resolved = resolveSourceItems(store, items, { ledger, index, lookup: options.lookup, noPointerReason: 'no_ref' })
+  return { schemaVersion: 2, preference, ...resolved, ...evidenceResolutionSummary(resolved) }
 }
 
 // ---------------------------------------------------------------------------
@@ -650,16 +1051,36 @@ function compareEntries(a, b) {
  *
  * @returns {string} canonical JSON text with a trailing newline
  */
-export function manifestFor(entries, { createdAt } = {}) {
+function tallyCompacted(entries) {
+  const byKind = emptyByKind()
+  let notCheckedCount = 0
+  for (const entry of entries) {
+    for (const key of ['sources', 'missing', 'unverifiable', 'notChecked']) {
+      const list = Array.isArray(entry[key]) ? entry[key] : []
+      if (key === 'notChecked') notCheckedCount += list.length
+      for (const item of list) {
+        const kind = EVIDENCE_KINDS.includes(item?.kind) ? item.kind : 'observed'
+        byKind[kind] += 1
+      }
+    }
+  }
+  return { byKind, notCheckedCount }
+}
+
+export function manifestFor(entries, { createdAt, byKind, notCheckedCount, verificationBasis } = {}) {
   const list = (Array.isArray(entries) ? entries : [])
     .filter((entry) => entry && typeof entry === 'object' && !Array.isArray(entry))
     .map((entry) => ({ ...entry }))
   list.sort(compareEntries)
+  const tallied = tallyCompacted(list)
   return `${stableStringify({
     format: MANIFEST_FORMAT,
     version: MANIFEST_VERSION,
     createdAt: isoDate(createdAt),
     entryCount: list.length,
+    byKind: byKind && typeof byKind === 'object' ? byKind : tallied.byKind,
+    notCheckedCount: Number.isInteger(notCheckedCount) && notCheckedCount >= 0 ? notCheckedCount : tallied.notCheckedCount,
+    verificationBasis: typeof verificationBasis === 'string' && VERIFICATION_BASES.includes(verificationBasis) ? verificationBasis : VERIFICATION_BASIS,
     entries: list,
   })}\n`
 }
@@ -683,41 +1104,87 @@ function formatRef(sessionId, turnId) {
   return parts.join('#')
 }
 
+const TYPED_SOURCE_FIELDS = Object.freeze(['ref', 'messageId', 'subject', 'docId', 'pageId', 'chunkIndex', 'url', 'tool', 'sourceDigest'])
+
+/** Clamp a quote while keeping already-recorded truncation metadata (receipt re-compaction). */
+function clampStoredQuote(item) {
+  const clamped = clampQuote(item?.quote)
+  if (Number.isInteger(item?.quoteChars) && item.quoteChars >= clamped.quoteChars) {
+    clamped.quoteChars = item.quoteChars
+    clamped.truncated = item.truncated === true || item.quoteChars > MAX_QUOTE_CHARS
+  }
+  return clamped
+}
+
 function compactSource(source) {
-  const clamped = clampQuote(source?.quote)
+  const clamped = clampStoredQuote(source)
   const entry = {
-    sessionId: typeof source?.sessionId === 'string' ? source.sessionId : '',
-    turnId: typeof source?.turnId === 'string' ? source.turnId : '',
+    kind: EVIDENCE_KINDS.includes(source?.kind) ? source.kind : 'observed',
+    type: typeof source?.type === 'string' && source.type ? source.type : 'conversation',
+    resolution: 'verified',
+    quoteVerified: source?.quoteVerified === true,
     ...clamped,
   }
+  if (typeof source?.sessionId === 'string' && source.sessionId) entry.sessionId = source.sessionId
+  if (typeof source?.turnId === 'string' && source.turnId) entry.turnId = source.turnId
   // Turn sequence/role are provenance metadata, not body text.
   if (Number.isInteger(source?.turn?.seq)) entry.turnSeq = source.turn.seq
   if (typeof source?.turn?.role === 'string') entry.turnRole = source.turn.role
+  for (const key of TYPED_SOURCE_FIELDS) {
+    const value = source?.[key]
+    if (typeof value === 'string' && value) entry[key] = value
+    else if (Number.isInteger(value) && value >= 0) entry[key] = value
+  }
+  if (typeof source?.retained === 'boolean') entry.retained = source.retained
+  if (Array.isArray(source?.derivedFrom) && source.derivedFrom.length) {
+    entry.derivedFrom = source.derivedFrom.filter((item) => typeof item === 'string').slice(0, 20)
+  }
   return entry
+}
+
+const TYPED_ITEM_FIELDS = Object.freeze(['ref', 'sessionId', 'turnId', 'messageId', 'subject', 'docId', 'pageId', 'chunkIndex', 'url', 'tool', 'chunkId'])
+
+function compactTypedItem(item, { resolution, fallbackReason }) {
+  const out = {
+    kind: EVIDENCE_KINDS.includes(item?.kind) ? item.kind : 'observed',
+    type: typeof item?.type === 'string' && item.type ? item.type : 'unknown',
+    resolution,
+    reason: typeof item?.reason === 'string' && item.reason ? item.reason : fallbackReason,
+  }
+  const clamped = clampStoredQuote(item)
+  Object.assign(out, clamped)
+  for (const key of TYPED_ITEM_FIELDS) {
+    const value = item?.[key]
+    if (typeof value === 'string' && value) out[key] = value
+    else if (Number.isInteger(value) && value >= 0) out[key] = value
+  }
+  if (typeof item?.retained === 'boolean') out.retained = item.retained
+  return out
 }
 
 function compactMissing(item) {
   const out = { reason: typeof item?.reason === 'string' ? item.reason : 'unknown' }
-  for (const key of ['id', 'ref', 'sessionId', 'turnId']) {
+  // Missing rows stay as small as the v1 shape: kind is only written when it is
+  // not the default 'observed' (the verifier defaults it the same way), so a
+  // 2000-row pack does not grow past the receipt manifest size limit.
+  if (EVIDENCE_KINDS.includes(item?.kind) && item.kind !== 'observed') out.kind = item.kind
+  for (const key of ['id', ...TYPED_ITEM_FIELDS]) {
     if (typeof item?.[key] === 'string' && item[key]) out[key] = item[key]
   }
-  if (typeof item?.quote === 'string' && item.quote.length) Object.assign(out, clampQuote(item.quote))
+  if (typeof item?.quote === 'string' && item.quote.length) Object.assign(out, clampStoredQuote(item))
   return out
 }
 
 function compactUnverifiable(item) {
-  const out = {
-    kind: MANUAL_SOURCE_KIND,
-    type: MANUAL_SOURCE_KIND,
-    resolution: MANUAL_RESOLUTION,
-    reason: typeof item?.reason === 'string' && item.reason ? item.reason : MANUAL_REASON,
-  }
-  const clamped = clampQuote(item?.quote)
-  Object.assign(out, clamped)
+  const out = compactTypedItem(item, { resolution: MANUAL_RESOLUTION, fallbackReason: MANUAL_REASON })
   for (const key of ['capturedAt', 'capturedBy', 'command']) {
     if (typeof item?.[key] === 'string' && item[key]) out[key] = item[key]
   }
   return out
+}
+
+function compactNotChecked(item) {
+  return compactTypedItem(item, { resolution: 'not_checked', fallbackReason: 'not_checked' })
 }
 
 function compactEntry(entry) {
@@ -732,6 +1199,9 @@ function compactEntry(entry) {
   // Kept absent when empty so pre-0.2.3 pack bytes do not change.
   if (Array.isArray(entry.unverifiable) && entry.unverifiable.length) {
     out.unverifiable = entry.unverifiable.map(compactUnverifiable)
+  }
+  if (Array.isArray(entry.notChecked) && entry.notChecked.length) {
+    out.notChecked = entry.notChecked.map(compactNotChecked)
   }
   return out
 }
@@ -801,19 +1271,23 @@ function normalizeRequestedIds(ids, ledger, index) {
   return out
 }
 
-function buildReadme({ createdAt, entries, manifestDigest }) {
+function buildReadme({ createdAt, entries, manifestDigest, byKind, notCheckedCount }) {
   const counts = { commitment: 0, fact: 0, preference: 0, unknown: 0 }
   let sourceCount = 0
   let missingCount = 0
   let unverifiableCount = 0
+  let manualCount = 0
   let truncatedCount = 0
   for (const entry of entries) {
     counts[entry.kind] = (counts[entry.kind] ?? 0) + 1
     sourceCount += entry.sources.length
     missingCount += entry.missing.length
     unverifiableCount += (entry.unverifiable ?? []).length
+    manualCount += (entry.unverifiable ?? []).filter((item) => item.kind === MANUAL_SOURCE_KIND || item.type === MANUAL_SOURCE_KIND).length
     truncatedCount += entry.sources.filter((source) => source.truncated).length
   }
+  const notChecked = Number.isInteger(notCheckedCount) ? notCheckedCount : entries.reduce((sum, entry) => sum + (entry.notChecked ?? []).length, 0)
+  const kinds = byKind && typeof byKind === 'object' ? byKind : tallyCompacted(entries).byKind
   const lines = [
     'Advisers evidence pack',
     '======================',
@@ -821,7 +1295,10 @@ function buildReadme({ createdAt, entries, manifestDigest }) {
     'format:   ' + MANIFEST_FORMAT + ' v' + MANIFEST_VERSION,
     'created:  ' + createdAt,
     'entries:  ' + entries.length + ' (commitment ' + counts.commitment + ', fact ' + counts.fact + ', preference ' + counts.preference + ', unknown ' + counts.unknown + ')',
-    'sources:  ' + sourceCount + ' resolved, ' + missingCount + ' missing' + (unverifiableCount ? ', ' + unverifiableCount + ' operator-entered (not externally verified, not missing)' : ''),
+    'version:  ' + MANIFEST_VERSION + ' (typed sources + byKind/notCheckedCount/verificationBasis)',
+    'sources:  ' + sourceCount + ' verified at build time, ' + missingCount + ' missing' + (unverifiableCount ? ', ' + unverifiableCount + ' unverifiable' + (manualCount ? ' (' + manualCount + ' operator-entered)' : '') : '') + (notChecked ? ', ' + notChecked + ' not checked' : ''),
+    'by kind:  observed ' + (kinds.observed ?? 0) + ', derived ' + (kinds.derived ?? 0) + ', inferred ' + (kinds.inferred ?? 0) + ', manual ' + (kinds.manual ?? 0),
+    'basis:    ' + VERIFICATION_BASIS + ' — offline verification proves pack consistency only; it cannot replay turns or re-check web/tool sources',
     `quotes:   verbatim, at most ${MAX_QUOTE_CHARS} characters each; ${truncatedCount} truncated`,
     '',
     'Files',
@@ -847,7 +1324,13 @@ function buildReadme({ createdAt, entries, manifestDigest }) {
       `- ${entry.kind} ${entry.id}  sources=${entry.sources.length} missing=${entry.missing.length}${manualCount ? ` manual=${manualCount}` : ''}${entry.found ? '' : ' (record not found)'}`,
     )
     for (const item of (entry.unverifiable ?? []).slice(0, README_REF_CAP)) {
-      lines.push(`    manual operator-entered (unverifiable): ${item.reason ?? MANUAL_REASON}`)
+      lines.push(`    unverifiable ${item.type ?? 'unknown'}: ${item.reason ?? MANUAL_REASON}`)
+    }
+    for (const item of (entry.notChecked ?? []).slice(0, README_REF_CAP)) {
+      lines.push(`    not checked ${item.type ?? 'unknown'}: ${item.reason ?? 'not_checked'}`)
+    }
+    if ((entry.notChecked ?? []).length > README_REF_CAP) {
+      lines.push(`    ... ${entry.notChecked.length - README_REF_CAP} more not checked`)
     }
     const refs = entry.sources.slice(0, README_REF_CAP)
     for (const source of refs) {
@@ -905,6 +1388,11 @@ function buildReadme({ createdAt, entries, manifestDigest }) {
  *        a record above `clearance`: omit it and count it (`exclude`, the bulk
  *        default), or throw `ProtectedEvidenceError` (`error`, used when the
  *        caller named the ids explicitly and must not get a silent partial pack).
+ * @param {{mail?: Function, kbChunk?: Function, kbPage?: Function}} [options.lookups]
+ *        optional typed-source lookup seam for the mail/KB data lines, e.g.
+ *        `{mail: (selector) => getMailMessage(store, selector.messageId ?? selector.ref, {includeBody:true})}`.
+ *        Missing lookups are honest unverifiable/not_checked rows, never missing;
+ *        store methods of the same names are used when the seam is absent.
  * @returns {{ files: Record<string, string>, summary: object }}
  *          files: `{ 'manifest.json': string, 'README.txt': string, 'SHA256SUMS': string }`
  */
@@ -917,6 +1405,7 @@ export function buildEvidencePack({
   all = false,
   clearance = null,
   protectedPolicy = 'exclude',
+  lookups,
 } = {}) {
   if (!ledger || typeof ledger !== 'object') throw new TypeError('buildEvidencePack requires a ledger')
   if (!store || typeof store !== 'object') throw new TypeError('buildEvidencePack requires a store')
@@ -964,7 +1453,7 @@ export function buildEvidencePack({
   for (const id of requested.commitments) {
     const commitment = findCommitment(ledger, id, index)
     if (blockedByClearance('commitment', commitment)) continue
-    const result = evidenceForCommitment(store, ledger, id, index)
+    const result = evidenceForCommitment(store, ledger, id, index, { lookup: lookups })
     entries.push({
       kind: 'commitment',
       id,
@@ -972,18 +1461,19 @@ export function buildEvidencePack({
       sources: result.sources,
       missing: result.missing,
       unverifiable: result.unverifiable,
+      notChecked: result.notChecked,
     })
   }
   for (const id of requested.facts) {
     const fact = findFact(ledger, id, index)
     if (blockedByClearance('fact', fact)) continue
-    const result = evidenceForFact(store, ledger, id, index)
-    entries.push({ kind: 'fact', id, found: Boolean(result.fact), sources: result.sources, missing: result.missing, unverifiable: result.unverifiable })
+    const result = evidenceForFact(store, ledger, id, index, { lookup: lookups })
+    entries.push({ kind: 'fact', id, found: Boolean(result.fact), sources: result.sources, missing: result.missing, unverifiable: result.unverifiable, notChecked: result.notChecked })
   }
   for (const id of requested.preferences) {
     const preference = findPreference(ledger, id, index)
     if (blockedByClearance('preference', preference)) continue
-    const result = evidenceForPreference(store, ledger, id, index)
+    const result = evidenceForPreference(store, ledger, id, index, { lookup: lookups })
     entries.push({
       kind: 'preference',
       id,
@@ -991,10 +1481,11 @@ export function buildEvidencePack({
       sources: result.sources,
       missing: result.missing,
       unverifiable: result.unverifiable,
+      notChecked: result.notChecked,
     })
   }
   for (const id of requested.unknown) {
-    entries.push({ kind: 'unknown', id, found: false, sources: [], missing: [{ id, reason: 'record_not_found' }] })
+    entries.push({ kind: 'unknown', id, found: false, sources: [], missing: [{ id, reason: 'record_not_found', kind: 'observed' }] })
   }
   if (protectedIds.length) throw new ProtectedEvidenceError(protectedIds.length, clearanceValue)
 
@@ -1002,9 +1493,10 @@ export function buildEvidencePack({
     .map(compactEntry)
     .sort(compareEntries)
 
-  const manifestJson = manifestFor(compacted, { createdAt })
+  const tallied = tallyCompacted(compacted)
+  const manifestJson = manifestFor(compacted, { createdAt, byKind: tallied.byKind, notCheckedCount: tallied.notCheckedCount, verificationBasis: VERIFICATION_BASIS })
   const manifestDigest = sha256Hex(manifestJson)
-  const readme = buildReadme({ createdAt, entries: compacted, manifestDigest })
+  const readme = buildReadme({ createdAt, entries: compacted, manifestDigest, byKind: tallied.byKind, notCheckedCount: tallied.notCheckedCount })
   const readmeDigest = sha256Hex(readme)
   const sums = [`${readmeDigest}  README.txt`, `${manifestDigest}  manifest.json`].join('\n') + '\n'
 
@@ -1013,14 +1505,16 @@ export function buildEvidencePack({
   let missingCount = 0
   let unverifiableCount = 0
   let operatorEnteredCount = 0
+  let notCheckedCount = 0
   let truncatedCount = 0
   for (const entry of compacted) {
     counts[entry.kind] = (counts[entry.kind] ?? 0) + 1
     sourceCount += entry.sources.length
     missingCount += entry.missing.length
-    const manual = entry.unverifiable ?? []
-    unverifiableCount += manual.length
-    operatorEnteredCount += manual.filter((item) => item.kind === MANUAL_SOURCE_KIND || item.type === MANUAL_SOURCE_KIND).length
+    const unverifiable = entry.unverifiable ?? []
+    unverifiableCount += unverifiable.length
+    operatorEnteredCount += unverifiable.filter((item) => item.kind === MANUAL_SOURCE_KIND || item.type === MANUAL_SOURCE_KIND).length
+    notCheckedCount += (entry.notChecked ?? []).length
     truncatedCount += entry.sources.filter((source) => source.truncated).length
   }
 
@@ -1040,6 +1534,9 @@ export function buildEvidencePack({
       missingCount,
       unverifiableCount,
       operatorEnteredCount,
+      notCheckedCount,
+      byKind: tallied.byKind,
+      verificationBasis: VERIFICATION_BASIS,
       truncatedCount,
       // Additive (0.2.5 A-1): how many requested rows were withheld because
       // their own matter is protected. Counts only — never a title or quote.
@@ -1427,11 +1924,22 @@ function normalizeReceiptDeliveries(deliveries) {
 // --- evidence entries (re-sanitized: the receipt pack keeps references and
 // --- capped quotes only, never full turn bodies) ---------------------------
 
+function receiptIsTypedSource(source) {
+  if (!source || typeof source !== 'object' || Array.isArray(source)) return false
+  if (EVIDENCE_KINDS.includes(source.kind)) return true
+  if (typeof source.type === 'string' && source.type && source.type !== 'conversation' && source.type !== 'unknown') return true
+  // A source that never carried a session#turn pair is a typed source in v2
+  // terms even when the caller forgot kind/type.
+  return !('sessionId' in source) || !('turnId' in source)
+}
+
 function receiptSource(source) {
   if (source && typeof source === 'object' && source.turn) return compactSource(source)
   if (!source || typeof source !== 'object' || Array.isArray(source)) {
     return { sessionId: '', turnId: '', quote: '', quoteChars: 0, truncated: false, quoteSha256: sha256Hex('') }
   }
+  if (receiptIsTypedSource(source)) return compactSource(source)
+  // v1 evidence shape: keep the historical receipt bytes exactly.
   const rawQuote = typeof source.quote === 'string' ? source.quote : ''
   const chars = Array.from(rawQuote)
   const quote = chars.length > MAX_QUOTE_CHARS ? chars.slice(0, MAX_QUOTE_CHARS).join('') : rawQuote
@@ -1453,7 +1961,7 @@ function receiptSource(source) {
 function receiptMissing(item) {
   if (!item || typeof item !== 'object' || Array.isArray(item)) return { reason: 'unknown' }
   const out = { reason: typeof item.reason === 'string' ? item.reason : 'unknown' }
-  for (const key of ['id', 'ref', 'sessionId', 'turnId']) {
+  for (const key of ['id', 'kind', 'type', 'ref', 'sessionId', 'turnId', 'messageId', 'docId', 'pageId', 'url', 'tool']) {
     if (typeof item[key] === 'string' && item[key]) out[key] = item[key]
   }
   if (typeof item.quote === 'string' && item.quote.length) {
@@ -1469,6 +1977,15 @@ function receiptMissing(item) {
 
 function receiptUnverifiable(item) {
   if (!item || typeof item !== 'object' || Array.isArray(item)) return null
+  const typed = EVIDENCE_KINDS.includes(item.kind) || (typeof item.type === 'string' && item.type && item.type !== MANUAL_SOURCE_KIND)
+  if (typed) {
+    const out = compactUnverifiable(item)
+    for (const key of ['capturedAt', 'capturedBy', 'command']) {
+      if (typeof item[key] === 'string' && item[key]) out[key] = item[key].slice(0, 120)
+    }
+    return out
+  }
+  // Legacy manual shape (v1 evidence): keep the historical receipt bytes.
   const out = {
     kind: MANUAL_SOURCE_KIND,
     type: MANUAL_SOURCE_KIND,
@@ -1480,6 +1997,11 @@ function receiptUnverifiable(item) {
     if (typeof item[key] === 'string' && item[key]) out[key] = item[key].slice(0, 120)
   }
   return out
+}
+
+function receiptNotChecked(item) {
+  if (!item || typeof item !== 'object' || Array.isArray(item)) return null
+  return compactNotChecked(item)
 }
 
 function receiptEvidenceEntry(entry) {
@@ -1494,11 +2016,14 @@ function receiptEvidenceEntry(entry) {
   if (Array.isArray(entry.unverifiable) && entry.unverifiable.length) {
     out.unverifiable = entry.unverifiable.map(receiptUnverifiable).filter(Boolean)
   }
+  if (Array.isArray(entry.notChecked) && entry.notChecked.length) {
+    out.notChecked = entry.notChecked.map(receiptNotChecked).filter(Boolean)
+  }
   return out
 }
 
 function normalizeReceiptEvidence(evidence) {
-  const meta = { format: MANIFEST_FORMAT, version: MANIFEST_VERSION }
+  const meta = { format: MANIFEST_FORMAT, version: MANIFEST_VERSION, versionDeclared: false, verificationBasis: null }
   let list = []
   // Additive (0.2.5 A-1): the evidence pack reports how many requested rows it
   // withheld because their own matter is protected; the receipt summary carries
@@ -1520,7 +2045,11 @@ function normalizeReceiptEvidence(evidence) {
   } else if (typeof evidence === 'object') {
     if (evidence.summary && Array.isArray(evidence.summary.entries)) {
       if (typeof evidence.summary.format === 'string') meta.format = evidence.summary.format
-      if (Number.isInteger(evidence.summary.version)) meta.version = evidence.summary.version
+      if (Number.isInteger(evidence.summary.version)) {
+        meta.version = evidence.summary.version
+        meta.versionDeclared = true
+      }
+      if (typeof evidence.summary.verificationBasis === 'string') meta.verificationBasis = evidence.summary.verificationBasis
       readProtectedExcluded(evidence.summary)
       list = evidence.summary.entries
     } else if (Array.isArray(evidence.entries)) {
@@ -1532,7 +2061,11 @@ function normalizeReceiptEvidence(evidence) {
           const parsed = JSON.parse(manifestText)
           if (parsed && typeof parsed === 'object' && !Array.isArray(parsed)) {
             if (typeof parsed.format === 'string') meta.format = parsed.format
-            if (Number.isInteger(parsed.version)) meta.version = parsed.version
+            if (Number.isInteger(parsed.version)) {
+              meta.version = parsed.version
+              meta.versionDeclared = true
+            }
+            if (typeof parsed.verificationBasis === 'string') meta.verificationBasis = parsed.verificationBasis
             list = Array.isArray(parsed.entries) ? parsed.entries : []
           }
         } catch {
@@ -1543,11 +2076,24 @@ function normalizeReceiptEvidence(evidence) {
   }
   const entries = list.map(receiptEvidenceEntry).filter(Boolean)
   entries.sort(compareEntries)
+  if (!meta.versionDeclared) {
+    // A caller passed raw v1-era entries (no version marker): keep claiming v1 so
+    // the historical receipt shape and validation stay byte-compatible.
+    const looksV1 = entries.some(
+      (entry) =>
+        entry.sources.some((source) => !('kind' in source)) ||
+        entry.missing.some((item) => !('kind' in item)) ||
+        (entry.unverifiable ?? []).some((item) => !('kind' in item)),
+    )
+    if (looksV1) meta.version = 1
+  }
   const counts = { commitment: 0, fact: 0, preference: 0, unknown: 0 }
   let sourceCount = 0
   let missingCount = 0
   let unverifiableCount = 0
   let operatorEnteredCount = 0
+  let notCheckedCount = 0
+  const flat = { sources: [], missing: [], unverifiable: [], notChecked: [] }
   for (const entry of entries) {
     counts[entry.kind] = (counts[entry.kind] || 0) + 1
     sourceCount += entry.sources.length
@@ -1555,8 +2101,13 @@ function normalizeReceiptEvidence(evidence) {
     const manual = entry.unverifiable ?? []
     unverifiableCount += manual.length
     operatorEnteredCount += manual.filter((item) => item.kind === MANUAL_SOURCE_KIND || item.type === MANUAL_SOURCE_KIND).length
+    notCheckedCount += (entry.notChecked ?? []).length
+    flat.sources.push(...entry.sources)
+    flat.missing.push(...entry.missing)
+    flat.unverifiable.push(...manual)
+    flat.notChecked.push(...(entry.notChecked ?? []))
   }
-  return {
+  const base = {
     format: meta.format,
     version: meta.version,
     entryCount: entries.length,
@@ -1568,6 +2119,14 @@ function normalizeReceiptEvidence(evidence) {
     protectedExcluded,
     entries,
   }
+  if (meta.version >= 2) {
+    // Evidence pack v2: taxonomy + honest verification basis. v1 receipt packs
+    // keep the exact historical evidence object (no new keys).
+    base.notCheckedCount = notCheckedCount
+    base.byKind = evidenceByKind(flat)
+    base.verificationBasis = VERIFICATION_BASES.includes(meta.verificationBasis) ? meta.verificationBasis : VERIFICATION_BASIS
+  }
+  return base
 }
 
 // --- verify results ---------------------------------------------------------
@@ -2039,8 +2598,10 @@ function receiptDocxSpec(input) {
     heading: '证据摘要',
     paragraphs: [
       '证据条目：' + evidence.entryCount + '（commitment ' + evidence.counts.commitment + ' / fact ' + evidence.counts.fact + ' / preference ' + evidence.counts.preference + ' / unknown ' + evidence.counts.unknown + '）',
-      '已解析来源：' + evidence.sourceCount + '；缺失来源：' + evidence.missingCount,
-      ...(evidence.unverifiableCount ? ['未外部核验（操作者录入）：' + evidence.unverifiableCount + ' 条（不是缺失；请勿当作已核验证据）'] : []),
+      '构建时已核验来源：' + evidence.sourceCount + '；缺失来源：' + evidence.missingCount,
+      ...(evidence.unverifiableCount ? ['不可本地核验：' + evidence.unverifiableCount + ' 条（manual/邮件正文未保留/网页未缓存；不是缺失；请勿当作已核验证据）'] : []),
+      ...(evidence.notCheckedCount ? ['本次未核验（not_checked）：' + evidence.notCheckedCount + ' 条'] : []),
+      ...(evidence.verificationBasis ? ['核验基准：' + evidence.verificationBasis + '（离线校验只证明包内自洽，不能重放对话）'] : []),
       '完整证据条目（session#turn 引用与截断引用原话）见 manifest.json 的 evidence 字段。',
     ],
   })
@@ -2117,7 +2678,9 @@ function buildReceiptReadme(input) {
     'SHA256SUMS     sha256 of every other file in this pack',
     '',
     'Evidence entries: ' + evidence.entryCount + ' (sources ' + evidence.sourceCount + ', missing ' + evidence.missingCount + ')',
-    ...(evidence.unverifiableCount ? ['unverifiable: ' + evidence.unverifiableCount + ' (operator-entered; not externally verified, NOT missing)'] : []),
+    ...(evidence.unverifiableCount ? ['unverifiable: ' + evidence.unverifiableCount + ' (manual/mail-body-purged/web-not-cached; not externally verified, NOT missing)'] : []),
+    ...(evidence.notCheckedCount ? ['not checked: ' + evidence.notCheckedCount + ' (no local lookup capability supplied for this run)'] : []),
+    ...(evidence.verificationBasis ? ['verification basis: ' + evidence.verificationBasis + ' (offline verification proves pack consistency only; it cannot replay turns)'] : []),
     '(references and capped quotes only; see manifest.json evidence.entries)',
     '',
     'Verify (offline, no ~/.advisers database needed)',
@@ -2399,6 +2962,14 @@ export async function buildReceiptPack(options = {}) {
       unverifiableCount: evidence.unverifiableCount ?? 0,
       operatorEnteredCount: evidence.operatorEnteredCount ?? 0,
       protectedExcluded: Number.isInteger(evidence.protectedExcluded) ? evidence.protectedExcluded : 0,
+      // Evidence pack v2 only; v1 callers keep the historical aggregate shape.
+      ...(evidence.version >= 2
+        ? {
+            notCheckedCount: evidence.notCheckedCount ?? 0,
+            byKind: evidence.byKind ?? emptyByKind(),
+            verificationBasis: evidence.verificationBasis ?? VERIFICATION_BASIS,
+          }
+        : {}),
     },
     anchored: anchors.length > 0,
     fileMode: RECEIPT_FILE_MODE,
@@ -2487,7 +3058,8 @@ export function toDocxRows(input, { maxRows = 200 } = {}) {
     const sources = Array.isArray(entry.sources) ? entry.sources : []
     const missing = Array.isArray(entry.missing) ? entry.missing : []
     const unverifiable = Array.isArray(entry.unverifiable) ? entry.unverifiable : []
-    if (!sources.length && !missing.length && !unverifiable.length) {
+    const notChecked = Array.isArray(entry.notChecked) ? entry.notChecked : []
+    if (!sources.length && !missing.length && !unverifiable.length && !notChecked.length) {
       rows.push([kind, id, '', '', entry.found === false ? '记录不存在' : '无证据'])
       continue
     }
@@ -2510,12 +3082,24 @@ export function toDocxRows(input, { maxRows = 200 } = {}) {
       ])
     }
     for (const item of unverifiable) {
+      const isManual = item.kind === MANUAL_SOURCE_KIND || item.type === MANUAL_SOURCE_KIND
       rows.push([
         kind,
         id,
-        '',
+        item.ref || formatRef(item.sessionId, item.turnId) || '',
         clampQuote(item.quote).quote,
-        MANUAL_SOURCE_KIND + ': operator-entered (unverifiable, not missing)',
+        isManual
+          ? MANUAL_SOURCE_KIND + ': operator-entered (unverifiable, not missing)'
+          : 'unverifiable: ' + (item.type ?? 'unknown') + ' (' + (item.reason ?? MANUAL_REASON) + ', not missing)',
+      ])
+    }
+    for (const item of notChecked) {
+      rows.push([
+        kind,
+        id,
+        item.ref || formatRef(item.sessionId, item.turnId) || '',
+        clampQuote(item.quote).quote,
+        'not_checked: ' + (item.type ?? 'unknown') + ' (' + (item.reason ?? 'not_checked') + ')',
       ])
     }
   }

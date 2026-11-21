@@ -1,0 +1,258 @@
+{
+  "version": 2,
+  "status": "frozen",
+  "frozenAt": "2026-11-21",
+  "sourceCommit": "86b144c",
+  "compat": "additive",
+  "description": "MCP protocol contract v2: dual-era server (0.4.0). The legacy initialize-based version matrix stays frozen in mcp/versions-v1.json and is unchanged by 0.4.0; this file is the single authoritative rulebook for the stateless modern 2026-07-28 era (per-request _meta, server/discover, resultType/ttlMs/cacheScope envelopes, error mapping) and for how both eras coexist in one process. Additive: no frozen v1 artifact is modified.",
+  "supersedes": {
+    "mcp/versions-v1.json#/modernProtocol": "versions-v1.json records status 'out-of-scope-0.3.2'; 0.4.0 implements the modern era as specified here."
+  },
+  "legacy": {
+    "contract": "mcp/versions-v1.json",
+    "status": "unchanged-frozen",
+    "defaultProtocolVersion": "2024-11-05",
+    "supportedProtocolVersions": [
+      "2024-11-05",
+      "2025-06-18",
+      "2025-11-25"
+    ],
+    "negotiation": "active-fallback",
+    "note": "0.4.0 does not change any legacy request/response byte. Requests without modern per-request _meta, and all traffic when ADVISERS_MCP_MODERN=off, take this path (verified by a golden byte diff in test/mcp-modern.test.js)."
+  },
+  "modern": {
+    "protocolVersion": "2026-07-28",
+    "supportedVersions": [
+      "2026-07-28"
+    ],
+    "stateless": true,
+    "eraDetection": {
+      "rule": "A request is modern iff method != 'initialize' and params._meta contains io.modelcontextprotocol/protocolVersion or io.modelcontextprotocol/clientCapabilities; every other request is legacy. The era is never inferred from prior requests (no connection state).",
+      "initialize": "Always legacy, even when it carries stray modern _meta: it answers with the legacy handshake result (echo/fallback matrix from versions-v1.json).",
+      "unrelatedMeta": "params._meta without a modern protocol key (e.g. only progressToken) stays legacy; the era is never guessed from unrelated metadata."
+    },
+    "requiredRequestMeta": {
+      "io.modelcontextprotocol/protocolVersion": {
+        "type": "string",
+        "required": true,
+        "note": "Missing or non-string => -32602 (malformed request)."
+      },
+      "io.modelcontextprotocol/clientCapabilities": {
+        "type": "object",
+        "required": true,
+        "note": "Missing or non-object => -32602 (malformed request)."
+      },
+      "io.modelcontextprotocol/clientInfo": {
+        "type": "object",
+        "required": false
+      }
+    },
+    "methods": [
+      "server/discover",
+      "tools/list",
+      "tools/call",
+      "resources/list",
+      "resources/read"
+    ],
+    "methodMatrix": {
+      "initialize": {
+        "modern": "-32601 (removed in 2026-07-28)"
+      },
+      "ping": {
+        "modern": "-32601 (removed)"
+      },
+      "notifications/initialized": {
+        "modern": "ignored; never answered"
+      },
+      "notifications/cancelled": {
+        "modern": "ignored; never answered"
+      },
+      "notifications/*": {
+        "modern": "ignored; never answered"
+      },
+      "server/discover": {
+        "modern": "DiscoverResult (cached)"
+      },
+      "tools/list": {
+        "modern": "same tool catalogue as legacy, wrapped in the modern envelope (cached)"
+      },
+      "tools/call": {
+        "modern": "same payload and audit as legacy; content[0].text is byte-identical"
+      },
+      "resources/list": {
+        "modern": "same resource catalogue as legacy, wrapped in the modern envelope (cached)"
+      },
+      "resources/read": {
+        "modern": "same contents text as legacy (private, ttlMs 0); unknown uri => -32602"
+      },
+      "resources/templates/list": {
+        "modern": "not implemented: -32601 (capability not declared)"
+      },
+      "prompts/list": {
+        "modern": "not implemented: -32601"
+      },
+      "logging/*": {
+        "modern": "-32601"
+      },
+      "subscriptions/listen": {
+        "modern": "-32601"
+      },
+      "resources/subscribe": {
+        "modern": "-32601 (removed)"
+      }
+    },
+    "discover": {
+      "requestBody": "no body parameters beyond the standard params._meta",
+      "result": {
+        "supportedVersions": [
+          "2026-07-28"
+        ],
+        "capabilities": {
+          "tools": {
+            "listChanged": false
+          },
+          "resources": {
+            "listChanged": false
+          }
+        },
+        "resultMeta": {
+          "io.modelcontextprotocol/serverInfo": {
+            "name": "advisers",
+            "versionSource": "packages/advisers/package.json"
+          }
+        },
+        "instructions": "not emitted"
+      }
+    },
+    "resultEnvelope": {
+      "resultType": {
+        "required": true,
+        "value": "complete",
+        "note": "Every success result carries resultType=complete, including tool results with isError=true. input_required is never emitted (no multi-round-trip support)."
+      },
+      "resultMeta": {
+        "key": "io.modelcontextprotocol/serverInfo",
+        "emitted": "on every modern success result",
+        "value": {
+          "name": "advisers",
+          "versionSource": "packages/advisers/package.json"
+        }
+      },
+      "errors": "JSON-RPC error responses never carry resultType."
+    },
+    "caching": {
+      "server/discover": {
+        "ttlMs": 300000,
+        "cacheScope": "public"
+      },
+      "tools/list": {
+        "ttlMs": 300000,
+        "cacheScope": "public"
+      },
+      "resources/list": {
+        "ttlMs": 300000,
+        "cacheScope": "public"
+      },
+      "resources/read": {
+        "ttlMs": 0,
+        "cacheScope": "private"
+      },
+      "tools/call": {
+        "note": "not cacheable: no ttlMs/cacheScope fields"
+      }
+    },
+    "pagination": {
+      "supported": false,
+      "nextCursor": "never emitted (single static page)",
+      "invalidCursorError": -32602,
+      "note": "Any client-supplied cursor on tools/list or resources/list is rejected with -32602."
+    },
+    "errorMapping": {
+      "malformedMeta": {
+        "code": -32602,
+        "when": "a required _meta field is missing or has the wrong type"
+      },
+      "unsupportedProtocolVersion": {
+        "code": -32022,
+        "message": "Unsupported protocol version",
+        "data": {
+          "supported": [
+            "2026-07-28"
+          ],
+          "requested": "<requested>"
+        },
+        "when": "well-formed but unsupported io.modelcontextprotocol/protocolVersion"
+      },
+      "unknownMethod": {
+        "code": -32601,
+        "when": "method is not in the modern allowlist (includes initialize/ping in the modern era)"
+      },
+      "unknownResource": {
+        "code": -32602,
+        "when": "resources/read uri is not one of the 5 catalogue URIs",
+        "legacyCodeForSameRequest": -32002
+      },
+      "unknownTool": {
+        "code": -32602
+      },
+      "invalidParams": {
+        "code": -32602
+      },
+      "parseError": {
+        "code": -32700
+      },
+      "invalidRequest": {
+        "code": -32600
+      },
+      "internalError": {
+        "code": -32603,
+        "message": "internal error"
+      },
+      "toolExecutionFailure": {
+        "transport": "success result",
+        "resultType": "complete",
+        "isError": true,
+        "note": "Tool execution failures are not JSON-RPC errors (same convention as legacy)."
+      }
+    },
+    "dataPath": "Modern handlers call the exact same read-model and audit functions as the legacy dispatcher; the era layer only changes the result envelope. tools/call content[0].text and resources/read contents[0].text are byte-identical between eras for the same request (asserted by tests).",
+    "audit": "Unchanged: tools/call writes the same mcp.* audit entry, resources/read writes resource:<uri>, server/discover and list methods write nothing.",
+    "clearance": "Unchanged: per-item clearance filtering, protectedExcluded counts, output caps and the 64 KiB byte budget run before the envelope is applied.",
+    "disableSwitch": {
+      "env": "ADVISERS_MCP_MODERN",
+      "default": "enabled",
+      "offValues": [
+        "off",
+        "0",
+        "false",
+        "no",
+        "disabled"
+      ],
+      "effect": "Every request takes the legacy path (the exact 0.3.2 surface): server/discover answers -32601 and modern _meta is ignored. One process restart reverts without a CLI flag."
+    }
+  },
+  "nonGoals": [
+    "prompts/*",
+    "resources/templates/list",
+    "resources/subscribe and subscriptions/listen",
+    "logging/*",
+    "ping in the modern era",
+    "initialize in the modern era",
+    "HTTP/SSE transports",
+    "pagination cursors and nextCursor",
+    "multi-round-trip requests (input_required)",
+    "sampling / elicitation / roots",
+    "readonly profile switching (not an MCP protocol feature)"
+  ],
+  "conformance": {
+    "schema": "mcp/responses-v2.schema.json",
+    "vectors": "vectors/mcp/modern.vectors.json",
+    "payloadSource": "mcp/responses-v1.schema.json ($defs are reused for the payload of tools/list, tools/call, resources/list and resources/read after the modern envelope keys resultType/ttlMs/cacheScope/_meta are removed)",
+    "tests": [
+      "packages/advisers/test/mcp-modern.test.js",
+      "packages/advisers/test/mcp-modern-cli.test.js",
+      "packages/advisers/test/mcp-modern-contract.test.js"
+    ]
+  },
+  "license": "CC-BY-NC-SA-4.0 (intended; see LICENSE + README status note)"
+}

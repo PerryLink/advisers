@@ -248,3 +248,82 @@ jobs:
 
           Write-Host 'windows smoke: PASS (--version, init, status, commit add/ls, doctor, doctor --check-db, backup, export --out, import --replace, vault seal/unseal)'
           Remove-Item -LiteralPath $smokeRoot -Recurse -Force -ErrorAction SilentlyContinue
+
+  windows-full:
+    # 0.4.0: full Windows test suite. The windows-smoke job above only covers the
+    # CLI/durable-write smoke; this job runs the workspace build, typecheck and
+    # every package's test files on Windows so path/mode/rename/signal
+    # regressions are seen by CI instead of only on a real machine.
+    #
+    # windows-latest is currently a Windows Server 2025 image: it does not
+    # replace the manual real-client verification (IME/Terminal/OneDrive/Office;
+    # docs/WINDOWS.md) but it does keep the full suite honest.
+    #
+    # 0.4.0 starts report-only: the 2026-11-21 real-machine run has 34 known
+    # Windows-only failures (fixture/POSIX assumptions and product/local
+    # semantics; tracked in the release checklist's Windows triage). Flip this to
+    # blocking by deleting continue-on-error once those fixtures are fixed and
+    # this job is green on main; keep windows-smoke green throughout.
+    runs-on: windows-latest
+    timeout-minutes: 30
+    continue-on-error: true
+    strategy:
+      fail-fast: false
+      matrix:
+        # 22.16 is the exact minimum: Node 22.13-22.15 ship node:sqlite without FTS5.
+        node: ['22.16', 24]
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+      - uses: pnpm/action-setup@fc06bc1257f339d1d5d8b3a19a8cae5388b55320 # v4.4.0
+        with:
+          version: 12.16.1
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
+        with:
+          node-version: ${{ matrix.node }}
+          cache: pnpm
+      - run: pnpm install --frozen-lockfile
+      - run: pnpm -r --if-present run build
+      - run: pnpm -r --if-present run typecheck
+      - run: node scripts/check-js.mjs
+      # Windows cmd does not expand the "test/*.test.js" glob that the package
+      # scripts pass to "node --test", so enumerate the files in PowerShell and
+      # invoke the test runner directly (the same files the Linux pnpm test step
+      # runs). Keep going after a failing package so one run reports every
+      # failure instead of stopping at the first.
+      - name: Full test suite (all packages)
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $PSNativeCommandUseErrorActionPreference = $false
+          $failed = [System.Collections.Generic.List[string]]::new()
+          foreach ($pkg in Get-ChildItem -Path 'packages' -Directory) {
+            $pkgName = $pkg.Name
+            $testDir = Join-Path $pkg.FullName 'test'
+            if (-not (Test-Path -LiteralPath $testDir -PathType Container)) { continue }
+            $files = @(Get-ChildItem -LiteralPath $testDir -File |
+              Where-Object { $_.Name -match '\.test\.(js|ts)$' } |
+              ForEach-Object { $_.FullName })
+            if ($files.Count -eq 0) { continue }
+            Write-Host ("=== " + $pkgName + ": " + $files.Count + " test file(s)")
+            Push-Location -LiteralPath $pkg.FullName
+            try {
+              & node --experimental-strip-types --test --test-reporter=spec $files
+              if ($LASTEXITCODE -ne 0) {
+                $failed.Add($pkgName)
+                Write-Host ("::error::" + $pkgName + " tests failed (exit " + $LASTEXITCODE + ")")
+              }
+            } finally {
+              Pop-Location
+            }
+          }
+          if ($failed.Count -gt 0) {
+            Write-Host ("::error::windows-full failed for: " + ($failed -join ', '))
+            exit 1
+          }
+          Write-Host 'windows full: PASS (build, typecheck, every package test file)'
+      - name: Pack dry-run smoke
+        run: node scripts/pack-smoke.mjs
+      - name: Portable bundle self-tests
+        run: |
+          node scripts/portable-zip.mjs --self-test
+          node scripts/pack-portable.mjs --self-test

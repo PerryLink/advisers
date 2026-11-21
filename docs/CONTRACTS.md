@@ -1,4 +1,4 @@
-# Interface contracts (0.3.0 minimal set; interface shapes unchanged by the 0.3.1 release-metadata patch, which only added the `dsh-famling` entry to `contracts/CONSUMERS.json`)
+# Interface contracts (0.3.0 minimal set; 0.4.0 adds the additive MCP modern era v2 and additive CLI read-model `$defs`; interface shapes frozen by 0.3.x stay unchanged)
 
 Advisers is CLI-first and its consumers (scripts, CI, MCP clients, the DSH host,
 Famling) need a machine-readable, versioned interface instead of prose. This
@@ -31,7 +31,10 @@ themselves are the single source of truth for shapes and are enforced by
 | `contracts/mcp/resources-v1.json` | 1 | additive | 4 MCP resources: URI/name/mimeType/payload schema ref. |
 | `contracts/mcp/versions-v1.json` | 1 | protocol negotiation | Supported legacy MCP protocol versions + negotiation status + methods. |
 | `contracts/mcp/errors-v1.json` | 1 | additive | JSON-RPC `-32600/-32601/-32602/-32603/-32700/-32002` + tool `isError` envelope. |
-| `contracts/mcp/responses-v1.schema.json` | 1 | additive | JSON Schema for MCP responses and the JSON payloads inside them. |
+| `contracts/mcp/responses-v1.schema.json` | 1 | additive | JSON Schema for legacy MCP responses and the JSON payloads inside them. |
+| `contracts/mcp/versions-v2.json` | 2 | additive | MCP dual-era rulebook (0.4.0): the legacy matrix reference plus the stateless modern 2026-07-28 era (per-request `_meta`, `server/discover`, `resultType`/`ttlMs`/`cacheScope`, error mapping, `ADVISERS_MCP_MODERN` switch). |
+| `contracts/mcp/responses-v2.schema.json` | 2 | additive | JSON Schema for the modern result/error envelopes only; the payload is byte-identical and validated against the frozen v1 `$defs`. |
+| `contracts/vectors/mcp/modern.vectors.json` | 1 | — | Accept/reject conformance vectors for every top-level `$def` of the modern envelope schema. |
 | `contracts/vectors/cli/read-models.vectors.json` | 1 | — | Accept/reject conformance vectors for every top-level read payload. |
 | `contracts/vectors/cli/errors.vectors.json` | 1 | — | Accept/reject vectors for the error envelope. |
 | `contracts/vectors/mcp/responses.vectors.json` | 1 | — | Accept/reject vectors for MCP envelopes and payloads. |
@@ -120,15 +123,35 @@ supported legacy protocol versions (2024-11-05 / 2025-06-18 / 2025-11-25) and
 the default 2024-11-05.
 
 0.3.0 negotiation is implemented as **active-fallback**: `initialize` echoes a
-supported requested version, while a missing or unknown version (including the
-modern stateless 2026-07-28 revision) falls back to 2024-11-05 so pre-0.3
-clients observe exactly the old behaviour. (The research target was a readable
-rejection listing the supported matrix; the implementation deliberately chose
-legacy compatibility. The checker asserts the echo and the fallback; changing
-to strict rejection is a documented contract change.) List-shaped MCP payloads
-gained the additive cap fields `total`/`truncated`/`limit`/per-array totals
-(caps applied after clearance, before the egress classifier); the modern
-2026-07-28 era remains future work (post-0.3.2).
+supported requested version, while a missing or unknown version falls back to
+2024-11-05 so pre-0.3 clients observe exactly the old behaviour. (The research
+target was a readable rejection listing the supported matrix; the implementation
+deliberately chose legacy compatibility. The checker asserts the echo and the
+fallback; changing to strict rejection is a documented contract change.)
+List-shaped MCP payloads gained the additive cap fields
+`total`/`truncated`/`limit`/per-array totals (caps applied after clearance,
+before the egress classifier).
+
+**0.4.0 adds the MCP modern (2026-07-28) era as an additive v2 contract**
+(`contracts/mcp/versions-v2.json` + `contracts/mcp/responses-v2.schema.json`
++ `contracts/vectors/mcp/modern.vectors.json`). The server is **dual-era**: a
+request carrying the required per-request `_meta` keys
+(`io.modelcontextprotocol/protocolVersion` + `clientCapabilities`) is served
+statelessly (`server/discover`, `tools/list`, `tools/call`,
+`resources/list`, `resources/read`), while `initialize` and every request
+without that `_meta` keep the frozen legacy path. Modern results carry
+`resultType` (+ `ttlMs`/`cacheScope` on cacheable methods and
+`_meta.io.modelcontextprotocol/serverInfo`); `tools/call` content and
+`resources/read` contents remain **byte-identical** to legacy. Modern error
+mapping is part of the contract: unsupported version `-32022` (with
+`data.supported`/`data.requested`), malformed/missing `_meta` `-32602`,
+removed methods (`initialize`/`ping`) and unlisted methods `-32601`, invalid
+cursor `-32602`, and unknown resources `-32602` (legacy stays `-32002` for
+the same request). `ADVISERS_MCP_MODERN=off` makes every request take the
+frozen legacy path. The v2 envelope is **not** part of
+`status.contracts` discovery: modern clients discover it through
+`server/discover`, and `discovery.expected` keeps `mcpProtocol: 2024-11-05`
+so 0.3.2 status consumers stay byte-compatible.
 
 ## How to validate
 
@@ -143,8 +166,9 @@ The gate runs **in CI on every PR** (the `test` job, after build/typecheck; see
 `.github/workflows/ci.yml`), so a shape change that is not reflected in the frozen
 artifacts fails the PR. It is offline (no credentials, no model, no network), uses a
 temporary `ADVISERS_HOME` under the OS temp directory, and removes it afterwards.
-Current tree: **46 checks PASS** (2026-11-21 0.3.2 tree, including the wired
-`status.contracts` field and the real stdio MCP catalogue). The eight checks:
+Current tree: **49 checks PASS** (2026-11-21 0.4.0 tree, including the wired
+`status.contracts` field, the real stdio MCP **dual-era** catalogue and the
+0.4.0 error-code layers). The eight checks:
 
 | Check | Enforces |
 |---|---|
@@ -153,7 +177,7 @@ Current tree: **46 checks PASS** (2026-11-21 0.3.2 tree, including the wired
 | `--cli` | the real CLI, in a temp home, returns pure JSON for every command in `cli/commands-v1.json` and every payload matches its frozen `$def`. |
 | `--status` | `status --json` works on a fresh home with no TOS/key, matches `StatusPayload`, and the (when present) discovery field equals the manifest. |
 | `--exit` | the real CLI exit codes match `cli/exit-codes-v1.json` probes; the error envelope validates against `cli/errors-v1.schema.json`. |
-| `--mcp` | a real `advisers mcp --stdio` session: initialize/tools/list/resources/list/resources/read/tools/call/error probes validated against `mcp/*.json` and `mcp/responses-v1.schema.json`; catalogue deep-equals the contract. |
+| `--mcp` | a real `advisers mcp --stdio` session for **both eras**: legacy initialize/tools/list/resources/list/resources/read/tools/call/error probes validated against `mcp/*.json` and `mcp/responses-v1.schema.json` (catalogue deep-equals the contract), then modern probes (server/discover, tools/list, tools/call, resources/list, resources/read) validated against `mcp/responses-v2.schema.json` with the envelope stripped and the payload re-validated against the frozen v1 `$defs`, plus `-32022`/`-32602`/`-32601`, cursor rejection, notification silence, legacy-byte equality and the `ADVISERS_MCP_MODERN=off` fallback. |
 | `--errors` | committed source literals are registered; registry codes still exist; generated registry/docs are in sync; exit mapping and DSH external codes intact. |
 | `--docs` | this document mentions every artifact in `versions-v1.json` and the discovery manifest agrees with the artifact versions and the DSH/Pet Brief sources. |
 
@@ -172,10 +196,20 @@ Current tree: **46 checks PASS** (2026-11-21 0.3.2 tree, including the wired
 
 ## Known gaps and out of scope (honesty list)
 
-- MCP legacy negotiation is **active-fallback** (supported versions are
-  echoed, unknown versions fall back to the default); strict rejection of
-  unknown versions, `server/discover` and the modern 2026-07-28 surface are
-  out of 0.3.0 scope.
+- MCP legacy negotiation stays **active-fallback** (supported versions are
+  echoed, unknown versions fall back to the default); strict rejection is not
+  part of v1. The 0.4.0 modern era is the read-only dual-era surface only:
+  `prompts/*`, `resources/templates/list`, `resources/subscribe`/`subscriptions/listen`,
+  `logging/*`, pagination `nextCursor`, multi-round-trip `input_required`,
+  HTTP/SSE transports and a `readonly` tool profile are explicit non-goals
+  (`contracts/mcp/versions-v2.json` `modern.nonGoals`). `status.contracts` does
+  not advertise the modern era; it is discovered through `server/discover`.
+- **Evidence/receipt pack v2 compatibility**: the evidence pack manifest is v2
+  (`verificationBasis`, `byKind`, `notCheckedCount`, typed source rows) and the
+  offline verifier accepts both v1 and v2 packs; delivery receipt packs keep
+  manifest v2 with verifier-side acceptance of v1. Offline verification proves
+  pack self-consistency and SHA-256 only — it never claims that a source was
+  re-resolved, and `verificationBasis` says which basis was used.
 - Exit codes **4/5/6 are not active** (policy engine, later); v2 is a draft.
 - Strict flags were added in the 0.3.0 integration wave for the operational
   commands (`status`, `export`, `audit`, `backup`, `backups`, `restore`, `doctor`,

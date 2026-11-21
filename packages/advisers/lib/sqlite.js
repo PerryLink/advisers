@@ -35,8 +35,16 @@ import { copyFileWithRetrySync, fsyncDirSync, fsyncFileSync, rmWithRetrySync } f
  * table and no stored counter: the timeline and the client views are derived
  * from these rows by packages/core/src/customer.ts. This is NOT the wire
  * format: LedgerSnapshot.version stays 1 (see core/src/ledger.ts).
+ *
+ * v22 (0.4.0 KB/mail/money entities): adds the knowledge-base tables
+ * (kb_documents/kb_chunks/kb_fact_links/kb_pages), the mail intake tables
+ * (mail_accounts/mail_cursors/mail_messages/mail_sync_runs) and the money
+ * sidecars (receivables/payments) in one step, plus the two KB FTS5 indexes
+ * (kb_fts over kb_chunks, kb_pages_fts over kb_pages) built by _setupKbFts()
+ * because their tokenizer is probed at runtime (the v19 rule). None of the new
+ * tables enters the wire format: LedgerSnapshot.version stays 1.
  */
-export const SCHEMA_VERSION = 21
+export const SCHEMA_VERSION = 22
 /** The last schema built by the single-block legacy migration (0.2.2). */
 const LEGACY_SCHEMA_VERSION = 19
 const DEFAULT_BUSY_TIMEOUT_MS = 5000
@@ -444,6 +452,95 @@ const SCHEMA_MIGRATIONS_DDL = `CREATE TABLE IF NOT EXISTS schema_migrations (
 );
 `
 
+// ---------------------------------------------------------------------------
+// Schema v22 (0.4.0): knowledge base, mail intake and money sidecars.
+//
+// All four domains land in ONE migration step (even though they are independent
+// tables) so a database is never half-migrated: the v22 step creates the KB FTS5
+// indexes with the probed tokenizer, and every plain table below is part of
+// SCHEMA so a fresh database gets it at creation time (CREATE TABLE IF NOT
+// EXISTS also converges an upgraded database before the step runs).
+//
+// Nothing here is a fourth ledger: KB documents/chunks/pages, mail rows and
+// receivables/payments are local-only tables, never part of the wire
+// LedgerSnapshot (see docs/ARCHITECTURE.md). The two FTS indexes are derived
+// and rebuildable, and mail_cursors is per-machine sync state (neither is
+// exported; see DATA_TABLES).
+// ---------------------------------------------------------------------------
+const V22_DDL = `
+-- KB (45 §3.1): L0 metadata + extracted text, no copy of the source file.
+CREATE TABLE IF NOT EXISTS kb_documents (
+  id TEXT PRIMARY KEY, kind TEXT NOT NULL, title TEXT NOT NULL,
+  client_id TEXT, project_id TEXT, matter_id TEXT,
+  source_name TEXT, source_sha256 TEXT NOT NULL, mime TEXT,
+  size_bytes INTEGER NOT NULL, encoding TEXT, extractor TEXT NOT NULL,
+  status TEXT NOT NULL DEFAULT 'active', secrecy INTEGER NOT NULL DEFAULT 0,
+  needs_ocr INTEGER NOT NULL DEFAULT 0, truncated INTEGER NOT NULL DEFAULT 0,
+  text_bytes INTEGER NOT NULL DEFAULT 0, chunk_count INTEGER NOT NULL DEFAULT 0,
+  safety TEXT, created_at TEXT NOT NULL, captured_at TEXT NOT NULL, deleted_at TEXT
+);
+CREATE TABLE IF NOT EXISTS kb_chunks (
+  id TEXT NOT NULL UNIQUE, doc_id TEXT NOT NULL, seq INTEGER NOT NULL,
+  text TEXT NOT NULL, char_count INTEGER NOT NULL, PRIMARY KEY(doc_id, seq)
+);
+CREATE TABLE IF NOT EXISTS kb_fact_links (
+  fact_id TEXT NOT NULL, doc_id TEXT NOT NULL, chunk_id TEXT,
+  relation TEXT NOT NULL, created_at TEXT NOT NULL,
+  PRIMARY KEY(fact_id, doc_id, relation)
+);
+CREATE TABLE IF NOT EXISTS kb_pages (
+  id TEXT PRIMARY KEY, kind TEXT NOT NULL, subject_id TEXT NOT NULL, title TEXT NOT NULL,
+  markdown TEXT NOT NULL, json TEXT NOT NULL, source_refs TEXT NOT NULL,
+  inputs_sha256 TEXT NOT NULL, generated_at TEXT NOT NULL,
+  status TEXT NOT NULL DEFAULT 'generated', deleted_at TEXT
+);
+-- Mail (41 §3.6). mail_cursors is per-mailbox sync state: local only, never
+-- exported (a lost cursor only costs one rescan; messageId dedupe is the guard).
+CREATE TABLE IF NOT EXISTS mail_accounts (
+  id TEXT PRIMARY KEY, name TEXT NOT NULL, host TEXT NOT NULL, port INTEGER NOT NULL,
+  tls TEXT NOT NULL, username TEXT NOT NULL, mailbox TEXT NOT NULL DEFAULT 'INBOX',
+  status TEXT NOT NULL DEFAULT 'active', default_matter_id TEXT, client_id TEXT,
+  retention_days INTEGER NOT NULL DEFAULT 30, last_sync_at TEXT, last_error TEXT,
+  created_at TEXT NOT NULL, updated_at TEXT NOT NULL
+);
+CREATE TABLE IF NOT EXISTS mail_cursors (
+  account_id TEXT NOT NULL, mailbox TEXT NOT NULL, uidvalidity TEXT, last_uid INTEGER,
+  uidnext TEXT, status TEXT NOT NULL DEFAULT 'ok', updated_at TEXT NOT NULL,
+  PRIMARY KEY(account_id, mailbox)
+);
+CREATE TABLE IF NOT EXISTS mail_messages (
+  id TEXT PRIMARY KEY, account_id TEXT NOT NULL, mailbox TEXT NOT NULL,
+  uid INTEGER NOT NULL, uidvalidity TEXT, message_id TEXT, dedupe_key TEXT NOT NULL,
+  from_addr TEXT, subject TEXT, sent_at TEXT, received_at TEXT NOT NULL,
+  size_bytes INTEGER, body_text TEXT, body_sha256 TEXT,
+  attachments TEXT NOT NULL DEFAULT '[]', client_id TEXT, project_id TEXT,
+  status TEXT NOT NULL DEFAULT 'new', candidate_ids TEXT NOT NULL DEFAULT '[]',
+  purged_at TEXT, created_at TEXT NOT NULL, updated_at TEXT NOT NULL
+);
+CREATE TABLE IF NOT EXISTS mail_sync_runs (
+  id TEXT PRIMARY KEY, account_id TEXT NOT NULL, mailbox TEXT NOT NULL,
+  started_at TEXT NOT NULL, finished_at TEXT, status TEXT NOT NULL,
+  fetched INTEGER NOT NULL DEFAULT 0, inserted INTEGER NOT NULL DEFAULT 0,
+  skipped INTEGER NOT NULL DEFAULT 0, failed INTEGER NOT NULL DEFAULT 0,
+  uidvalidity TEXT, last_uid_before INTEGER, last_uid_after INTEGER, error_code TEXT
+);
+-- Money sidecars (48 §3.2): amounts are integer minor units; status is derived
+-- from the amount + date, never stored, so it cannot fight the commitment status.
+CREATE TABLE IF NOT EXISTS receivables (
+  id TEXT PRIMARY KEY, commitment_id TEXT NOT NULL UNIQUE, client_id TEXT NOT NULL,
+  project_id TEXT, matter_id TEXT, delivery_id TEXT,
+  amount_minor INTEGER NOT NULL CHECK(amount_minor > 0), currency TEXT NOT NULL,
+  kind TEXT NOT NULL DEFAULT 'other', memo TEXT, closed_by_payment_id TEXT,
+  written_off_at TEXT, created_at TEXT NOT NULL, updated_at TEXT NOT NULL, deleted_at TEXT
+);
+CREATE TABLE IF NOT EXISTS payments (
+  id TEXT PRIMARY KEY, client_id TEXT NOT NULL, commitment_id TEXT,
+  amount_minor INTEGER NOT NULL CHECK(amount_minor > 0), currency TEXT NOT NULL,
+  paid_at TEXT NOT NULL, method TEXT NOT NULL, memo TEXT,
+  created_at TEXT NOT NULL, updated_at TEXT NOT NULL, deleted_at TEXT
+);
+`
+
 const SCHEMA = `
 CREATE TABLE IF NOT EXISTS matters (
   id TEXT PRIMARY KEY, title TEXT NOT NULL, status TEXT NOT NULL, domain TEXT NOT NULL,
@@ -575,6 +672,10 @@ CREATE TABLE IF NOT EXISTS client_notes (
   kind TEXT NOT NULL, at TEXT NOT NULL, summary TEXT NOT NULL, source TEXT,
   created_at TEXT NOT NULL, deleted_at TEXT
 );
+-- 0.4.0 (schema v22): KB / mail / money tables. They are defined once in
+-- V22_DDL and interpolated here so a fresh database and an upgraded database
+-- converge on the exact same layout.
+${V22_DDL}
 CREATE TABLE IF NOT EXISTS meta (key TEXT PRIMARY KEY, value TEXT NOT NULL);
 ${SCHEMA_MIGRATIONS_DDL}`
 
@@ -606,6 +707,34 @@ const FTS_TOKENIZER_ENV = 'ADVISERS_FTS_TOKENIZER'
 const FTS_TRIGRAM_MIN_QUERY = 3
 const FTS_TABLE_NAMES = ['turns_fts', 'summaries_fts']
 const FTS_TRIGGER_NAMES = ['turns_ai', 'turns_ad', 'turns_au', 'summaries_ai', 'summaries_ad', 'summaries_au']
+// v22 KB FTS5 indexes (0.4.0). Deliberately kept out of FTS_TABLE_NAMES: the
+// v19 helpers (_setupFts/_dropFts/ftsDdl) own the turn indexes and their
+// trigger names are hard-coded there, so mixing the KB indexes in would make a
+// repair drop one set without rebuilding it. The KB pair has its own
+// _setupKbFts/_dropKbFts helpers and its own entries in FTS_INDEX_CONFIG, and
+// verifyFtsIntegrity() reports all four indexes in one report.
+const KB_FTS_TABLE_NAMES = ['kb_fts', 'kb_pages_fts']
+const KB_FTS_TRIGGER_NAMES = ['kb_chunks_ai', 'kb_chunks_ad', 'kb_chunks_au', 'kb_pages_ai', 'kb_pages_ad', 'kb_pages_au']
+
+/**
+ * Verify/repair configuration for every FTS5 index (schema v22).
+ *
+ * verifyFtsIntegrity() iterates this table: table name + the external-content
+ * source table + the three sync triggers that must exist for the index to stay
+ * honest. Entry order is the report order (the v19 turn pair first, then the
+ * v22 KB pair); a missing table/trigger on any entry fails the whole report.
+ */
+const FTS_INDEX_CONFIG = Object.freeze([
+  { table: 'turns_fts', sourceTable: 'turns', triggers: ['turns_ai', 'turns_ad', 'turns_au'] },
+  { table: 'summaries_fts', sourceTable: 'session_summaries', triggers: ['summaries_ai', 'summaries_ad', 'summaries_au'] },
+  { table: 'kb_fts', sourceTable: 'kb_chunks', triggers: ['kb_chunks_ai', 'kb_chunks_ad', 'kb_chunks_au'] },
+  { table: 'kb_pages_fts', sourceTable: 'kb_pages', triggers: ['kb_pages_ai', 'kb_pages_ad', 'kb_pages_au'] },
+])
+
+/** Read the tokenizer captured in a virtual table's DDL (unicode61 is implicit). */
+function ftsTokenizerFromSql(sql) {
+  return /tokenize\s*=\s*'?trigram/i.test(String(sql ?? '')) ? 'trigram' : 'unicode61'
+}
 
 function ftsTokenizerPreference() {
   const raw = String(process.env[FTS_TOKENIZER_ENV] ?? '').trim().toLowerCase()
@@ -640,6 +769,39 @@ function ftsDdl(tokenizer) {
       `CREATE TRIGGER summaries_au AFTER UPDATE ON session_summaries BEGIN
         INSERT INTO summaries_fts(summaries_fts, rowid, summary) VALUES ('delete', old.rowid, old.summary);
         INSERT INTO summaries_fts(rowid, summary) VALUES (new.rowid, new.summary);
+      END`,
+    ],
+  }
+}
+
+/** DDL for the two v22 KB FTS indexes and their sync triggers for one tokenizer. */
+function kbFtsDdl(tokenizer) {
+  const trigram = tokenizer === 'trigram' ? ", tokenize='trigram'" : ''
+  return {
+    tables: [
+      `CREATE VIRTUAL TABLE kb_fts USING fts5(text, content='kb_chunks', content_rowid='rowid'${trigram})`,
+      `CREATE VIRTUAL TABLE kb_pages_fts USING fts5(title, markdown, content='kb_pages', content_rowid='rowid'${trigram})`,
+    ],
+    triggers: [
+      `CREATE TRIGGER kb_chunks_ai AFTER INSERT ON kb_chunks BEGIN
+        INSERT INTO kb_fts(rowid, text) VALUES (new.rowid, new.text);
+      END`,
+      `CREATE TRIGGER kb_chunks_ad AFTER DELETE ON kb_chunks BEGIN
+        INSERT INTO kb_fts(kb_fts, rowid, text) VALUES ('delete', old.rowid, old.text);
+      END`,
+      `CREATE TRIGGER kb_chunks_au AFTER UPDATE ON kb_chunks BEGIN
+        INSERT INTO kb_fts(kb_fts, rowid, text) VALUES ('delete', old.rowid, old.text);
+        INSERT INTO kb_fts(rowid, text) VALUES (new.rowid, new.text);
+      END`,
+      `CREATE TRIGGER kb_pages_ai AFTER INSERT ON kb_pages BEGIN
+        INSERT INTO kb_pages_fts(rowid, title, markdown) VALUES (new.rowid, new.title, new.markdown);
+      END`,
+      `CREATE TRIGGER kb_pages_ad AFTER DELETE ON kb_pages BEGIN
+        INSERT INTO kb_pages_fts(kb_pages_fts, rowid, title, markdown) VALUES ('delete', old.rowid, old.title, old.markdown);
+      END`,
+      `CREATE TRIGGER kb_pages_au AFTER UPDATE ON kb_pages BEGIN
+        INSERT INTO kb_pages_fts(kb_pages_fts, rowid, title, markdown) VALUES ('delete', old.rowid, old.title, old.markdown);
+        INSERT INTO kb_pages_fts(rowid, title, markdown) VALUES (new.rowid, new.title, new.markdown);
       END`,
     ],
   }
@@ -681,6 +843,35 @@ CREATE INDEX IF NOT EXISTS idx_commitments_matter ON commitments(matter_id);
 CREATE INDEX IF NOT EXISTS idx_deliveries_matter ON deliveries(matter_id, created_at);
 `
 /**
+ * v22 (0.4.0 KB/mail/money entities) layout:
+ *  - idx_kb_source_unique is a PARTIAL unique index: only active, non-deleted
+ *    documents dedupe on the source-file sha256, so a tombstoned document can
+ *    be re-added (its bytes may legitimately recur) while a racing importer
+ *    still cannot create two active rows for the same input file;
+ *  - idx_mail_dedupe / idx_mail_uid are UNIQUE (not partial): the sync path
+ *    inserts with ON CONFLICT and relies on the database for idempotency;
+ *  - the money indexes serve the per-client aging/list read;
+ *  - the kb_chunks/kb_pages primary keys already cover rowid lookups.
+ * Like every secondary index they are layout only (IF NOT EXISTS on open) and
+ * do not themselves bump the schema version.
+ */
+const V22_INDEXES = `
+CREATE INDEX IF NOT EXISTS idx_kb_source_active ON kb_documents(source_sha256) WHERE status='active' AND deleted_at IS NULL;
+CREATE UNIQUE INDEX IF NOT EXISTS idx_kb_source_unique ON kb_documents(source_sha256) WHERE status='active' AND deleted_at IS NULL;
+CREATE INDEX IF NOT EXISTS idx_kb_client_status ON kb_documents(client_id, status);
+CREATE INDEX IF NOT EXISTS idx_kb_matter_status ON kb_documents(matter_id, status);
+CREATE INDEX IF NOT EXISTS idx_kb_chunks_doc ON kb_chunks(doc_id);
+CREATE INDEX IF NOT EXISTS idx_kb_fact_links_fact ON kb_fact_links(fact_id, doc_id);
+CREATE INDEX IF NOT EXISTS idx_kb_pages_kind ON kb_pages(kind, subject_id);
+CREATE UNIQUE INDEX IF NOT EXISTS idx_mail_dedupe ON mail_messages(account_id, dedupe_key);
+CREATE UNIQUE INDEX IF NOT EXISTS idx_mail_uid ON mail_messages(account_id, mailbox, uidvalidity, uid);
+CREATE INDEX IF NOT EXISTS idx_mail_client ON mail_messages(client_id, status);
+CREATE INDEX IF NOT EXISTS idx_receivables_client ON receivables(client_id) WHERE deleted_at IS NULL;
+CREATE INDEX IF NOT EXISTS idx_payments_client_day ON payments(client_id, paid_at) WHERE deleted_at IS NULL;
+CREATE INDEX IF NOT EXISTS idx_payments_commitment ON payments(commitment_id) WHERE deleted_at IS NULL;
+`
+
+/**
  * 0.3.0 P0-T2 (2026-11-20): two more layout-only indexes for the pet-brief read
  * projection. Both replace a full facts scan + TEMP B-TREE on every pet-brief:
  *  - (status, confidence) serves the top-N facts by confidence query
@@ -706,7 +897,8 @@ CREATE INDEX IF NOT EXISTS idx_task_runs_created ON task_runs(created_at);
 CREATE INDEX IF NOT EXISTS idx_sessions_updated ON sessions(updated_at);
 CREATE INDEX IF NOT EXISTS idx_model_calls_created ON model_calls(created_at);
 ${V20_INDEXES}
-${V21_INDEXES}`
+${V21_INDEXES}
+${V22_INDEXES}`
 
 
 /**
@@ -764,6 +956,24 @@ const MIGRATIONS = [
       ]) addColumnIfMissing(store.db, 'deliveries', column, type)
     },
   },
+  {
+    version: 22,
+    name: 'kb-mail-payment-entities',
+    up(store) {
+      // Four independent domains migrate together so no database can be
+      // half-upgraded: KB, mail intake and the money sidecars have no foreign
+      // keys between them (everything is validated by the owning module), so a
+      // single idempotent step is enough. The plain tables are also part of
+      // SCHEMA and were created with IF NOT EXISTS before this step ran; the
+      // DDL is repeated here so a direct migrate() caller converges too.
+      store.db.exec(V22_DDL)
+      // The tokenizer must be probed at runtime, so the two KB FTS5 indexes are
+      // built here (not in SCHEMA), exactly like the v19 turn indexes. This is
+      // idempotent (drop + recreate + 'rebuild' from kb_chunks/kb_pages) and is
+      // also the repair path for kb reindex / audit --rebuild-fts.
+      store._setupKbFts()
+    },
+  },
 ]
 const json = (v) => JSON.stringify(v ?? [])
 const parse = (v, fallback = []) => {
@@ -797,15 +1007,26 @@ export const CLIENT_NOTE_SOURCE_KINDS = ['delivery', 'matter', 'manual']
 
 /**
  * Tables that a full export --all carries next to the nine-table ledger
- * snapshot. The three v21 customer tables are appended so an export/import
- * round-trip cannot silently drop them; this constant is the single list the
- * CLI should read instead of hard-coding its own (bin wiring is a separate
- * 0.3.0 task).
+ * snapshot. The v21 customer tables and the v22 KB/mail/money tables are
+ * appended so an export/import round-trip cannot silently drop them; this
+ * constant is the single list the CLI reads instead of hard-coding its own.
+ *
+ * Deliberately NOT in this list:
+ *  - kb_fts / kb_pages_fts (and their shadow tables): derived, rebuildable from
+ *    kb_chunks/kb_pages by _setupKbFts();
+ *  - mail_cursors: per-machine sync state, not customer data (a lost cursor
+ *    only triggers a rescan; message dedupe is the correctness guard).
+ * kb_pages IS exported: the page markdown is a rebuildable projection, but the
+ * export/import round-trip is still expected to restore it byte for byte so a
+ * restored HOME shows the same pages before the first rebuild.
  */
 export const DATA_TABLES = Object.freeze([
   'sessions', 'turns', 'session_summaries', 'summary_versions', 'deliveries', 'nudges',
   'task_runs', 'audit', 'memory_candidates', 'permit_consumed',
   'clients', 'projects', 'client_notes',
+  'kb_documents', 'kb_chunks', 'kb_fact_links', 'kb_pages',
+  'mail_accounts', 'mail_messages', 'mail_sync_runs',
+  'receivables', 'payments',
 ])
 
 /** A business error with a stable code (message keeps the code for stderr). */
@@ -1227,12 +1448,18 @@ function encodeEntityValue(codec, value) {
 }
 
 /**
- * Tables whose row counts are sampled to verify a pre-migration backup. The
- * v21 customer tables are included so a future migration's backup verification
- * also proves the customer entities were copied (they are absent in older
- * databases and are then skipped by _sampleTableCounts).
+ * Tables whose row counts are sampled to verify a pre-migration backup
+ * (fail-closed: a copy that silently lost committed rows is removed and the
+ * migration is refused). The v21 customer and v22 KB/mail/money tables are
+ * included so a future migration's backup verification proves they were copied
+ * too; tables absent from the old schema are skipped by _sampleTableCounts.
  */
-const BACKUP_SAMPLE_TABLES = ['matters', 'facts', 'commitments', 'preferences', 'audit', 'clients', 'projects', 'client_notes']
+const BACKUP_SAMPLE_TABLES = [
+  'matters', 'facts', 'commitments', 'preferences', 'audit',
+  'clients', 'projects', 'client_notes',
+  'kb_documents', 'kb_pages', 'mail_accounts', 'mail_messages', 'receivables', 'payments',
+]
+
 // ---------------------------------------------------------------------------
 // WAL status / recovery (robustness audit 2026-11-17 P1-6).
 //
@@ -1417,12 +1644,18 @@ export class SqliteStore {
     this._readDepth = 0
     this._baselineIds = null
     this._fullLoad = false
-    // FTS5 state (schema v19): which indexes exist and which tokenizer built
-    // them. Fillable stores discover it after migrate(); read-only stores detect
-    // it from sqlite_master without running DDL (see _initFtsState).
+    // FTS5 state (schema v19/v22): which indexes exist and which tokenizer
+    // built them. Fillable stores discover it after migrate(); read-only stores
+    // detect it from sqlite_master without running DDL (see _initFtsState).
+    // ftsTokenizer/_ftsTables describe the v19 turn indexes (the legacy search
+    // paths read them); kbFtsTokenizer/_kbFtsTables describe the v22 KB pair.
     this.ftsTokenizer = null
     this.ftsWarning = null
     this._ftsTables = new Set()
+    this.ftsTokenizers = {}
+    this.kbFtsTokenizer = null
+    this.kbFtsWarning = null
+    this._kbFtsTables = new Set()
     // P1-5: searchTurns()/searchSummaries() set these when FTS and LIKE
     // disagree; verifyFtsIntegrity() fills ftsIntegrityReport for doctor.
     this._ftsBroken = false
@@ -1641,13 +1874,17 @@ export class SqliteStore {
 
   /** Look up which FTS indexes/tokenizer this database actually has on disk. */
   _initFtsState() {
-    const rows = this.db.prepare("SELECT name, sql FROM sqlite_master WHERE name IN ('turns_fts', 'summaries_fts')").all()
-    this._ftsTables = new Set(rows.map((row) => row.name))
-    const turns = rows.find((row) => row.name === 'turns_fts')
-    // v19 records the tokenizer in the virtual-table DDL. An older or
+    const names = [...FTS_TABLE_NAMES, ...KB_FTS_TABLE_NAMES]
+    const rows = this.db.prepare(`SELECT name, sql FROM sqlite_master WHERE name IN (${names.map(() => '?').join(',')})`).all(...names)
+    // v19/v22 record the tokenizer in the virtual-table DDL. An older or
     // hand-modified database may have no index at all: search then uses the
     // LIKE path only, which stays correct.
-    this.ftsTokenizer = turns ? (/tokenize\s*=\s*'?trigram/i.test(String(turns.sql ?? '')) ? 'trigram' : 'unicode61') : null
+    this.ftsTokenizers = {}
+    for (const row of rows) this.ftsTokenizers[row.name] = ftsTokenizerFromSql(row.sql)
+    this._ftsTables = new Set(rows.filter((row) => FTS_TABLE_NAMES.includes(row.name)).map((row) => row.name))
+    this._kbFtsTables = new Set(rows.filter((row) => KB_FTS_TABLE_NAMES.includes(row.name)).map((row) => row.name))
+    this.ftsTokenizer = this.ftsTokenizers.turns_fts ?? null
+    this.kbFtsTokenizer = this.ftsTokenizers.kb_fts ?? null
     return this.ftsTokenizer
   }
 
@@ -1662,6 +1899,18 @@ export class SqliteStore {
     // on the source table would break the next write.
     for (const trigger of FTS_TRIGGER_NAMES) this.db.exec(`DROP TRIGGER IF EXISTS ${trigger}`)
     for (const table of FTS_TABLE_NAMES) this.db.exec(`DROP TABLE IF EXISTS ${table}`)
+  }
+
+  _createKbFts(tokenizer) {
+    const ddl = kbFtsDdl(tokenizer)
+    for (const sql of ddl.tables) this.db.exec(sql)
+    for (const sql of ddl.triggers) this.db.exec(sql)
+  }
+
+  _dropKbFts() {
+    // Same order as _dropFts: triggers first, then the virtual tables.
+    for (const trigger of KB_FTS_TRIGGER_NAMES) this.db.exec(`DROP TRIGGER IF EXISTS ${trigger}`)
+    for (const table of KB_FTS_TABLE_NAMES) this.db.exec(`DROP TABLE IF EXISTS ${table}`)
   }
 
   /**
@@ -1719,6 +1968,73 @@ export class SqliteStore {
   }
 
   /**
+   * Install (or rebuild) the v22 KB FTS5 indexes with the probed tokenizer.
+   *
+   * Same contract as _setupFts(): runs inside the v22 migration transaction (or
+   * a repair transaction), so dropping/creating both virtual tables, replacing
+   * the six sync triggers and the 'rebuild' backfill are atomic with the schema
+   * version bump / repair. Rows are re-indexed from kb_chunks and kb_pages, so
+   * reindexing never needs the (unretained) source files.
+   *
+   * Degrades instead of crashing: trigram -> unicode61 -> LIKE-only, recording
+   * kbFtsWarning and printing one warning line. The database still advances to
+   * v22 so a missing tokenizer build is not retried on every open; searchKb /
+   * kb_pages search must check kbFtsTokenizer and fall back to LIKE when null.
+   */
+  _setupKbFts() {
+    this._dropKbFts()
+    const preference = ftsTokenizerPreference()
+    let tokenizer = preference === 'unicode61' ? null : 'trigram'
+    if (tokenizer) {
+      try {
+        this._createKbFts(tokenizer)
+      } catch (error) {
+        this._dropKbFts()
+        this.kbFtsWarning = `FTS5 trigram tokenizer unavailable for the KB indexes (${error.message}); kb search falls back to LIKE`
+        try { console.warn(`advisers: warning: ${this.kbFtsWarning}`) } catch {}
+        tokenizer = null
+      }
+    } else if (preference === 'unicode61') {
+      this.kbFtsWarning = 'ADVISERS_FTS_TOKENIZER=unicode61 forces the legacy FTS5 tokenizer; kb search falls back to LIKE for Chinese substrings'
+      try { console.warn(`advisers: warning: ${this.kbFtsWarning}`) } catch {}
+    }
+    if (!tokenizer) {
+      try {
+        this._createKbFts('unicode61')
+        tokenizer = 'unicode61'
+      } catch (error) {
+        this._dropKbFts()
+        tokenizer = null
+        this.kbFtsWarning = `FTS5 is unavailable in this SQLite build (${error.message}); kb search uses LIKE only`
+        try { console.warn(`advisers: warning: ${this.kbFtsWarning}`) } catch {}
+      }
+    }
+    this.kbFtsTokenizer = tokenizer
+    this._kbFtsTables = new Set(tokenizer ? KB_FTS_TABLE_NAMES : [])
+    for (const table of KB_FTS_TABLE_NAMES) {
+      if (tokenizer) this.ftsTokenizers[table] = tokenizer
+      else delete this.ftsTokenizers[table]
+    }
+    if (tokenizer) {
+      this.db.exec("INSERT INTO kb_fts(kb_fts) VALUES('rebuild')")
+      this.db.exec("INSERT INTO kb_pages_fts(kb_pages_fts) VALUES('rebuild')")
+    }
+    return tokenizer
+  }
+
+  /**
+   * Rebuild every FTS5 index (the v19 turn pair + the v22 KB pair) from its
+   * source tables. This is the single repair entry point for 'advisers audit
+   * --rebuild-fts' and 'advisers doctor --repair --only fts'; callers run it
+   * inside one write transaction so a failure keeps the previous indexes.
+   * Returns the installed tokenizers (null = the LIKE-only degradation).
+   */
+  rebuildAllFtsIndexes() {
+    this._assertWritable('rebuildAllFtsIndexes')
+    return { turns: this._setupFts(), kb: this._setupKbFts() }
+  }
+
+  /**
    * Report the WAL/shm state and whether this connection can checkpoint.
    * `initial` is the pre-open inspection (see inspectWalStatus above); a fresh
    * `current` read lets a long-lived store (mcp/ui) be diagnosed too.
@@ -1748,16 +2064,20 @@ export class SqliteStore {
   }
 
   /**
-   * Verify the two FTS5 indexes against their source tables (robustness audit
-   * 2026-11-17 P1-5). A desynchronised index makes search silently return
-   * fewer rows than a LIKE scan; this is the explicit check that doctor and
-   * audit --check-db should surface (O(index), so never run on every open).
+   * Verify every FTS5 index against its source table (robustness audit
+   * 2026-11-17 P1-5; extended by v22 to the two KB indexes). A desynchronised
+   * index makes search silently return fewer rows than a LIKE scan; this is the
+   * explicit check that doctor / audit --check-db surface (O(index), never on
+   * every open).
    *
-   * Checks per index: table present, the three sync triggers present, FTS5
-   * 'integrity-check' (catches malformed/desynced segments), source vs index
-   * (shadow docsize) row counts, and a deterministic rowid sample in both
-   * directions. On a non-ok result the store also marks its FTS path unusable
-   * (`searchTurns`/`searchSummaries` then use LIKE until a rebuild).
+   * Checks per FTS_INDEX_CONFIG entry: table present, the three sync triggers
+   * present, FTS5 'integrity-check' (catches malformed/desynced segments),
+   * source vs index (shadow docsize) row counts, and a deterministic rowid
+   * sample in both directions. On a non-ok result the store also marks its FTS
+   * path unusable (`searchTurns`/`searchSummaries` then use LIKE until a
+   * rebuild). The legacy report.triggers and report.tokenizer fields stay
+   * turn-index shaped for compatibility; the KB indexes appear in the additive
+   * tokenizers/kbTokenizer fields and as their own report.tables entries.
    */
   verifyFtsIntegrity({ sampleSize = 100 } = {}) {
     this._initFtsState()
@@ -1765,6 +2085,8 @@ export class SqliteStore {
       ok: true,
       state: 'ok',
       tokenizer: this.ftsTokenizer,
+      kbTokenizer: this.kbFtsTokenizer,
+      tokenizers: { ...this.ftsTokenizers },
       tables: {},
       triggers: { expected: FTS_TRIGGER_NAMES.slice(), missing: [] },
       checkedAt: new Date().toISOString(),
@@ -1778,24 +2100,18 @@ export class SqliteStore {
     } catch (error) {
       report.errors.push(`cannot list triggers: ${String(error?.message ?? error).slice(0, 200)}`)
     }
-    const triggerMap = {
-      turns_fts: ['turns_ai', 'turns_ad', 'turns_au'],
-      summaries_fts: ['summaries_ai', 'summaries_ad', 'summaries_au'],
-    }
-    const sourceMap = {
-      turns_fts: { table: 'turns' },
-      summaries_fts: { table: 'session_summaries' },
-    }
     let anyTable = false
     let inconsistent = false
     let missingTable = false
-    for (const table of FTS_TABLE_NAMES) {
-      const source = sourceMap[table]
+    for (const config of FTS_INDEX_CONFIG) {
+      const table = config.table
+      const sourceTable = config.sourceTable
       const info = {
         table,
-        sourceTable: source.table,
+        sourceTable,
         exists: false,
-        triggers: { expected: triggerMap[table].slice(), missing: [] },
+        tokenizer: this.ftsTokenizers[table] ?? null,
+        triggers: { expected: config.triggers.slice(), missing: [] },
         integrityCheck: 'skipped',
         sourceCount: null,
         indexCount: null,
@@ -1806,12 +2122,12 @@ export class SqliteStore {
       report.tables[table] = info
       if (!info.exists) {
         missingTable = true
-        info.triggers.missing = triggerMap[table].slice()
-        report.errors.push(`${table}: the FTS index table is missing although schema v19 expects it`)
+        info.triggers.missing = config.triggers.slice()
+        report.errors.push(`${table}: the FTS index table is missing although the current schema expects it`)
         continue
       }
       anyTable = true
-      info.triggers.missing = triggerMap[table].filter((name) => !existingTriggers.has(name))
+      info.triggers.missing = config.triggers.filter((name) => !existingTriggers.has(name))
       if (info.triggers.missing.length) {
         inconsistent = true
         report.errors.push(`${table}: missing FTS sync trigger(s) ${info.triggers.missing.join(', ')}; rows written without them are not indexed`)
@@ -1824,7 +2140,7 @@ export class SqliteStore {
         inconsistent = true
         report.errors.push(`${table}: FTS5 integrity-check failed: ${String(error?.message ?? error).slice(0, 200)}`)
       }
-      try { info.sourceCount = Number(this.db.prepare(`SELECT COUNT(*) AS n FROM ${source.table}`).get()?.n ?? 0) } catch (error) { report.errors.push(`${table}: cannot count ${source.table}: ${String(error?.message ?? error).slice(0, 120)}`) }
+      try { info.sourceCount = Number(this.db.prepare(`SELECT COUNT(*) AS n FROM ${sourceTable}`).get()?.n ?? 0) } catch (error) { report.errors.push(`${table}: cannot count ${sourceTable}: ${String(error?.message ?? error).slice(0, 120)}`) }
       try { info.indexCount = Number(this.db.prepare(`SELECT COUNT(*) AS n FROM ${table}_docsize`).get()?.n ?? 0) } catch (error) { info.indexCount = null }
       if (info.sourceCount != null && info.indexCount != null && info.sourceCount !== info.indexCount) {
         info.countMismatch = true
@@ -1834,7 +2150,7 @@ export class SqliteStore {
       if (info.sourceCount && info.sourceCount > 0) {
         try {
           const limitN = Math.max(1, Math.min(Number(sampleSize) || 0, 1000))
-          const sampleIds = this.db.prepare(`SELECT rowid AS id FROM ${source.table} ORDER BY rowid LIMIT ?`).all(limitN).map((row) => row.id)
+          const sampleIds = this.db.prepare(`SELECT rowid AS id FROM ${sourceTable} ORDER BY rowid LIMIT ?`).all(limitN).map((row) => row.id)
           if (sampleIds.length) {
             const indexed = new Set(this.db.prepare(`SELECT id FROM ${table}_docsize WHERE id IN (${sampleIds.map(() => '?').join(',')})`).all(...sampleIds).map((row) => row.id))
             info.sample.checked = sampleIds.length
@@ -1845,7 +2161,7 @@ export class SqliteStore {
             }
             const indexIds = this.db.prepare(`SELECT id FROM ${table}_docsize ORDER BY id LIMIT ?`).all(limitN).map((row) => row.id)
             if (indexIds.length) {
-              const sourceIds = new Set(this.db.prepare(`SELECT rowid AS id FROM ${source.table} WHERE rowid IN (${indexIds.map(() => '?').join(',')})`).all(...indexIds).map((row) => row.id))
+              const sourceIds = new Set(this.db.prepare(`SELECT rowid AS id FROM ${sourceTable} WHERE rowid IN (${indexIds.map(() => '?').join(',')})`).all(...indexIds).map((row) => row.id))
               info.sample.extraInIndex = indexIds.filter((id) => !sourceIds.has(id))
               if (info.sample.extraInIndex.length) {
                 inconsistent = true
@@ -1860,13 +2176,14 @@ export class SqliteStore {
     }
     report.triggers.missing = FTS_TRIGGER_NAMES.filter((name) => !existingTriggers.has(name))
     if (!anyTable) {
-      if (this.ftsWarning) {
+      const degraded = this.ftsWarning || this.kbFtsWarning
+      if (degraded) {
         report.state = 'degraded'
-        report.warning = `FTS5 is unavailable/degraded (${this.ftsWarning}); search uses LIKE only`
+        report.warning = `FTS5 is unavailable/degraded (${degraded}); search uses LIKE only`
       } else {
         report.state = 'missing'
         report.ok = false
-        report.errors.push('no FTS index tables exist although schema v19 expects them')
+        report.errors.push('no FTS index tables exist although the current schema expects them')
       }
     } else if (inconsistent || missingTable) {
       report.state = 'inconsistent'

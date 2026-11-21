@@ -1,15 +1,18 @@
-# Reminders / ICS (E1)
+# Reminders / ICS / morning brief / scheduler
 
 `advisers remind` is the delivery-side counterpart of `advisers tick`:
 
 - `tick` updates local nudge rows and prints what is due in the next 7 days.
-- `remind` computes the same due set with **five rule families** (`due-1d`,
-  `due-today-09`, `due-today-18`, `overdue-daily`, `snooze-wake`) and can emit
-  an `.ics` calendar or a local delivery log.
+- `remind` computes the same due set with **six rule families** (`due-1d`,
+  `due-today-09`, `due-today-18`, `overdue-daily`, `snooze-wake`, and `upcoming`)
+  and can emit an `.ics` calendar, a local delivery log, or a signed opt-in webhook.
+- 0.4.0 adds an explainable **urgency v1** score (`terms`/`whyNow`, model version 1)
+  to remind/agenda/morning output, a deterministic **morning brief archive**, a
+  **second scheduler block** for the morning brief and scheduler **status v2**.
 
 ```sh
 advisers remind                      # human view
-advisers remind --json               # scripts
+advisers remind --json [--now ISO]   # scripts; pure read, never delivers
 advisers remind --ics out.ics        # VEVENT + VALARM (custom offsets or -P1D, -PT1H)
 advisers remind --deliver            # append to ~/.advisers/reminders.log + audit
                                      # + scheduler/status.json (lastRun)
@@ -17,9 +20,61 @@ advisers remind --deliver --notify   # + local notification adapter + optional w
 advisers remind install              # write opt-in scheduler scripts + PRINT the OS plan
                                      # (dry-run by default; --apply executes it)
 advisers remind install --apply [--schedule "0 9 * * *"]
-advisers remind uninstall [--apply]  # remove scripts; --apply also removes the cron/schtasks entry
-advisers remind status               # scripts/log + last recorded run + OS registration state
+advisers remind install --morning [--morning-time 08:30] [--morning-days 1-5] [--quiet-hours 22:00-08:00]
+advisers remind uninstall [--apply]  # remove scripts; --apply also removes both own blocks
+advisers remind status               # scripts/log + last runs (remind+morning) + OS plans
+
+advisers morning [--json] [--now ISO] [--top 1..5]       # deterministic brief + top priority list
+advisers morning --archive [--keep 1..365] [--out f]    # archive under ~/.advisers/briefs/
 ```
+
+## Urgency v1 and `whyNow` (0.4.0, deterministic)
+
+Urgency is a **derived, explainable ordering aid**, never a priority verdict. It is
+computed at read time by the pure function `lib/urgency.js` (no SQLite, no network,
+no filesystem, no model, no clock read when `--now` is injected) and attached as an
+additive `urgency` object to: `remind --json` reminders, `agenda --json` commitment
+items (including `overdue[]`, `days[].items`, `waiting[]`, `unscheduled[]`; calendar
+items never get one), and the `morning --json` items / `top[]` list.
+
+```json
+{"id":"cm_...","modelVersion":1,"score":44,"level":"medium",
+ "terms":[{"id":"overdue","contribution":36,"explain":"逾期 3 天"},
+          {"id":"mine","contribution":6,"explain":"你答应对方"},
+          {"id":"timed","contribution":2,"explain":"有具体时刻"}],
+ "topFactors":["overdue","mine","timed"],"whyNow":"逾期 3 天 · 你答应对方 · 有具体时刻",
+ "dueAt":"2026-11-21T18:00:00+08:00","excluded":false,"degraded":null}
+```
+
+`score` is exactly the sum of the named terms (clamped 0..100); levels are
+`<25 low`, `25–49 medium`, `50–74 high`, `>=75 critical`. **Model version 1 is
+frozen**: changing any weight or threshold requires bumping `modelVersion`.
+
+| Term | Condition (Asia/Shanghai local day) | Contribution | Cap |
+|---|---|---|---|
+| `overdue` | due < now and open | `min(50, 30 + 2 × overdueDays)` | 50 |
+| `due_today` | today, not overdue | 30 | 30 |
+| `due_near` | 1–7 days out | `max(0, 24 − 3 × days)` | 21 |
+| `third` | debtor is `third:*` (you can chase) | 10 | 10 |
+| `mine` | debtor is `user`/`agent` (you promised) | 6 | 6 |
+| `remind_offsets` | custom reminder offsets | `min(6, 2 × count)` | 6 |
+| `age` | created > 14 days ago | `min(6, 1 + floor((age − 14) / 7))` | 6 |
+| `timed` | dueAt has a specific time (not date-only) | 2 | 2 |
+
+Rules and non-claims:
+
+- `snoozed`/`done`/`dropped` items are excluded upstream and returned with
+  `excluded: true` (neutral score), not scored.
+- **`secrecy` is not an input** and never appears in `terms`/`whyNow` — urgency must
+  not leak a protection level.
+- Dirty data never throws: an unparseable/missing due date returns
+  `{score:0,level:"low",terms:[],degraded:"urgency_failed"}`.
+- `whyNow` is the joined `explain` strings, capped at 200 code points; it is human
+  text and never enters ICS, webhook payloads, receipts or MCP.
+- **`dataSha256` is unchanged**: urgency is attached after the deterministic brief
+  hash is computed, so two runs of the same data still produce the same hash.
+- This is a heuristic, not a science score. Do not treat it as a business priority
+  decision or expose it as one.
 
 ## Per-commitment reminder offsets (0.2.0)
 
@@ -148,6 +203,64 @@ Payload (`Content-Type: application/json`):
   no network). A configured webhook that fails is reported on stderr while the
   local log/status stays authoritative.
 
+### Standard Webhooks signature (0.4.0)
+
+When `ADVISERS_NOTIFY_WEBHOOK_SECRET` is set, every delivery also carries
+[Standard Webhooks](https://github.com/standard-webhooks/standard-webhooks) v1
+headers (the **payload is byte-identical to the 0.3.2 body**):
+
+| Header | Value |
+|---|---|
+| `webhook-id` | random UUID; idempotency key for the receiver |
+| `webhook-timestamp` | Unix seconds at send time |
+| `webhook-signature` | `v1,<base64(HMAC-SHA256(secret, webhook-id + "." + timestamp + "." + rawBody))>` |
+
+- The secret is read from the environment only and is never written to disk, a
+  script, the database, logs or the audit chain. `whsec_<base64>` (the Standard
+  Webhooks convention) is decoded to key bytes; any other non-empty value is used
+  **as raw UTF-8 key bytes** (useful for a passphrase, not base64).
+- **No secret configured** (only `ADVISERS_NOTIFY_WEBHOOK` set): the webhook is
+  still sent for backward compatibility, but the CLI prints one stderr warning and
+  the delivery result reports `signing: "none"`. 0.5 is planned to require a secret.
+- A malformed `whsec_...` secret (not valid base64) fails closed: the webhook is
+  not sent and the structured result reports `error: "invalid-secret"` without
+  echoing the value.
+- There is **no retry queue/outbox** in 0.4.0: a failed delivery is reported in the
+  structured result/status and the local log stays authoritative. Retry semantics
+  belong to a later notification engine.
+- Receiver verification (Node, no dependency):
+
+```js
+import { createHmac, timingSafeEqual } from 'node:crypto'
+
+function keyBytes(secret) {
+  // Mirror Advisers: whsec_<base64> decodes to key bytes; any other string is raw UTF-8.
+  return secret.startsWith('whsec_')
+    ? Buffer.from(secret.slice('whsec_'.length), 'base64')
+    : Buffer.from(secret, 'utf8')
+}
+
+function verify(secret, headers, rawBody, nowMs = Date.now()) {
+  const id = headers['webhook-id']
+  const timestamp = Number(headers['webhook-timestamp'])
+  const sig = headers['webhook-signature']
+  if (!id || !Number.isFinite(timestamp) || !sig) return false
+  if (Math.abs(nowMs / 1000 - timestamp) > 300) return false          // replay window
+  const expected = createHmac('sha256', keyBytes(secret))
+    .update(id + '.' + headers['webhook-timestamp'] + '.' + rawBody)
+    .digest()
+  for (const part of sig.split(/\s+/)) {
+    if (!part.startsWith('v1,')) continue
+    const got = Buffer.from(part.slice(3), 'base64')
+    if (got.length === expected.length && timingSafeEqual(got, expected)) return true
+  }
+  return false
+}
+```
+
+Use `webhook-id` as a short-lived idempotency key (5-minute cache is enough) and
+verify against the **raw request body**, not a re-serialized JSON object.
+
 ## User-level scheduler (opt-in, dry-run first)
 
 `lib/scheduler.js` generates `crontab` / Windows `schtasks` registrations but
@@ -182,49 +295,95 @@ advisers remind install                 # writes ~/.advisers/scheduler/remind.sh
                                         # and PRINTS the OS plan (crontab -/schtasks argv)
 advisers remind install --apply         # same, then executes the plan
 advisers remind install --apply --schedule "0 9 * * *"   # custom five-field cron schedule
+advisers remind install --morning [--morning-time 08:30] [--morning-days 1-5] [--quiet-hours 22:00-08:00]
+                                        # also writes morning.sh|ps1 and a SECOND own block
 advisers remind uninstall               # removes the local scripts
-advisers remind uninstall --apply       # removes the local scripts AND the cron/schtasks entry
-advisers remind status                  # scripts/log + last recorded run + OS registration state
+advisers remind uninstall --apply       # removes the scripts AND both own cron/Task Scheduler blocks
+advisers remind status                  # scripts/logs + last runs (remind + morning) + OS plans
 ```
 
 - `install` builds the plan with `planScheduler({ platform: process.platform,
   action: 'install', command: buildCronCommand({ nodeBin, cliPath }), schedule,
   time, dryRun: !apply })`; on cron platforms it reads the current `crontab -l`
   text before planning so every unrelated line is preserved.
-- `uninstall` plans with `planScheduler({ action: 'uninstall' })` (read-only
-  crontab read, marker-delimited block removal) and removes the local scripts.
-- `status` prints the scheduler directory/log, the `readSchedulerStatus()`
-  record (`lastRun`/`lastResult`/`lastCount`/`lastChannel`), and the OS plan
+- **Two independent blocks (0.4.0).** The reminder block uses the marker
+  `# >>> advisers-remind >>>`; `install --morning` adds
+  `# >>> advisers-morning >>>` (`30 8 * * 1-5` by default, weekdays only) and
+  `scheduler/morning.sh|ps1`. Both write `morning --archive` and log to
+  `morning.log` separately from `reminders.log`. `uninstall --apply` removes
+  exactly the two own marker blocks; every other crontab line is byte-preserved.
+  Task Scheduler uses `/SC WEEKLY /D MON,TUE,WED,THU,FRI /ST 08:30 /F` for the
+  morning block and keeps `/SC DAILY` for reminders.
+- `uninstall` plans with `planSchedulerBlocks({ action: 'uninstall', markers })`
+  (read-only crontab read, marker-delimited block removal) and removes the local
+  scripts.
+- `--quiet-hours HH:MM-HH:MM` is **validated and baked into the generated
+  remind script only** (as `remind --deliver --notify --quiet-hours ...`);
+  `morning.sh`/`morning.ps1` always call `morning --archive`. 0.4.0 does **not**
+  implement runtime suppression: the `--quiet-hours` value is accepted by the
+  reminder parser but does not gate channels, and the OS scheduler still fires at
+  the configured time. A real quiet-hours gate (and notification dedupe
+  `--force-notify`) is a 0.5 item; do not claim that 0.4.0 suppresses notifications
+  at night.
+- `status` prints the scheduler directory/logs, the `readSchedulerStatusV2()`
+  record (both `remind` and `morning` sections), and both OS plans
   (`planCronStatus` with the live crontab text, or the `schtasks /Query` argv on
   Windows — exit code 0 there means registered).
-- A real `advisers remind --deliver` run (including one with zero due
-  reminders) writes `recordSchedulerRun({ homeDir, result: 'ok', count, channel,
-  dryRun: false })`, so `remind status` can prove the schedule actually fires.
-  A missing/corrupt status file never blocks delivery.
-- Once a cron/schtasks entry exists it calls `remind --deliver --notify`; the
-  `--notify` channel and the optional webhook are described above.
+- A real `advisers remind --deliver` run (including one with zero due reminders)
+  writes `recordSchedulerRunV2({ section: 'remind', result: 'ok', count, channel,
+  dryRun: false })`, and `morning --archive` records the `morning` section (count +
+  archive path), so `remind status` can prove the schedules actually fire. A
+  missing/corrupt status file never blocks delivery.
+- Once a cron/schtasks entry exists it calls `remind --deliver --notify` (or
+  `morning --archive`); the `--notify` channel and the optional webhook are
+  described above.
 
-### Status file
+### Status file (v2, backward compatible)
 
 `~/.advisers/scheduler/status.json` (0600, written atomically through a temp
-file + rename) records the last real run:
+file + rename) records the last real run of each section:
 
 ```json
 {
-  "version": 1,
-  "lastRun": "2026-11-17T09:00:00.000Z",
-  "lastResult": "ok",
-  "lastCount": 3,
-  "lastChannel": "webhook",
-  "updatedAt": "2026-11-17T09:00:00.000Z"
+  "version": 2,
+  "remind": {"lastRun": "2026-11-21T09:00:00.000Z", "lastResult": "ok",
+             "lastCount": 3, "lastChannel": "webhook"},
+  "morning": {"lastRun": "2026-11-21T08:30:00.000Z", "lastResult": "ok",
+              "lastCount": 3, "lastPath": "/home/me/.advisers/briefs/2026-11-21.md"},
+  "updatedAt": "2026-11-21T09:00:00.000Z"
 }
 ```
 
-`readSchedulerStatus({ homeDir })` degrades to defaults for a missing, corrupt
-or partial (pre-0.2.0) file instead of throwing; `recordSchedulerRun({ at, result,
-count, channel, dryRun: false })` is the write path. A missing/corrupt status
-file must never block reminder delivery. Tests and callers always pass an
-explicit `homeDir`.
+A 0.3.x **v1** file (`{version:1,lastRun,lastResult,lastCount,lastChannel}`) is still
+read and mapped into the `remind` section without throwing; a missing/corrupt/partial
+file degrades to defaults. `readSchedulerStatusV2({ homeDir })` is the read path,
+`recordSchedulerRunV2({ section, at, result, count, channel|path, dryRun: false })`
+the write path. Tests and callers always pass an explicit `homeDir`.
+
+## Morning brief: top list and archive (0.4.0)
+
+`advisers morning` stays deterministic (no model, no network, `dataSha256` of the
+source data). 0.4.0 adds two additive views and one explicit write path:
+
+- `--json` adds `top: [{id,kind,title,localTime?,urgency,whyNow,source:"today"|"overdue"}]`
+  (at most `--top 1..5`, default 3; ordering `score desc -> dueAt asc -> id asc`) and
+  `urgencyModelVersion: 1`. The full `mustDo` list keeps its 0.3.2 meaning and the
+  markdown gains a `## 今天优先（最多 N）` section before `## 今天必须做`.
+- `--archive` writes the markdown to `~/.advisers/briefs/<localDay>.md` plus a
+  byte-identical `latest.md` (directory 0700, files 0600, atomic overwrite for the
+  same day), records one `brief.archive` audit row (reason = local day, no body), and
+  records the `morning` scheduler section. `--keep N` (default 14, 1..365) prunes
+  only files matching `YYYY-MM-DD.md`; it never recurses and never deletes unrelated
+  files. `--out` still writes a separate copy.
+- **Retention/privacy:** archived briefs contain commitment titles and dates (no
+  evidence quotes, no money, no mail/KB text). `purge <matter>` does **not** delete
+  archived briefs (up to `--keep` days). `vault seal` encrypts the database, not
+  `briefs/`, so a sealed vault can still have plaintext brief copies until they age
+  out or you delete them. See [PRIVACY.md](PRIVACY.md).
+- Scheduling: `remind install --morning` runs `morning --archive` on weekdays at
+  08:30 by default. **Missed runs are not retried** (same as cron/Task Scheduler):
+  if the machine is off at 08:30, that day has no archive; `status` only shows the
+  last recorded run.
 
 ## Design constraints
 

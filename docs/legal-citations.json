@@ -1,6 +1,6 @@
 {
   "schema": "advisers.legal-citations/1",
-  "asOf": "2026-11-17",
+  "asOf": "2026-11-21",
   "language": "zh-CN",
   "notes": "Advisers 服务条款（docs/TOS.md）附录 A 的结构化法规清单。国家法律法规数据库（https://flk.npc.gov.cn/）为 JavaScript 单页应用，需用浏览器打开并按名称检索；详情页 URL 会随数据库升级变化，故法律条目统一使用数据库入口。sourceType=name-only 的条目只给出官方名称、发布机关与施行日期，不列可能漂移的详情页 URL。由 scripts/check-tos.mjs 做离线结构校验；URL 连通性不做 CI 硬门，发布前人工浏览器验收。",
   "entries": [
@@ -115,6 +115,34 @@
       "accessedAt": "2026-11-17",
       "status": "verified",
       "notes": "第 38 条：律师保密义务。"
+    },
+    {
+      "id": "accounting-law",
+      "name": "中华人民共和国会计法",
+      "kind": "law",
+      "authority": "全国人民代表大会常务委员会",
+      "documentNumber": "主席令第二十八号（2024 修正）",
+      "publishedAt": "2024-06-28",
+      "effectiveAt": "2024-07-01",
+      "url": "http://www.npc.gov.cn/c2/kgfb/202406/t20240628_437895.html",
+      "sourceType": "official-page",
+      "accessedAt": "2026-11-21",
+      "status": "verified",
+      "notes": "2024-06-28 第十四届全国人大常委会第十次会议修正，自 2024-07-01 施行；本软件不生成会计凭证或法定账簿，记账与会计核算义务由用户自行履行。"
+    },
+    {
+      "id": "invoice-administration-measures",
+      "name": "中华人民共和国发票管理办法",
+      "kind": "administrative-regulation",
+      "authority": "国务院",
+      "documentNumber": "国务院令第七百六十四号（2023 修订）",
+      "publishedAt": "2023-07-20",
+      "effectiveAt": "2023-07-20",
+      "url": null,
+      "sourceType": "name-only",
+      "accessedAt": "2026-11-21",
+      "status": "name-only",
+      "notes": "1993 年发布，2023-07-20 第三次修订并自发布之日起施行；本软件不代开发票、不管理发票，相关义务由用户自行履行。"
     },
     {
       "id": "network-data-security-regulation",

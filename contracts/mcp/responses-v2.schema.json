@@ -1,0 +1,500 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/PerryLink/advisers/contracts/mcp/responses-v2.schema.json",
+  "title": "Advisers MCP stdio responses (contract v2 - modern 2026-07-28 envelope)",
+  "description": "Frozen modern-era (2026-07-28, stateless) response envelopes for `advisers mcp --stdio`. This schema covers only the era envelope: resultType, ttlMs/cacheScope on cacheable results, the io.modelcontextprotocol/serverInfo result metadata, the server/discover payload and the -32022 UnsupportedProtocolVersion error. The JSON payload carried inside tools/list, tools/call, resources/list and resources/read is byte-identical to the legacy era and is validated against the frozen responses-v1.schema.json $defs (reused, never duplicated); legacy response shapes stay in responses-v1.schema.json unchanged.",
+  "version": 2,
+  "x-license": "CC-BY-NC-SA-4.0",
+  "x-contract-status": "frozen",
+  "x-frozen-at": "2026-11-21",
+  "x-source-commit": "86b144c",
+  "x-compat": "additive",
+  "$defs": {
+    "JsonRpcId": {
+      "oneOf": [
+        {
+          "type": "string"
+        },
+        {
+          "type": "integer"
+        }
+      ]
+    },
+    "Implementation": {
+      "type": "object",
+      "properties": {
+        "name": {
+          "type": "string",
+          "minLength": 1
+        },
+        "version": {
+          "type": "string",
+          "minLength": 1
+        }
+      },
+      "required": [
+        "name",
+        "version"
+      ],
+      "additionalProperties": true
+    },
+    "ResultMeta": {
+      "type": "object",
+      "properties": {
+        "io.modelcontextprotocol/serverInfo": {
+          "$ref": "#/$defs/Implementation"
+        }
+      },
+      "required": [
+        "io.modelcontextprotocol/serverInfo"
+      ],
+      "additionalProperties": true
+    },
+    "CompleteResult": {
+      "type": "object",
+      "properties": {
+        "resultType": {
+          "type": "string",
+          "const": "complete"
+        },
+        "_meta": {
+          "$ref": "#/$defs/ResultMeta"
+        }
+      },
+      "required": [
+        "resultType",
+        "_meta"
+      ],
+      "additionalProperties": true
+    },
+    "CacheableResult": {
+      "type": "object",
+      "properties": {
+        "ttlMs": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "cacheScope": {
+          "type": "string",
+          "enum": [
+            "public",
+            "private"
+          ]
+        }
+      },
+      "required": [
+        "ttlMs",
+        "cacheScope"
+      ],
+      "additionalProperties": true
+    },
+    "JsonRpcResponseBase": {
+      "type": "object",
+      "properties": {
+        "jsonrpc": {
+          "type": "string",
+          "const": "2.0"
+        },
+        "id": {
+          "$ref": "#/$defs/JsonRpcId"
+        }
+      },
+      "required": [
+        "jsonrpc",
+        "id"
+      ],
+      "additionalProperties": true
+    },
+    "TextContent": {
+      "type": "object",
+      "properties": {
+        "type": {
+          "type": "string",
+          "const": "text"
+        },
+        "text": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "type",
+        "text"
+      ],
+      "additionalProperties": true
+    },
+    "ToolSummary": {
+      "type": "object",
+      "properties": {
+        "name": {
+          "type": "string",
+          "minLength": 1
+        },
+        "description": {
+          "type": "string",
+          "minLength": 1
+        },
+        "inputSchema": {
+          "type": "object"
+        }
+      },
+      "required": [
+        "name",
+        "description",
+        "inputSchema"
+      ],
+      "additionalProperties": true
+    },
+    "ResourceSummary": {
+      "type": "object",
+      "properties": {
+        "uri": {
+          "type": "string",
+          "pattern": "^advisers://[a-z]+$"
+        },
+        "name": {
+          "type": "string",
+          "minLength": 1
+        },
+        "mimeType": {
+          "type": "string",
+          "const": "application/json"
+        }
+      },
+      "required": [
+        "uri",
+        "name",
+        "mimeType"
+      ],
+      "additionalProperties": true
+    },
+    "ResourceContents": {
+      "type": "object",
+      "properties": {
+        "uri": {
+          "type": "string",
+          "pattern": "^advisers://[a-z]+$"
+        },
+        "mimeType": {
+          "type": "string",
+          "const": "application/json"
+        },
+        "text": {
+          "type": "string",
+          "minLength": 2
+        }
+      },
+      "required": [
+        "uri",
+        "mimeType",
+        "text"
+      ],
+      "additionalProperties": true
+    },
+    "ServerCapabilities": {
+      "type": "object",
+      "properties": {
+        "tools": {
+          "type": "object",
+          "properties": {
+            "listChanged": {
+              "type": "boolean"
+            }
+          },
+          "required": [
+            "listChanged"
+          ],
+          "additionalProperties": true
+        },
+        "resources": {
+          "type": "object",
+          "properties": {
+            "listChanged": {
+              "type": "boolean"
+            }
+          },
+          "required": [
+            "listChanged"
+          ],
+          "additionalProperties": true
+        }
+      },
+      "required": [
+        "tools",
+        "resources"
+      ],
+      "additionalProperties": true
+    },
+    "DiscoverResult": {
+      "allOf": [
+        {
+          "$ref": "#/$defs/JsonRpcResponseBase"
+        },
+        {
+          "type": "object",
+          "properties": {
+            "result": {
+              "allOf": [
+                {
+                  "$ref": "#/$defs/CompleteResult"
+                },
+                {
+                  "$ref": "#/$defs/CacheableResult"
+                },
+                {
+                  "type": "object",
+                  "properties": {
+                    "supportedVersions": {
+                      "type": "array",
+                      "minItems": 1,
+                      "items": {
+                        "type": "string",
+                        "pattern": "^\\d{4}-\\d{2}-\\d{2}$"
+                      }
+                    },
+                    "capabilities": {
+                      "$ref": "#/$defs/ServerCapabilities"
+                    },
+                    "instructions": {
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "supportedVersions",
+                    "capabilities"
+                  ]
+                }
+              ]
+            }
+          },
+          "required": [
+            "result"
+          ]
+        }
+      ],
+      "type": "object"
+    },
+    "ToolsListResult": {
+      "allOf": [
+        {
+          "$ref": "#/$defs/JsonRpcResponseBase"
+        },
+        {
+          "type": "object",
+          "properties": {
+            "result": {
+              "allOf": [
+                {
+                  "$ref": "#/$defs/CompleteResult"
+                },
+                {
+                  "$ref": "#/$defs/CacheableResult"
+                },
+                {
+                  "type": "object",
+                  "properties": {
+                    "tools": {
+                      "type": "array",
+                      "minItems": 1,
+                      "items": {
+                        "$ref": "#/$defs/ToolSummary"
+                      }
+                    }
+                  },
+                  "required": [
+                    "tools"
+                  ]
+                }
+              ]
+            }
+          },
+          "required": [
+            "result"
+          ]
+        }
+      ],
+      "type": "object"
+    },
+    "ToolCallResult": {
+      "allOf": [
+        {
+          "$ref": "#/$defs/JsonRpcResponseBase"
+        },
+        {
+          "type": "object",
+          "properties": {
+            "result": {
+              "allOf": [
+                {
+                  "$ref": "#/$defs/CompleteResult"
+                },
+                {
+                  "type": "object",
+                  "properties": {
+                    "content": {
+                      "type": "array",
+                      "minItems": 1,
+                      "items": {
+                        "$ref": "#/$defs/TextContent"
+                      }
+                    },
+                    "isError": {
+                      "type": "boolean"
+                    }
+                  },
+                  "required": [
+                    "content",
+                    "isError"
+                  ]
+                }
+              ]
+            }
+          },
+          "required": [
+            "result"
+          ]
+        }
+      ],
+      "type": "object"
+    },
+    "ResourcesListResult": {
+      "allOf": [
+        {
+          "$ref": "#/$defs/JsonRpcResponseBase"
+        },
+        {
+          "type": "object",
+          "properties": {
+            "result": {
+              "allOf": [
+                {
+                  "$ref": "#/$defs/CompleteResult"
+                },
+                {
+                  "$ref": "#/$defs/CacheableResult"
+                },
+                {
+                  "type": "object",
+                  "properties": {
+                    "resources": {
+                      "type": "array",
+                      "minItems": 1,
+                      "items": {
+                        "$ref": "#/$defs/ResourceSummary"
+                      }
+                    }
+                  },
+                  "required": [
+                    "resources"
+                  ]
+                }
+              ]
+            }
+          },
+          "required": [
+            "result"
+          ]
+        }
+      ],
+      "type": "object"
+    },
+    "ResourceReadResult": {
+      "allOf": [
+        {
+          "$ref": "#/$defs/JsonRpcResponseBase"
+        },
+        {
+          "type": "object",
+          "properties": {
+            "result": {
+              "allOf": [
+                {
+                  "$ref": "#/$defs/CompleteResult"
+                },
+                {
+                  "$ref": "#/$defs/CacheableResult"
+                },
+                {
+                  "type": "object",
+                  "properties": {
+                    "contents": {
+                      "type": "array",
+                      "minItems": 1,
+                      "items": {
+                        "$ref": "#/$defs/ResourceContents"
+                      }
+                    }
+                  },
+                  "required": [
+                    "contents"
+                  ]
+                }
+              ]
+            }
+          },
+          "required": [
+            "result"
+          ]
+        }
+      ],
+      "type": "object"
+    },
+    "UnsupportedProtocolVersionError": {
+      "type": "object",
+      "properties": {
+        "jsonrpc": {
+          "type": "string",
+          "const": "2.0"
+        },
+        "id": {
+          "$ref": "#/$defs/JsonRpcId"
+        },
+        "error": {
+          "type": "object",
+          "properties": {
+            "code": {
+              "type": "integer",
+              "const": -32022
+            },
+            "message": {
+              "type": "string",
+              "minLength": 1
+            },
+            "data": {
+              "type": "object",
+              "properties": {
+                "supported": {
+                  "type": "array",
+                  "minItems": 1,
+                  "items": {
+                    "type": "string",
+                    "pattern": "^\\d{4}-\\d{2}-\\d{2}$"
+                  }
+                },
+                "requested": {
+                  "type": "string"
+                }
+              },
+              "required": [
+                "supported",
+                "requested"
+              ],
+              "additionalProperties": true
+            }
+          },
+          "required": [
+            "code",
+            "message",
+            "data"
+          ],
+          "additionalProperties": false
+        }
+      },
+      "required": [
+        "jsonrpc",
+        "id",
+        "error"
+      ],
+      "additionalProperties": true
+    }
+  }
+}

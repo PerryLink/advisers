@@ -3,6 +3,7 @@ import { chmodSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'nod
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import test from 'node:test'
+import { skipOnWindows } from './win-compat.mjs'
 import { runLocalOcr } from '../lib/ocr.js'
 import { runLocalTimestamp } from '../lib/timestamp.js'
 import { sendNotification } from '../lib/notify.js'
@@ -53,7 +54,8 @@ function assertNoSecrets(dump, adapter) {
   assert.match(dump, /(?:^|\n)PATH=/, adapter + ' subprocess keeps an OS-basics PATH')
 }
 
-test('OCR adapter subprocess cannot see Advisers credentials', async () => {
+test('OCR adapter subprocess cannot see Advisers credentials', async (t) => {
+  if (skipOnWindows(t, 'OCR external adapter commands are spawned as a single executable path on Windows, so a POSIX #!/bin/sh probe cannot run (quoted-argv adapter contract tracked; docs/WINDOWS.md section 8, windows triage B)')) return
   const root = mkdtempSync(join(tmpdir(), 'advisers-env-ocr-'))
   try {
     writeFileSync(join(root, 'scan.png'), Buffer.from([0x89, 0x50, 0x4e, 0x47]))
@@ -68,7 +70,8 @@ test('OCR adapter subprocess cannot see Advisers credentials', async () => {
   }
 })
 
-test('timestamp adapter subprocess cannot see Advisers credentials', async () => {
+test('timestamp adapter subprocess cannot see Advisers credentials', async (t) => {
+  if (skipOnWindows(t, 'timestamp external adapter commands are spawned as a single executable path on Windows, so a POSIX #!/bin/sh probe cannot run (quoted-argv adapter contract tracked; docs/WINDOWS.md section 8, windows triage B)')) return
   const root = mkdtempSync(join(tmpdir(), 'advisers-env-ts-'))
   try {
     writeFileSync(join(root, 'pack.txt'), 'evidence')
@@ -83,7 +86,8 @@ test('timestamp adapter subprocess cannot see Advisers credentials', async () =>
   }
 })
 
-test('notification adapter subprocess cannot see Advisers credentials', async () => {
+test('notification adapter subprocess cannot see Advisers credentials', async (t) => {
+  if (skipOnWindows(t, 'notification external adapter commands are spawned as a single executable path on Windows, so a POSIX #!/bin/sh probe cannot run (quoted-argv adapter contract tracked; docs/WINDOWS.md section 8, windows triage B)')) return
   const root = mkdtempSync(join(tmpdir(), 'advisers-env-notify-'))
   try {
     const dumpPath = join(root, 'env.dump')

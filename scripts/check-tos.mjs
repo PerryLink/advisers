@@ -23,7 +23,7 @@
  * URL connectivity for the legal citations is intentionally NOT asserted here (government
  * sites move and CI must stay offline-stable); release-mode validates the structured
  * citations and the release owner verifies the links in a browser (record: docs/TOS.md
- * appendix A, accessed 2026-11-17).
+ * appendix A, accessed 2026-11-17, refreshed 2026-11-21).
  *
  * Run: node scripts/check-tos.mjs [--release]
  */
@@ -34,7 +34,7 @@ import { fileURLToPath } from 'node:url'
 
 const root = fileURLToPath(new URL('..', import.meta.url))
 const RELEASE = process.argv.includes('--release')
-const FINAL_EFFECTIVE = '2026-11-20'
+const FINAL_EFFECTIVE = '2026-11-21'
 
 const failures = []
 const warnings = []
@@ -181,6 +181,8 @@ const REQUIRED_LAWS = [
   '互联网信息服务管理办法',
   '促进和规范数据跨境流动规定',
   '清朗',
+  '中华人民共和国会计法',
+  '中华人民共和国发票管理办法',
 ]
 for (const law of REQUIRED_LAWS) {
   check(`docs/TOS.md covers ${law}`, tosText.includes(law))
@@ -217,13 +219,20 @@ const REQUIRED_CLAUSES = {
   'local DB not encrypted by default': '默认不加密',
   'partial purge disclosure': 'purge 是部分删除',
   'forget tombstone disclosure': '墓碑',
+  'mail sync egress clause': 'mail sync',
+  'mail model opt-in clause': 'mail extract --model',
+  'mail credential handling clause': 'credentials/imap',
+  'knowledge-base data clause': '知识库',
+  'receivables are not statements/invoices': '不是对账单',
+  'financial-account sensitive data': '金融账户',
+  'TUI in-process history clause': '进程内存',
 }
 for (const [name, needle] of Object.entries(REQUIRED_CLAUSES)) {
   check(`docs/TOS.md has ${name}`, tosText.includes(needle), `missing "${needle}"`)
 }
 
 // The egress list must be complete (lead decision E, 2026-11-17).
-const REQUIRED_EGRESS = ['api.deepseek.com', 'chat', 'capture', 'review', 'brief --deep', 'learn review', 'research', 'IMAP', 'webhook', 'sync', 'MCP', 'DSH', '桌宠', '遥测', 'bridge', 'Hermes', 'inbox', 'outbox']
+const REQUIRED_EGRESS = ['api.deepseek.com', 'chat', 'capture', 'review', 'brief --deep', 'learn review', 'research', 'IMAP', 'webhook', 'sync', 'MCP', 'DSH', '桌宠', '遥测', 'bridge', 'Hermes', 'inbox', 'outbox', 'mail sync', 'mail extract --model']
 for (const needle of REQUIRED_EGRESS) {
   check(`docs/TOS.md data clause lists egress: ${needle}`, tosText.includes(needle))
 }
@@ -242,6 +251,8 @@ for (const [name, needle] of Object.entries({
   'not a compliance certification': '不构成合规认证',
   'privacy notice reference': 'PRIVACY.md',
   'bridge / Hermes egress': /bridge[^\n]*Hermes/,
+  'new local data surfaces': '邮件',
+  'receivables boundary': '不是对账单',
 })) {
   const ok = typeof needle === 'string' ? disclaimerText.includes(needle) : needle.test(disclaimerText)
   check(`docs/DISCLAIMER.md has ${name}`, ok, `missing "${String(needle)}"`)
@@ -254,6 +265,9 @@ check('docs/SAFETY.md marks the mechanism as auxiliary', safetyText.includes('�
 check('docs/SAFETY.md denies being a compliance certification', /不构成[^。\n]*合规认证/.test(safetyText))
 check('docs/SAFETY.md states the user remains responsible', /第一责任人|自行承担/.test(safetyText))
 check('docs/SAFETY.md links the privacy notice', safetyText.includes('PRIVACY.md'))
+check('docs/SAFETY.md discloses mail sync egress', safetyText.includes('mail sync'))
+check('docs/SAFETY.md discloses the mail-model opt-in', safetyText.includes('mail extract --model'))
+check('docs/SAFETY.md states receivables are not statements/invoices', safetyText.includes('不是对账单'))
 
 // ---------------------------------------------------------------------------
 // 6. PRIVACY.md covers the data-flow disclosure required by the legal review.
@@ -279,6 +293,20 @@ const REQUIRED_PRIVACY = {
   'under-14 rule': '14 周岁',
   'withdrawal': '撤回',
   'complaint channel': 'GitHub Issues',
+  'mail account/sync tables': 'mail_accounts',
+  'mail message table': 'mail_messages',
+  'mail credential file': 'credentials/imap',
+  'mail body retention (30 days)': '30 天',
+  'mail TLS/STARTTLS-only sync': 'STARTTLS',
+  'mail model opt-in consent': 'mail extract --model',
+  'model consent record': 'consent.json',
+  'KB documents/tables': 'kb_documents',
+  'KB extracted-text plaintext': '抽取文本',
+  'receivables/payments tables': 'receivables',
+  'receivables are not statements/invoices': '不是对账单',
+  'TUI in-process history': '仅进程内存',
+  'briefs archive': 'briefs',
+  'model egress is separate from TOS consent': '模型出网',
 }
 for (const [name, needle] of Object.entries(REQUIRED_PRIVACY)) {
   const ok = typeof needle === 'string' ? privacyText.includes(needle) : needle.test(privacyText)
@@ -307,12 +335,18 @@ check('privacy command lists egress surfaces', privacySurfaces.length >= 6, `${p
 const EGRESS_DISCLOSURE = {
   'model provider': { tos: ['模型调用', 'api.deepseek.com'], privacy: ['模型调用', 'api.deepseek.com'] },
   'research --web|--url': { tos: ['网页研究'], privacy: ['网页研究'] },
-  'capture --from-imap': { tos: ['邮件导入'], privacy: ['邮件导入'] },
+  'capture --from-imap': { tos: ['capture --from-imap', 'IMAP'], privacy: ['capture --from-imap', 'IMAP'] },
   'remind --deliver --notify': { tos: ['通知'], privacy: ['webhook'] },
   'sync push|pull': { tos: ['同步'], privacy: ['同步'] },
   bridge: { tos: ['桥接', 'Hermes'], privacy: ['桥接', 'Hermes'] },
   'MCP --stdio / DSH host tools / pet-brief': { tos: ['MCP', 'DSH', '桌宠'], privacy: ['MCP', 'DSH', '桌宠'] },
   'ocr / timestamp': { tos: ['OCR'], privacy: ['OCR'] },
+  // Announced surfaces (0.4.0 legal texts): docs must disclose them now; the
+  // `privacy` command starts printing them when the bin integration lands in the
+  // same release. Until then `planned: true` exempts them from the stale-entry
+  // check, while their legal disclosure rows are still asserted below.
+  'mail sync': { planned: true, tos: ['mail sync', 'IMAP'], privacy: ['mail sync', 'IMAP'] },
+  'mail extract --model': { planned: true, tos: ['mail extract --model', '单独同意'], privacy: ['mail extract --model', '单独同意'] },
 }
 const surfaceKeys = new Set()
 for (const surface of privacySurfaces) {
@@ -324,7 +358,17 @@ for (const surface of privacySurfaces) {
   for (const needle of disclosure.tos) check(`docs/TOS.md §9.3 discloses "${key}" (${needle})`, tosText.includes(needle))
   for (const needle of disclosure.privacy) check(`docs/PRIVACY.md §4 discloses "${key}" (${needle})`, privacyText.includes(needle))
 }
+for (const [key, disclosure] of Object.entries(EGRESS_DISCLOSURE)) {
+  if (!disclosure.planned) continue
+  if (surfaceKeys.has(key)) {
+    info(`announced egress surface is now printed by privacy: ${key} (move it into EGRESS_DISCLOSURE and drop planned: true)`)
+    continue
+  }
+  for (const needle of disclosure.tos) check(`docs/TOS.md §9.3 discloses announced surface "${key}" (${needle})`, tosText.includes(needle))
+  for (const needle of disclosure.privacy) check(`docs/PRIVACY.md §4 discloses announced surface "${key}" (${needle})`, privacyText.includes(needle))
+}
 for (const key of Object.keys(EGRESS_DISCLOSURE)) {
+  if (EGRESS_DISCLOSURE[key].planned) continue
   check(`legal egress map has no stale entry: ${key}`, surfaceKeys.has(key), 'remove it from EGRESS_DISCLOSURE')
 }
 
@@ -339,6 +383,29 @@ const bridgeTosClause = tosText.split(/\r?\n/).find((line) => /^（h）[^\n]*bri
 check('docs/TOS.md §9.3 has a bridge (h) clause', Boolean(bridgeTosClause), 'no "（h）... bridge ..." clause')
 for (const needle of ['Hermes', 'inbox', 'outbox', '模型服务商', '0700', '0600', '同步盘', '明文']) {
   check(`docs/TOS.md bridge clause discloses ${needle}`, Boolean(bridgeTosClause) && bridgeTosClause.includes(needle))
+}
+
+// Row-scoped mail checks: deleting the mail sync row/clause must fail even if
+// the words "mail"/"IMAP" survive elsewhere in the documents.
+const mailSyncPrivacyRow = privacyText.split(/\r?\n/).find((line) => /^\|\s*3\s*\|[^\n]*mail sync/i.test(line))
+check('docs/PRIVACY.md §4 has a mail sync table row', Boolean(mailSyncPrivacyRow), 'no "| 3 | ... mail sync ... |" row')
+for (const needle of ['IMAP', 'TLS', '只读', '0600', '30 天']) {
+  check(`docs/PRIVACY.md mail sync row discloses ${needle}`, Boolean(mailSyncPrivacyRow) && mailSyncPrivacyRow.includes(needle))
+}
+const mailModelPrivacyRow = privacyText.split(/\r?\n/).find((line) => /^\|\s*12\s*\|[^\n]*mail extract --model/i.test(line))
+check('docs/PRIVACY.md §4 has a mail extract --model table row', Boolean(mailModelPrivacyRow), 'no "| 12 | ... mail extract --model ... |" row')
+for (const needle of ['模型', '单独同意', '正文', 'consent revoke']) {
+  check(`docs/PRIVACY.md mail model row discloses ${needle}`, Boolean(mailModelPrivacyRow) && mailModelPrivacyRow.includes(needle))
+}
+const mailSyncTosClause = tosText.split(/\r?\n/).find((line) => /^（c）[^\n]*mail sync/i.test(line))
+check('docs/TOS.md §9.3 has a mail sync (c) clause', Boolean(mailSyncTosClause), 'no "（c）... mail sync ..." clause')
+for (const needle of ['IMAP', 'TLS', '只读', 'credentials/imap']) {
+  check(`docs/TOS.md mail sync clause discloses ${needle}`, Boolean(mailSyncTosClause) && mailSyncTosClause.includes(needle))
+}
+const mailModelTosClause = tosText.split(/\r?\n/).find((line) => /^（i）[^\n]*mail extract --model/i.test(line))
+check('docs/TOS.md §9.3 has a mail model (i) clause', Boolean(mailModelTosClause), 'no "（i）... mail extract --model ..." clause')
+for (const needle of ['单独同意', '模型', '8KB', 'secrecy']) {
+  check(`docs/TOS.md mail model clause discloses ${needle}`, Boolean(mailModelTosClause) && mailModelTosClause.includes(needle))
 }
 
 // ---------------------------------------------------------------------------

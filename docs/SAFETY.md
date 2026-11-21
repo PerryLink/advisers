@@ -3,8 +3,8 @@
 | 项目 | 内容 |
 |---|---|
 | 适用对象 | Advisers 用户、集成方与扩展开发者 |
-| 文档版本 | 2026.11.3（与 [docs/TOS.md](https://github.com/PerryLink/advisers/blob/main/docs/TOS.md) 同版本） |
-| 最后更新 | 2026-11-20 |
+| 文档版本 | 2026.11.4（与 [docs/TOS.md](https://github.com/PerryLink/advisers/blob/main/docs/TOS.md) 同版本） |
+| 最后更新 | 2026-11-21 |
 | 范围 | 本软件自带的内容安全辅助机制、其能力边界、用户责任与申诉方式 |
 | 性质 | 本文是解释性技术说明，不单独创设法律义务；与 TOS 冲突时以 TOS 为准 |
 
@@ -42,13 +42,13 @@ Advisers 包含（或按版本逐步接入）本地内容安全规则、可选�
 2. **不是合规认证**：不构成算法备案、大模型登记、安全评估、等保测评或任何官方认证；不向主管部门报送数据。
 3. **不替代你的法律责任**：若你对外提供生成式 AI 服务，内容审核、标识、备案/登记等义务在你自身，本软件不代办、不背书。
 4. **不覆盖第三方与宿主平台**：第三方扩展、DLC、模型服务商、邮件/飞书等链接服务、MCP 客户端与 DSH 宿主自身的处理管线不受本软件完全控制。
-5. **不能替代人工复核**：重要事实、对外交付物与公开发布内容必须人工复核。
+5. **不能替代人工复核**：重要事实、对外交付物与公开发布内容必须人工复核。**不能替代会计/税务/审计复核**：回款/对账记录只是内部记账辅助，不是对账单、发票、收据、会计凭证、完税凭证、审计证据、催收依据或法律意见，也未与银行流水核验；相关会计与发票义务（《会计法》《发票管理办法》）由你自行履行。
 6. **不做年龄核验**：本软件当前不核验年龄，仅在你声明未成年时收紧策略；这不等于未成年人保护合规认证。
 
 ## 5. 数据与出网
 
-- 默认本地优先：不内置遥测、无账号、无运营者云服务、无自动更新检查；数据默认保存在 `~/.advisers`（可用 `ADVISERS_HOME` 指定），**默认不加密**（明文 SQLite）；可选 `advisers vault` / `export --encrypted` / `sync` 加密。
-- 会出网的情形：① 设置 `ADVISERS_API_KEY` 后的模型类命令（`chat`、`capture`、`review`、`brief --deep`、`learn review` 等；默认 DeepSeek，见 [docs/PRIVACY.md](https://github.com/PerryLink/advisers/blob/main/docs/PRIVACY.md) §4）；② `research --web|--url`（显式 flag）；③ `capture --from-imap`（只读 IMAP）；④ `ADVISERS_NOTIFY_WEBHOOK`（仅计数/级别/日期）与 `ADVISERS_NOTIFY_CMD`；⑤ `sync`（加密快照写入你指定的目录，可能被云盘同步）；⑥ DSH 宿主/MCP 客户端/桌宠消费端（其自身条款）；⑦ 你自行配置的 OCR/时间戳等外部命令。未列明的功能不出网。
+- 默认本地优先：不内置遥测、无账号、无运营者云服务、无自动更新检查；数据默认保存在 `~/.advisers`（可用 `ADVISERS_HOME` 指定），**默认不加密**（明文 SQLite，含邮件正文、知识库抽取文本与回款/支付记录）；可选 `advisers vault` / `export --encrypted` / `sync` 加密。**邮件、知识库与回款/支付记录默认只在本机处理**；交互式壳的输入历史仅在进程内存。邮件密码保存在 `credentials/imap/<account>.json`（0600、目录 0700、原子写），不进入数据库/导出/备份/同步/日志/命令行参数。
+- 会出网的情形：① 设置 `ADVISERS_API_KEY` 后的模型类命令（`chat`、`capture`、`review`、`brief --deep`、`learn review` 等；默认 DeepSeek，见 [docs/PRIVACY.md](https://github.com/PerryLink/advisers/blob/main/docs/PRIVACY.md) §4）；② `research --web|--url`（显式 flag）；③ 邮件同步：`mail sync`（与旧入口 `capture --from-imap`）只读连接你配置的 IMAP 服务器（默认 993 隐式 TLS/143 仅显式 STARTTLS，失败即拒绝、不回落明文）；④ `mail extract --model`（默认关；需显式 `--model` + 模型 Key + `mail.extract` 单独同意，只发正文摘录 ≤8KB、无附件/完整 header；默认 `--local` 不出网）；⑤ `ADVISERS_NOTIFY_WEBHOOK`（仅计数/级别/日期）与 `ADVISERS_NOTIFY_CMD`；⑥ `sync`（加密快照写入你指定的目录，可能被云盘同步）；⑦ DSH 宿主/MCP 客户端/桌宠消费端（其自身条款）；⑧ 你自行配置的 OCR/时间戳等外部命令。**知识库在本版本不调用模型、不出网；回款/支付记录默认不出网。**未列明的功能不出网。
 - 受保护事项（secrecy>0）的模型/研究/导入路径 fail-closed；`advisers privacy --prove` 可在本地验证无遥测、默认不出网、审计链与受保护事项 fail-closed，但它不是合规认证。
 - 运营者不接收、不存储、不访问你的本地数据，因此无法删除、监控或向主管部门报告你的具体内容；详见 TOS 第 9、12 条。
 - 审计只记录判定与最小元数据，不保存被拦原文；但审计链不可单行删除，导出/回执/备份/同步快照可能含个人信息，详见 [docs/PRIVACY.md](https://github.com/PerryLink/advisers/blob/main/docs/PRIVACY.md)。
@@ -90,13 +90,14 @@ Advisers 包含（或按版本逐步接入）本地内容安全规则、可选�
 
 ## 11. 与 TOS / 免责声明 / 隐私说明的关系
 
-- 本说明是 [docs/TOS.md](https://github.com/PerryLink/advisers/blob/main/docs/TOS.md)（v2026.11.3）、[docs/DISCLAIMER.md](https://github.com/PerryLink/advisers/blob/main/docs/DISCLAIMER.md) 与 [docs/PRIVACY.md](https://github.com/PerryLink/advisers/blob/main/docs/PRIVACY.md) 的补充说明，不构成独立法律承诺。
+- 本说明是 [docs/TOS.md](https://github.com/PerryLink/advisers/blob/main/docs/TOS.md)（v2026.11.4）、[docs/DISCLAIMER.md](https://github.com/PerryLink/advisers/blob/main/docs/DISCLAIMER.md) 与 [docs/PRIVACY.md](https://github.com/PerryLink/advisers/blob/main/docs/PRIVACY.md) 的补充说明，不构成独立法律承诺。
 - 若本说明与 TOS 冲突，以 TOS 为准；TOS 与仓库许可证冲突时，许可证就相应代码/文档的授权优先。
 
 ## 12. 变更记录
 
 | 版本 | 日期 | 变更 |
 |---|---|---|
+| 2026.11.4 | 2026-11-21 | 与 TOS/PRIVACY 同步版本：新增邮件同步/邮件正文模型抽取出网披露、邮件凭据与保留、知识库与回款/支付本地边界；回款记录不构成对账单/发票/会计凭证或法律意见 |
 | 2026.11.3 | 2026-11-20 | 与 TOS/PRIVACY 同步版本：补充 bridge（Hermes 文件网关）出网披露；本文内容未作实质变更 |
 | 2026.11.2 | 2026-11-17 | 定稿：删除审阅标记、写明 0.2.0 规则层接入范围以发布说明为准、出网清单与隐私说明对齐、标识义务按义务主体分层、申诉渠道与时限确定、TTS/深度合成口径具体化 |
 | 2026.11.1 | 2026-11-17 | 首版：诚实口径、机制与边界、数据出网、健康使用、未成年人、AI 标识、TTS/深度合成、申诉渠道 |

@@ -1,9 +1,12 @@
 import assert from 'node:assert/strict'
 import { readFileSync, readdirSync } from 'node:fs'
 import { join } from 'node:path'
+import { fileURLToPath } from 'node:url'
 import test from 'node:test'
 
-const SRC = new URL('../src/', import.meta.url).pathname
+// fileURLToPath keeps the drive letter on Windows; URL.pathname yields
+// "/C:/..." which path.resolve() then turns into "C:\\C:\\..." (windows triage D).
+const SRC = fileURLToPath(new URL('../src/', import.meta.url))
 
 test('core source has no host imports (cordis, DSH, or platform SDKs)', () => {
   const files = readdirSync(SRC).filter((f) => f.endsWith('.ts'))

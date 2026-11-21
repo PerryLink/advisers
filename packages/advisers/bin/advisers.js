@@ -120,6 +120,24 @@ const loadContextWindow = lazyModule(() => import('../lib/context-window.js'))
 const loadPetBrief = lazyModule(() => import('../lib/pet-brief.js'))
 const loadImap = lazyModule(() => import('../lib/imap.js'))
 const loadUi = lazyModule(() => import('../lib/ui.js'))
+// 0.4.0 (task-29): interactive shell + KB/mail/money/consent command families.
+// Each one is only imported by the commands that need it, so ordinary commands
+// keep the 0.3.2 startup graph (and --version/help pay for nothing extra).
+const loadShell = lazyModule(() => import('../lib/shell.js'))
+const loadUrgency = lazyModule(() => import('../lib/urgency.js'))
+const loadBriefArchive = lazyModule(() => import('../lib/brief-archive.js'))
+const loadKb = lazyModule(() => import('../lib/kb.js'))
+const loadKbPages = lazyModule(() => import('../lib/kb-pages.js'))
+const loadKbFacts = lazyModule(() => import('../lib/kb-facts.js'))
+const loadMail = lazyModule(() => import('../lib/mail.js'))
+const loadCredentials = lazyModule(() => import('../lib/credentials.js'))
+const loadConsent = lazyModule(() => import('../lib/consent.js'))
+const loadPolicy = lazyModule(() => import('../lib/policy/index.js'))
+const loadMailStore = lazyModule(() => import('../lib/mail-store.js'))
+const loadClientPack = lazyModule(() => import('../lib/client-pack.js'))
+// Money sidecar: the library lands with the 0.4.0 receivables wave; the loader
+// fails only when a money command is actually run, never at startup.
+const loadReceivablesLib = lazyModule(() => import('../lib/receivables.js'))
 
 let core
 if (process.env.ADVISERS_CORE_LOCAL === '1') {
@@ -1194,7 +1212,8 @@ function help() {
   console.log(`advisers — a staff of AI advisers
 
 Usage:
-  advisers                    start the local conversation (TTY)
+  advisers                    start the local conversation (TTY shell)
+                              (status line + result blocks; non-TTY prints help; ADVISERS_NO_SHELL=1 keeps the legacy REPL)
   advisers chat [--file <path>] [--allow-path <dir>]... [text]
                               one-shot task, or start the local conversation
   advisers init               initialize home + soul
@@ -1214,7 +1233,9 @@ Usage:
   advisers remind [--json] [--ics [path]] [--deliver [--notify]]  due reminders + ICS/VALARM export
   advisers remind install|uninstall|status [--apply] [--schedule "0 9 * * *"]
                               scheduler scripts + OS plan (dry-run by default; --apply executes)
-                              status also shows the last recorded run (scheduler/status.json)
+                              --morning adds the second morning block (--morning-time 08:30, --morning-days 1-5)
+                              status v2 shows the remind + morning sections and both OS plans
+  advisers remind --json [--now ISO]   reminders + per-row urgency (pure read)
   advisers calendar import --ics <file>  local .ics read-only import
   advisers risks              up to 3 deterministic obligation risks
   advisers pet-brief [--json] [--out [path]] [--check [--strict]] [--display-policy public|private|none]
@@ -1223,8 +1244,9 @@ Usage:
   advisers week [--json]      last 7 local days (Asia/Shanghai); --json is one JSON document
   advisers agenda [--days 7] [--json]
                               7-day agenda: commitments + calendar_events, Asia/Shanghai days
-  advisers morning [--json] [--out f]
-                              deterministic local morning brief (no model, no network)
+  advisers morning [--json] [--out f] [--top 1..5] [--archive [--keep 1..365]]
+                              deterministic local morning brief (no model, no network);
+                              --archive writes ~/.advisers/briefs/<day>.md + latest.md
   advisers digest day|week|morning    short digest (morning = the deterministic brief)
   advisers diff                show the last changed file
   advisers undo [--list]      restore the last file write
@@ -1263,6 +1285,7 @@ Usage:
   advisers client archive <id> [--dry-run] [--json]
   advisers client merge <from> <into> [--dry-run] [--json]
   advisers client export <id> [--format md|docx] [--out <file>] [--redact-names] [--json]
+  advisers client export <id> --pack [--out <dir>] [--force] [--json]   client status pack v1 (no money fields)
   advisers client note add <id> "<summary>" [--kind k] [--at ISO] [--project id] [--matter id] [--json]
   advisers client note list <id> [--project id] [--limit n] [--json]
   advisers project add <client-id> "<name>" [--start YYYY-MM-DD] [--end YYYY-MM-DD]
@@ -1272,6 +1295,33 @@ Usage:
   advisers project archive <id> [--dry-run] [--json]
                               customer/project entities + derived timeline (SQLite store;
                               see docs/CLIENTS.md)
+  advisers kb add <file>... [--title s] [--kind k] [--client|--project|--matter id] [--secrecy 0-3]
+                      [--replace] [--from list.txt] [--json]    index a local document (text extracted locally)
+  advisers kb ls|show <id>|rm <id>|purge <id>|reindex [--rebuild] [--json]
+                      list/inspect/tombstone/physically purge documents; reindex verifies/rebuilds KB FTS
+  advisers kb page ls|show <id>|rebuild|diff ...   deterministic compiled pages (client/project/timeline/facts)
+  advisers kb search <q> [--scope kb|pages|all] [--limit n] [--clearance 0-3] [--json]
+                      local KB search (no model, no network; clearance filtered before counting)
+  advisers search <q> --scope turns|kb|pages|facts|all [--json]
+                      scoped local search; without --scope the 0.3.2 turn search output is unchanged
+  advisers fact show <id>|history <id>|as-of <YYYY-MM-DD|ISO> [--json]
+                      fact source/supersede chain/value as-of a moment (no model, no network)
+  advisers mail account add --name n --host h [--port 993] [--tls tls|starttls] --user u [--pass-stdin]
+                      store an IMAP account; password only from the TTY prompt or stdin, never argv
+  advisers mail account ls|show <acct>|rm <acct> [--json]
+  advisers mail sync [<acct>] [--full] [--dry-run] [--json]   the only IMAP network entry (read-only EXAMINE/FETCH)
+  advisers mail ls|show <id> [--body]|purge [--older-than 30d] [--dry-run|--yes]|import <file|dir> [--json]
+                      local reads; purge clears bodies (metadata/hash stay); import reads .eml/.mbox offline
+  advisers mail extract [<id>...] [--all-new] [--local|--model --yes] [--matter id] [--dry-run] [--json]
+                      default local rules (offline); --model needs --yes + ADVISERS_API_KEY + consent + secrecy 0
+  advisers receivable add <client-id> "<label>" --amount 8000.00 [--due DATE] [--currency CNY] [--json]
+  advisers receivable ls|show <id>|edit <id>|void <id> [--aging] [--json]
+                      money sidecars in integer minor units; amounts never enter MCP/receipt packs
+  advisers payment add <client-id> --amount 4000.00 [--receivable rcv] [--method bank] [--json]
+  advisers payment ls|void <id> [--json]   payments reopen/complete the follow-up commitment atomically
+  advisers consent status|grant <surface>|revoke <surface> [--data-class mail|kb] [--yes] [--json]
+                      separate model-egress consent (provider/base-URL bound; TTY typed confirmation)
+  advisers privacy --matrix [--json]   policy surface/action/gate matrix from the registry
   advisers privacy [--json] [--prove]  show/verify local data & egress facts
   advisers why <pref-id>      explain a preference
   advisers forget <pref-id>   forget a preference (tombstone)
@@ -1550,7 +1600,7 @@ function purgeMatter(id, confirmed) {
 function parseFlags(args) {
   const flags = {}
   const positional = []
-  const booleanFlags = new Set(['web', 'deep', 'all', 'yes', 'json', 'list', 'force', 'apply', 'quiet', 'help', 'content', 'ics', 'deliver', 'install', 'uninstall', 'status', 'calendar', 'sources', 'pack', 'receipt', 'from-imap', 'remove', 'force', 'notify', 'no-remind', 'dry-run', 'unclassified', 'no-calendar', 'include-done', 'record-delivery', 'include-global'])
+  const booleanFlags = new Set(['web', 'deep', 'all', 'yes', 'json', 'list', 'force', 'apply', 'quiet', 'help', 'content', 'ics', 'deliver', 'install', 'uninstall', 'status', 'calendar', 'sources', 'pack', 'receipt', 'from-imap', 'remove', 'force', 'notify', 'no-remind', 'dry-run', 'unclassified', 'no-calendar', 'include-done', 'record-delivery', 'include-global', 'archive', 'morning', 'include-deleted', 'all-new', 'local', 'model', 'full', 'pass-stdin'])
   for (let i = 0; i < args.length; i++) {
     if (args[i].startsWith('--')) {
       const key = args[i].slice(2)
@@ -2246,7 +2296,7 @@ const CUSTOMER_USAGE = {
   projectList: 'usage: advisers project list [--client <id>] [--all] [--limit n] [--json]',
   projectShow: 'usage: advisers project show <id> [--timeline-limit n] [--clearance 0-3] [--json]',
   projectArchive: 'usage: advisers project archive <id> [--dry-run] [--json]',
-  export: 'usage: advisers client export <id> [--format md|docx] [--out <file>] [--redact-names] [--json]',
+  export: 'usage: advisers client export <id> [--format md|docx] [--out <file>] [--redact-names] [--json]\n       advisers client export <id> --pack [--out <dir>] [--force] [--json]'
 }
 
 /** An application error with a stable E_* code and optional actionable hint. */
@@ -2809,7 +2859,7 @@ function clientList(rest) {
   } catch (error) { reportCustomerFailure(error) }
 }
 
-function clientShow(rest) {
+async function clientShow(rest) {
   const usage = CUSTOMER_USAGE.show
   try {
     const parsed = customerFlags(rest, { booleans: ['json'], values: ['timeline-limit', 'clearance'] }, usage)
@@ -2818,6 +2868,9 @@ function clientShow(rest) {
     const timelineLimit = customerIntegerFlag(parsed.flags['timeline-limit'], 'timeline-limit', 0, CUSTOMER_TIMELINE_MAX, CUSTOMER_TIMELINE_DEFAULT, usage)
     if (!customerStoreOrFail()) return
     const store = readStoreOrExit()
+    // 0.4.0 additive: money summary (no amounts beyond per-currency totals; the
+    // lib also fails closed above clearance and only counts hidden rows).
+    const money = await loadReceivablesLib().catch(() => null)
     const payload = store.read(() => {
       const view = readClientView(store, id)
       const filtered = clearCustomerView(view, clearance)
@@ -2856,6 +2909,7 @@ function clientShow(rest) {
         clearance: clearance,
         protectedExcluded: filtered.protectedExcluded,
         degraded: timeline.degraded,
+        ...(money ? { receivables: money.clientReceivablesBlock(store, id, { clearance }) } : {}),
       }
     })
     const lines = []
@@ -3086,7 +3140,8 @@ function clientNoteList(rest) {
 async function clientExport(rest) {
   const usage = CUSTOMER_USAGE.export
   try {
-    const parsed = customerFlags(rest, { booleans: ['json', 'redact-names'], values: ['format', 'out'] }, usage)
+    const parsed = customerFlags(rest, { booleans: ['json', 'redact-names', 'pack', 'force', 'include-receivables'], values: ['format', 'out'] }, usage)
+    if (parsed.flags['include-receivables'] === true) throw customerError('E_CLIENT_PACK_RECEIVABLES_UNSUPPORTED', 'client status packs do not carry receivable/payment amounts in 0.4.0', 'amounts stay local; --include-receivables is reserved until legal review (0.4.1)')
     const id = customerIdArg(parsed.positional, 0, 'a client id', usage)
     const format = parsed.flags.format === undefined ? 'md' : String(parsed.flags.format).toLowerCase()
     if (format !== 'md' && format !== 'docx') throw customerError('E_USAGE', '--format must be md or docx', usage)
@@ -3171,6 +3226,84 @@ async function clientExport(rest) {
     } else {
       buffer = Buffer.from(markdown, 'utf8')
     }
+    // 0.4.0: client status pack v2 (directory pack). The pack contains no money
+    // fields (amounts stay local in 0.4.0; --include-receivables would fail
+    // closed in the library), is written 0700/0600 atomically and self-verified.
+    if (parsed.flags.pack === true) {
+      const packLib = await loadClientPack()
+      const statusPayload = {
+        ok: true,
+        command: 'client export',
+        format: 'json',
+        scope: 'client',
+        subject: { kind: 'client', id: data.client.id, name: data.displayName },
+        generatedAt: generatedAt,
+        clearance: clearance,
+        protectedExcluded: data.protectedExcluded,
+        counts: data.counts,
+        projects: data.projects,
+        open: data.open,
+        nextDueAt: data.nextDueAt,
+        timeline: data.timeline,
+        timelineTotal: data.timelineTotal,
+        timelineTruncated: data.timelineTruncated,
+        disclaimer: true,
+      }
+      const outDir = typeof parsed.flags.out === 'string' && parsed.flags.out.trim()
+        ? parsed.flags.out.trim()
+        : join(HOME, 'exports', 'client-' + data.client.id + '-' + generatedAt.replace(/[:.]/g, '-'))
+      const packResult = packLib.exportClientStatusPack({
+        outDir,
+        status: statusPayload,
+        markdown: markdown,
+        ...(format === 'docx' ? { docx: buffer } : {}),
+        subject: { kind: 'client', id: data.client.id, name: data.displayName },
+        generatedAt: generatedAt,
+        overwrite: parsed.flags.force === true,
+        env: { advisersVersion: VERSION, command: 'client export --pack' },
+      })
+      try {
+        const writeStore = dbStore()
+        if (writeStore) {
+          writeStore.appendAudit({
+            actor: 'local',
+            action: 'client.export',
+            allowed: true,
+            reason: 'client ' + data.client.id + ' format=pack bytes=' + packResult.bytes + ' files=' + packResult.fileCount + ' protected=' + data.protectedExcluded,
+          })
+        }
+      } catch {}
+      const payload = {
+        ok: true,
+        command: 'client export --pack',
+        format: packResult.format,
+        version: packResult.version,
+        scope: packResult.scope,
+        subject: packResult.subject,
+        out: packResult.out,
+        replaced: packResult.replaced,
+        generatedAt: packResult.generatedAt,
+        counts: packResult.counts,
+        bytes: packResult.bytes,
+        fileCount: packResult.fileCount,
+        checksumCount: packResult.checksumCount,
+        manifestDigest: packResult.manifestDigest,
+        verificationBasis: packResult.verificationBasis,
+        verification: packResult.verification,
+        clearance: clearance,
+        protectedExcluded: data.protectedExcluded,
+        disclaimer: true,
+      }
+      const human = [
+        '已生成客户状态包目录（pack v1）：' + payload.out,
+        '客户：' + data.displayName + ' (' + data.client.id + ') · files=' + payload.fileCount + ' · bytes=' + payload.bytes + ' · manifestDigest=' + String(payload.manifestDigest).slice(0, 16),
+        '离线校验：' + (payload.verification.ok ? '通过（仅证明包内 SHA-256 自洽，不是签名/第三方存证）' : '失败：' + (payload.verification.errors ?? []).slice(0, 3).join(' | ')),
+        '边界：状态说明，不是对账单/合同/法律意见；不含金额、对话原文与备注正文。',
+      ]
+      customerPrint(parsed.flags.json === true, payload, human)
+      if (!payload.verification.ok) process.exitCode = 1
+      return
+    }
     const out = typeof parsed.flags.out === 'string'
       ? parsed.flags.out.trim()
       : join(HOME, 'exports', 'client-' + data.client.id + '-' + generatedAt.replace(/[:.]/g, '-') + '.' + format)
@@ -3221,7 +3354,7 @@ async function clientExport(rest) {
     customerPrint(parsed.flags.json === true, payload, human)
   } catch (error) { reportCustomerFailure(error) }
 }
-function clientCommand(rawArgs) {
+async function clientCommand(rawArgs) {
   const sub = rawArgs[0]
   const rest = rawArgs.slice(1)
   if (!sub || sub === 'help' || sub === '--help') { clientUsage(); return }
@@ -3671,15 +3804,24 @@ async function buildAgendaData(input) {
   conflicts.sort((a, b) => (a.date === b.date ? (a.items.join(',') < b.items.join(',') ? -1 : 1) : (a.date < b.date ? -1 : 1)))
   const perDayLoad = {}
   for (const day of daysOut) if (day.load) perDayLoad[day.date] = day.load
+  // 0.4.0 proactive (task-29): urgency is a derived, additive field attached
+  // after the deterministic projection. It is never part of the morning hash
+  // (buildMorningReport strips it before hashing) and calendar items are left
+  // untouched. Secrecy is not an input (see lib/urgency.js).
+  const { scoreUrgency } = await loadUrgency()
+  const urgencyRecords = new Map()
+  for (const commitment of input.ledger.listCommitments()) urgencyRecords.set(commitment.id, commitment)
+  const urgencyOptions = { now: nowMs, timezone: AGENDA_TIMEZONE, records: urgencyRecords }
+  const withUrgency = (items) => items.map((item) => (item.kind === 'commitment' ? { ...item, urgency: scoreUrgency(item, urgencyOptions) } : item))
   return {
     ok: true,
     command: 'agenda',
     now: new Date(nowMs).toISOString(),
     window: { from: startDay, to: lastDay, days: days, timezone: AGENDA_TIMEZONE },
-    overdue: overdue.slice(0, 50),
-    days: daysOut,
-    waiting: waiting.slice(0, 20),
-    unscheduled: unscheduled.slice(0, 20),
+    overdue: withUrgency(overdue.slice(0, 50)),
+    days: daysOut.map((day) => ({ ...day, items: withUrgency(day.items) })),
+    waiting: withUrgency(waiting.slice(0, 20)),
+    unscheduled: withUrgency(unscheduled.slice(0, 20)),
     conflicts: conflicts,
     counts: { overdue: overdue.length, today: daysOut[0] ? daysOut[0].load : 0, days: days, waiting: waiting.length, unscheduled: unscheduled.length, conflicts: conflicts.length, perDayLoad: perDayLoad },
     degraded: degraded,
@@ -3814,8 +3956,43 @@ async function buildMorningReport(input) {
   if (agenda.conflicts.length) risks.push('时间冲突 ' + agenda.conflicts.length + ' 处')
   if (today.load >= 3) risks.push('今日负载较高（' + today.load + ' 项）')
   if (agenda.unscheduled.length) risks.push('未排期 ' + agenda.unscheduled.length + ' 条')
+  // 0.4.0 proactive: urgency now rides on the agenda commitment items, but the
+  // frozen dataSha256 must cover exactly the 0.3.2 shape. Strip the derived field
+  // before hashing (the same data still ships in payloadInput below).
+  const stripUrgency = (value) => {
+    if (Array.isArray(value)) return value.map(stripUrgency)
+    if (value && typeof value === 'object') {
+      const out = {}
+      for (const [key, entry] of Object.entries(value)) if (key !== 'urgency') out[key] = stripUrgency(entry)
+      return out
+    }
+    return value
+  }
+  const counts = {
+    mustDo: mustDo.length,
+    overdue: agenda.overdue.length,
+    meetings: meetings.length,
+    waiting: agenda.waiting.length,
+    upcoming: upcoming.length,
+    unscheduled: agenda.unscheduled.length,
+    conflicts: agenda.conflicts.length,
+  }
   const hashInput = {
     localDay: agenda.window.from,
+    window: agenda.window,
+    mustDo: stripUrgency(mustDo),
+    overdue: stripUrgency(agenda.overdue),
+    meetings: meetings,
+    waiting: stripUrgency(agenda.waiting),
+    upcoming: upcoming,
+    unscheduled: stripUrgency(agenda.unscheduled),
+    conflicts: agenda.conflicts,
+    counts: counts,
+  }
+  const evidence = await loadEvidence()
+  const dataSha256 = evidence.sha256Hex(evidence.stableStringify(hashInput, { space: 0 }))
+  const payloadInput = {
+    localDay: hashInput.localDay,
     window: agenda.window,
     mustDo: mustDo,
     overdue: agenda.overdue,
@@ -3824,19 +4001,26 @@ async function buildMorningReport(input) {
     upcoming: upcoming,
     unscheduled: agenda.unscheduled,
     conflicts: agenda.conflicts,
-    counts: {
-      mustDo: mustDo.length,
-      overdue: agenda.overdue.length,
-      meetings: meetings.length,
-      waiting: agenda.waiting.length,
-      upcoming: upcoming.length,
-      unscheduled: agenda.unscheduled.length,
-      conflicts: agenda.conflicts.length,
-    },
+    counts: counts,
   }
-  const evidence = await loadEvidence()
-  const dataSha256 = evidence.sha256Hex(evidence.stableStringify(hashInput, { space: 0 }))
-  return { agenda: agenda, today: today, risks: risks, hashInput: hashInput, dataSha256: dataSha256 }
+  // Deterministic human priority list (score desc -> dueAt asc -> id asc); it is
+  // presentation only and never enters dataSha256.
+  const { selectTopUrgent } = await loadUrgency()
+  const topLimit = Number.isInteger(input.top) && input.top >= 1 && input.top <= 5 ? input.top : 3
+  const topCandidates = [
+    ...mustDo.map((item) => ({ ...item, source: 'today' })),
+    ...agenda.overdue.map((item) => ({ ...item, source: 'overdue' })),
+  ]
+  const top = selectTopUrgent(topCandidates, { limit: topLimit }).map((item) => ({
+    id: item.id,
+    kind: item.kind,
+    title: item.title,
+    ...(item.localTime ? { localTime: item.localTime } : {}),
+    urgency: item.urgency,
+    whyNow: item.urgency?.whyNow ?? '',
+    source: item.source,
+  }))
+  return { agenda: agenda, today: today, risks: risks, hashInput: hashInput, payloadInput: payloadInput, dataSha256: dataSha256, top: top, topLimit: topLimit }
 }
 
 function morningMarkdown(report) {
@@ -3845,6 +4029,17 @@ function morningMarkdown(report) {
   const lines = []
   lines.push('# 晨报 ' + day + '（' + agendaWeekday(day) + '）')
   lines.push('> 本地确定性生成 · 不含模型推理 · 数据哈希 sha256:' + report.dataSha256.slice(0, 16))
+  lines.push('')
+  // 0.4.0 additive section: top-urgency view (<=3/--top). The full "今天必须做"
+  // list below keeps its 0.3.2 meaning, so existing readers do not break.
+  const urgencyLevelLabels = { low: '低', medium: '中', high: '高', critical: '急' }
+  lines.push('## 今天优先（最多 ' + report.topLimit + '）')
+  if (!report.top.length) lines.push('（无）')
+  for (let index = 0; index < report.top.length; index++) {
+    const item = report.top[index]
+    const level = urgencyLevelLabels[item.urgency?.level] ?? String(item.urgency?.level ?? '低')
+    lines.push((index + 1) + '. ' + item.title + (item.localTime ? '（今天 ' + item.localTime + ' 到期）' : '') + '，urgency ' + (item.urgency?.score ?? 0) + '/' + level + (item.whyNow ? '：' + item.whyNow : ''))
+  }
   lines.push('')
   lines.push('## 今天必须做')
   if (!report.hashInput.mustDo.length) lines.push('（无）')
@@ -3891,19 +4086,34 @@ async function morningReportCommand(args) {
   const parsed = parseFlags(args)
   const flags = parsed.flags
   if (flags.help === true) {
-    console.log('usage: advisers morning [digest morning] [--days 1..31] [--matter id] [--out file] [--json] [--now ISO]')
+    console.log('usage: advisers morning [digest morning] [--days 1..31] [--matter id] [--top 1..5] [--out file] [--archive [--keep 1..365]] [--json] [--now ISO]')
     return
   }
   const window = parseAgendaWindowFlags(flags, 'morning')
   if (!window) return
+  // 0.4.0 flags: --top (human priority count) and --keep (archive retention).
+  let top
+  if (flags.top !== undefined) {
+    if (flags.top === true || !/^\d+$/.test(String(flags.top)) || Number(flags.top) < 1 || Number(flags.top) > 5) { agendaUsageFail('--top must be an integer 1..5'); return }
+    top = Number(flags.top)
+  }
+  let keep
+  if (flags.keep !== undefined) {
+    if (flags.keep === true || !/^\d+$/.test(String(flags.keep)) || Number(flags.keep) < 1 || Number(flags.keep) > 365) { agendaUsageFail('--keep must be an integer 1..365'); return }
+    keep = Number(flags.keep)
+  }
   try {
     const inputs = loadAgendaInputs()
     if (window.matterId) {
       try { resolveMatterForCommand(inputs.ledger, window.matterId, 'morning') } catch (error) { agendaMatterErrorLine(error); return }
     }
-    const report = await buildMorningReport({ ledger: inputs.ledger, events: inputs.events, nowMs: window.nowMs, days: window.days, fromDay: window.fromDay, matterId: window.matterId })
+    const report = await buildMorningReport({ ledger: inputs.ledger, events: inputs.events, nowMs: window.nowMs, days: window.days, fromDay: window.fromDay, matterId: window.matterId, top: top })
     const markdown = morningMarkdown(report)
-    const payload = Object.assign({ ok: true, command: 'morning', generatedAt: new Date(window.nowMs).toISOString() }, report.hashInput, { dataSha256: report.dataSha256, degraded: report.agenda.degraded })
+    const payload = Object.assign(
+      { ok: true, command: 'morning', generatedAt: new Date(window.nowMs).toISOString() },
+      report.payloadInput,
+      { dataSha256: report.dataSha256, degraded: report.agenda.degraded, top: report.top, urgencyModelVersion: 1 },
+    )
     let outPath
     if (flags.out !== undefined) {
       if (typeof flags.out !== 'string') { agendaUsageFail('--out requires a file path'); return }
@@ -3912,9 +4122,45 @@ async function morningReportCommand(args) {
       atomicWriteFileSync(outPath, markdown, { mode: 0o600 })
       payload.out = outPath
     }
+    // 0.4.0 proactive: --archive is the only write path here. It takes the
+    // writer lock (audit row brief.archive inside the same transaction), writes
+    // briefs/<localDay>.md + latest.md atomically, and prunes old day files.
+    let archiveInfo
+    if (flags.archive === true) {
+      const archive = await loadBriefArchive()
+      const localDay = report.hashInput.localDay
+      const writeBrief = () => archive.archiveBrief({ home: HOME, env: process.env, localDay, markdown, keep })
+      try {
+        if (dbStore()) {
+          mutateWithAudit(() => { archiveInfo = writeBrief(); return null }, archive.briefAuditRow({ localDay }))
+        } else {
+          archiveInfo = writeBrief()
+        }
+      } catch (error) { reportCommandFailure(error); return }
+      try {
+        const scheduler = await loadScheduler()
+        scheduler.recordSchedulerRunV2({ homeDir: HOME, at: new Date(window.nowMs), section: 'morning', result: 'ok', count: report.top.length, path: archiveInfo.path, dryRun: false })
+      } catch (error) {
+        console.error(sanitizeConsoleText('scheduler status not recorded: ' + (error?.message ?? error), { max: 2000 }))
+      }
+      payload.archive = {
+        path: archiveInfo.path,
+        latestPath: archiveInfo.latestPath,
+        keep: archiveInfo.keep,
+        bytes: archiveInfo.bytes,
+        removed: archiveInfo.removed,
+        failed: archiveInfo.failed,
+      }
+    }
     if (flags.json === true) { console.log(JSON.stringify(payload, null, 2)); return }
     process.stdout.write(markdown)
     if (outPath) console.log('wrote ' + outPath + ' (mode 600)')
+    if (archiveInfo) {
+      console.log('已归档：' + sanitizeConsoleText(archiveInfo.path, { max: 240 }) + '（' + formatBytes(archiveInfo.bytes) + '，keep=' + archiveInfo.keep + '）')
+      console.log('最新：' + sanitizeConsoleText(archiveInfo.latestPath, { max: 240 }))
+      for (const removed of archiveInfo.removed) console.log('已删除：' + sanitizeConsoleText(removed, { max: 240 }))
+      for (const failed of archiveInfo.failed) console.error(sanitizeConsoleText('归档清理失败：' + failed.path + ' (' + failed.code + ')', { max: 2000 }))
+    }
   } catch (error) { reportCommandFailure(error) }
 }
 
@@ -4174,8 +4420,9 @@ function tick(ledger, asJson = false) {
  * pointed at by `verifyFtsIntegrity()` / reader warnings ("advisers audit
  * --rebuild-fts"). Runs in the single-writer lock inside one immediate
  * transaction so a failure leaves the previous index intact, then verifies the
- * rebuilt index and records an audit row. `_setupFts()` is the same migration
- * helper v19 uses (test/fts-integrity.test.js pins this contract).
+ * rebuilt index and records an audit row. `rebuildAllFtsIndexes()` (0.4.0)
+ * rebuilds the v19 turn pair AND the v22 KB pair with the same probed tokenizer,
+ * so a KB FTS drift is repairable here instead of only detectable.
  */
 async function rebuildFtsIndexes({ asJson = false } = {}) {
   let store
@@ -4190,7 +4437,7 @@ async function rebuildFtsIndexes({ asJson = false } = {}) {
   try {
     store.db.exec('BEGIN IMMEDIATE')
     try {
-      store._setupFts()
+      store.rebuildAllFtsIndexes()
       store.db.exec('COMMIT')
     } catch (error) {
       try { store.db.exec('ROLLBACK') } catch {}
@@ -4398,6 +4645,17 @@ async function printPrivacy(args = []) {
   ensureHome()
   const asJson = args.includes('--json')
   const prove = args.includes('--prove')
+  // 0.4.0: surface x action x gate matrix generated from the policy registry
+  // (read-only; no ledger rows). Replaces the hand-maintained coverage narrative.
+  if (args.includes('--matrix')) {
+    const policy = await loadPolicy()
+    const matrix = policy.surfaceMatrix()
+    const payload = { ok: true, command: 'privacy --matrix', policyVersion: matrix.policyVersion, rulesetVersion: matrix.rulesetVersion, generatedAt: new Date().toISOString(), rows: matrix.rows }
+    if (asJson) { console.log(JSON.stringify(payload, null, 2)); return }
+    console.log('policy matrix · policy v' + payload.policyVersion + ' · ruleset ' + payload.rulesetVersion + ' · generatedAt ' + payload.generatedAt)
+    for (const row of payload.rows) console.log(row.surface + '\t' + row.actions.join(',') + '\t' + row.dataClass + '\t' + row.gate + '\tdefault=' + row.default)
+    return
+  }
   const store = readStoreOrExit()
   let audit = null
   try { const v = store?.verifyAudit(); if (v) audit = { ok: v.ok, count: v.count ?? 0 } } catch {}
@@ -4438,6 +4696,8 @@ async function printPrivacy(args = []) {
     'model provider — chat / brief --deep / review / learn review (only when ADVISERS_API_KEY is set; ADVISERS_BASE_URL)',
     'research --web|--url — provider web search/read tool (explicit opt-in; no silent research egress)',
     'capture --from-imap — read-only IMAP fetch from the server you configure (TLS by default)',
+    'mail sync — IMAP server you configure (TLS/STARTTLS, read-only EXAMINE/FETCH)',
+    'mail extract --model — mail body excerpts sent to the model provider only after explicit opt-in + separate consent (ADVISERS_API_KEY)',
     'remind --deliver --notify — optional outbound webhook or local notifier you configure',
     'sync push|pull — the directory you provide; snapshots are AES-256-GCM encrypted before writing',
     'bridge — Hermes file gateway: inbox/outbox JSON files are handed to the Hermes process',
@@ -4494,7 +4754,7 @@ async function printPrivacy(args = []) {
         console.log(`[FAIL] audit anchor ${auditAnchor.code ?? auditAnchor.status} (local self-check: the audit tail is shorter/rewritten vs the recorded anchor; see \`advisers audit\`)`)
       }
     }
-    console.log('egress gate coverage: chat/model, review, research, brief --deep, learn review, bridge and capture are wired to the local secrecy gate; the other surfaces listed above are self-attested.')
+    console.log('egress gate coverage: chat/model, review, research, brief --deep, learn review, bridge, capture, mail sync and mail extract --model are wired to the local secrecy gate (mail extract --model also requires a separate consent record); the other surfaces listed above are self-attested.')
     if (failed) process.exitCode = 1
   }
 }
@@ -5220,7 +5480,7 @@ async function doctorRepair(flags) {
       if (!before.ok) {
         store.db.exec('BEGIN IMMEDIATE')
         try {
-          store._setupFts()
+          store.rebuildAllFtsIndexes()
           store.db.exec('COMMIT')
         } catch (error) {
           try { store.db.exec('ROLLBACK') } catch {}
@@ -5338,6 +5598,9 @@ function printStatus(asJson = false) {
       // queries on the same read snapshot (no row materialisation).
       clients: Number(store.db.prepare("SELECT COUNT(*) AS n FROM clients WHERE status = 'active' AND deleted_at IS NULL").get()?.n ?? 0),
       projects: Number(store.db.prepare("SELECT COUNT(*) AS n FROM projects WHERE status = 'active' AND deleted_at IS NULL").get()?.n ?? 0),
+      // 0.4.0 additive status counts: money rows (never amounts).
+      receivables: Number(store.db.prepare('SELECT COUNT(*) AS n FROM receivables WHERE deleted_at IS NULL').get()?.n ?? 0),
+      payments: Number(store.db.prepare('SELECT COUNT(*) AS n FROM payments WHERE deleted_at IS NULL').get()?.n ?? 0),
       usage: store.sumModelUsage(),
     }))
     data.matters = counts.matters
@@ -5348,6 +5611,8 @@ function printStatus(asJson = false) {
     data.deliveries = counts.deliveries
     data.clients = counts.clients
     data.projects = counts.projects
+    data.receivables = counts.receivables
+    data.payments = counts.payments
     const usage = counts.usage
     if (usage.calls) data.modelUsage = usage
   }
@@ -5562,7 +5827,7 @@ async function runTurn(options) {
   }
 }
 
-async function runTurnInner({ runtime, ledger, text, conversationId, debug = false, confirm, attachments = [], allowPaths = [], renderWidth = null }) {
+async function runTurnInner({ runtime, ledger, text, conversationId, debug = false, confirm, attachments = [], allowPaths = [], renderWidth = null, signal = null }) {
   // 0.3.0 Wave 3 (plan 26 §4.1): internal process lines ([tool]/[attach]/[compact])
   // are hidden by default; ADVISERS_PROGRESS=1 (or /debug) is the explicit
   // opt-in. Results, confirmations and failures are never gated.
@@ -5686,6 +5951,10 @@ async function runTurnInner({ runtime, ledger, text, conversationId, debug = fal
     effort: process.env.ADVISERS_THINKING_EFFORT,
     onTool: (name) => { if (showProgress) console.log('[tool] ' + sanitizeConsoleText(name, { max: 120 })) },
     onToolAction: auditToolAction,
+    // 0.4.0: the interactive shell passes an AbortSignal so Ctrl+C/Esc can
+    // interrupt one turn; one-shot chat passes null and keeps the exact old
+    // options object shape (no behavioural change).
+    ...(signal ? { signal } : {}),
   })
   // 0.2.3 Wave 1: consume the structured warnings (they used to be discarded)
   // and treat a blocked turn as a failure, never as a successful reply.
@@ -6121,6 +6390,1420 @@ async function repl({ allowPaths = [] } = {}) {
   saveLedger(ledger)
 }
 
+/* ---------------------------------------------------------------------------
+ * 0.4.0 Wave 1 (task-29): interactive shell entry.
+ *
+ * The state machine / rendering / paste guard live in lib/shell.js. This file
+ * keeps the process-level concerns (the TOS gate already ran, the ledger and
+ * model runtime, the writer lock) and injects read-only JSON views plus one
+ * turn executor. The legacy REPL (repl) stays as the explicit fallback
+ * (ADVISERS_NO_SHELL=1); a non-TTY stdin keeps the 0.3.x "print help, exit 0"
+ * path byte for byte, and `advisers tui --once/--json` is untouched.
+ * ------------------------------------------------------------------------- */
+
+/** Today counts for the shell status line (same definition as repl()). */
+function shellTodayCounts(ledger, nowMs = Date.now()) {
+  const today = localDayOf(nowMs)
+  let due = 0
+  let overdue = 0
+  try {
+    for (const commitment of ledger.openCommitments()) {
+      if (!commitment.dueAt) continue
+      const ms = Date.parse(commitment.dueAt)
+      if (Number.isNaN(ms)) continue
+      if (ms < nowMs && localDayOf(ms) !== today) overdue += 1
+      else if (localDayOf(ms) === today) due += 1
+    }
+  } catch {}
+  return { due, overdue }
+}
+
+function shellModelState() {
+  const local = !process.env.ADVISERS_API_KEY || process.env.ADVISERS_NO_MODEL === '1'
+  return { local, model: local ? null : (process.env.ADVISERS_MODEL || 'deepseek-flash') }
+}
+
+/**
+ * Run legacy printing code and collect its stdout as result-block lines.
+ * Keeps the old /commands alive inside the shell without a second command
+ * surface: the functions print like before, the shell renders the captured
+ * lines through the sanitising kernel.
+ */
+async function captureConsole(fn) {
+  const lines = []
+  const original = console.log
+  console.log = (...values) => { lines.push(values.map((value) => (typeof value === 'string' ? value : String(value))).join(' ')) }
+  try { await fn() } finally { console.log = original }
+  return lines
+}
+
+/** Read-only evidence view shared by /evidence (no exit-code side effects). */
+async function shellEvidenceBlock(id) {
+  const store = mode === 'sqlite' ? readStore() : null
+  const ledger = readLedgerForCommand(id.startsWith('fact_') ? { facts: {} } : id.startsWith('pref_') ? { preferences: {} } : { commitments: {} })
+  const { evidenceForCommitment, evidenceForFact, evidenceForPreference } = await loadEvidence()
+  const lookups = await buildEvidenceLookups(store)
+  let result
+  if (id.startsWith('cm_')) result = await evidenceForCommitment(store, ledger, id, undefined, { lookup: lookups })
+  else if (id.startsWith('fact_')) result = await evidenceForFact(store, ledger, id, undefined, { lookup: lookups })
+  else if (id.startsWith('pref_')) result = await evidenceForPreference(store, ledger, id, undefined, { lookup: lookups })
+  else throw Object.assign(new Error('unknown evidence id prefix (want cm_/fact_/pref_)'), { code: 'E_USAGE' })
+  if (!result || (!result.commitment && !result.fact && !result.preference)) throw new Error('not found: ' + id)
+  await normalizeEvidenceSources(result)
+  const unverifiable = Array.isArray(result.unverifiable) ? result.unverifiable : []
+  const label = result.commitment ? result.commitment.action : result.fact ? result.fact.subject + ' ' + result.fact.predicate : result.preference?.statement
+  const lines = []
+  if (!result.sources.length && !unverifiable.length) lines.push({ role: 'fact', text: '（没有可回溯来源）' })
+  for (const source of result.sources) lines.push({ role: 'fact', text: source.sessionId + '#' + source.turnId + '  「' + String(source.quote ?? '').slice(0, 120) + '」' })
+  for (const missing of result.missing) lines.push({ role: 'fact', text: 'MISSING ' + missing.reason + (missing.ref ? ' ' + missing.ref : '') })
+  for (const item of unverifiable) lines.push({ role: 'fact', text: 'MANUAL 操作者录入（未外部核验）  「' + String(item.quote ?? '').slice(0, 120) + '」' })
+  return { headline: String(id) + '  ' + String(label ?? ''), lines, next: 'advisers evidence show ' + id + ' --json' }
+}
+
+/** Read-only client view for /client [id|list]. */
+function shellClientBlock(args, arg) {
+  const store = readStore()
+  if (!store) throw new Error('customer views need the SQLite store (ADVISERS_STORE=sqlite)')
+  const words = Array.isArray(args) ? args : []
+  const sub = words[0]
+  if (!sub || sub === 'list' || sub === 'ls') {
+    const rows = store.listClients({ status: 'active', limit: 50 })
+    return {
+      headline: '客户（' + rows.length + '）',
+      lines: rows.length ? rows.map((client) => ({ role: 'item', text: client.id + '  ' + client.name })) : [{ role: 'fact', text: '（还没有客户）' }],
+      next: 'advisers client show <id>',
+    }
+  }
+  const id = sub === 'show' ? words[1] : sub
+  if (!id) throw new Error('usage: /client [list|<id>]')
+  const view = readClientView(store, id)
+  const openRows = Array.isArray(view.open) ? view.open : []
+  const lines = [
+    { role: 'fact', text: '状态 ' + String(view.client.status ?? 'active') + ' · secrecy ' + String(view.client.secrecyDefault ?? 0) },
+    { role: 'item', text: '项目 ' + view.projects.length + ' · 事项 ' + view.matters.length + ' · 未完成 ' + openRows.length + ' · 备注 ' + view.notes.length },
+  ]
+  for (const item of openRows.slice(0, 5)) lines.push({ role: 'item', text: item.id + '  ' + String(item.action ?? item.title ?? '') })
+  return { headline: view.client.name + ' [' + view.client.id + ']', lines, next: 'advisers client show ' + view.client.id + ' --json' }
+}
+
+/** Open commitments grouped for /today and /who (no store reads). */
+function shellOpenRows(ledger) {
+  const rows = []
+  try {
+    for (const commitment of ledger.openCommitments()) rows.push(commitment)
+  } catch {}
+  return rows
+}
+
+/** Build the runShell() handler table for one interactive session. */
+async function runShellEntry({ allowPaths = [] } = {}) {
+  const shell = await loadShell()
+  ensureHome()
+  const ledger = loadLedger()
+  const runtime = runtimeFor(ledger)
+  const state = {
+    ledger,
+    runtime,
+    conversationId: latestConversationId(),
+    debug: process.env.ADVISERS_DEBUG === '1',
+    allowPaths: [...allowPaths],
+  }
+  const handlers = {
+    status: () => {
+      const model = shellModelState()
+      return { kind: 'idle', today: shellTodayCounts(state.ledger), local: model.local, model: model.model, hint: '/help' }
+    },
+    turn: async (payload) => {
+      let question
+      try {
+        question = await runTurn({
+          runtime: state.runtime,
+          ledger: state.ledger,
+          text: payload.text,
+          conversationId: state.conversationId,
+          debug: state.debug,
+          confirm: payload.confirm,
+          attachments: Array.isArray(payload.attachments) ? payload.attachments : [],
+          allowPaths: [...state.allowPaths, ...(Array.isArray(payload.allowPaths) ? payload.allowPaths : [])],
+          renderWidth: null,
+          signal: payload.signal ?? null,
+        })
+      } finally {
+        try { saveLedger(state.ledger) } catch {}
+      }
+      if (lastTurnSafetyBlock) {
+        return { kind: 'error', error: { title: '本轮被内容安全拦截', reason: '没有执行；未创建承诺或文件。', next: '/retry 或 /help', code: lastTurnSafetyBlock.code ?? undefined } }
+      }
+      if (question) return { question: String(question) }
+      return undefined
+    },
+    history: async () => {
+      const rows = dbStore()?.listSessions(50) ?? []
+      return { sessions: rows.map((row, index) => ({ n: index + 1, id: row.conversationId, title: row.title, updatedAt: row.updatedAt })) }
+    },
+    resume: async ({ arg }) => {
+      const rows = dbStore()?.listSessions(50) ?? []
+      const pick = /^\d+$/.test(String(arg)) ? rows[Number(arg) - 1] : rows.find((row) => row.conversationId === arg)
+      if (!pick) throw new Error('unknown session: ' + arg)
+      state.conversationId = pick.conversationId
+      return { kind: 'notice', headline: '已恢复会话', summary: String(pick.title ?? '') + ' [' + pick.conversationId + ']', next: '直接输入下一步' }
+    },
+    newSession: async () => {
+      state.conversationId = 'local_' + Date.now()
+      return { kind: 'notice', headline: '新会话', summary: '下一条消息写在新会话里' }
+    },
+    today: async () => {
+      const nowMs = Date.now()
+      const today = localDayOf(nowMs)
+      const due = []
+      const overdue = []
+      for (const commitment of shellOpenRows(state.ledger)) {
+        if (!commitment.dueAt) continue
+        const ms = Date.parse(commitment.dueAt)
+        if (Number.isNaN(ms)) continue
+        if (ms < nowMs && localDayOf(ms) !== today) overdue.push(commitment)
+        else if (localDayOf(ms) === today) due.push(commitment)
+      }
+      const lines = []
+      for (const commitment of due.slice(0, 8)) lines.push({ role: 'item', text: '今天 · ' + commitment.id + '  ' + String(commitment.action) })
+      for (const commitment of overdue.slice(0, 8)) lines.push({ role: 'item', text: '逾期 · ' + commitment.id + '  ' + String(commitment.action) + '（' + String(commitment.dueAt).slice(0, 10) + '）' })
+      if (!lines.length) lines.push({ role: 'fact', text: '今天没有到期的承诺。' })
+      return { headline: '今天 · 今天到期 ' + due.length + ' · 逾期 ' + overdue.length, lines, next: 'advisers today --json' }
+    },
+    remind: async () => {
+      const { buildReminders } = await loadRemind()
+      const snoozed = {}
+      for (const [key, value] of readStore()?.listMetaByPrefix('snooze:') ?? []) snoozed[key.slice('snooze:'.length)] = value
+      const reminders = buildReminders(state.ledger, { now: new Date(), snoozedUntil: snoozed })
+      const lines = reminders.slice(0, 8).map((reminder) => ({ role: 'item', text: '[' + reminder.level + '/' + reminder.bucket + '] ' + String(reminder.action) + (reminder.dueAt ? ' · ' + String(reminder.dueAt).slice(0, 16) : '') }))
+      return { headline: '提醒（' + reminders.length + '）', lines: lines.length ? lines : [{ role: 'fact', text: '现在没有到期的提醒。' }], next: 'advisers remind --json' }
+    },
+    who: async () => {
+      const open = shellOpenRows(state.ledger)
+      const mine = open.filter((commitment) => commitment.debtor === 'user' || commitment.debtor === 'agent')
+      const waiting = open.filter((commitment) => commitment.debtor === 'third' || String(commitment.debtor).startsWith('third:'))
+      const lines = []
+      for (const commitment of mine) lines.push({ role: 'item', text: '我欠 ' + commitment.id + '  ' + commitment.creditor + ' · ' + String(commitment.action) })
+      for (const commitment of waiting) lines.push({ role: 'item', text: '等人 ' + commitment.id + '  ' + String(commitment.action) })
+      return { headline: '我欠别人 ' + mine.length + ' · 等别人 ' + waiting.length, lines: lines.length ? lines.slice(0, 12) : [{ role: 'fact', text: '（没有未完成的承诺）' }], next: 'advisers who' }
+    },
+    client: async ({ args, arg }) => shellClientBlock(args, arg),
+    evidence: async ({ arg }) => {
+      if (!arg) throw Object.assign(new Error('usage: /evidence <cm_|fact_|pref_ id>'), { code: 'E_USAGE' })
+      return shellEvidenceBlock(String(arg).split(/\s+/)[0])
+    },
+    opening: async () => {
+      const lines = await captureConsole(() => printOpening(state.conversationId))
+      return lines.filter((line) => line.trim() !== '').slice(0, 2)
+    },
+    legacyCommand: async ({ name, args, arg }) => {
+      const sub = Array.isArray(args) ? args[0] : undefined
+      switch (name) {
+        case '/deliveries': { const lines = await captureConsole(() => printDeliveries()); return { lines } }
+        case '/tick': { const lines = await captureConsole(() => tick(state.ledger)); return { lines } }
+        case '/week': { const lines = await captureConsole(() => printWeek(state.ledger)); return { lines } }
+        case '/memory': { const lines = await captureConsole(() => printMemory(state.ledger)); return { lines } }
+        case '/prefs': { const lines = await captureConsole(() => printPreferences()); return { lines } }
+        case '/links': { const lines = await captureConsole(() => printLinks()); return { lines } }
+        case '/audit': { const lines = await captureConsole(() => auditCommand([])); return { lines } }
+        case '/agenda': {
+          const lines = await captureConsole(async () => {
+            const inputs = loadAgendaInputs()
+            const data = await buildAgendaData({ ledger: inputs.ledger, events: inputs.events, nowMs: Date.now(), days: 7, includeCalendar: true, includeDone: false })
+            printAgenda(data)
+          })
+          return { lines }
+        }
+        case '/search': {
+          const query = String(arg ?? '').trim()
+          if (!query) throw Object.assign(new Error('usage: /search <text>'), { code: 'E_USAGE' })
+          const rows = dbStore()?.searchTurns(query, { limit: 10 }) ?? []
+          return { headline: '搜索 · ' + query, lines: rows.length ? rows.map((row) => ({ role: 'item', text: row.seq + '\t' + row.role + '\t' + String(row.content).replace(/\s+/g, ' ').slice(0, 160) })) : [{ role: 'fact', text: '没有匹配' }] }
+        }
+        case '/digest': {
+          const lines = await captureConsole(async () => {
+            const store = dbStore()
+            const { buildDigest } = await loadDigest()
+            console.log(buildDigest({
+              period: String(arg ?? '').endsWith('week') ? 'week' : 'day',
+              turns: store?.listTurns(state.conversationId, 200) ?? [],
+              commitments: state.ledger.listCommitments(),
+              deliveries: store?.listDeliveries(100) ?? [],
+            }))
+          })
+          return { lines }
+        }
+        case '/diff': { const lines = await captureConsole(async () => { const { diffLatest } = await loadUndo(); const result = await diffLatest({ cwd: process.cwd(), backupDir: join(HOME, 'undo') }); console.log(result.ok ? result.diff : 'diff failed: ' + result.error) }); return { lines } }
+        case '/undo': { const lines = await captureConsole(async () => { const { undoLatest } = await loadUndo(); const result = await undoLatest({ cwd: process.cwd(), backupDir: join(HOME, 'undo'), force: args.includes('--force') }); console.log(result.ok ? '已回滚：' + result.path : '撤销失败：' + result.error) }); return { lines } }
+        case '/why': { const id = String(arg ?? '').trim(); if (!id) throw Object.assign(new Error('usage: /why <pref-id>'), { code: 'E_USAGE' }); const lines = await captureConsole(() => why(id)); return { lines } }
+        case '/debug': {
+          state.debug = !state.debug
+          return { kind: 'notice', headline: state.debug ? '明细已开启' : '明细已关闭', summary: state.debug ? '会打印上下文与内部行。' : undefined }
+        }
+        case '/forget': {
+          const id = String(arg ?? '').trim()
+          if (!id) throw Object.assign(new Error('usage: /forget <pref-id>'), { code: 'E_USAGE' })
+          const ok = state.ledger.forget('preference', id)
+          saveLedger(state.ledger)
+          return { kind: 'notice', headline: ok ? '已忘记：' + id : '没有这条偏好：' + id }
+        }
+        case '/correct': {
+          const statement = String(arg ?? '').trim()
+          if (!statement) throw Object.assign(new Error('usage: /correct <text>'), { code: 'E_USAGE' })
+          const lines = await captureConsole(() => { const result = learnPreference(state.ledger, statement, statement); saveLedger(state.ledger); printLearnReceipt(result) })
+          return { lines }
+        }
+        case '/decay': {
+          const lines = await captureConsole(async () => { const { applyPreferenceDecay } = await loadLearning(); const changed = applyPreferenceDecay(state.ledger.listPreferences({ includeCandidates: true })); saveLedger(state.ledger); console.log('[decay] ' + changed.length + ' preference(s) updated') })
+          return { lines }
+        }
+        case '/matter': {
+          const useId = sub === 'use' && Array.isArray(args) ? args[1] : undefined
+          if (!useId) throw Object.assign(new Error('usage: /matter use <matter-id>'), { code: 'E_USAGE' })
+          const matter = state.ledger.getMatter(useId)
+          if (!matter) throw new Error('unknown matter: ' + useId)
+          if (matter.status !== 'active') throw new Error('matter 已归档：' + useId)
+          state.ledger.setRoute('active-matter', useId)
+          saveLedger(state.ledger)
+          return { kind: 'notice', headline: 'active matter: ' + useId, summary: String(matter.title ?? '') }
+        }
+        case '/commit': {
+          const { flags, positional } = parseFlags(Array.isArray(args) ? args : [])
+          if (positional[0] === 'ls') { const lines = await captureConsole(() => printCommitments(state.ledger)); return { lines } }
+          if (positional[0] === 'add') {
+            const action = positional.slice(1).join(' ')
+            if (!action || !flags.quote) throw Object.assign(new Error('用法：/commit add <action> --quote <原话> [--due ISO]'), { code: 'E_USAGE' })
+            const c = state.ledger.addCommitment({ matterId: resolveMatterForCommand(state.ledger, flags.matter, 'commit add'), debtor: flags.debtor ?? 'user', creditor: flags.creditor ?? 'me', action, dueAt: flags.due, capability: 'todo', evidence: [manualEvidence(String(flags.quote), 'repl commit add')] })
+            saveLedger(state.ledger)
+            return { kind: 'notice', headline: c.id + ' open ' + c.action }
+          }
+          throw Object.assign(new Error('用法：/commit add ... 或 /commit ls'), { code: 'E_USAGE' })
+        }
+        case '/done': {
+          const { flags, positional } = parseFlags(Array.isArray(args) ? args : [])
+          const id = positional[0]
+          if (!id || !flags.evidence) throw Object.assign(new Error('用法：/done <id> --evidence <证据>'), { code: 'E_USAGE' })
+          state.ledger.completeCommitment(id, [manualEvidence(String(flags.evidence), 'repl commit done')])
+          saveLedger(state.ledger)
+          return { kind: 'notice', headline: 'done: ' + id }
+        }
+        case '/routine': {
+          if (sub !== 'save') throw Object.assign(new Error('usage: /routine save'), { code: 'E_USAGE' })
+          const last = lastRun
+          const routine = state.ledger.addRoutine({
+            name: (last?.toolLog?.map((tool) => tool.name).join(' ') || '本地任务').slice(0, 60),
+            description: '从本地任务沉淀的流程草稿',
+            trigger: [],
+            steps: last?.toolLog?.map((tool) => tool.name).length ? last.toolLog.map((tool) => tool.name) : ['执行任务'],
+            preferences: [],
+            pitfalls: [],
+            verification: ['产物已生成并记录 delivery'],
+            createdBy: 'agent',
+          })
+          saveLedger(state.ledger)
+          return { kind: 'notice', headline: 'draft routine ' + routine.id, summary: String(routine.name), next: 'advisers routine approve ' + routine.id }
+        }
+        case '/brief': {
+          const text = String(arg ?? '').trim()
+          if (!text) throw Object.assign(new Error('usage: /brief <text>'), { code: 'E_USAGE' })
+          const lines = await captureConsole(() => { const brief = state.runtime.brief(text); console.log(core.renderIntentBrief(brief)); console.log(core.renderReadback(brief)) })
+          return { lines }
+        }
+        default:
+          return undefined
+      }
+    },
+  }
+  const result = await shell.runShell({
+    argv: outputArgv,
+    env: process.env,
+    stdin: process.stdin,
+    stdout: process.stdout,
+    stderr: process.stderr,
+    store: null,
+    allowPaths: state.allowPaths,
+    handlers,
+  })
+  try { saveLedger(state.ledger) } catch {}
+  return result
+}
+
+
+/* ---------------------------------------------------------------------------
+ * 0.4.0 Wave 2 (task-29): KB / fact / scoped-search commands.
+ *
+ * Design source: 04-0.4-research/45-kb-design.md sections 3.4-3.7. Human output
+ * and machine output stay separate: --json prints one JSON document and nothing
+ * else; failures go to stderr as {error:{code,message,hint?}} with exit code 1
+ * (the TOS gate still uses 3).
+ * ------------------------------------------------------------------------- */
+
+/** One structured family error (new 0.4 command family style). */
+function familyError(code, message, hint) {
+  const error = new Error(message)
+  error.code = code
+  if (typeof hint === 'string' && hint) error.hint = hint
+  return error
+}
+
+/** Print one family failure as stderr JSON and exit 1 (store failures keep the
+ * documented E_DB_* hint path instead). */
+function reportFamilyFailure(error) {
+  if (isStoreWriteFailure(error)) { exitStoreWriteFailure(error); return }
+  const code = typeof error?.code === 'string' && error.code ? error.code : 'E_INTERNAL'
+  let message = String(error?.message ?? error)
+  if (message.startsWith(code + ': ')) message = message.slice(code.length + 2)
+  const hintTail = message.lastIndexOf(' (hint: ')
+  if (hintTail !== -1 && message.endsWith(')')) message = message.slice(0, hintTail)
+  const payload = { error: { code, message } }
+  if (typeof error?.hint === 'string' && error.hint) payload.error.hint = error.hint
+  console.error(JSON.stringify(payload))
+  process.exitCode = 1
+}
+
+/** Resolve the SQLite store for a family command (null in JSON-store mode). */
+function familyStore({ write = false } = {}) {
+  if (mode !== 'sqlite') {
+    throw familyError('E_STORE_REQUIRED', 'this command needs the SQLite store (ADVISERS_STORE=sqlite)', 'unset ADVISERS_STORE=json or run advisers doctor')
+  }
+  if (write) {
+    const store = dbStore()
+    if (!store) throw familyError('E_STORE_REQUIRED', 'the SQLite store is unavailable for writing', 'run advisers doctor')
+    return store
+  }
+  return readStoreOrExit()
+}
+
+/** Shared strict flag parse that reports E_USAGE for the family commands. */
+function familyFlags(args, spec, usage) {
+  const parsed = parseStrictFlags(args, spec)
+  if (!parsed.ok) { usageFail(parsed.error, usage); return null }
+  return parsed
+}
+
+function familyInteger(value, name, min, max) {
+  if (value === undefined) return undefined
+  if (!/^\d+$/.test(String(value))) throw familyError('E_USAGE', name + ' must be an integer')
+  const number = Number(value)
+  if (number < min || number > max) throw familyError('E_USAGE', name + ' must be an integer ' + min + '..' + max)
+  return number
+}
+
+const KB_USAGE = [
+  'usage: advisers kb add <file>... [--title s] [--kind quote|contract|receipt|delivery|note|other]',
+  '                            [--client id] [--project id] [--matter id] [--secrecy 0-3] [--replace] [--from list.txt] [--json]',
+  '       advisers kb ls [--client|--matter|--kind] [--all] [--limit n] [--clearance 0-3] [--json]',
+  '       advisers kb show <id> [--chunks 0..20] [--json]',
+  '       advisers kb rm <id> [--json]',
+  '       advisers kb purge <id> [--dry-run|--yes] [--json]',
+  '       advisers kb reindex [--rebuild] [--json]',
+  '       advisers kb search <query> [--scope kb|pages|all] [--limit n] [--clearance 0-3] [--json]',
+  '       advisers kb page ls|show|rebuild|diff ... [--json]',
+].join('\n')
+
+function kbDocRowText(doc) {
+  return doc.id + '  ' + doc.kind + '  ' + (doc.status === 'active' ? '' : '[' + doc.status + '] ') + doc.title + '  (' + doc.chunkCount + ' chunks, ' + doc.sizeBytes + ' B)'
+}
+
+async function kbAddCommand(args) {
+  const usage = 'usage: advisers kb add <file>... [--title s] [--kind k] [--client id] [--project id] [--matter id] [--secrecy 0-3] [--replace] [--from list.txt] [--json]'
+  const parsed = familyFlags(args, { booleans: ['json', 'replace'], values: ['title', 'kind', 'client', 'project', 'matter', 'secrecy', 'from'] }, usage)
+  if (!parsed) return
+  const flags = parsed.flags
+  let secrecy
+  if (flags.secrecy !== undefined) secrecy = familyInteger(flags.secrecy, '--secrecy', 0, 3)
+  const files = [...parsed.positional]
+  if (typeof flags.from === 'string') {
+    let list
+    try { list = readFileSync(flags.from, 'utf8') } catch (error) { throw familyError('E_KB_READ', 'cannot read --from list: ' + (error?.message ?? error)) }
+    for (const line of list.split(/\r?\n/)) {
+      const value = line.trim()
+      if (value && !value.startsWith('#')) files.push(value)
+    }
+  }
+  if (!files.length) { usageFail('no input files', usage); return }
+  const store = familyStore({ write: true })
+  const kb = await loadKb()
+  const added = []
+  const skipped = []
+  const failed = []
+  let chunks = 0
+  let textBytes = 0
+  let truncated = 0
+  let needsOcr = 0
+  for (const file of files) {
+    try {
+      const result = await kb.kbAdd(store, { file, title: flags.title, kind: flags.kind, clientId: flags.client, projectId: flags.project, matterId: flags.matter, secrecy, replace: flags.replace === true, hmacKey: process.env.ADVISERS_AUDIT_KEY })
+      const doc = result.document
+      added.push({ id: doc.id, title: doc.title, kind: doc.kind, sizeBytes: doc.sizeBytes, textBytes: result.counts.textBytes, chunks: result.counts.chunks, truncated: result.truncated, needsOcr: doc.needsOcr, encoding: doc.encoding })
+      chunks += result.counts.chunks
+      textBytes += result.counts.textBytes
+      if (result.truncated) truncated += 1
+      if (doc.needsOcr) needsOcr += 1
+    } catch (error) {
+      if (error?.skip === true) skipped.push({ file, code: error.code ?? 'E_KB_DUPLICATE', existingId: error.existingId })
+      else failed.push({ file, code: typeof error?.code === 'string' ? error.code : 'E_KB_INVALID', message: String(error?.message ?? error) })
+    }
+  }
+  const payload = { ok: failed.length === 0, command: 'kb add', counts: { added: added.length, skipped: skipped.length, failed: failed.length, chunks, textBytes }, added, skipped, failed, truncated, needsOcr }
+  if (failed.length) process.exitCode = 1
+  if (flags.json) { console.log(JSON.stringify(payload, null, 2)); return }
+  for (const item of added) console.log('added ' + item.id + '  ' + item.title + '  (' + item.chunks + ' chunks, ' + item.textBytes + ' B text)')
+  for (const item of skipped) console.log('skipped ' + item.file + '  ' + item.code + (item.existingId ? ' existing ' + item.existingId : ''))
+  for (const item of failed) console.error('failed ' + item.file + '  ' + item.code + ': ' + item.message)
+  console.log('counts: added=' + added.length + ' skipped=' + skipped.length + ' failed=' + failed.length + ' chunks=' + chunks + ' textBytes=' + textBytes)
+}
+
+async function kbListCommand(args) {
+  const usage = 'usage: advisers kb ls [--client id] [--matter id] [--kind k] [--all] [--limit n] [--clearance 0-3] [--json]'
+  const parsed = familyFlags(args, { booleans: ['json', 'all'], values: ['client', 'matter', 'kind', 'limit', 'clearance'] }, usage)
+  if (!parsed) return
+  const flags = parsed.flags
+  const store = familyStore()
+  const kb = await loadKb()
+  const result = kb.kbList(store, {
+    clientId: flags.client,
+    matterId: flags.matter,
+    kind: flags.kind,
+    all: flags.all === true,
+    limit: familyInteger(flags.limit, '--limit', 1, 200),
+    clearance: familyInteger(flags.clearance, '--clearance', 0, 3),
+  })
+  if (flags.json) { console.log(JSON.stringify(result, null, 2)); return }
+  if (!result.documents.length) console.log('（没有 KB 文档）')
+  for (const doc of result.documents) console.log(kbDocRowText(doc))
+  console.log('total=' + result.total + ' limit=' + result.limit + ' clearance=' + result.clearance + (result.truncated ? ' truncated' : '') + (result.protectedExcluded ? ' protectedExcluded=' + result.protectedExcluded : ''))
+}
+
+async function kbShowCommand(args) {
+  const usage = 'usage: advisers kb show <id> [--chunks 0..20] [--clearance 0-3] [--json]'
+  const parsed = familyFlags(args, { booleans: ['json'], values: ['chunks', 'clearance'] }, usage)
+  if (!parsed) return
+  const id = parsed.positional[0]
+  if (!id) { usageFail('missing document id', usage); return }
+  const kb = await loadKb()
+  const result = kb.kbShow(familyStore(), id, { chunks: familyInteger(parsed.flags.chunks, '--chunks', 0, 20), clearance: familyInteger(parsed.flags.clearance, '--clearance', 0, 3) })
+  if (parsed.flags.json) { console.log(JSON.stringify(result, null, 2)); return }
+  const doc = result.document
+  console.log(doc.id + '  ' + doc.kind + '  ' + doc.title)
+  console.log('size=' + doc.sizeBytes + ' textBytes=' + doc.textBytes + ' chunks=' + doc.chunkCount + ' secrecy=' + doc.secrecy + ' status=' + doc.status)
+  console.log('source=' + doc.sourceName + ' sha256=' + String(doc.sourceSha256 ?? '').slice(0, 16) + ' capturedAt=' + doc.capturedAt)
+  if (result.chunks.length) {
+    console.log('chunks (showing ' + result.chunks.length + '/' + result.chunksTotal + '):')
+    for (const chunk of result.chunks) console.log('  #' + chunk.seq + '  ' + chunk.text + (chunk.truncated ? '…' : ''))
+  }
+}
+
+async function kbRmCommand(args) {
+  const usage = 'usage: advisers kb rm <id> [--json]'
+  const parsed = familyFlags(args, { booleans: ['json'], values: [] }, usage)
+  if (!parsed) return
+  const id = parsed.positional[0]
+  if (!id) { usageFail('missing document id', usage); return }
+  const kb = await loadKb()
+  const result = kb.kbRm(familyStore({ write: true }), id)
+  if (parsed.flags.json) { console.log(JSON.stringify(result, null, 2)); return }
+  console.log('removed ' + result.document.id + '  ' + result.document.title + '  (' + result.counts.chunks + ' chunks)')
+}
+
+async function kbPurgeCommand(args) {
+  const usage = 'usage: advisers kb purge <id> [--dry-run|--yes] [--json]'
+  const parsed = familyFlags(args, { booleans: ['json', 'dry-run', 'yes'], values: [] }, usage)
+  if (!parsed) return
+  const id = parsed.positional[0]
+  if (!id) { usageFail('missing document id', usage); return }
+  let yes = parsed.flags.yes === true
+  if (!yes && parsed.flags['dry-run'] !== true && process.stdin.isTTY) yes = await askYesNo(null, '永久删除 KB 文档 ' + id + '？[y/N] ', false)
+  const kb = await loadKb()
+  const result = kb.kbPurge(familyStore({ write: yes }), id, { yes })
+  if (parsed.flags.json) { console.log(JSON.stringify(result, null, 2)); return }
+  if (result.dryRun) console.log('dry-run: 会物理删除 ' + id + '（chunks=' + result.counts.chunks + ', factLinks=' + result.counts.factLinks + '）；加 --yes 执行')
+  else console.log('purged ' + result.document.id + '  (' + result.counts.chunks + ' chunks, ' + result.counts.factLinks + ' fact links)')
+}
+
+async function kbReindexCommand(args) {
+  const usage = 'usage: advisers kb reindex [--rebuild] [--json]'
+  const parsed = familyFlags(args, { booleans: ['json', 'rebuild'], values: [] }, usage)
+  if (!parsed) return
+  const kb = await loadKb()
+  // kbReindex() may rebuild (a write) when the integrity probe fails, so it
+  // always runs on the writable store (one audit row when anything changed).
+  const store = familyStore({ write: true })
+  const result = kb.kbReindex(store, { rebuild: parsed.flags.rebuild === true })
+  if (parsed.flags.json) { console.log(JSON.stringify(result, null, 2)); return }
+  console.log('integrity: ' + (result.integrity.ok ? 'ok' : 'BROKEN') + ' tokenizer=' + (result.integrity.tokenizer ?? 'LIKE-only'))
+  if (result.rebuilt.length) console.log('rebuilt: ' + result.rebuilt.join(', '))
+  else console.log('rebuilt: none (indexes already consistent; --rebuild forces)')
+  console.log('counts: documents=' + result.counts.documents + ' chunks=' + result.counts.chunks + ' pages=' + result.counts.pages)
+  if (result.degraded.length) console.log('degraded: ' + result.degraded.join(', '))
+  if (!result.ok) process.exitCode = 1
+}
+
+async function kbPageCommand(args) {
+  const usage = [
+    'usage: advisers kb page ls [--kind client|project|timeline|facts] [--check] [--limit n] [--json]',
+    '       advisers kb page show <id> [--stored] [--diff] [--json]',
+    '       advisers kb page rebuild [--kind k] [--id page-id] [--only-stale] [--dry-run] [--json]',
+    '       advisers kb page diff <id> [--json]',
+  ].join('\n')
+  const sub = args[0]
+  const parsed = familyFlags(args.slice(1), { booleans: ['json', 'check', 'stored', 'diff', 'dry-run', 'only-stale'], values: ['kind', 'id', 'limit', 'clearance'] }, usage)
+  if (!parsed) return
+  const flags = parsed.flags
+  const pages = await loadKbPages()
+  const baseOptions = { kind: flags.kind, id: parsed.positional[0] ?? flags.id, limit: familyInteger(flags.limit, '--limit', 1, 500), clearance: familyInteger(flags.clearance, '--clearance', 0, 3) }
+  if (sub === 'ls') {
+    const result = pages.kbPageList(familyStore(), { ...baseOptions, check: flags.check === true })
+    if (flags.json) { console.log(JSON.stringify(result, null, 2)); return }
+    if (!result.pages.length) console.log('（没有页面；先运行 advisers kb page rebuild）')
+    for (const page of result.pages) console.log(page.id + '  ' + page.kind + '  ' + page.title + (page.stale === true ? '  [STALE]' : page.stale === false ? '  [fresh]' : ''))
+    console.log('total=' + result.total + ' limit=' + result.limit + (flags.check === true ? ' staleCount=' + result.staleCount : '') + (result.protectedExcluded ? ' protectedExcluded=' + result.protectedExcluded : ''))
+    return
+  }
+  if (sub === 'show' || sub === 'diff') {
+    const id = parsed.positional[0]
+    if (!id) { usageFail('missing page id', usage); return }
+    const result = sub === 'diff' ? pages.kbPageDiff(familyStore(), id, baseOptions) : pages.kbPageShow(familyStore(), id, { ...baseOptions, stored: flags.stored === true, diff: flags.diff === true })
+    if (flags.json) { console.log(JSON.stringify(result, null, 2)); return }
+    if (sub === 'diff') { console.log(result.diff || '（页面没有变化）'); return }
+    const page = result.page
+    console.log(page.id + '  ' + page.kind + '  ' + page.title + '  [' + (result.stale ? 'STALE' : 'fresh') + ']')
+    if (page.markdown) process.stdout.write(page.markdown.endsWith('\n') ? page.markdown : page.markdown + '\n')
+    if (result.diff) process.stdout.write(result.diff)
+    return
+  }
+  if (sub === 'rebuild') {
+    const result = pages.kbPageRebuild(familyStore({ write: flags['dry-run'] !== true }), { ...baseOptions, dryRun: flags['dry-run'] === true })
+    if (flags.json) { console.log(JSON.stringify(result, null, 2)); return }
+    console.log((result.dryRun ? 'dry-run: ' : '') + 'built=' + result.counts.built + ' written=' + result.counts.written + ' unchanged=' + result.counts.unchanged + ' skipped=' + result.counts.skipped)
+    if (result.degraded.length) console.log('degraded: ' + result.degraded.join(', '))
+    return
+  }
+  usageFail('unknown kb page subcommand: ' + (sub ?? '(none)'), usage)
+}
+
+async function kbSearchCommand(args, options = {}) {
+  const usage = 'usage: advisers kb search <query> [--scope kb|pages|all] [--client id] [--matter id] [--kind k] [--limit n] [--clearance 0-3] [--json]'
+  const parsed = familyFlags(args, { booleans: ['json'], values: ['scope', 'client', 'matter', 'kind', 'limit', 'clearance'] }, usage)
+  if (!parsed) return
+  const query = parsed.positional.join(' ').trim()
+  if (!query) { usageFail('missing query', usage); return }
+  const scope = options.scope ?? (parsed.flags.scope === undefined ? 'kb' : String(parsed.flags.scope))
+  const kb = await loadKb()
+  const store = familyStore()
+  const result = kb.kbSearch(store, query, {
+    scope,
+    clientId: parsed.flags.client,
+    matterId: parsed.flags.matter,
+    kind: parsed.flags.kind,
+    limit: familyInteger(parsed.flags.limit, '--limit', 1, 200),
+    clearance: familyInteger(parsed.flags.clearance, '--clearance', 0, 3),
+  })
+  if (parsed.flags.json) { console.log(JSON.stringify(result, null, 2)); return }
+  if (!result.hits.length) console.log('没有匹配')
+  for (const hit of result.hits) console.log(hit.kind + '\t' + String(hit.title ?? hit.snippet ?? '') + (hit.snippet ? '  「' + String(hit.snippet).replace(/\s+/g, ' ').slice(0, 120) + '」' : ''))
+  console.log('counts: docs=' + result.counts.kbDocs + ' chunks=' + result.counts.kbChunks + ' pages=' + result.counts.kbPages + ' total=' + result.total + ' clearance=' + result.clearance + (result.degraded.length ? ' degraded=' + result.degraded.join(',') : ''))
+}
+
+async function kbCommand(rawArgs) {
+  const sub = rawArgs[0]
+  try {
+    if (!sub || sub === 'help' || sub === '--help') { console.log(KB_USAGE); return }
+    if (sub === 'add') return await kbAddCommand(rawArgs.slice(1))
+    if (sub === 'ls' || sub === 'list') return await kbListCommand(rawArgs.slice(1))
+    if (sub === 'show') return await kbShowCommand(rawArgs.slice(1))
+    if (sub === 'rm' || sub === 'remove') return await kbRmCommand(rawArgs.slice(1))
+    if (sub === 'purge') return await kbPurgeCommand(rawArgs.slice(1))
+    if (sub === 'reindex') return await kbReindexCommand(rawArgs.slice(1))
+    if (sub === 'page') return await kbPageCommand(rawArgs.slice(1))
+    if (sub === 'search') return await kbSearchCommand(rawArgs.slice(1))
+    usageFail('unknown kb subcommand: ' + sub, KB_USAGE)
+  } catch (error) { reportFamilyFailure(error) }
+}
+
+const FACT_USAGE = [
+  'usage: advisers fact show <id> [--include-deleted] [--json]',
+  '       advisers fact history <id> [--json]',
+  '       advisers fact as-of <YYYY-MM-DD|ISO> [--matter id] [--client id] [--subject s] [--predicate s] [--limit n] [--include-deleted] [--json]',
+].join('\n')
+
+function factLine(fact) {
+  return fact.id + '  ' + fact.subject + ' ' + fact.predicate + ' ' + String(fact.object ?? '') + (fact.matterId ? '  [' + fact.matterId + ']' : '') + '  status=' + fact.status + ' recordedAt=' + fact.recordedAt + (fact.validFrom ? ' validFrom=' + fact.validFrom : '') + (fact.validTo ? ' validTo=' + fact.validTo : '')
+}
+
+async function factCommand(rawArgs) {
+  const sub = rawArgs[0]
+  try {
+    if (!sub || sub === 'help' || sub === '--help') { console.log(FACT_USAGE); return }
+    const parsed = familyFlags(rawArgs.slice(1), { booleans: ['json', 'include-deleted'], values: ['matter', 'client', 'subject', 'predicate', 'limit', 'at'] }, FACT_USAGE)
+    if (!parsed) return
+    const flags = parsed.flags
+    const facts = await loadKbFacts()
+    if (sub === 'show') {
+      const id = parsed.positional[0]
+      if (!id) { usageFail('missing fact id', FACT_USAGE); return }
+      const result = facts.factShow(familyStore(), id, { includeDeleted: flags['include-deleted'] === true })
+      if (flags.json) { console.log(JSON.stringify(result, null, 2)); return }
+      console.log(factLine(result.fact))
+      for (const evidence of result.fact.evidence ?? []) console.log('  evidence  「' + String(evidence.quote ?? '').slice(0, 200) + '」')
+      for (const source of result.kbSources ?? []) console.log('  kb  ' + source.docId + '  ' + String(source.title ?? ''))
+      for (const warning of result.warnings ?? []) console.log('  warning: ' + warning)
+      return
+    }
+    if (sub === 'history') {
+      const id = parsed.positional[0]
+      if (!id) { usageFail('missing fact id', FACT_USAGE); return }
+      const result = facts.factHistory(familyStore(), id, { includeDeleted: flags['include-deleted'] !== false })
+      if (flags.json) { console.log(JSON.stringify(result, null, 2)); return }
+      console.log('history of ' + result.rootId + ' (' + result.items.length + ')')
+      result.items.forEach((fact, index) => console.log('  ' + (index + 1) + '. ' + factLine(fact)))
+      for (const warning of result.warnings) console.log('  warning: ' + warning)
+      return
+    }
+    if (sub === 'as-of' || sub === 'asof') {
+      const at = parsed.positional[0] ?? flags.at
+      if (!at) { usageFail('missing as-of instant (YYYY-MM-DD or ISO)', FACT_USAGE); return }
+      const result = facts.factAsOf(familyStore(), {
+        at,
+        matterId: flags.matter,
+        clientId: flags.client,
+        subject: flags.subject,
+        predicate: flags.predicate,
+        limit: familyInteger(flags.limit, '--limit', 1, 500),
+        includeDeleted: flags['include-deleted'] === true,
+      })
+      if (flags.json) { console.log(JSON.stringify(result, null, 2)); return }
+      console.log('as-of ' + result.at + '（本地日 ' + result.asOfLocalDay + '）· ' + result.items.length + ' 条')
+      for (const fact of result.items) console.log('  ' + factLine(fact))
+      for (const warning of result.warnings) console.log('  warning: ' + warning)
+      if (result.degraded.length) console.log('  degraded: ' + result.degraded.join(', '))
+      return
+    }
+    usageFail('unknown fact subcommand: ' + sub, FACT_USAGE)
+  } catch (error) { reportFamilyFailure(error) }
+}
+
+/**
+ * 'search <q> --scope turns|kb|pages|facts|all' (0.4.0 additive).
+ *
+ * The default (no --scope, or --scope turns) path is the frozen 0.3.2 output;
+ * this helper only runs for the KB-inclusive scopes. KB hits come from
+ * lib/kb.kbSearch; scope=all also merges local turn hits (never model calls).
+ */
+async function scopedSearch(args) {
+  const usage = 'usage: advisers search <query> [--scope turns|kb|pages|facts|all] [--client id] [--matter id] [--kind k] [--limit n] [--clearance 0-3] [--json]'
+  const parsed = familyFlags(args, { booleans: ['json', 'explain'], values: ['scope', 'client', 'matter', 'kind', 'limit', 'clearance'] }, usage)
+  if (!parsed) return
+  const query = parsed.positional.join(' ').trim()
+  if (!query) { usageFail('missing query', usage); return }
+  const scope = String(parsed.flags.scope ?? 'all')
+  if (!['kb', 'pages', 'all', 'facts', 'turns'].includes(scope)) { usageFail('--scope must be turns, kb, pages, facts or all', usage); return }
+  if (scope === 'turns') {
+    const rows = readStoreOrExit()?.searchTurns(query, { limit: 10 }) ?? []
+    if (parsed.flags.json) {
+      console.log(JSON.stringify({ ok: true, command: 'search', query, scope: 'turns', counts: { turns: rows.length, kbDocs: 0, kbChunks: 0, kbPages: 0, facts: 0, preferences: 0 }, hits: rows.map((row) => ({ kind: 'turn', ref: { kind: 'turn', id: row.conversationId + '#' + row.seq }, snippet: String(row.content).slice(0, 240), at: row.createdAt })), total: rows.length, truncated: false, protectedExcluded: 0 }, null, 2))
+      return
+    }
+    if (!rows.length) console.log('没有匹配')
+    for (const row of rows) console.log(row.seq + '\t' + row.role + '\t' + row.content.replace(/\s+/g, ' ').slice(0, 160))
+    return
+  }
+  const store = familyStore()
+  const kb = await loadKb()
+  const result = kb.kbSearch(store, query, {
+    scope: scope === 'facts' ? 'kb' : scope,
+    clientId: parsed.flags.client,
+    matterId: parsed.flags.matter,
+    kind: parsed.flags.kind,
+    limit: familyInteger(parsed.flags.limit, '--limit', 1, 200),
+    clearance: familyInteger(parsed.flags.clearance, '--clearance', 0, 3),
+  })
+  if (scope === 'all') {
+    const turns = readStoreOrExit()?.searchTurns(query, { limit: 10 }) ?? []
+    result.counts.turns = turns.length
+    for (const row of turns) {
+      if (result.hits.length >= result.limit) break
+      result.hits.push({ kind: 'turn', ref: { kind: 'turn', id: row.conversationId + '#' + row.seq }, snippet: String(row.content).slice(0, 240), at: row.createdAt })
+    }
+    result.total = result.counts.kbDocs + result.counts.kbChunks + result.counts.kbPages + result.counts.turns
+    result.truncated = result.total > result.hits.length
+  }
+  if (parsed.flags.json) { console.log(JSON.stringify(result, null, 2)); return }
+  if (!result.hits.length) console.log('没有匹配')
+  for (const hit of result.hits) console.log(String(hit.kind) + '\t' + String(hit.title ?? hit.snippet ?? '').slice(0, 200))
+  console.log('counts: turns=' + result.counts.turns + ' docs=' + result.counts.kbDocs + ' chunks=' + result.counts.kbChunks + ' pages=' + result.counts.kbPages + ' facts=' + result.counts.facts + ' total=' + result.total + ' clearance=' + result.clearance)
+}
+
+
+/* ---------------------------------------------------------------------------
+ * 0.4.0 Wave 3 (task-29): mail / receivable / payment / consent commands.
+ *
+ * Design sources: 41-mail-entry.md section 3.7, 48-customer-v2.md section 3.3,
+ * 46-policy-evidence.md section 3.5. All of them are additive CLI commands:
+ * human output and --json output are separate, failures go to stderr as
+ * {error:{code,message,hint?}} with exit 1, and credentials never appear on
+ * argv, in the ledger or in logs.
+ * ------------------------------------------------------------------------- */
+
+function flagString(flags, name, label, usage) {
+  const value = flags[name]
+  if (value === undefined) return undefined
+  if (typeof value !== 'string' || !value.trim()) { usageFail('--' + label + ' requires a value', usage); return undefined }
+  return value.trim()
+}
+
+/** Prompt for a secret on the terminal without echo (TTY only). */
+async function promptHidden(question) {
+  if (!process.stdin.isTTY) throw familyError('E_TERM_REQUIRED', 'a terminal is required for the hidden password prompt', 'pipe one line with --pass-stdin instead')
+  return await new Promise((resolve) => {
+    const stdin = process.stdin
+    const output = process.stderr
+    let value = ''
+    let done = false
+    const wasRaw = Boolean(stdin.isRaw)
+    const finish = (result) => {
+      if (done) return
+      done = true
+      try { stdin.setRawMode(wasRaw) } catch {}
+      try { stdin.off('data', onData) } catch {}
+      try { stdin.pause() } catch {}
+      output.write('\n')
+      resolve(result)
+    }
+    const onData = (chunk) => {
+      for (const char of String(chunk)) {
+        if (char === '\r' || char === '\n') { finish(value); return }
+        if (char === '\u0003') { finish(undefined); return }
+        if (char === '\u0004') { finish(value); return }
+        if (char === '\u007f' || char === '\b') {
+          if (value) { const chars = Array.from(value); chars.pop(); value = chars.join(''); output.write('\b \b') }
+          continue
+        }
+        value += char
+        output.write('*')
+      }
+    }
+    output.write(question)
+    try { stdin.setRawMode(true) } catch {}
+    try { stdin.resume() } catch {}
+    stdin.on('data', onData)
+  })
+}
+
+/** Read one secret line from stdin (non-TTY --pass-stdin path). */
+async function readSecretFromStdin() {
+  let text = ''
+  process.stdin.setEncoding('utf8')
+  for await (const chunk of process.stdin) text += chunk
+  const first = text.split(/\r?\n/)[0]
+  return first === undefined ? '' : first
+}
+
+/* -------------------------------- mail ---------------------------------- */
+
+const MAIL_USAGE = [
+  'usage: advisers mail account add --name n --host h [--port 993] [--tls tls|starttls] --user u [--pass-stdin]',
+  '                                [--mailbox INBOX] [--retention-days 30] [--client id] [--matter id] [--json]',
+  '       advisers mail account ls|show <account>|rm <account> [--json]',
+  '       advisers mail sync [<account>] [--full] [--dry-run] [--since-days 30] [--limit 50] [--mailbox INBOX] [--json]',
+  '       advisers mail ls [--account a] [--client id] [--status s] [--since 30d] [--limit n] [--json]',
+  '       advisers mail show <id> [--body] [--json]',
+  '       advisers mail extract [<id>...] [--all-new] [--local|--model] [--yes] [--matter id] [--limit n] [--dry-run] [--json]',
+  '       advisers mail import <file|dir> [--limit n] [--dry-run] [--client id] [--project id] [--json]',
+  '       advisers mail purge [--older-than 30d] [--dry-run|--yes] [--account a] [--json]',
+].join('\n')
+
+function mailHumanRow(message) {
+  const from = sanitizeConsoleText(String(message.from ?? ''), { max: 120 })
+  const subject = sanitizeConsoleText(String(message.subject ?? ''), { max: 200 })
+  return message.id + '  ' + String(message.receivedAt ?? '').slice(0, 16) + '  ' + from + '  ' + subject + '  [' + message.status + ']'
+}
+
+async function mailAccountCommand(args) {
+  const sub = args[0]
+  const rest = args.slice(1)
+  const usage = 'usage: advisers mail account add|ls|show|rm ...'
+  if (!sub || sub === 'help' || sub === '--help') { console.log(MAIL_USAGE); return }
+  const mail = await loadMail()
+  if (sub === 'add') {
+    const parsed = familyFlags(rest, { booleans: ['json', 'pass-stdin'], values: ['name', 'host', 'port', 'tls', 'user', 'mailbox', 'client', 'matter', 'retention-days', 'pass'] }, usage)
+    if (!parsed) return
+    const flags = parsed.flags
+    if (flags.pass !== undefined) throw familyError('E_MAIL_CONFIG', 'refusing a password on the command line (--pass)', 'use the interactive TTY prompt or --pass-stdin')
+    const name = flagString(flags, 'name', 'name', usage)
+    const host = flagString(flags, 'host', 'host', usage)
+    const user = flagString(flags, 'user', 'user', usage)
+    if (!name || !host || !user) { usageFail('--name, --host and --user are required', usage); return }
+    let pass
+    if (flags['pass-stdin'] === true) pass = await readSecretFromStdin()
+    else pass = await promptHidden('IMAP 密码（输入不回显）：')
+    if (typeof pass !== 'string' || pass === '') throw familyError('E_MAIL_CONFIG', 'no IMAP password was provided', 'run in a terminal for the hidden prompt, or pipe one line with --pass-stdin')
+    const store = familyStore({ write: true })
+    const result = mail.mailAccountAdd(store, {
+      name,
+      host,
+      port: flags.port === undefined ? undefined : familyInteger(flags.port, '--port', 1, 65535),
+      tls: flags.tls,
+      username: user,
+      mailbox: flags.mailbox,
+      clientId: flags.client,
+      defaultMatterId: flags.matter,
+      retentionDays: flags['retention-days'] === undefined ? undefined : familyInteger(flags['retention-days'], '--retention-days', 0, 3650),
+    }, { credential: { user, pass }, home: HOME })
+    if (flags.json) { console.log(JSON.stringify(result, null, 2)); return }
+    const account = result.account
+    console.log('added ' + account.id + '  ' + account.name + '  ' + account.username + '@' + account.host + ':' + account.port + ' (' + account.tls + ')')
+    console.log('credential: ' + (account.hasCredential ? 'stored (0600, outside the ledger)' : 'not stored'))
+    return
+  }
+  if (sub === 'ls' || sub === 'list') {
+    const parsed = familyFlags(rest, { booleans: ['json', 'all'], values: [] }, usage)
+    if (!parsed) return
+    const result = mail.mailAccountList(familyStore(), { includeRemoved: parsed.flags.all === true, home: HOME })
+    if (parsed.flags.json) { console.log(JSON.stringify(result, null, 2)); return }
+    if (!result.accounts.length) console.log('（没有邮件账号）')
+    for (const account of result.accounts) console.log(account.id + '  ' + account.name + '  ' + account.username + '@' + account.host + ':' + account.port + '  ' + account.status + (account.hasCredential ? '  credential' : '  no-credential'))
+    return
+  }
+  if (sub === 'show') {
+    const parsed = familyFlags(rest, { booleans: ['json'], values: [] }, usage)
+    if (!parsed) return
+    const ref = parsed.positional[0]
+    if (!ref) { usageFail('missing account id or name', usage); return }
+    const result = mail.mailAccountShow(familyStore(), ref, { home: HOME })
+    if (parsed.flags.json) { console.log(JSON.stringify(result, null, 2)); return }
+    const account = result.account
+    console.log(account.id + '  ' + account.name + '  ' + account.username + '@' + account.host + ':' + account.port + ' (' + account.tls + ')  ' + account.status)
+    console.log('mailbox=' + account.mailbox + ' retentionDays=' + account.retentionDays + ' credential=' + (account.hasCredential ? 'stored' : 'missing') + (account.lastSyncAt ? ' lastSyncAt=' + account.lastSyncAt : ''))
+    return
+  }
+  if (sub === 'rm' || sub === 'remove') {
+    const parsed = familyFlags(rest, { booleans: ['json', 'purge-messages'], values: [] }, usage)
+    if (!parsed) return
+    const ref = parsed.positional[0]
+    if (!ref) { usageFail('missing account id or name', usage); return }
+    const result = mail.mailAccountRemove(familyStore({ write: true }), ref, { home: HOME, purgeMessages: parsed.flags['purge-messages'] === true })
+    if (parsed.flags.json) { console.log(JSON.stringify(result, null, 2)); return }
+    console.log('removed ' + result.accountId + '  credentialRemoved=' + (result.credentialRemoved ? 'yes' : 'no') + ' messagesDeleted=' + result.messagesDeleted)
+    return
+  }
+  usageFail('unknown mail account subcommand: ' + sub, MAIL_USAGE)
+}
+
+async function mailSyncCommand(args) {
+  const usage = 'usage: advisers mail sync [<account>] [--full] [--dry-run] [--since-days n] [--limit n] [--mailbox INBOX] [--json]'
+  const parsed = familyFlags(args, { booleans: ['json', 'full', 'dry-run'], values: ['account', 'since-days', 'limit', 'mailbox'] }, usage)
+  if (!parsed) return
+  const flags = parsed.flags
+  const mail = await loadMail()
+  const store = familyStore({ write: true })
+  const requested = parsed.positional[0] ?? flags.account
+  let accounts
+  if (requested) accounts = [String(requested)]
+  else {
+    const listed = mail.mailAccountList(store, { home: HOME })
+    accounts = listed.accounts.filter((account) => account.status === 'active' && (account.tls === 'tls' || account.tls === 'starttls')).map((account) => account.id)
+    if (!accounts.length) throw familyError('E_MAIL_CONFIG', 'no IMAP account is configured', 'add one with advisers mail account add')
+  }
+  const results = []
+  for (const account of accounts) {
+    results.push(await mail.mailSync(store, account, {
+      full: flags.full === true,
+      dryRun: flags['dry-run'] === true,
+      sinceDays: flags['since-days'] === undefined ? undefined : familyInteger(flags['since-days'], '--since-days', 1, 3650),
+      limit: flags.limit === undefined ? undefined : familyInteger(flags.limit, '--limit', 1, 200),
+      mailbox: flags.mailbox,
+      home: HOME,
+    }))
+  }
+  const payload = requested ? results[0] : { ok: true, command: 'mail sync', results }
+  if (flags.json) { console.log(JSON.stringify(payload, null, 2)); return }
+  for (const result of results) console.log('sync ' + result.accountId + ' ' + result.mailbox + ': fetched=' + result.fetched + ' inserted=' + result.inserted + ' skipped=' + result.skipped + ' failed=' + result.failed + ' duplicates=' + result.duplicates + (result.dryRun ? ' (dry-run)' : '') + (result.needsResync ? ' NEEDS-RESYNC(--full)' : ''))
+}
+
+function mailSinceDays(value) {
+  if (value === undefined) return undefined
+  const text = String(value).trim()
+  const match = /^(\d+)d$/.exec(text)
+  if (match) return familyInteger(match[1], '--since', 1, 3650)
+  return familyInteger(text, '--since', 1, 3650)
+}
+
+async function mailLsCommand(args) {
+  const usage = 'usage: advisers mail ls [--account a] [--client id] [--status s] [--since 30d] [--limit n] [--json]'
+  const parsed = familyFlags(args, { booleans: ['json'], values: ['account', 'client', 'status', 'since', 'limit'] }, usage)
+  if (!parsed) return
+  const flags = parsed.flags
+  const mail = await loadMail()
+  const result = mail.mailList(familyStore(), {
+    account: flags.account,
+    clientId: flags.client,
+    status: flags.status,
+    sinceDays: mailSinceDays(flags.since),
+    limit: flags.limit === undefined ? undefined : familyInteger(flags.limit, '--limit', 1, 500),
+  })
+  if (flags.json) { console.log(JSON.stringify(result, null, 2)); return }
+  if (!result.messages.length) console.log('（没有邮件）')
+  for (const message of result.messages) console.log(mailHumanRow(message))
+  console.log('total=' + result.total + ' limit=' + result.limit + (result.truncated ? ' truncated' : ''))
+}
+
+async function mailShowCommand(args) {
+  const usage = 'usage: advisers mail show <id> [--body] [--json]'
+  const parsed = familyFlags(args, { booleans: ['json', 'body'], values: [] }, usage)
+  if (!parsed) return
+  const ref = parsed.positional[0]
+  if (!ref) { usageFail('missing mail message id', usage); return }
+  const mail = await loadMail()
+  const result = mail.mailShow(familyStore(), ref, { body: parsed.flags.body === true })
+  if (parsed.flags.json) { console.log(JSON.stringify(result, null, 2)); return }
+  const message = result.message
+  console.log(mailHumanRow(message))
+  console.log('messageId=' + (message.messageId ?? '-') + ' uid=' + message.uid + ' size=' + (message.sizeBytes ?? '-') + ' retained=' + (message.retained === true ? 'yes' : 'no') + (message.clientId ? ' client=' + message.clientId : ''))
+  if (parsed.flags.body === true) {
+    console.log('---')
+    process.stdout.write(String(message.bodyText ?? '') + '\n')
+  }
+}
+
+/**
+ * Authorization + consent gate for model egress of local content.
+ * evaluate/authorize come from lib/policy; the consent record is bound to the
+ * surface + data class + provider + base URL. An audit failure fails closed.
+ */
+async function authorizeModelEgress(surface, dataClass, options = {}) {
+  const policy = await loadPolicy()
+  const consent = await loadConsent()
+  const provider = process.env.ADVISERS_PROVIDER || 'deepseek'
+  const baseUrl = process.env.ADVISERS_BASE_URL || 'https://api.deepseek.com'
+  const consentFact = consent.consentFacts(HOME, { surface, dataClass, provider, baseUrl })
+  let tosFacts = { accepted: true, version: '', currentVersion: '', hashOk: true }
+  try {
+    const tos = await loadTos()
+    const { info } = resolveTosFacts(tos)
+    const status = tos.acceptanceStatus({ home: HOME, version: info.version, sha256: info.sha256 })
+    tosFacts = { accepted: status.accepted === true, version: String(status.record?.version ?? info.version), currentVersion: info.version, hashOk: status.reason !== 'hash_mismatch' }
+  } catch {}
+  const audit = (event) => {
+    const store = mode === 'sqlite' ? dbStore() : undefined
+    if (!store) return { ok: false }
+    try {
+      store.appendAudit({
+        actor: 'policy',
+        action: 'policy.' + String(event.surface) + '.' + String(event.policyAction ?? event.action ?? 'unknown'),
+        allowed: event.allowed === true,
+        reason: [String(event.phase ?? ''), String(event.code ?? event.policyCode ?? '')].filter(Boolean).join(' ').slice(0, 300),
+      })
+      return { ok: true }
+    } catch { return { ok: false } }
+  }
+  const facts = {
+    v: 1,
+    surface,
+    action: 'model-egress',
+    actor: 'cli',
+    interactive: Boolean(process.stdin.isTTY),
+    record: options && options.record && typeof options.record === 'object' ? options.record : null,
+    safety: { action: 'allow' },
+    tos: tosFacts,
+    consent: consentFact,
+    audit: { available: mode === 'sqlite' },
+    trust: { tainted: true, sourceKinds: [dataClass] },
+    now: new Date().toISOString(),
+  }
+  const decision = policy.authorize('model-egress', facts, { audit })
+  if (decision.authorized !== true) {
+    const code = typeof decision.code === 'string' ? decision.code : 'E_POLICY_DENIED'
+    const hint = consentFact.granted === true
+      ? 'model egress is not allowed for this surface/data class; see advisers privacy --matrix'
+      : 'run advisers consent grant ' + surface + ' and read the prompt before sending content to the model provider'
+    throw familyError(code, String(decision.reason ?? 'policy denied model egress'), hint)
+  }
+  // The effect digest authorize() bound is computed from the facts (surface /
+  // action / dataClass; the facts carry record=null and no top-level provider),
+  // so consumeDecision() must receive exactly that shape or it refuses.
+  const effectRecord = options && options.record && typeof options.record === 'object' ? { kind: String(options.record.kind ?? 'record'), secrecy: Number(options.record.secrecy ?? 0) } : null
+  return { policy, token: decision.token, effect: { surface, action: 'model-egress', dataClass, ...(effectRecord ? { record: effectRecord } : {}) }, audit }
+}
+
+/** Run one authorized model effect, then write its result audit row. */
+async function runAuthorizedModelEffect(authorization, effectFn) {
+  const { consumeDecision } = await loadPolicy()
+  const consumed = consumeDecision(authorization.token, authorization.effect)
+  let result
+  try {
+    result = await effectFn()
+  } catch (error) {
+    try { authorization.audit({ surface: authorization.effect.surface, policyAction: authorization.effect.action, phase: 'result', allowed: true, decisionId: consumed.decisionId, ok: false, code: typeof error?.code === 'string' ? error.code : 'E_POLICY_EFFECT_FAILED' }) } catch {}
+    throw error
+  }
+  const wrote = authorization.audit({ surface: authorization.effect.surface, policyAction: authorization.effect.action, phase: 'result', allowed: true, decisionId: consumed.decisionId, ok: true })
+  if (wrote?.ok !== true) throw familyError('E_POLICY_AUDIT_UNAVAILABLE', 'model extraction completed but its result audit could not be written', 'the effect already happened; run advisers audit and inspect the ledger before continuing')
+  return result
+}
+
+async function mailExtractCommand(args) {
+  const usage = 'usage: advisers mail extract [<id>...] [--all-new] [--local|--model] [--yes] [--matter id] [--limit n] [--dry-run] [--json]'
+  const parsed = familyFlags(args, { booleans: ['json', 'local', 'model', 'all-new', 'dry-run', 'yes'], values: ['account', 'matter', 'limit'] }, usage)
+  if (!parsed) return
+  const flags = parsed.flags
+  if (flags.local === true && flags.model === true) { usageFail('--local and --model are mutually exclusive', usage); return }
+  const useModel = flags.model === true
+  if (useModel && flags.yes !== true) throw familyError('E_MAIL_MODEL_OPT_IN', 'mail extract --model requires an explicit --yes opt-in', 'the default local path is offline; --model sends message text to your configured model provider and needs consent')
+  const mail = await loadMail()
+  const store = familyStore({ write: true })
+  const extractOptions = {
+    model: useModel,
+    confirmModel: useModel && flags.yes === true,
+    apiKey: process.env.ADVISERS_API_KEY,
+    modelName: process.env.ADVISERS_MODEL,
+    account: flags.account,
+    ids: parsed.positional.length ? parsed.positional : undefined,
+    all: flags['all-new'] === true,
+    matterId: flags.matter,
+    limit: flags.limit === undefined ? undefined : familyInteger(flags.limit, '--limit', 1, 500),
+    dryRun: flags['dry-run'] === true,
+    secrecy: 0,
+  }
+  let result
+  if (useModel) {
+    // Protection by matter: model egress is refused for secrecy > 0 (the lib
+    // repeats the check; the policy facts also carry the record secrecy).
+    let secrecy = 0
+    if (flags.matter) {
+      const matter = familyStore().getMatter(String(flags.matter))
+      if (!matter) throw familyError('E_MATTER_NOT_FOUND', 'unknown matter: ' + flags.matter, 'advisers matter ls')
+      secrecy = Number(matter.secrecy ?? 0)
+    }
+    if (Number.isFinite(secrecy) && secrecy > 0) throw familyError('E_MAIL_MODEL_DISABLED', 'model extraction is disabled for protected matters (secrecy > 0)', 'use the default local extraction or move the mail to an unprotected matter')
+    extractOptions.secrecy = secrecy
+    const authorization = await authorizeModelEgress('mail.extract', 'mail', { record: { kind: 'mail', secrecy } })
+    result = await runAuthorizedModelEffect(authorization, () => mail.mailExtract(store, extractOptions))
+  } else {
+    result = await mail.mailExtract(store, extractOptions)
+  }
+  if (flags.json) { console.log(JSON.stringify(result, null, 2)); return }
+  console.log('mail extract (' + result.mode + '): scanned=' + result.scanned + ' candidates=' + result.candidates.length + ' skipped=' + result.skipped + ' failed=' + result.failed + (result.dryRun ? ' (dry-run)' : ''))
+  for (const candidate of result.candidates.slice(0, 20)) console.log('  ' + String(candidate.id ?? '(preview)') + '  ' + String(candidate.action ?? candidate.statement ?? candidate.text ?? '').slice(0, 120))
+  if (result.safetyWarnings?.length) console.log('  safety warnings: ' + result.safetyWarnings.length)
+}
+
+async function mailImportCommand(args) {
+  const usage = 'usage: advisers mail import <file|dir> [--limit n] [--dry-run] [--client id] [--project id] [--json]'
+  const parsed = familyFlags(args, { booleans: ['json', 'dry-run'], values: ['limit', 'client', 'project', 'account'] }, usage)
+  if (!parsed) return
+  const target = parsed.positional[0]
+  if (!target) { usageFail('missing .eml/.mbox file or directory', usage); return }
+  const mail = await loadMail()
+  const result = await mail.mailImport(familyStore({ write: parsed.flags['dry-run'] !== true }), {
+    path: target,
+    accountId: parsed.flags.account,
+    clientId: parsed.flags.client,
+    projectId: parsed.flags.project,
+    limit: parsed.flags.limit === undefined ? undefined : familyInteger(parsed.flags.limit, '--limit', 1, 500),
+    dryRun: parsed.flags['dry-run'] === true,
+  })
+  if (parsed.flags.json) { console.log(JSON.stringify(result, null, 2)); return }
+  console.log('mail import: files=' + result.files + ' scanned=' + result.scanned + ' inserted=' + result.inserted + ' skipped=' + result.skipped + ' failed=' + result.failed + (result.dryRun ? ' (dry-run)' : ''))
+}
+
+async function mailPurgeCommand(args) {
+  const usage = 'usage: advisers mail purge [--older-than 30d] [--dry-run|--yes] [--account a] [--json]'
+  const parsed = familyFlags(args, { booleans: ['json', 'dry-run', 'yes'], values: ['older-than', 'account'] }, usage)
+  if (!parsed) return
+  let olderThanDays
+  if (parsed.flags['older-than'] !== undefined) {
+    const text = String(parsed.flags['older-than']).trim()
+    const match = /^(\d+)d$/.exec(text)
+    olderThanDays = familyInteger(match ? match[1] : text, '--older-than', 1, 3650)
+  }
+  let yes = parsed.flags.yes === true
+  const dryRun = parsed.flags['dry-run'] === true || !yes
+  if (!dryRun && process.stdin.isTTY && parsed.flags['dry-run'] !== true) {
+    yes = await askYesNo(null, '永久清除保留期外的邮件正文（元数据保留）？[y/N] ', false)
+    if (!yes) { console.log('已取消。'); return }
+  }
+  const mail = await loadMail()
+  const result = mail.mailPurge(familyStore({ write: yes }), { olderThanDays, account: parsed.flags.account, dryRun: !yes })
+  if (parsed.flags.json) { console.log(JSON.stringify(result, null, 2)); return }
+  if (result.dryRun) console.log('dry-run: 将清除 ' + result.wouldPurge + ' 封正文（' + formatBytes(result.bytesWouldFree) + '），跳过 ' + result.skippedPending + ' 封有待处理候选；加 --yes 执行')
+  else console.log('purged bodies=' + result.messagesPurged + ' bytesFreed=' + formatBytes(result.bytesFreed) + ' skippedPending=' + result.skippedPending)
+}
+
+async function mailCommand(rawArgs) {
+  const sub = rawArgs[0]
+  try {
+    if (!sub || sub === 'help' || sub === '--help') { console.log(MAIL_USAGE); return }
+    if (sub === 'account') return await mailAccountCommand(rawArgs.slice(1))
+    if (sub === 'sync') return await mailSyncCommand(rawArgs.slice(1))
+    if (sub === 'ls' || sub === 'list') return await mailLsCommand(rawArgs.slice(1))
+    if (sub === 'show') return await mailShowCommand(rawArgs.slice(1))
+    if (sub === 'extract') return await mailExtractCommand(rawArgs.slice(1))
+    if (sub === 'import') return await mailImportCommand(rawArgs.slice(1))
+    if (sub === 'purge') return await mailPurgeCommand(rawArgs.slice(1))
+    usageFail('unknown mail subcommand: ' + sub, MAIL_USAGE)
+  } catch (error) { reportFamilyFailure(error) }
+}
+
+/* ------------------------- receivable / payment ------------------------- */
+
+const RECEIVABLE_USAGE = [
+  'usage: advisers receivable add <client-id> "<label>" --amount 8000.00 [--currency CNY] [--due YYYY-MM-DD]',
+  '                             [--project id] [--matter id] [--kind quote|milestone|retainer|other] [--memo text]',
+  '                             [--remind-offsets "-3d,-1d"] [--no-remind] [--json]',
+  '       advisers receivable ls|list [--client id] [--project id] [--status open|partial|overdue|settled|all]',
+  '                             [--currency CNY] [--aging] [--due-within 7d|30d] [--clearance 0-3] [--limit n] [--json]',
+  '       advisers receivable show <id> [--json]',
+  '       advisers receivable edit <id> [--amount 9000.00|--due DATE|--memo text|--kind k|--label text] [--json]',
+  '       advisers receivable void <id> [--reason text] [--json]',
+].join('\n')
+
+const PAYMENT_USAGE = [
+  'usage: advisers payment add <client-id> --amount 4000.00 [--currency CNY] [--paid-at ISO] [--method bank|wechat|alipay|cash|other]',
+  '                          [--receivable rcv] [--memo text] [--no-complete] [--json]',
+  '       advisers payment ls|list [--client id] [--receivable rcv] [--since 90d|ISO] [--limit n] [--json]',
+  '       advisers payment void <id> [--reason text] [--json]',
+].join('\n')
+
+function receivableMoney(row) {
+  return String(row.amount ?? '') + ' ' + String(row.currency ?? '') + (row.state ? '  ' + row.state : '') + (row.outstanding && row.outstanding !== row.amount ? '  outstanding ' + row.outstanding : '')
+}
+
+async function receivableCommand(rawArgs) {
+  const sub = rawArgs[0]
+  try {
+    if (!sub || sub === 'help' || sub === '--help') { console.log(RECEIVABLE_USAGE); return }
+    const receivable = await loadReceivablesLib()
+    if (sub === 'add') {
+      const usage = RECEIVABLE_USAGE
+      const parsed = familyFlags(rawArgs.slice(1), { booleans: ['json', 'no-remind'], values: ['amount', 'currency', 'due', 'project', 'matter', 'kind', 'memo', 'remind-offsets'] }, usage)
+      if (!parsed) return
+      const clientId = parsed.positional[0]
+      const label = parsed.positional.slice(1).join(' ').trim()
+      if (!clientId || !label) { usageFail('usage: advisers receivable add <client-id> "<label>" --amount 8000.00', usage); return }
+      if (parsed.flags.amount === undefined) { usageFail('--amount is required', usage); return }
+      const result = receivable.receivableAdd(familyStore({ write: true }), {
+        clientId,
+        label,
+        amount: parsed.flags.amount,
+        currency: parsed.flags.currency,
+        dueAt: parsed.flags.due,
+        projectId: parsed.flags.project,
+        matterId: parsed.flags.matter,
+        kind: parsed.flags.kind,
+        memo: parsed.flags.memo,
+        reminderOffsets: parsed.flags['remind-offsets'],
+        noRemind: parsed.flags['no-remind'] === true,
+      })
+      if (parsed.flags.json) { console.log(JSON.stringify(result, null, 2)); return }
+      const row = result.receivable
+      console.log('added ' + (row ? row.id : '(hidden)') + '  ' + label + '  ' + (row ? receivableMoney(row) : '') + (row && row.dueAt ? '  due ' + row.dueAt : ''))
+      console.log('follow-up commitment: ' + result.commitment.id)
+      return
+    }
+    if (sub === 'ls' || sub === 'list') {
+      const usage = RECEIVABLE_USAGE
+      const parsed = familyFlags(rawArgs.slice(1), { booleans: ['json', 'aging'], values: ['client', 'project', 'status', 'currency', 'due-within', 'clearance', 'limit'] }, usage)
+      if (!parsed) return
+      const flags = parsed.flags
+      const store = familyStore()
+      const options = {
+        clientId: flags.client,
+        projectId: flags.project,
+        status: flags.status,
+        currency: flags.currency,
+        dueWithin: flags['due-within'],
+        clearance: flags.clearance === undefined ? undefined : familyInteger(flags.clearance, '--clearance', 0, 3),
+        limit: flags.limit === undefined ? undefined : familyInteger(flags.limit, '--limit', 1, 500),
+      }
+      const result = flags.aging === true ? receivable.receivablesSummary(store, options) : receivable.receivableList(store, options)
+      if (flags.json) { console.log(JSON.stringify(result, null, 2)); return }
+      if (flags.aging === true) {
+        console.log('unsettled=' + result.unsettled + ' overdue=' + result.overdue + ' settled=' + result.settled + ' writtenOff=' + result.writtenOff)
+        for (const total of result.totals) console.log('  ' + total.currency + '  amount=' + receivable.formatMinorAmount(BigInt(total.amountMinor)) + ' paid=' + receivable.formatMinorAmount(BigInt(total.paidMinor)) + ' outstanding=' + receivable.formatMinorAmount(BigInt(total.outstandingMinor)) + ' overdueCount=' + total.overdueCount + ' aging=' + JSON.stringify(total.aging))
+        return
+      }
+      if (!result.receivables.length) console.log('（没有回款记录）')
+      for (const row of result.receivables) console.log(row.id + '  ' + String(row.clientName ?? row.clientId) + '  ' + row.label + '  ' + receivableMoney(row) + (row.dueAt ? '  due ' + row.dueAt : ''))
+      for (const total of result.totals) console.log('total ' + total.currency + ' outstanding=' + receivable.formatMinorAmount(BigInt(total.outstandingMinor)) + ' overdueCount=' + total.overdueCount)
+      console.log('total=' + result.total + ' limit=' + result.limit + (result.truncated ? ' truncated' : '') + (result.protectedExcluded ? ' protectedExcluded=' + result.protectedExcluded : ''))
+      return
+    }
+    if (sub === 'show') {
+      const parsed = familyFlags(rawArgs.slice(1), { booleans: ['json'], values: ['clearance'] }, RECEIVABLE_USAGE)
+      if (!parsed) return
+      const id = parsed.positional[0]
+      if (!id) { usageFail('missing receivable id', RECEIVABLE_USAGE); return }
+      const result = receivable.receivableShow(familyStore(), id, { clearance: parsed.flags.clearance === undefined ? undefined : familyInteger(parsed.flags.clearance, '--clearance', 0, 3) })
+      if (parsed.flags.json) { console.log(JSON.stringify(result, null, 2)); return }
+      const row = result.receivable
+      console.log(row.id + '  ' + row.label + '  ' + receivableMoney(row) + (row.dueAt ? '  due ' + row.dueAt : '') + (row.overdueDays ? '  overdueDays=' + row.overdueDays : ''))
+      console.log('client=' + row.clientId + (row.projectId ? ' project=' + row.projectId : '') + (row.matterId ? ' matter=' + row.matterId : '') + ' commitment=' + row.commitmentId)
+      for (const payment of result.payments) console.log('  payment ' + payment.id + '  ' + payment.amount + ' ' + payment.currency + '  ' + payment.paidAt + '  ' + payment.method + (payment.deletedAt ? '  [void]' : ''))
+      return
+    }
+    if (sub === 'edit') {
+      const parsed = familyFlags(rawArgs.slice(1), { booleans: ['json', 'no-remind'], values: ['amount', 'due', 'memo', 'kind', 'label', 'remind-offsets'] }, RECEIVABLE_USAGE)
+      if (!parsed) return
+      const id = parsed.positional[0]
+      if (!id) { usageFail('missing receivable id', RECEIVABLE_USAGE); return }
+      const patch = {}
+      if (parsed.flags.amount !== undefined) patch.amount = parsed.flags.amount
+      if (parsed.flags.due !== undefined) patch.dueAt = parsed.flags.due
+      if (parsed.flags.memo !== undefined) patch.memo = parsed.flags.memo
+      if (parsed.flags.kind !== undefined) patch.kind = parsed.flags.kind
+      if (parsed.flags.label !== undefined) patch.label = parsed.flags.label
+      if (parsed.flags['no-remind'] === true) patch.noRemind = true
+      else if (parsed.flags['remind-offsets'] !== undefined) patch.reminderOffsets = parsed.flags['remind-offsets']
+      const result = receivable.receivableEdit(familyStore({ write: true }), id, patch)
+      if (parsed.flags.json) { console.log(JSON.stringify(result, null, 2)); return }
+      console.log('updated ' + id + (result.receivable ? '  ' + receivableMoney(result.receivable) : ''))
+      return
+    }
+    if (sub === 'void') {
+      const parsed = familyFlags(rawArgs.slice(1), { booleans: ['json'], values: ['reason'] }, RECEIVABLE_USAGE)
+      if (!parsed) return
+      const id = parsed.positional[0]
+      if (!id) { usageFail('missing receivable id', RECEIVABLE_USAGE); return }
+      const result = receivable.receivableVoid(familyStore({ write: true }), id, { reason: parsed.flags.reason })
+      if (parsed.flags.json) { console.log(JSON.stringify(result, null, 2)); return }
+      console.log('void ' + id + (result.alreadyVoid ? ' (already void)' : '') + '  commitmentReopened=' + (result.reopenedCommitment ? 'yes' : 'no') + ' commitmentDropped=' + (result.droppedCommitment ? 'yes' : 'no'))
+      return
+    }
+    usageFail('unknown receivable subcommand: ' + sub, RECEIVABLE_USAGE)
+  } catch (error) { reportFamilyFailure(error) }
+}
+
+async function paymentCommand(rawArgs) {
+  const sub = rawArgs[0]
+  try {
+    if (!sub || sub === 'help' || sub === '--help') { console.log(PAYMENT_USAGE); return }
+    const money = await loadReceivablesLib()
+    if (sub === 'add') {
+      const parsed = familyFlags(rawArgs.slice(1), { booleans: ['json', 'no-complete'], values: ['amount', 'currency', 'paid-at', 'method', 'receivable', 'commitment', 'memo'] }, PAYMENT_USAGE)
+      if (!parsed) return
+      const clientId = parsed.positional[0]
+      if (!clientId) { usageFail('usage: advisers payment add <client-id> --amount 4000.00', PAYMENT_USAGE); return }
+      if (parsed.flags.amount === undefined) { usageFail('--amount is required', PAYMENT_USAGE); return }
+      const result = money.paymentAdd(familyStore({ write: true }), {
+        clientId,
+        amount: parsed.flags.amount,
+        currency: parsed.flags.currency,
+        paidAt: parsed.flags['paid-at'],
+        method: parsed.flags.method,
+        receivableId: parsed.flags.receivable,
+        commitmentId: parsed.flags.commitment,
+        memo: parsed.flags.memo,
+        noComplete: parsed.flags['no-complete'] === true,
+      })
+      if (parsed.flags.json) { console.log(JSON.stringify(result, null, 2)); return }
+      console.log('added ' + result.payment.id + '  ' + result.payment.amount + ' ' + result.payment.currency + '  ' + result.payment.paidAt + '  ' + result.payment.method + (result.receivable ? '  receivable=' + result.receivable.id : '') + (result.completedCommitment ? '  commitmentCompleted=yes' : ''))
+      return
+    }
+    if (sub === 'ls' || sub === 'list') {
+      const parsed = familyFlags(rawArgs.slice(1), { booleans: ['json'], values: ['client', 'receivable', 'since', 'limit', 'clearance'] }, PAYMENT_USAGE)
+      if (!parsed) return
+      const result = money.paymentList(familyStore(), {
+        clientId: parsed.flags.client,
+        receivableId: parsed.flags.receivable,
+        since: parsed.flags.since,
+        clearance: parsed.flags.clearance === undefined ? undefined : familyInteger(parsed.flags.clearance, '--clearance', 0, 3),
+        limit: parsed.flags.limit === undefined ? undefined : familyInteger(parsed.flags.limit, '--limit', 1, 500),
+      })
+      if (parsed.flags.json) { console.log(JSON.stringify(result, null, 2)); return }
+      if (!result.payments.length) console.log('（没有收款记录）')
+      for (const payment of result.payments) console.log(payment.id + '  ' + payment.amount + ' ' + payment.currency + '  ' + payment.paidAt + '  ' + payment.method + (payment.receivableId ? '  rcv=' + payment.receivableId : ''))
+      console.log('total=' + result.total + ' limit=' + result.limit + (result.truncated ? ' truncated' : ''))
+      return
+    }
+    if (sub === 'void') {
+      const parsed = familyFlags(rawArgs.slice(1), { booleans: ['json'], values: ['reason'] }, PAYMENT_USAGE)
+      if (!parsed) return
+      const id = parsed.positional[0]
+      if (!id) { usageFail('missing payment id', PAYMENT_USAGE); return }
+      const result = money.paymentVoid(familyStore({ write: true }), id, { reason: parsed.flags.reason })
+      if (parsed.flags.json) { console.log(JSON.stringify(result, null, 2)); return }
+      console.log('void ' + id + (result.alreadyVoid ? ' (already void)' : '') + '  commitmentReopened=' + (result.reopenedCommitment ? 'yes' : 'no'))
+      return
+    }
+    usageFail('unknown payment subcommand: ' + sub, PAYMENT_USAGE)
+  } catch (error) { reportFamilyFailure(error) }
+}
+
+/* ------------------------------- consent -------------------------------- */
+
+const CONSENT_USAGE = [
+  'usage: advisers consent status [--json]',
+  '       advisers consent grant <surface> [--data-class mail|kb] [--provider deepseek] [--base-url URL] [--yes] [--json]',
+  '       advisers consent revoke <surface> [--data-class mail|kb] [--provider p] [--base-url URL] [--yes] [--json]',
+].join('\n')
+
+function consentDataClassFor(surface, explicit) {
+  if (explicit !== undefined) return String(explicit)
+  const table = { 'mail.extract': 'mail', 'mail.sync': 'mail', 'kb.ask': 'kb', 'kb.ingest': 'kb', 'kb.search': 'kb' }
+  return table[surface] ?? undefined
+}
+
+async function consentCommand(rawArgs) {
+  const sub = rawArgs[0]
+  try {
+    if (!sub || sub === 'help' || sub === '--help') { console.log(CONSENT_USAGE); return }
+    const consent = await loadConsent()
+    if (sub === 'status') {
+      const parsed = familyFlags(rawArgs.slice(1), { booleans: ['json'], values: [] }, CONSENT_USAGE)
+      if (!parsed) return
+      const entries = consent.listConsents(HOME)
+      const payload = { ok: true, command: 'consent status', path: consent.consentPath(HOME), configured: entries.length > 0, entries }
+      if (parsed.flags.json) { console.log(JSON.stringify(payload, null, 2)); return }
+      console.log('consent file: ' + payload.path + (payload.configured ? '' : '（尚未记录任何同意）'))
+      if (!entries.length) console.log('（没有同意的数据外发）')
+      for (const entry of entries) console.log(entry.surface + '  ' + entry.dataClass + '  ' + entry.provider + (entry.baseUrl ? '  ' + entry.baseUrl : '') + '  ' + (entry.active ? 'granted ' + entry.grantedAt : 'revoked ' + entry.revokedAt))
+      return
+    }
+    if (sub === 'grant' || sub === 'revoke') {
+      const parsed = familyFlags(rawArgs.slice(1), { booleans: ['json', 'yes'], values: ['data-class', 'provider', 'base-url', 'consent'] }, CONSENT_USAGE)
+      if (!parsed) return
+      const surface = parsed.positional[0]
+      if (!surface) { usageFail('missing surface (for example mail.extract)', CONSENT_USAGE); return }
+      const dataClass = consentDataClassFor(surface, parsed.flags['data-class'])
+      if (!dataClass) throw familyError('E_POLICY_INVALID_FACTS', 'unknown consent data class for ' + surface, 'pass --data-class mail or --data-class kb')
+      const provider = typeof parsed.flags.provider === 'string' ? parsed.flags.provider : (process.env.ADVISERS_PROVIDER || 'deepseek')
+      const baseUrl = typeof parsed.flags['base-url'] === 'string' ? parsed.flags['base-url'] : (process.env.ADVISERS_BASE_URL || 'https://api.deepseek.com')
+      const isTTY = Boolean(process.stdin.isTTY)
+      const envOverride = process.env['ADVISERS_CONSENT_' + surface.toUpperCase().replace(/[^A-Z0-9]/g, '_')] === '1'
+      const explicit = parsed.flags.yes === true || parsed.flags.consent !== undefined || envOverride
+      if (sub === 'grant') {
+        if (!isTTY && !explicit) throw familyError('E_CONSENT_CONFIRMATION_UNAVAILABLE', 'non-interactive consent grant requires an explicit --yes (or ADVISERS_CONSENT_<SURFACE>=1)', 'read advisers tos show and docs/PRIVACY.md first; this is a separate model-egress consent')
+        if (isTTY && !explicit) {
+          const answer = await askYesNo(null, '同意把 ' + dataClass + ' 内容发送给模型服务 ' + provider + (baseUrl ? ' (' + baseUrl + ')' : '') + '（' + surface + '）？[y/N] ', false)
+          if (!answer) { console.log('已取消，未写入同意记录。'); return }
+        }
+      } else {
+        if (!isTTY && !explicit) throw familyError('E_CONSENT_CONFIRMATION_UNAVAILABLE', 'non-interactive consent revoke requires an explicit --yes', 'run in a terminal to confirm the revocation')
+        if (isTTY && !explicit) {
+          const answer = await askYesNo(null, '撤回 ' + surface + ' 的同意？[y/N] ', false)
+          if (!answer) { console.log('已取消。'); return }
+        }
+      }
+      const audit = (event) => {
+        const store = mode === 'sqlite' ? dbStore() : undefined
+        if (!store) return { ok: false }
+        try { store.appendAudit({ actor: 'local', action: event.action, allowed: event.ok === true, reason: String(event.surface) + ' ' + String(event.dataClass ?? '') }); return { ok: true } } catch { return { ok: false } }
+      }
+      const channel = isTTY ? 'tty' : 'flag'
+      const result = sub === 'grant'
+        ? consent.grantConsent(HOME, { surface, dataClass, provider, baseUrl, channel, audit })
+        : consent.revokeConsent(HOME, { surface, dataClass, provider, baseUrl, audit })
+      const payload = { ok: true, command: 'consent ' + sub, ...result, auditWritten: result.auditWritten === true }
+      if (parsed.flags.json) { console.log(JSON.stringify(payload, null, 2)); return }
+      if (sub === 'grant') console.log('granted ' + surface + ' / ' + dataClass + ' / ' + provider + ' (channel=' + channel + ')')
+      else console.log('revoked ' + result.revoked + ' consent entr' + (result.revoked === 1 ? 'y' : 'ies') + ' for ' + surface)
+      return
+    }
+    usageFail('unknown consent subcommand: ' + sub, CONSENT_USAGE)
+  } catch (error) { reportFamilyFailure(error) }
+}
+
 function ls() {
   const matters = loadReadLedger({ matters: {} }).listMatters()
   if (!matters.length) {
@@ -6431,6 +8114,121 @@ function applyCustomerImport(store, tables) {
   return { clients: clientCount, projects: projectCount, clientNotes: noteCount, reconciledDeliveries: reconciledDeliveries }
 }
 
+
+/* ---------------------------------------------------------------------------
+ * 0.4.0 (task-29): export --all / import --replace symmetry.
+ *
+ * export --all writes DATA_TABLES (KB, mail, money included). import --replace
+ * validates and restores the same table list in ONE transaction: the ledger via
+ * saveWithAudit, the customer tables through the 0.3.2 reference checks, and the
+ * derived/auxiliary tables (sessions/turns/deliveries/audit/KB/mail/money).
+ * Derived FTS tables and mail_cursors are never imported; kb_pages is dropped
+ * because its inputs changed.
+ * ------------------------------------------------------------------------- */
+const MONEY_IMPORT_TABLES = ['receivables', 'payments']
+// mail_cursors: server-side IMAP cursors are meaningless on another machine.
+// audit: the hash chain is keyed by THIS home's audit.key, so importing another
+// home's rows would report a broken chain; the local chain is preserved and the
+// import keeps appending to it.
+const IMPORT_TABLE_DENYLIST = new Set(['mail_cursors', 'audit'])
+const IMPORT_TABLES = DATA_TABLES.filter((table) => !IMPORT_TABLE_DENYLIST.has(table))
+
+/** Validate the shape of payload.data before any write happens (all DATA_TABLES). */
+function prepareDataImport(payloadData) {
+  if (!payloadData || typeof payloadData !== 'object' || Array.isArray(payloadData)) return null
+  const present = IMPORT_TABLES.filter((table) => Object.prototype.hasOwnProperty.call(payloadData, table))
+  if (!present.length) return null
+  const tables = {}
+  for (const table of IMPORT_TABLES) {
+    if (!Object.prototype.hasOwnProperty.call(payloadData, table)) {
+      // A pre-0.4 export has no money tables: clear them so old commitments are
+      // never left with dangling money rows. Other absent tables are left as-is.
+      tables[table] = MONEY_IMPORT_TABLES.includes(table) ? [] : null
+      continue
+    }
+    const rows = payloadData[table]
+    if (!Array.isArray(rows)) throw importDataError('import data.' + table + ' must be an array')
+    if (rows.length > CUSTOMER_IMPORT_MAX_ROWS) throw importDataError('import data.' + table + ' has too many rows (max ' + CUSTOMER_IMPORT_MAX_ROWS + ')')
+    for (let index = 0; index < rows.length; index += 1) {
+      const row = rows[index]
+      if (!row || typeof row !== 'object' || Array.isArray(row)) throw importDataError('import data.' + table + '[' + index + '] must be an object')
+    }
+    tables[table] = rows
+  }
+  return tables
+}
+
+/**
+ * Restore every exported DATA_TABLES entry inside the import transaction.
+ * Throws importDataError on a dangling reference; the caller's transaction rolls
+ * back and the pre-import backup stays as the recovery copy.
+ */
+function applyDataImport(store, tables) {
+  const report = { tables: {}, customer: null, cleared: [], kbReconciled: 0, kbPagesCleared: 0 }
+  const customerPresent = CUSTOMER_IMPORT_TABLES.some((table) => Array.isArray(tables[table]))
+  if (customerPresent) {
+    report.customer = applyCustomerImport(store, {
+      clients: Array.isArray(tables.clients) ? tables.clients : [],
+      projects: Array.isArray(tables.projects) ? tables.projects : [],
+      client_notes: Array.isArray(tables.client_notes) ? tables.client_notes : [],
+    })
+    report.tables.clients = report.customer.clients
+    report.tables.projects = report.customer.projects
+    report.tables.client_notes = report.customer.clientNotes
+  }
+  const restored = (table) => !CUSTOMER_IMPORT_TABLES.includes(table)
+  for (const table of IMPORT_TABLES) {
+    if (!restored(table)) continue
+    const rows = tables[table]
+    if (rows === null || rows === undefined) continue
+    report.tables[table] = replaceCustomerTable(store, table, rows)
+  }
+  // KB: chunks must point at a restored document; entity ids are reconciled to
+  // NULL (KB is derived data, never a reason to reject the whole import).
+  if (tables.kb_documents !== null || tables.kb_chunks !== null || tables.kb_fact_links !== null) {
+    const docIds = new Set(store.db.prepare('SELECT id FROM kb_documents').all().map((row) => row.id))
+    for (const chunk of store.db.prepare('SELECT id, doc_id FROM kb_chunks').all()) {
+      if (!docIds.has(chunk.doc_id)) throw importDataError('import data.kb_chunks references a missing document: ' + String(chunk.doc_id))
+    }
+    const clientIds = new Set(store.db.prepare('SELECT id FROM clients').all().map((row) => row.id))
+    const projectIds = new Set(store.db.prepare('SELECT id FROM projects').all().map((row) => row.id))
+    const matterIds = new Set(store.db.prepare('SELECT id FROM matters').all().map((row) => row.id))
+    for (const doc of store.db.prepare('SELECT id, client_id, project_id, matter_id FROM kb_documents').all()) {
+      const nextClient = doc.client_id !== null && clientIds.has(doc.client_id) ? doc.client_id : null
+      const nextProject = doc.project_id !== null && projectIds.has(doc.project_id) ? doc.project_id : null
+      const nextMatter = doc.matter_id !== null && matterIds.has(doc.matter_id) ? doc.matter_id : null
+      if (nextClient !== doc.client_id || nextProject !== doc.project_id || nextMatter !== doc.matter_id) {
+        store.db.prepare('UPDATE kb_documents SET client_id = ?, project_id = ?, matter_id = ? WHERE id = ?').run(nextClient, nextProject, nextMatter, doc.id)
+        report.kbReconciled += 1
+      }
+    }
+    for (const link of store.db.prepare('SELECT fact_id, doc_id FROM kb_fact_links').all()) {
+      if (!docIds.has(link.doc_id)) { store.db.prepare('DELETE FROM kb_fact_links WHERE fact_id = ? AND doc_id = ?').run(link.fact_id, link.doc_id); report.kbReconciled += 1 }
+    }
+    report.kbPagesCleared = Number(store.db.prepare('DELETE FROM kb_pages').run().changes ?? 0)
+    try { store.rebuildAllFtsIndexes() } catch {}
+  }
+  // Money: an import must not leave money rows pointing at missing entities.
+  if (tables.receivables !== null || tables.payments !== null) {
+    const commitmentIds = new Set(store.db.prepare('SELECT id FROM commitments').all().map((row) => row.id))
+    const clientIds = new Set(store.db.prepare('SELECT id FROM clients').all().map((row) => row.id))
+    const receivableById = new Map(store.db.prepare('SELECT id, commitment_id, client_id, currency FROM receivables').all().map((row) => [row.id, row]))
+    for (const row of receivableById.values()) {
+      if (!commitmentIds.has(row.commitment_id)) throw importDataError('import data.receivables references a missing commitment: ' + String(row.commitment_id))
+      if (!clientIds.has(row.client_id)) throw importDataError('import data.receivables references a missing client: ' + String(row.client_id))
+    }
+    for (const payment of store.db.prepare('SELECT id, client_id, commitment_id, currency FROM payments').all()) {
+      if (!clientIds.has(payment.client_id)) throw importDataError('import data.payments references a missing client: ' + String(payment.client_id))
+      if (payment.commitment_id !== null && !commitmentIds.has(payment.commitment_id)) throw importDataError('import data.payments references a missing commitment: ' + String(payment.commitment_id))
+      if (payment.commitment_id !== null) {
+        const receivable = [...receivableById.values()].find((row) => row.commitment_id === payment.commitment_id)
+        if (receivable && receivable.currency !== payment.currency) throw importDataError('import data.payments currency does not match its receivable: ' + String(payment.id))
+      }
+    }
+  }
+  return report
+}
+
 async function importLedger(file, { replace = false } = {}) {
   if (!file) { console.error('usage: advisers import <file> [--replace]'); process.exitCode = 1; return }
   if (!replace) { console.error('import replaces the local ledger; pass --replace to confirm'); process.exitCode = 1; return }
@@ -6464,8 +8262,8 @@ async function importLedger(file, { replace = false } = {}) {
   }
   // Validate the customer-table payload shape BEFORE any write; the restore
   // itself runs inside the import transaction and rolls back on a bad reference.
-  let customerImport = null
-  try { customerImport = prepareCustomerImport(payload?.data) } catch (error) {
+  let dataImport = null
+  try { dataImport = prepareDataImport(payload?.data) } catch (error) {
     console.error('import failed: ' + error.message)
     process.exitCode = 1
     return
@@ -6480,16 +8278,26 @@ async function importLedger(file, { replace = false } = {}) {
     facts: Array.isArray(data.facts) ? data.facts.length : 0,
     preferences: Array.isArray(data.preferences) ? data.preferences.length : 0,
   }
-  if (customerImport) {
-    incoming.clients = customerImport.clients.length
-    incoming.projects = customerImport.projects.length
-    incoming.clientNotes = customerImport.client_notes.length
+  if (dataImport) {
+    // Additive per-table line: the old clients/projects/clientNotes keys stay.
+    for (const table of Object.keys(dataImport)) {
+      const rows = dataImport[table]
+      if (!Array.isArray(rows)) continue
+      incoming[table] = rows.length
+    }
+    incoming.clients = (dataImport.clients ?? []).length
+    incoming.projects = (dataImport.projects ?? []).length
+    incoming.clientNotes = (dataImport.client_notes ?? []).length
   }
   const importBackupFile = mode === 'sqlite' ? join(HOME, 'import-backup-' + Date.now() + '.db') : null
   console.log('! 需要确认：整库替换本地账本（不是合并）')
-  console.log('  写入：' + incoming.matters + ' 个事项 / ' + incoming.commitments + ' 条承诺 / ' + incoming.facts + ' 条事实 / ' + incoming.preferences + ' 条偏好' + (customerImport ? ' / ' + incoming.clients + ' 个客户 / ' + incoming.projects + ' 个项目 / ' + incoming.clientNotes + ' 条客户备注' : ''))
+  console.log('  写入：' + incoming.matters + ' 个事项 / ' + incoming.commitments + ' 条承诺 / ' + incoming.facts + ' 条事实 / ' + incoming.preferences + ' 条偏好' + (dataImport ? ' / ' + incoming.clients + ' 个客户 / ' + incoming.projects + ' 个项目 / ' + incoming.clientNotes + ' 条客户备注' : ''))
+  if (dataImport) {
+    const summary = Object.keys(dataImport).filter((table) => Array.isArray(dataImport[table])).map((table) => table + '=' + dataImport[table].length).join(', ')
+    console.log('  导出表：' + summary)
+  }
   console.log('  备份：' + (importBackupFile ?? '（JSON store：无数据库备份，旧 state.json 会被覆盖）'))
-  console.log('  不可撤销：替换后只能用上面的备份恢复；' + (customerImport ? '客户/项目/备注表按导出恢复，其余 SQLite-only 表不会合并。' : '未导入的 SQLite-only 表不会被保留。'))
+  console.log('  不可撤销：替换后只能用上面的备份恢复；' + (dataImport ? '导出的 DATA_TABLES 按同一事务恢复（派生 FTS 与 mail_cursors 除外），kb_pages 需重新生成。' : '未导入的 SQLite-only 表不会被保留。'))
   // import replaces the ledger wholesale; serialize it with every other store
   // user (P0-1) before copying the pre-import backup and writing.
   ensureInstanceLock()
@@ -6522,21 +8330,32 @@ async function importLedger(file, { replace = false } = {}) {
   try {
     const ledger = Ledger.fromJSON(data, LOCAL_PORTS)
     const audit = { actor: 'local', action: 'import.ledger', allowed: true, reason: basename(file) }
-    let customerReport = null
-    if (customerImport && mode === 'sqlite') {
-      // One transaction: the nine ledger tables, the three customer tables and
-      // their cross-reference validation. A bad reference throws and rolls the
-      // whole replace back; the pre-import backup remains as a second net.
+    let dataReport = null
+    if (dataImport && mode === 'sqlite') {
+      // One transaction: the ledger tables (saveWithAudit) and every exported
+      // DATA_TABLES entry (applyDataImport), including their cross-reference
+      // validation. A bad reference throws and rolls the whole replace back; the
+      // pre-import backup remains as a second net.
       openStore().saveWithAudit(ledger.toJSON(), audit, (innerStore) => {
-        customerReport = applyCustomerImport(innerStore, customerImport)
+        dataReport = applyDataImport(innerStore, dataImport)
       })
     } else {
       saveLedgerWithAudit(ledger, audit)
     }
     console.log(`imported ${data.matters.length} matters, ${data.commitments?.length ?? 0} commitments`)
-    if (customerReport) {
+    if (dataReport?.customer) {
+      const customerReport = dataReport.customer
       console.log('restored clients=' + customerReport.clients + ' projects=' + customerReport.projects + ' client_notes=' + customerReport.clientNotes + (customerReport.reconciledDeliveries ? ' · delivery lineage reconciled=' + customerReport.reconciledDeliveries : ''))
-      console.error('note: ledger + customer tables were replaced; other SQLite-only tables in the export (sessions/turns/deliveries/nudges/audit/...) were not merged.')
+    }
+    if (dataReport) {
+      const restoredTables = Object.entries(dataReport.tables)
+        .filter(([table]) => !CUSTOMER_IMPORT_TABLES.includes(table))
+        .map(([table, count]) => table + '=' + count)
+        .join(', ')
+      if (restoredTables) console.log('restored tables: ' + restoredTables)
+      if (dataReport.kbReconciled) console.log('kb reconciled rows=' + dataReport.kbReconciled)
+      if (dataReport.kbPagesCleared) console.log('kb_pages cleared=' + dataReport.kbPagesCleared + ' (run advisers kb page rebuild)')
+      console.error('note: ledger + exported DATA_TABLES were replaced (derived FTS tables, mail_cursors and the machine-local audit chain excluded); the local audit chain stays valid.')
     } else if (payload?.data) {
       console.error('note: SQLite-only tables in the import were not merged; ledger was replaced.')
     }
@@ -8282,6 +10101,55 @@ async function ui(args) {
   await app.close()
 }
 
+let webhookSecretWarned = false
+
+/** Parse remind --now into a Date (fixed instant for reproducible JSON + planning). */
+function parseRemindNow(flags) {
+  if (flags.now === undefined) return { date: new Date() }
+  if (typeof flags.now !== 'string' || Number.isNaN(Date.parse(flags.now))) return { error: '--now must be an ISO timestamp' }
+  return { date: new Date(Date.parse(flags.now)) }
+}
+
+const QUIET_HOURS_RE = /^([01]\d|2[0-3]):([0-5]\d)-([01]\d|2[0-3]):([0-5]\d)$/
+/** Validate --quiet-hours HH:MM-HH:MM; the value is baked into the scheduler script only. */
+function parseQuietHours(value) {
+  if (value === undefined) return { value: null }
+  if (typeof value !== 'string' || !QUIET_HOURS_RE.test(value)) return { error: '--quiet-hours must be HH:MM-HH:MM (for example 22:00-08:00)' }
+  return { value: value }
+}
+
+const HHMM_RE = /^([01]\d|2[0-3]):([0-5]\d)$/
+function parseHhmm(value, flag) {
+  if (typeof value !== 'string' || !HHMM_RE.test(value)) return { error: flag + ' must be HH:MM' }
+  const parts = value.split(':').map(Number)
+  return { time: value, hour: parts[0], minute: parts[1] }
+}
+
+const MORNING_WINDOWS_DAYS = ['SUN', 'MON', 'TUE', 'WED', 'THU', 'FRI', 'SAT']
+/** Accept a cron day list (1-5, 1,3,5) and derive both cron and schtasks forms. */
+function parseMorningDays(value) {
+  const text = value === undefined ? '1-5' : String(value).trim()
+  if (!/^[0-7](?:[-,][0-7])*$/.test(text)) return { error: '--morning-days must be a cron day list like 1-5 or 1,3,5' }
+  const numeric = []
+  for (const part of text.split(',')) {
+    if (part.includes('-')) {
+      const bounds = part.split('-').map(Number)
+      const from = Math.min(bounds[0], bounds[1])
+      const to = Math.max(bounds[0], bounds[1])
+      for (let day = from; day <= to; day++) numeric.push(day % 7)
+    } else numeric.push(Number(part) % 7)
+  }
+  const unique = [...new Set(numeric)]
+  if (!unique.length) return { error: '--morning-days must name at least one day' }
+  return { cron: text, windows: unique.map((day) => MORNING_WINDOWS_DAYS[day]) }
+}
+
+/** m h * * <days> cron schedule from an HH:MM time. */
+function cronScheduleFor(timeText, daysCron) {
+  const parts = timeText.split(':').map(Number)
+  return parts[1] + ' ' + parts[0] + ' * * ' + (daysCron ?? '*')
+}
+
 async function remind(args) {
   const { flags, positional } = parseFlags(args)
   ensureHome()
@@ -8311,39 +10179,92 @@ async function remind(args) {
     mkdirSync(dir, { recursive: true, mode: 0o700 })
     const nodeBin = process.execPath
     const cli = process.argv[1]
-    writeFileSync(join(dir, 'remind.sh'), '#!/bin/sh\n"' + nodeBin + '" "' + cli + '" remind --deliver --notify >> "' + join(HOME, 'reminders.log') + '" 2>&1\n', { mode: 0o700 })
-    writeFileSync(join(dir, 'remind.ps1'), '& "' + nodeBin + '" "' + cli + '" remind --deliver --notify *>> "' + join(HOME, 'reminders.log') + '"\n', { mode: 0o700 })
-    writeFileSync(join(dir, 'README.txt'), 'Install one of these user-level schedules (opt-in):\nLinux:  systemd --user timer or cron: 0 9 * * * sh ' + join(dir, 'remind.sh') + '\nWindows: Task Scheduler -> run remind.ps1 daily\nOr import ~/.advisers/reminders.ics into your calendar.\n')
+    const quiet = parseQuietHours(flags['quiet-hours'])
+    if (quiet.error) { usageFail(quiet.error, 'usage: advisers remind install [--apply] [--schedule "0 9 * * *"] [--morning [--morning-time 08:30] [--morning-days 1-5]] [--quiet-hours 22:00-08:00]'); return }
+    const withMorning = flags.morning === true
+    const remindArgs = [...scheduler.DEFAULT_REMIND_ARGS, ...(quiet.value ? ['--quiet-hours', quiet.value] : [])]
+    const remindCommand = scheduler.buildCronCommand({ nodeBin, cliPath: cli, args: remindArgs })
+    writeFileSync(join(dir, 'remind.sh'), '#!/bin/sh\n"' + nodeBin + '" "' + cli + '" ' + remindArgs.join(' ') + ' >> "' + join(HOME, 'reminders.log') + '" 2>&1\n', { mode: 0o700 })
+    writeFileSync(join(dir, 'remind.ps1'), '& "' + nodeBin + '" "' + cli + '" ' + remindArgs.join(' ') + ' *>> "' + join(HOME, 'reminders.log') + '"\n', { mode: 0o700 })
+    let morningCommand
+    let morningPlan = null
+    if (withMorning) {
+      const morningTime = parseHhmm(flags['morning-time'] === undefined ? scheduler.DEFAULT_MORNING_TASK_TIME : flags['morning-time'], '--morning-time')
+      if (morningTime.error) { usageFail(morningTime.error, 'usage: advisers remind install --morning [--morning-time 08:30] [--morning-days 1-5]'); return }
+      const morningDays = parseMorningDays(flags['morning-days'])
+      if (morningDays.error) { usageFail(morningDays.error, 'usage: advisers remind install --morning [--morning-time 08:30] [--morning-days 1-5]'); return }
+      morningCommand = scheduler.buildCronCommand({ nodeBin, cliPath: cli, args: scheduler.DEFAULT_MORNING_ARGS })
+      writeFileSync(join(dir, 'morning.sh'), '#!/bin/sh\n"' + nodeBin + '" "' + cli + '" ' + scheduler.DEFAULT_MORNING_ARGS.join(' ') + ' >> "' + join(HOME, 'morning.log') + '" 2>&1\n', { mode: 0o700 })
+      writeFileSync(join(dir, 'morning.ps1'), '& "' + nodeBin + '" "' + cli + '" ' + scheduler.DEFAULT_MORNING_ARGS.join(' ') + ' *>> "' + join(HOME, 'morning.log') + '"\n', { mode: 0o700 })
+      // The second block is opt-in: without --morning the 0.3.2 single-block
+      // install (and its exact dry-run output) is unchanged.
+      const blocks = process.platform === 'win32'
+        ? [
+          { marker: scheduler.CRON_MARKER, taskName: scheduler.DEFAULT_TASK_NAME, time: typeof flags.time === 'string' ? flags.time : scheduler.DEFAULT_TASK_TIME, schedule: 'daily', command: remindCommand },
+          { marker: scheduler.MORNING_CRON_MARKER, taskName: scheduler.DEFAULT_MORNING_TASK_NAME, time: morningTime.time, schedule: 'weekly', days: morningDays.windows, command: morningCommand },
+        ]
+        : [
+          { marker: scheduler.CRON_MARKER, schedule: typeof flags.schedule === 'string' ? flags.schedule : scheduler.DEFAULT_CRON_SCHEDULE, command: remindCommand },
+          { marker: scheduler.MORNING_CRON_MARKER, schedule: cronScheduleFor(morningTime.time, morningDays.cron), command: morningCommand },
+        ]
+      morningPlan = { blocks, schedule: cronScheduleFor(morningTime.time, morningDays.cron), days: morningDays }
+    }
+    writeFileSync(join(dir, 'README.txt'), 'Install one of these user-level schedules (opt-in):\nLinux:  systemd --user timer or cron: 0 9 * * * sh ' + join(dir, 'remind.sh') + '\nWindows: Task Scheduler -> run remind.ps1 daily\n' + (withMorning ? 'Morning brief: register morning.sh/.ps1 for ' + morningPlan.schedule + ' (or point Task Scheduler at morning.ps1).\n' : '') + 'Or import ~/.advisers/reminders.ics into your calendar.\n')
     store?.appendAudit({ actor: 'local', action: 'notify.install', allowed: true, reason: dir })
     console.log('scheduler scripts written: ' + dir)
     console.log('opt-in: import ~/.advisers/reminders.ics, or register remind.sh/.ps1 with your OS scheduler.')
-    const command = scheduler.buildCronCommand({ nodeBin, cliPath: cli })
+    if (withMorning) console.log('morning scripts written: ' + join(dir, 'morning.sh') + ' / morning.ps1')
+    const existing = apply ? await readCrontabText() : { ok: false }
+    if (withMorning) {
+      const plan = scheduler.planSchedulerBlocks({
+        platform: process.platform,
+        action: 'install',
+        dryRun: !apply,
+        blocks: morningPlan.blocks,
+        ...(existing.ok ? { existingText: existing.text } : {}),
+      })
+      console.log('schedule: ' + (plan.platform === 'win32' ? scheduler.DEFAULT_TASK_NAME + ' daily ' + scheduler.DEFAULT_TASK_TIME : morningPlan.blocks[0].schedule))
+      console.log('morning schedule: ' + (plan.platform === 'win32' ? scheduler.DEFAULT_MORNING_TASK_NAME + ' weekly ' + morningPlan.blocks[1].time + ' ' + morningPlan.blocks[1].days.join(',') : morningPlan.schedule))
+      console.log('command: ' + remindCommand)
+      console.log('morning command: ' + morningCommand)
+      await applySchedulerPlan(plan, { apply })
+      return
+    }
     const schedule = typeof flags.schedule === 'string' ? flags.schedule : scheduler.DEFAULT_CRON_SCHEDULE
     const time = typeof flags.time === 'string' ? flags.time : scheduler.DEFAULT_TASK_TIME
-    const existing = apply ? await readCrontabText() : { ok: false }
     const plan = scheduler.planScheduler({
       platform: process.platform,
       action: 'install',
       dryRun: !apply,
-      command,
+      command: remindCommand,
       schedule,
       time,
       ...(existing.ok ? { existingText: existing.text } : {}),
     })
     console.log('schedule: ' + (plan.platform === 'win32' ? plan.taskName + ' daily ' + plan.time : plan.schedule))
-    console.log('command: ' + command)
+    console.log('command: ' + remindCommand)
     await applySchedulerPlan(plan, { apply })
     return
   }
   if (sub === 'uninstall' || flags.uninstall) {
     const dir = join(HOME, 'scheduler')
     const existing = await readCrontabText()
-    const plan = scheduler.planScheduler({
-      platform: process.platform,
-      action: 'uninstall',
-      dryRun: !apply,
-      ...(existing.ok ? { existingText: existing.text } : {}),
-    })
+    // 0.4.0: remove BOTH owned blocks precisely (remind + morning) and leave
+    // every unmanaged crontab line byte-identical.
+    const plan = process.platform === 'win32'
+      ? scheduler.planSchedulerBlocks({
+        platform: 'win32',
+        action: 'uninstall',
+        dryRun: !apply,
+        blocks: [{ taskName: scheduler.DEFAULT_TASK_NAME }, { taskName: scheduler.DEFAULT_MORNING_TASK_NAME }],
+      })
+      : scheduler.planSchedulerBlocks({
+        platform: process.platform,
+        action: 'uninstall',
+        dryRun: !apply,
+        markers: [scheduler.CRON_MARKER, scheduler.MORNING_CRON_MARKER],
+        ...(existing.ok ? { existingText: existing.text } : {}),
+      })
     await applySchedulerPlan(plan, { apply })
     if (existsSync(dir)) rmSync(dir, { recursive: true, force: true })
     store?.appendAudit({ actor: 'local', action: 'notify.uninstall', allowed: true, reason: dir })
@@ -8354,38 +10275,66 @@ async function remind(args) {
     const dir = join(HOME, 'scheduler')
     console.log('scheduler scripts: ' + (existsSync(dir) ? dir : 'not installed (optional)'))
     console.log('reminder log: ' + join(HOME, 'reminders.log'))
-    const status = scheduler.readSchedulerStatus({ homeDir: HOME })
-    if (!status.lastRun) console.log('last run: none recorded' + (status.corrupt ? ' (status.json corrupt)' : ''))
-    else console.log('last run: ' + status.lastRun + ' · result=' + (status.lastResult ?? '-') + ' · count=' + (status.lastCount ?? '-') + ' · channel=' + (status.lastChannel ?? '-'))
+    // 0.4.0 status v2: two sections (remind + morning). A 0.3.2 flat file is
+    // mapped into the remind section by the library, so old runs still show.
+    const status = scheduler.readSchedulerStatusV2({ homeDir: HOME })
+    const remindStatus = status.remind ?? {}
+    if (!remindStatus.lastRun) console.log('last run: none recorded' + (status.corrupt ? ' (status.json corrupt)' : ''))
+    else console.log('last run: ' + remindStatus.lastRun + ' · result=' + (remindStatus.lastResult ?? '-') + ' · count=' + (remindStatus.lastCount ?? '-') + ' · channel=' + (remindStatus.lastChannel ?? '-'))
+    const morningStatus = status.morning ?? {}
+    if (!morningStatus.lastRun) console.log('morning: none recorded')
+    else console.log('morning: ' + morningStatus.lastRun + ' · result=' + (morningStatus.lastResult ?? '-') + ' · count=' + (morningStatus.lastCount ?? '-') + ' · path=' + (morningStatus.lastPath ?? '-'))
     if (process.platform === 'win32') {
       const plan = scheduler.planWindowsStatus({})
       console.log('os plan: ' + plan.commands.map((entry) => entry.command + ' ' + entry.args.join(' ')).join('; ') + '（运行该命令；exit 0 表示已注册）')
+      const morningPlan = scheduler.planWindowsStatus({ taskName: scheduler.DEFAULT_MORNING_TASK_NAME })
+      console.log('os plan (morning): ' + morningPlan.commands.map((entry) => entry.command + ' ' + entry.args.join(' ')).join('; ') + '（运行该命令；exit 0 表示已注册）')
     } else if (scheduler.CRON_PLATFORMS.includes(process.platform)) {
       const existing = await readCrontabText()
       if (existing.ok) {
         const plan = scheduler.planCronStatus({ existingText: existing.text })
         console.log(plan.installed ? 'os plan: installed (' + plan.schedule + ')' : 'os plan: not installed')
+        const blocks = scheduler.planCronStatusBlocks({ existingText: existing.text, markers: [scheduler.CRON_MARKER, scheduler.MORNING_CRON_MARKER] })
+        const morningEntry = blocks.entries.find((entry) => entry.marker === scheduler.MORNING_CRON_MARKER)
+        console.log(morningEntry && morningEntry.installed ? 'os plan (morning): installed (' + morningEntry.schedule + ')' : 'os plan (morning): not installed')
       } else {
         console.log('os plan: unknown (' + (existing.error ?? 'crontab unavailable') + ')')
+        console.log('os plan (morning): unknown (' + (existing.error ?? 'crontab unavailable') + ')')
       }
     } else {
       console.log('os plan: unsupported platform ' + process.platform)
+      console.log('os plan (morning): unsupported platform ' + process.platform)
     }
     return
   }
   const { buildReminders, toIcs } = await loadRemind()
+  // 0.4.0: --now pins planning and the echoed instant, so a fixed run is
+  // byte-reproducible (the same value is used by reminders/ICS/JSON/webhook).
+  const nowInfo = parseRemindNow(flags)
+  if (nowInfo.error) { usageFail(nowInfo.error, 'usage: advisers remind [--json] [--now ISO] [--ics [path]] [--deliver [--notify]]'); return }
+  const nowDate = nowInfo.date
   // One prefix query instead of getMeta() per commitment (read-only store safe).
   const snoozed = {}
   for (const [key, value] of store?.listMetaByPrefix('snooze:') ?? []) snoozed[key.slice('snooze:'.length)] = value
-  const reminders = buildReminders(plannerLedger(), { now: new Date(), snoozedUntil: snoozed })
+  const reminders = buildReminders(plannerLedger(), { now: nowDate, snoozedUntil: snoozed })
   if (flags.ics) {
     const path = typeof flags.ics === 'string' ? flags.ics : (positional[0] || join(HOME, 'reminders.ics'))
-    writeFileSync(path, toIcs(reminders, { now: new Date() }), { mode: 0o600 })
+    writeFileSync(path, toIcs(reminders, { now: nowDate }), { mode: 0o600 })
     store?.appendAudit({ actor: 'local', action: 'notify.ics', allowed: true, reason: basename(path) })
     console.log('ics written: ' + path + ' (' + reminders.length + ' events)')
     return
   }
-  if (flags.json) { console.log(JSON.stringify({ now: new Date().toISOString(), reminders }, null, 2)); return }
+  if (flags.json) {
+    // 0.4.0 additive read model: ok/command/timezone + per-row urgency. The old
+    // now/reminders keys are unchanged and --json stays a pure read (it wins over
+    // --deliver/--notify exactly as in 0.3.2).
+    const { buildRemindPayload } = await loadUrgency()
+    const records = new Map()
+    for (const commitment of plannerLedger().listCommitments()) records.set(commitment.id, commitment)
+    const payload = buildRemindPayload(reminders, { now: nowDate, timezone: AGENDA_TIMEZONE, records })
+    console.log(JSON.stringify(payload, null, 2))
+    return
+  }
   if (!reminders.length) {
     console.log('现在没有到期的提醒。')
     if (flags.deliver) recordReminderRun(scheduler, { count: 0, channel: 'log' })
@@ -8398,16 +10347,25 @@ async function remind(args) {
     // control characters before appending; otherwise one entry could forge log
     // lines in the user's reminder history.
     const actions = reminders.map((r) => sanitizeConsoleText(r.action, { max: 2000 }))
-    const line = new Date().toISOString() + '\t' + reminders.length + '\t' + actions.join('；') + '\n'
+    const line = nowDate.toISOString() + '\t' + reminders.length + '\t' + actions.join('；') + '\n'
     writeFileSync(join(HOME, 'reminders.log'), line, { flag: 'a', mode: 0o600 })
     let channel = 'log'
     if (flags.notify) {
       const notify = await loadNotify()
       const local = await notify.sendNotification({ title: 'Advisers · 到期提醒', body: reminders.length + ' 条承诺到期或即将到期' })
       channel = local.sent ? local.channel : 'log-only'
-      const webhook = await notify.sendWebhookNotification(reminders)
-      if (webhook.sent) channel = channel === 'log-only' ? 'webhook' : channel + '+webhook'
-      else if (webhook.configured) console.error(sanitizeConsoleText('webhook 未发送：' + (webhook.error ?? 'unknown') + (webhook.detail ? '（' + webhook.detail + '）' : ''), { max: 2000 }))
+      const webhook = await notify.sendWebhookNotification(reminders, { now: nowDate })
+      if (webhook.sent) {
+        channel = channel === 'log-only' ? 'webhook' : channel + '+webhook'
+        // 0.4.0: remember whether the delivery was signed, without changing the
+        // payload bytes. A configured webhook with no secret still sends but says
+        // so exactly once per process (sanitised, no secret material).
+        if (typeof webhook.signing === 'string' && webhook.signing !== '') channel += '+signing:' + webhook.signing
+        if (webhook.warning === 'missing-secret' && !webhookSecretWarned) {
+          webhookSecretWarned = true
+          console.error(sanitizeConsoleText('webhook 已配置但未设置 ADVISERS_NOTIFY_WEBHOOK_SECRET：本次按未签名发送（signing=none）；建议设置 secret，否则接收端无法验证请求来源。', { max: 2000 }))
+        }
+      } else if (webhook.configured) { console.error(sanitizeConsoleText('webhook 未发送：' + (webhook.error ?? 'unknown') + (webhook.detail ? '（' + webhook.detail + '）' : ''), { max: 2000 })) }
     }
     store?.appendAudit({ actor: 'local', action: 'notify.delivered', allowed: true, reason: reminders.length + ' reminders channel=' + channel })
     recordReminderRun(scheduler, { count: reminders.length, channel })
@@ -8441,7 +10399,15 @@ async function readCrontabText() {
 /** Record a successful delivery run in ~/.advisers/scheduler/status.json. */
 function recordReminderRun(scheduler, { count, channel }) {
   try {
-    scheduler.recordSchedulerRun({ homeDir: HOME, at: new Date(), result: 'ok', count, channel, dryRun: false })
+    // 0.4.0: once a v2 status document exists (a morning --archive run writes
+    // the morning section), keep writing v2 so the other section survives. A
+    // fresh home keeps the 0.3.2 flat v1 layout for byte-compatible readers.
+    const current = scheduler.readSchedulerStatusV2({ homeDir: HOME })
+    if (current.exists && current.legacy !== true && current.corrupt !== true) {
+      scheduler.recordSchedulerRunV2({ homeDir: HOME, at: new Date(), section: 'remind', result: 'ok', count, channel, dryRun: false })
+    } else {
+      scheduler.recordSchedulerRun({ homeDir: HOME, at: new Date(), result: 'ok', count, channel, dryRun: false })
+    }
   } catch (error) {
     console.error('scheduler status not recorded: ' + error.message)
   }
@@ -9242,6 +11208,57 @@ async function normalizeEvidenceSources(result) {
   return result
 }
 
+/**
+ * Typed evidence lookups injected into lib/evidence.js: the mail body table and
+ * the KB chunk/page tables. The library treats a missing lookup as honest
+ * not_checked/unverifiable (never missing), so a read-only command still works.
+ */
+async function buildEvidenceLookups(store) {
+  if (!store || typeof store.db?.prepare !== 'function') return undefined
+  const lookups = {}
+  try {
+    const mailStore = await loadMailStore()
+    lookups.mail = (selector) => {
+      const ref = selector?.messageId ?? selector?.ref
+      if (typeof ref !== 'string' || !ref) return null
+      try { return mailStore.getMailMessage(store, ref, { includeBody: true }) } catch { return null }
+    }
+  } catch {}
+  lookups.kbChunk = (selector) => {
+    try {
+      if (typeof selector?.chunkId === 'string' && selector.chunkId) return store.db.prepare('SELECT * FROM kb_chunks WHERE id = ?').get(selector.chunkId) ?? null
+      if (typeof selector?.docId === 'string' && selector.docId && Number.isInteger(selector.chunkIndex)) {
+        return store.db.prepare('SELECT * FROM kb_chunks WHERE doc_id = ? AND seq = ?').get(selector.docId, selector.chunkIndex) ?? null
+      }
+      return null
+    } catch { return null }
+  }
+  lookups.kbPage = (selector) => {
+    try {
+      const id = typeof selector?.pageId === 'string' && selector.pageId
+        ? selector.pageId
+        : typeof selector?.docId === 'string' && selector.docId
+          ? selector.docId
+          : typeof selector?.ref === 'string' ? selector.ref.replace(/^kb_page:/i, '') : ''
+      if (!id) return null
+      return store.db.prepare('SELECT * FROM kb_pages WHERE id = ? AND deleted_at IS NULL').get(id) ?? null
+    } catch { return null }
+  }
+  return lookups
+}
+
+/** One human line for a verified evidence entry, rendered by its source type. */
+function verifiedEvidenceLine(entry) {
+  const quote = String(entry?.quote ?? '').slice(0, 120)
+  const type = String(entry?.type ?? 'unknown')
+  if (type === 'conversation') return '  ' + String(entry.sessionId ?? '') + '#' + String(entry.turnId ?? '') + '  「' + quote + '」'
+  if (type === 'mail') return '  mail  ' + String(entry.messageId ?? entry.ref ?? '') + '  「' + quote + '」' + (entry.subject ? '  ' + String(entry.subject).slice(0, 80) : '')
+  if (type === 'kb_chunk') return '  kb_chunk  ' + String(entry.docId ?? '') + (entry.chunkIndex !== undefined ? '#' + entry.chunkIndex : '') + '  「' + quote + '」'
+  if (type === 'kb_page') return '  kb_page  ' + String(entry.pageId ?? '') + '  「' + quote + '」'
+  if (type === 'ledger') return '  ledger  ' + String(entry.ref ?? '') + '  「' + quote + '」'
+  return '  ' + type + (entry.ref ? ' ' + String(entry.ref) : '') + '  「' + quote + '」'
+}
+
 async function printEvidence(args) {
   const { flags, positional } = parseFlags(args)
   // Offline receipt-pack verification: reads only the given directory. It runs
@@ -9249,6 +11266,23 @@ async function printEvidence(args) {
   if (positional[0] === 'verify') {
     const dir = positional[1] ?? (typeof flags.dir === 'string' ? flags.dir : undefined)
     if (!dir) { console.error('usage: advisers evidence verify <dir>'); process.exitCode = 1; return }
+    // 0.4.0: dispatch by manifest.format. A client status pack is verified by
+    // the client-pack verifier (its own limits/semantics); everything else stays
+    // on the frozen receipt verifier.
+    try {
+      const clientPack = await loadClientPack()
+      const header = clientPack.readClientPackManifestHeader(dir)
+      if (header.ok && header.format === clientPack.CLIENT_PACK_MANIFEST_FORMAT) {
+        const result = clientPack.verifyClientStatusPackDir(dir)
+        console.log(JSON.stringify(result, null, 2))
+        if (result.code === clientPack.CLIENT_PACK_LIMIT_CODE) {
+          const violation = result.limitViolation ?? {}
+          console.error(sanitizeConsoleText(clientPack.CLIENT_PACK_LIMIT_CODE + ': client status pack ' + (violation.limit ?? 'limit') + ' exceeded ' + (violation.max ?? '?') + ' (actual ' + (violation.actual ?? '?') + '); refusing to verify a pack that could exhaust memory or time.', { max: 2000 }))
+        }
+        process.exitCode = result.ok ? 0 : 1
+        return
+      }
+    } catch {}
     const { verifyReceiptPackDir, RECEIPT_LIMIT_CODE } = await loadReceiptVerify()
     // The verifier caps entries/depth/file size/total size/SHA256SUMS/manifest
     // for an untrusted pack (lib/receipt-verify.js). A pack that trips a cap is
@@ -9272,31 +11306,40 @@ async function printEvidence(args) {
   if (!id) { console.error('usage: advisers evidence show <id> [--json]'); process.exitCode = 1; return }
   const ledger = readLedgerForCommand(id.startsWith('fact_') ? { facts: {} } : id.startsWith('pref_') ? { preferences: {} } : { commitments: {} })
   let result
+  const lookups = await buildEvidenceLookups(store)
   try {
     const { evidenceForCommitment, evidenceForFact, evidenceForPreference } = await loadEvidence()
-    if (id.startsWith('cm_')) result = evidenceForCommitment(store, ledger, id)
-    else if (id.startsWith('fact_')) result = evidenceForFact(store, ledger, id)
-    else if (id.startsWith('pref_')) result = evidenceForPreference(store, ledger, id)
+    if (id.startsWith('cm_')) result = evidenceForCommitment(store, ledger, id, undefined, { lookup: lookups })
+    else if (id.startsWith('fact_')) result = evidenceForFact(store, ledger, id, undefined, { lookup: lookups })
+    else if (id.startsWith('pref_')) result = evidenceForPreference(store, ledger, id, undefined, { lookup: lookups })
     else { console.error('unknown evidence id prefix (want cm_/fact_/pref_)'); process.exitCode = 1; return }
   } catch (error) { console.error(error.message); process.exitCode = 1; return }
   if (!result || (!result.commitment && !result.fact && !result.preference)) { console.error(`not found: ${id}`); process.exitCode = 1; return }
   await normalizeEvidenceSources(result)
   const unverifiable = Array.isArray(result.unverifiable) ? result.unverifiable : []
+  const notChecked = Array.isArray(result.notChecked) ? result.notChecked : []
   const manualSources = unverifiable.filter((item) => item && (item.kind === 'manual' || item.type === 'manual'))
+  // 0.4.0: prefer the resolver summary (four-state byKind, notCheckedCount,
+  // verificationBasis); fall back to the 0.3.2 tally for legacy result objects.
   const summary = {
-    byKind: { observed: result.sources.length, manual: manualSources.length },
+    byKind: result.byKind && typeof result.byKind === 'object' ? result.byKind : { observed: result.sources.length, manual: manualSources.length },
     missing: result.missing.length,
     unverifiable: unverifiable.length,
     operatorEntered: manualSources.length,
+    notCheckedCount: Number.isInteger(result.notCheckedCount) ? result.notCheckedCount : notChecked.length,
+    verificationBasis: typeof result.verificationBasis === 'string' ? result.verificationBasis : 'build-time',
   }
   if (flags.json) { console.log(JSON.stringify(Object.assign({}, result, { summary: summary }), null, 2)); return }
   const label = result.commitment ? `${result.commitment.action}` : result.fact ? `${result.fact.subject} ${result.fact.predicate}` : result.preference?.statement
   console.log(`${id}  ${label ?? ''}`)
-  if (!result.sources.length && !unverifiable.length) console.log('  （没有可回溯来源）')
-  for (const s of result.sources) console.log(`  ${s.sessionId}#${s.turnId}  「${(s.quote ?? '').slice(0, 120)}」`)
+  if (!result.sources.length && !unverifiable.length && !notChecked.length) console.log('  （没有可回溯来源）')
+  for (const s of result.sources) console.log(verifiedEvidenceLine(s))
   for (const m of result.missing) console.log(`  MISSING ${m.reason}${m.ref ? ` ${m.ref}` : ''}`)
+  for (const item of notChecked) console.log(`  NOT CHECKED ${String(item.type ?? 'unknown')} ${String(item.reason ?? 'not_checked')}${item.ref ? ' ' + String(item.ref) : ''}`)
   for (const item of unverifiable) console.log(`  MANUAL 操作者录入（未外部核验，不是缺失）  「${(item.quote ?? '').slice(0, 120)}」  sha256:${String(item.quoteSha256 ?? '').slice(0, 16)}`)
   if (unverifiable.length) console.log('  说明：manual/operator-entered 证据由用户手工录入；本地无法外部核验，不计入 missing。')
+  if (notChecked.length) console.log('  说明：not-checked 指本地没有对应的类型化查找能力/记录（如邮件正文未留存）；它既不是 resolved，也不是 missing。')
+  console.log('  校验口径：' + summary.verificationBasis + '——本地解析只证明构建时状态，不代表第三方审计或不可伪造。')
 }
 
 /**
@@ -9343,6 +11386,7 @@ async function evidencePack(args) {
     preferences: ledger.listPreferences({ includeCandidates: false }).map((p) => p.id),
   }
   const { buildEvidencePack, toDocxRows, verifyPack, EvidencePackLimitError } = await loadEvidence()
+  const lookups = await buildEvidenceLookups(store)
   let pack
   try {
     // Performance audit P1-1: --all was parsed but never forwarded, so the
@@ -9357,6 +11401,7 @@ async function evidencePack(args) {
       all: flags.all === true,
       clearance: 0,
       protectedPolicy: ids ? 'error' : 'exclude',
+      lookups,
     })
   } catch (error) {
     if (error instanceof EvidencePackLimitError || error?.code === 'EVIDENCE_PACK_TOO_LARGE') {
@@ -9776,6 +11821,7 @@ async function receiptPack(args) {
   if (skippedFiles.length) console.error('注意：' + skippedFiles.length + ' 个交付文件缺失，已跳过（回执只覆盖仍存在的文件）。')
   const verifyResults = await verifyDeliveryArtifacts(deliveries.flatMap((delivery) => delivery.files))
   const { buildEvidencePack, buildReceiptPack, EvidencePackLimitError } = await loadEvidence()
+  const lookups = await buildEvidenceLookups(store)
   let evidence
   let evidenceGlobalExcluded = 0
   let evidenceClientDefaultExcluded = 0
@@ -9790,6 +11836,7 @@ async function receiptPack(args) {
         all: flags.all === true,
         clearance: 0,
         protectedPolicy: 'error',
+        lookups,
       })
     } else {
       // A-1 (0.2.5) + 0.3.2: per-item clearance is max(client default, matter
@@ -9819,6 +11866,7 @@ async function receiptPack(args) {
         // Explicit --ids fail closed (A-1); the bulk path excludes protected
         // rows and reports them through evidence.protectedExcluded.
         protectedPolicy: ids ? 'error' : 'exclude',
+        lookups,
       })
     }
   } catch (error) {
@@ -10434,6 +12482,9 @@ const KNOWN_COMMANDS = new Set([
   'forget', 'sync', 'vault', 'export', 'import', 'backup', 'backups', 'restore', 'brief', 'review', 'research', 'capture', 'policy',
   'office-edit', 'office-read', 'verify', 'office', 'routine', 'template', 'link', 'bridge', 'soul', 'tos',
   'matter', 'agenda', 'morning',
+  // 0.4.0: KB / mail / money / consent commands are gated like every other
+  // command (unknown names keep the plain error instead of the gate).
+  'kb', 'fact', 'mail', 'receivable', 'payment', 'consent',
   // 0.3.0 customer entities: reads and writes both go through the L1/TOS gate
   // (they touch the local ledger); there is no exempt customer command.
   'client', 'project',
@@ -10749,8 +12800,22 @@ async function tosCommand(argv) {
 await tosGate()
 
 if (!command) {
-  if (process.stdin.isTTY) await repl()
-  else help()
+  // 0.4.0: a TTY with no command enters the readline shell (lib/shell.js);
+  // stdin not a TTY keeps the frozen 0.3.x "print help, exit 0" path.
+  if (process.stdin.isTTY) {
+    const shellResult = await runShellEntry()
+    if (shellResult.entered) {
+      process.exitCode = shellResult.exitCode
+    } else if (shellResult.reason === 'json-unsupported') {
+      console.error('advisers: E_USAGE: --json is not supported by the interactive shell; use `advisers tui --once --json` or a CLI command with --json.')
+      process.exitCode = 1
+    } else {
+      // ADVISERS_NO_SHELL=1 (or an unusable stream pair) keeps the old REPL.
+      await repl()
+    }
+  } else {
+    help()
+  }
 } else if (command === 'version' || command === '--version' || command === '-v') {
   console.log(VERSION)
 } else if (command === 'help' || command === '--help') {
@@ -11014,13 +13079,18 @@ if (!command) {
     else { store.upsertSessionSummary({ conversationId, summary: old.summary, throughSeq: old.throughSeq, pins: old.pins }); console.log(`restored summary v${version}`) }
   } else { console.error('usage: advisers compact ls|rollback <version>'); process.exitCode = 1 }
 } else if (command === 'search') {
-  const q = args.join(' ').trim()
-  if (!q) { console.error('usage: advisers search <text>'); process.exitCode = 1 }
+  // 0.4.0 additive routing: --scope turns|kb|pages|facts|all. Without --scope
+  // the 0.3.2 bytes are unchanged (turn search, human lines).
+  if (args.includes('--scope')) await scopedSearch(args)
   else {
-    // 0.2.3: turn search is a pure read (lock-free; reads the WAL snapshot).
-    const rows = readStoreOrExit()?.searchTurns(q, { limit: 10 }) ?? []
-    if (!rows.length) console.log('没有匹配')
-    for (const r of rows) console.log(`${r.seq}\t${r.role}\t${r.content.replace(/\s+/g, ' ').slice(0, 160)}`)
+    const q = args.join(' ').trim()
+    if (!q) { console.error('usage: advisers search <text>'); process.exitCode = 1 }
+    else {
+      // 0.2.3: turn search is a pure read (lock-free; reads the WAL snapshot).
+      const rows = readStoreOrExit()?.searchTurns(q, { limit: 10 }) ?? []
+      if (!rows.length) console.log('没有匹配')
+      for (const r of rows) console.log(`${r.seq}\t${r.role}\t${r.content.replace(/\s+/g, ' ').slice(0, 160)}`)
+    }
   }
 } else if (command === 'nudge') {
   const sub = args[0]
@@ -11135,7 +13205,10 @@ if (!command) {
             } else if (candidate.kind === 'commitment') {
               const input = {
                 ...candidate.payload,
-                matterId: candidate.payload.matterId ?? s.firstActiveMatter?.()?.id,
+                // Mail/KB candidates may arrive before any matter exists; a
+                // commitment must always point at a real matter (SQLite binds
+                // undefined as an error, and the ledger tolerates no dangling).
+                matterId: candidate.payload.matterId ?? s.firstActiveMatter?.()?.id ?? resolveDeliveryMatterId(s),
                 evidence: candidate.evidence.map(commitmentEvidence),
               }
               s.insertCommitment(core.createCommitment(opsPorts, input))
@@ -11172,13 +13245,25 @@ if (!command) {
 } else if (command === 'matter') {
   await matterCommand(args)
 } else if (command === 'client') {
-  clientCommand(args)
+  await clientCommand(args)
 } else if (command === 'project') {
   projectCommand(args)
 } else if (command === 'agenda') {
   await agendaCommand(args)
 } else if (command === 'morning') {
   await morningReportCommand(args)
+} else if (command === 'kb') {
+  await kbCommand(args)
+} else if (command === 'fact') {
+  await factCommand(args)
+} else if (command === 'mail') {
+  await mailCommand(args)
+} else if (command === 'receivable') {
+  await receivableCommand(args)
+} else if (command === 'payment') {
+  await paymentCommand(args)
+} else if (command === 'consent') {
+  await consentCommand(args)
 } else if (command === 'digest') {
   if (args[0] === 'morning') await morningReportCommand(args.slice(1))
   else {

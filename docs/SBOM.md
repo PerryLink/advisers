@@ -1,13 +1,18 @@
 # Software Bill of Materials (SBOM)
 
-> Status: 0.3.2 was published on 2026-11-21 as the current feature release (npm `latest`;
-> `next` is also `0.3.2`). The workspace version is whatever
+> Status: **0.4.0** was published on 2026-11-21 as the current feature release (npm
+> `latest`; `next` is also `0.4.0`), and the release tree is schema **v22** (one
+> `kb-mail-payment-entities` migration). The workspace version is whatever
 > `packages/advisers/package.json` records. This page documents a release-gate artifact,
-> not a claim that the build is reproducible. Provenance status lives in
-> [SECURITY.md](SECURITY.md). The 0.3.2 GitHub Release carries the generated CycloneDX
+> not a claim that the build is reproducible — it describes the dependency set and says
+> nothing about the database schema. Provenance status lives in
+> [SECURITY.md](SECURITY.md). The 0.4.0 GitHub Release carries the generated CycloneDX
 > SBOM (`sbom.cdx.json`) and a `SHA256SUMS` file for the six tarballs; the post-publish
-> `node scripts/verify-release.mjs --version 0.3.2 --tag latest --sbom artifacts/sbom.cdx.json --require-sbom`
-> check verifies the SBOM. The 0.3.0 run passed 222 checks (historical record:
+> `node scripts/verify-release.mjs --version 0.4.0 --tag latest --sbom artifacts/sbom.cdx.json --require-sbom`
+> check verifies the SBOM. 0.4.0 adds no runtime dependency: the lockfile diff from
+> 0.3.2 is the workspace version pins, so the component set has the same shape. Each
+> release records its own `verify-release` check count instead of inheriting an older
+> figure; the 0.3.0 run passed 222 checks (historical record:
 > <https://github.com/PerryLink/advisers/releases/tag/v0.3.0>).
 
 Advisers publishes a CycloneDX SBOM for its dependency set. The document is
@@ -123,7 +128,8 @@ pnpm run sbom && pnpm run check:sbom   # SBOM artifact + gate
 ```
 
 CI generates and validates the SBOM as a gate only; it does not upload the
-artifact or publish anything. The Windows smoke job does not run it.
+artifact or publish anything. Neither Windows job (`windows-smoke`, `windows-full`) runs
+the SBOM step.
 
 ## Release use
 
@@ -146,7 +152,10 @@ The SBOM gate is independent of the provenance gate: non-empty
 `dist.attestations` on all six packages is checked separately by
 `scripts/check-provenance.mjs`. An SBOM in hand does **not** justify a
 "provenance-signed" or "reproducible build" claim — see
-[SECURITY.md](SECURITY.md).
+[SECURITY.md](SECURITY.md). The Windows portable ZIP is **not** an npm artifact: it is
+not covered by npm provenance, and its integrity comes from the Release
+`SHA256SUMS-<version>-portable.txt` (plus a GitHub artifact attestation when the
+operator attaches one) — see [WINDOWS.md](WINDOWS.md) §3.4.
 
 ## Limits and non-claims
 

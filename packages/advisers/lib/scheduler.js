@@ -23,12 +23,26 @@ export const DEFAULT_CRON_SCHEDULE = '0 9 * * *'
 export const DEFAULT_TASK_NAME = 'Advisers Remind'
 export const DEFAULT_TASK_TIME = '09:00'
 export const DEFAULT_REMIND_ARGS = Object.freeze(['remind', '--deliver', '--notify'])
+
+/** Proactive 0.4: second managed crontab block for the archived morning brief. */
+export const MORNING_CRON_MARKER = 'advisers-morning'
+export const DEFAULT_MORNING_CRON_SCHEDULE = '30 8 * * 1-5'
+export const DEFAULT_MORNING_TASK_NAME = 'Advisers Morning'
+export const DEFAULT_MORNING_TASK_TIME = '08:30'
+/** Windows weekly day abbreviations accepted by `schtasks /D`. */
+export const DEFAULT_MORNING_WEEKDAYS = Object.freeze(['MON', 'TUE', 'WED', 'THU', 'FRI'])
+export const DEFAULT_MORNING_ARGS = Object.freeze(['morning', '--archive'])
+
+/** Version 2 scheduler status: per-section lastRun for remind + morning. */
+export const SCHEDULER_STATUS_VERSION_V2 = 2
+export const SCHEDULER_SECTIONS = Object.freeze(['remind', 'morning'])
 /** Platforms where `crontab(1)` is the user-level scheduler. */
 export const CRON_PLATFORMS = Object.freeze(['linux', 'darwin', 'freebsd', 'openbsd', 'sunos'])
 
 const MARKER_PATTERN = /^[A-Za-z0-9._-]{1,64}$/
 const CRON_FIELD = /^[0-9A-Za-z*,/-]+$/
 const TASK_TIME = /^([01][0-9]|2[0-3]):[0-5][0-9]$/
+const TASK_DAY = /^(MON|TUE|WED|THU|FRI|SAT|SUN)$/
 
 /** Quote one argv element for a POSIX shell (cron runs commands via /bin/sh). */
 export function quoteShellArgument(value) {
@@ -170,6 +184,93 @@ export function removeCronEntry(text, { marker = CRON_MARKER } = {}) {
   return { text: remaining, changed: true, removed: true }
 }
 
+
+function normalizeMarkers(markers) {
+  if (!Array.isArray(markers) || !markers.length) throw new TypeError('markers must be a non-empty array')
+  const seen = new Set()
+  const list = []
+  for (const marker of markers) {
+    const safe = validateMarker(marker)
+    if (seen.has(safe)) throw new TypeError(`duplicate scheduler marker: ${safe}`)
+    seen.add(safe)
+    list.push(safe)
+  }
+  return list
+}
+
+function normalizeCronBlocks(blocks) {
+  if (!Array.isArray(blocks) || !blocks.length) throw new TypeError('blocks must be a non-empty array')
+  const seen = new Set()
+  return blocks.map((block) => {
+    if (!block || typeof block !== 'object') throw new TypeError('each scheduler block must be an object')
+    const marker = validateMarker(block.marker)
+    if (seen.has(marker)) throw new TypeError(`duplicate scheduler marker: ${marker}`)
+    seen.add(marker)
+    return {
+      marker,
+      schedule: validateCronSchedule(block.schedule ?? DEFAULT_CRON_SCHEDULE),
+      command: validateCronCommand(block.command),
+    }
+  })
+}
+
+/**
+ * Read several managed blocks in the caller-supplied `markers` order.
+ * Unmanaged crontab lines are never inspected or modified.
+ *
+ * @returns {Array<{marker: string, installed: boolean, schedule: string|null,
+ *   command: string|null, malformed: boolean}>}
+ */
+export function getCronEntries(text, { markers = [CRON_MARKER] } = {}) {
+  const list = normalizeMarkers(markers)
+  return list.map((marker) => ({ marker, ...getCronEntry(text, { marker }) }))
+}
+
+/**
+ * Append or replace several managed blocks in one pass. Blocks are applied in
+ * order to the evolving text; every other crontab line is preserved verbatim.
+ *
+ * @returns {{text: string, changed: boolean, blocks: Array<{marker: string,
+ *   changed: boolean, added: boolean, alreadyInstalled: boolean, updated: boolean}>}}
+ */
+export function addCronBlocks(text, { blocks } = {}) {
+  const list = normalizeCronBlocks(blocks)
+  let current = String(text ?? '')
+  let changed = false
+  const results = []
+  for (const block of list) {
+    const change = addCronEntry(current, block)
+    current = change.text
+    changed = changed || change.changed
+    results.push({
+      marker: block.marker,
+      changed: change.changed,
+      added: change.added,
+      alreadyInstalled: change.alreadyInstalled,
+      updated: change.updated,
+    })
+  }
+  return { text: current, changed, blocks: results }
+}
+
+/**
+ * Remove several managed blocks by marker, leaving every unmanaged line as-is.
+ * A marker that is not installed is reported (not an error), so uninstall is
+ * idempotent for both blocks.
+ *
+ * @returns {{text: string, changed: boolean, removedMarkers: string[]}}
+ */
+export function removeCronBlocks(text, { markers } = {}) {
+  const list = normalizeMarkers(markers)
+  let current = String(text ?? '')
+  const removedMarkers = []
+  for (const marker of list) {
+    const change = removeCronEntry(current, { marker })
+    current = change.text
+    if (change.removed) removedMarkers.push(marker)
+  }
+  return { text: current, changed: removedMarkers.length > 0, removedMarkers }
+}
 export function crontabReadCommand() {
   return { command: 'crontab', args: ['-l'] }
 }
@@ -195,16 +296,50 @@ export function validateTaskTime(time) {
 }
 
 /**
+ * Validate a Windows weekly day list (`MON`..`SUN`), as an array or a
+ * comma-separated string. Duplicates collapse and the input order is preserved.
+ *
+ * @param {string[]|string} days
+ * @returns {string[]}
+ */
+export function validateTaskDays(days) {
+  const items = Array.isArray(days) ? days : typeof days === 'string' ? days.split(',') : null
+  if (!items) throw new TypeError('task days must be an array or a comma-separated string')
+  const seen = new Set()
+  const normalized = []
+  for (const item of items) {
+    const text = String(item ?? '').trim().toUpperCase()
+    if (!TASK_DAY.test(text)) throw new TypeError(`invalid task day: ${String(item)} (expected MON..SUN)`)
+    if (seen.has(text)) continue
+    seen.add(text)
+    normalized.push(text)
+  }
+  if (!normalized.length) throw new TypeError('task days must not be empty')
+  return normalized
+}
+
+/**
  * Generate the schtasks argv for create/delete/query. Nothing is executed.
+ *
+ * Proactive 0.4 adds an additive `schedule: 'daily'|'weekly'` (+ `days` for
+ * weekly); the default daily argv is byte-identical to 0.3.2.
  *
  * @returns {{ command: 'schtasks', args: string[] }}
  */
-export function buildSchtasksCommand({ action = 'create', taskName = DEFAULT_TASK_NAME, command, time = DEFAULT_TASK_TIME } = {}) {
+export function buildSchtasksCommand({ action = 'create', taskName = DEFAULT_TASK_NAME, command, time = DEFAULT_TASK_TIME, schedule = 'daily', days } = {}) {
   const safeTask = validateTaskName(taskName)
   if (action === 'create') {
     const safeCommand = validateCronCommand(command)
     const safeTime = validateTaskTime(time)
-    return { command: 'schtasks', args: ['/Create', '/TN', safeTask, '/TR', safeCommand, '/SC', 'DAILY', '/ST', safeTime, '/F'] }
+    if (schedule === 'daily') {
+      if (days !== undefined && days !== null) throw new TypeError('a daily schtasks schedule does not take days')
+      return { command: 'schtasks', args: ['/Create', '/TN', safeTask, '/TR', safeCommand, '/SC', 'DAILY', '/ST', safeTime, '/F'] }
+    }
+    if (schedule === 'weekly') {
+      const safeDays = validateTaskDays(days ?? DEFAULT_MORNING_WEEKDAYS)
+      return { command: 'schtasks', args: ['/Create', '/TN', safeTask, '/TR', safeCommand, '/SC', 'WEEKLY', '/D', safeDays.join(','), '/ST', safeTime, '/F'] }
+    }
+    throw new TypeError(`unknown schtasks schedule: ${String(schedule)}`)
   }
   if (action === 'delete') return { command: 'schtasks', args: ['/Delete', '/TN', safeTask, '/F'] }
   if (action === 'query') return { command: 'schtasks', args: ['/Query', '/TN', safeTask] }
@@ -255,9 +390,59 @@ export function planCronStatus({ existingText = '', marker = CRON_MARKER } = {})
   }
 }
 
-/** Dry-run plan for a Windows Task Scheduler install (argv only, not executed). */
-export function planWindowsInstall({ command, taskName = DEFAULT_TASK_NAME, time = DEFAULT_TASK_TIME, dryRun = true } = {}) {
+
+/**
+ * Dry-run plan for installing several cron blocks at once (one `crontab -`
+ * write for all changes, matching 0.3.2's single-block contract).
+ */
+export function planCronInstallBlocks({ existingText = '', blocks, dryRun = true } = {}) {
+  const list = normalizeCronBlocks(blocks)
+  const change = addCronBlocks(existingText, { blocks: list })
   return {
+    platform: 'cron',
+    action: 'install',
+    dryRun: dryRun !== false,
+    changed: change.changed,
+    installed: true,
+    markers: list.map((block) => block.marker),
+    blocks: change.blocks,
+    text: change.text,
+    commands: change.changed ? [crontabWriteCommand(change.text)] : [],
+  }
+}
+
+/** Dry-run plan for removing several cron blocks at once. */
+export function planCronUninstallBlocks({ existingText = '', markers, dryRun = true } = {}) {
+  const list = normalizeMarkers(markers)
+  const change = removeCronBlocks(existingText, { markers: list })
+  return {
+    platform: 'cron',
+    action: 'uninstall',
+    dryRun: dryRun !== false,
+    changed: change.changed,
+    installed: false,
+    markers: list,
+    removedMarkers: change.removedMarkers,
+    text: change.text,
+    commands: change.changed ? [crontabWriteCommand(change.text)] : [],
+  }
+}
+
+/** Read-only status for several cron blocks (the CLI executes the read command). */
+export function planCronStatusBlocks({ existingText = '', markers = [CRON_MARKER, MORNING_CRON_MARKER] } = {}) {
+  const list = normalizeMarkers(markers)
+  return {
+    platform: 'cron',
+    action: 'status',
+    dryRun: true,
+    entries: list.map((marker) => getCronEntry(existingText, { marker })),
+    commands: [crontabReadCommand()],
+  }
+}
+/** Dry-run plan for a Windows Task Scheduler install (argv only, not executed). */
+export function planWindowsInstall({ command, taskName = DEFAULT_TASK_NAME, time = DEFAULT_TASK_TIME, schedule = 'daily', days, dryRun = true } = {}) {
+  if (schedule !== 'daily' && schedule !== 'weekly') throw new TypeError(`unknown schtasks schedule: ${String(schedule)}`)
+  const plan = {
     platform: 'win32',
     action: 'install',
     dryRun: dryRun !== false,
@@ -265,8 +450,11 @@ export function planWindowsInstall({ command, taskName = DEFAULT_TASK_NAME, time
     installed: null,
     taskName: validateTaskName(taskName),
     time: validateTaskTime(time),
-    commands: [buildSchtasksCommand({ action: 'create', taskName, command, time })],
+    schedule,
+    commands: [buildSchtasksCommand({ action: 'create', taskName, command, time, schedule, ...(days === undefined ? {} : { days }) })],
   }
+  if (schedule === 'weekly') plan.days = validateTaskDays(days ?? DEFAULT_MORNING_WEEKDAYS)
+  return plan
 }
 
 export function planWindowsUninstall({ taskName = DEFAULT_TASK_NAME, dryRun = true } = {}) {
@@ -294,6 +482,94 @@ export function planWindowsStatus({ taskName = DEFAULT_TASK_NAME } = {}) {
   }
 }
 
+function normalizeWindowsInstallBlock(block) {
+  if (!block || typeof block !== 'object') throw new TypeError('each scheduler block must be an object')
+  const schedule = block.schedule === undefined ? (block.days === undefined ? 'daily' : 'weekly') : block.schedule
+  if (schedule !== 'daily' && schedule !== 'weekly') throw new TypeError(`unknown schtasks schedule: ${String(schedule)}`)
+  const taskName = validateTaskName(block.taskName ?? (schedule === 'weekly' ? DEFAULT_MORNING_TASK_NAME : DEFAULT_TASK_NAME))
+  const time = validateTaskTime(block.time ?? (schedule === 'weekly' ? DEFAULT_MORNING_TASK_TIME : DEFAULT_TASK_TIME))
+  const days = schedule === 'weekly' ? validateTaskDays(block.days ?? DEFAULT_MORNING_WEEKDAYS) : undefined
+  return {
+    marker: block.marker === undefined || block.marker === null ? null : validateMarker(block.marker),
+    taskName,
+    command: validateCronCommand(block.command),
+    time,
+    schedule,
+    days,
+  }
+}
+
+function normalizeWindowsTaskList(blocks) {
+  if (!Array.isArray(blocks) || !blocks.length) throw new TypeError('blocks must be a non-empty array')
+  return blocks.map((block) => {
+    if (typeof block === 'string') return { taskName: validateTaskName(block) }
+    if (!block || typeof block !== 'object') throw new TypeError('each scheduler block must be an object or a task name')
+    if (block.taskName === undefined || block.taskName === null) throw new TypeError('windows scheduler blocks require taskName')
+    return { taskName: validateTaskName(block.taskName) }
+  })
+}
+
+/**
+ * Dry-run plan for installing several Windows scheduled tasks (argv only).
+ * Each block carries its own taskName/time/schedule/days; the daily argv is
+ * byte-identical to the 0.3.2 single-task plan.
+ */
+export function planWindowsInstallBlocks({ blocks, dryRun = true } = {}) {
+  if (!Array.isArray(blocks) || !blocks.length) throw new TypeError('blocks must be a non-empty array')
+  const list = blocks.map(normalizeWindowsInstallBlock)
+  return {
+    platform: 'win32',
+    action: 'install',
+    dryRun: dryRun !== false,
+    changed: true,
+    installed: null,
+    blocks: list.map((block) => ({
+      marker: block.marker,
+      taskName: block.taskName,
+      time: block.time,
+      schedule: block.schedule,
+      ...(block.days ? { days: block.days } : {}),
+    })),
+    commands: list.map((block) => buildSchtasksCommand({
+      action: 'create',
+      taskName: block.taskName,
+      command: block.command,
+      time: block.time,
+      schedule: block.schedule,
+      ...(block.days ? { days: block.days } : {}),
+    })),
+  }
+}
+
+/** Dry-run plan for removing several Windows scheduled tasks (argv only). */
+export function planWindowsUninstallBlocks({ blocks, dryRun = true } = {}) {
+  const list = normalizeWindowsTaskList(blocks)
+  return {
+    platform: 'win32',
+    action: 'uninstall',
+    dryRun: dryRun !== false,
+    changed: true,
+    installed: false,
+    blocks: list.map((block) => ({ taskName: block.taskName })),
+    commands: list.map((block) => buildSchtasksCommand({ action: 'delete', taskName: block.taskName })),
+  }
+}
+
+/** Read-only plan for several Windows scheduled tasks (the CLI runs the query). */
+export function planWindowsStatusBlocks({ blocks } = {}) {
+  const list = normalizeWindowsTaskList(blocks)
+  return {
+    platform: 'win32',
+    action: 'status',
+    dryRun: true,
+    installed: null,
+    entries: list.map((block) => ({
+      taskName: block.taskName,
+      installed: null,
+      commands: [buildSchtasksCommand({ action: 'query', taskName: block.taskName })],
+    })),
+  }
+}
 /** Platform dispatcher used by the CLI: returns a plan, never executes it. */
 export function planScheduler(options = {}) {
   const opts = options ?? {}
@@ -311,6 +587,27 @@ export function planScheduler(options = {}) {
   throw new TypeError(`unsupported scheduler platform/action: ${String(platform)}/${String(action)}`)
 }
 
+
+/**
+ * Platform dispatcher for the multi-block install/uninstall/status plans.
+ * Accepts `{ blocks }` for install, `{ markers }`/`{ blocks }` for uninstall and
+ * the same options for status; never executes a system command.
+ */
+export function planSchedulerBlocks(options = {}) {
+  const opts = options ?? {}
+  const platform = opts.platform ?? process.platform
+  const action = opts.action ?? 'install'
+  if (platform === 'win32') {
+    if (action === 'install') return planWindowsInstallBlocks(opts)
+    if (action === 'uninstall') return planWindowsUninstallBlocks(opts)
+    if (action === 'status') return planWindowsStatusBlocks(opts)
+  } else if (CRON_PLATFORMS.includes(platform)) {
+    if (action === 'install') return planCronInstallBlocks(opts)
+    if (action === 'uninstall') return planCronUninstallBlocks(opts)
+    if (action === 'status') return planCronStatusBlocks(opts)
+  }
+  throw new TypeError(`unsupported scheduler platform/action: ${String(platform)}/${String(action)}`)
+}
 /** Resolve `~/.advisers/scheduler/` without assuming a real HOME. */
 export function schedulerPaths({ homeDir } = {}) {
   const home = String(homeDir ?? process.env.ADVISERS_HOME ?? join(homedir(), '.advisers'))
@@ -354,11 +651,16 @@ export function readSchedulerStatus(options = {}) {
   if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) {
     return { ...defaultSchedulerStatus(), exists: true, corrupt: true }
   }
+  // Cross-version read: a v2 document maps its `remind` section back to the flat
+  // v1 fields, so a 0.3.2 reader never loses lastRun after a v2 writer ran.
+  const source = parsed.version === SCHEDULER_STATUS_VERSION_V2 && parsed.remind && typeof parsed.remind === 'object'
+    ? parsed.remind
+    : parsed
   const status = defaultSchedulerStatus()
-  if (typeof parsed.lastRun === 'string' && !Number.isNaN(Date.parse(parsed.lastRun))) status.lastRun = new Date(parsed.lastRun).toISOString()
-  if (typeof parsed.lastResult === 'string' && parsed.lastResult) status.lastResult = parsed.lastResult
-  if (Number.isFinite(parsed.lastCount)) status.lastCount = Number(parsed.lastCount)
-  if (typeof parsed.lastChannel === 'string' && parsed.lastChannel) status.lastChannel = parsed.lastChannel
+  if (typeof source.lastRun === 'string' && !Number.isNaN(Date.parse(source.lastRun))) status.lastRun = new Date(source.lastRun).toISOString()
+  if (typeof source.lastResult === 'string' && source.lastResult) status.lastResult = source.lastResult
+  if (Number.isFinite(source.lastCount)) status.lastCount = Number(source.lastCount)
+  if (typeof source.lastChannel === 'string' && source.lastChannel) status.lastChannel = source.lastChannel
   if (typeof parsed.updatedAt === 'string' && !Number.isNaN(Date.parse(parsed.updatedAt))) status.updatedAt = new Date(parsed.updatedAt).toISOString()
   return { ...status, exists: true, corrupt: false }
 }
@@ -396,4 +698,146 @@ export function recordSchedulerRun({ homeDir, at = new Date(), result = 'ok', co
     throw error
   }
   return { status, path: paths.statusFile, written: true }
+}
+
+/* ------------------------------------------------------------------ */
+/* Status v2: per-section lastRun for remind + morning (additive to v1) */
+/* ------------------------------------------------------------------ */
+
+/** `remind` section of the version-2 status document. */
+export function defaultSchedulerRemindStatus() {
+  return { lastRun: null, lastResult: null, lastCount: null, lastChannel: null }
+}
+
+/** `morning` section of the version-2 status document. */
+export function defaultSchedulerMorningStatus() {
+  return { lastRun: null, lastResult: null, lastCount: null, lastPath: null }
+}
+
+export function defaultSchedulerStatusV2() {
+  return {
+    version: SCHEDULER_STATUS_VERSION_V2,
+    remind: defaultSchedulerRemindStatus(),
+    morning: defaultSchedulerMorningStatus(),
+    updatedAt: null,
+  }
+}
+
+function readStatusDocument(options = {}) {
+  const { statusFile } = schedulerPaths(options ?? {})
+  let raw
+  try {
+    raw = readFileSync(statusFile, 'utf8')
+  } catch (error) {
+    return { statusFile, doc: null, exists: false, corrupt: false, error: error?.code === 'ENOENT' ? null : 'read-error' }
+  }
+  let parsed
+  try {
+    parsed = JSON.parse(raw)
+  } catch {
+    return { statusFile, doc: null, exists: true, corrupt: true, error: null }
+  }
+  if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) {
+    return { statusFile, doc: null, exists: true, corrupt: true, error: null }
+  }
+  return { statusFile, doc: parsed, exists: true, corrupt: false, error: null }
+}
+
+function sanitizeStatusTime(value) {
+  if (typeof value !== 'string' || !value) return null
+  const ms = Date.parse(value)
+  return Number.isNaN(ms) ? null : new Date(ms).toISOString()
+}
+
+function readRemindStatusSection(source) {
+  const section = defaultSchedulerRemindStatus()
+  if (!source || typeof source !== 'object' || Array.isArray(source)) return section
+  section.lastRun = sanitizeStatusTime(source.lastRun)
+  if (typeof source.lastResult === 'string' && source.lastResult) section.lastResult = source.lastResult
+  if (Number.isFinite(source.lastCount)) section.lastCount = Number(source.lastCount)
+  if (typeof source.lastChannel === 'string' && source.lastChannel) section.lastChannel = source.lastChannel
+  return section
+}
+
+function readMorningStatusSection(source) {
+  const section = defaultSchedulerMorningStatus()
+  if (!source || typeof source !== 'object' || Array.isArray(source)) return section
+  section.lastRun = sanitizeStatusTime(source.lastRun)
+  if (typeof source.lastResult === 'string' && source.lastResult) section.lastResult = source.lastResult
+  if (Number.isFinite(source.lastCount)) section.lastCount = Number(source.lastCount)
+  if (typeof source.lastPath === 'string' && source.lastPath) section.lastPath = source.lastPath
+  return section
+}
+
+/**
+ * Read the version-2 scheduler status. A v1 (flat) file is mapped into the
+ * `remind` section instead of failing — upgrading never loses lastRun — and a
+ * corrupt file degrades to defaults. `legacy: true` means the file on disk is
+ * still the v1 layout (the next record writes v2).
+ *
+ * @returns {{version: 2, remind: object, morning: object, updatedAt: string|null,
+ *   exists: boolean, corrupt: boolean, legacy: boolean, error: string|null, path: string}}
+ */
+export function readSchedulerStatusV2(options = {}) {
+  const read = readStatusDocument(options)
+  const base = defaultSchedulerStatusV2()
+  if (!read.exists) return { ...base, exists: false, corrupt: false, legacy: false, error: read.error, path: read.statusFile }
+  if (read.corrupt) return { ...base, exists: true, corrupt: true, legacy: false, error: null, path: read.statusFile }
+  const doc = read.doc
+  const legacy = doc.version !== SCHEDULER_STATUS_VERSION_V2
+  return {
+    version: SCHEDULER_STATUS_VERSION_V2,
+    remind: readRemindStatusSection(legacy ? doc : doc.remind),
+    morning: readMorningStatusSection(legacy ? null : doc.morning),
+    updatedAt: sanitizeStatusTime(doc.updatedAt),
+    exists: true,
+    corrupt: false,
+    legacy,
+    error: null,
+    path: read.statusFile,
+  }
+}
+
+/**
+ * Record one run in a section of the version-2 status file. Reads the current
+ * document first (mapping v1 or recovering from a corrupt file), updates only
+ * the named section and writes atomically. Defaults to dry-run; pass
+ * `dryRun: false` (the CLI does this after a real run) to write the file.
+ *
+ * @returns {{status: object, path: string, written: boolean}}
+ */
+export function recordSchedulerRunV2({ homeDir, at = new Date(), section = 'remind', result = 'ok', count = null, channel = null, path = null, dryRun = true } = {}) {
+  if (!SCHEDULER_SECTIONS.includes(section)) throw new TypeError(`unknown scheduler status section: ${String(section)}`)
+  const when = at instanceof Date ? at : new Date(at)
+  if (Number.isNaN(when.getTime())) throw new RangeError('invalid scheduler run time')
+  const paths = schedulerPaths({ homeDir })
+  const current = readSchedulerStatusV2({ homeDir })
+  const stamp = when.toISOString()
+  const next = {
+    version: SCHEDULER_STATUS_VERSION_V2,
+    remind: { ...current.remind },
+    morning: { ...current.morning },
+    updatedAt: stamp,
+  }
+  const target = section === 'remind' ? next.remind : next.morning
+  target.lastRun = stamp
+  target.lastResult = typeof result === 'string' && result ? result : 'ok'
+  target.lastCount = Number.isFinite(count) ? Number(count) : null
+  if (section === 'remind') target.lastChannel = typeof channel === 'string' && channel ? channel : null
+  else target.lastPath = typeof path === 'string' && path ? path : null
+  if (dryRun !== false) return { status: next, path: paths.statusFile, written: false }
+  mkdirSync(paths.dir, { recursive: true, mode: 0o700 })
+  const temp = `${paths.statusFile}.${process.pid}.tmp`
+  try {
+    writeFileSync(temp, JSON.stringify(next, null, 2) + '\n', { mode: 0o600 })
+    renameSync(temp, paths.statusFile)
+  } catch (error) {
+    try {
+      if (existsSync(temp)) unlinkSync(temp)
+    } catch {
+      // Best-effort cleanup only; the original error is the one that matters.
+    }
+    throw error
+  }
+  return { status: next, path: paths.statusFile, written: true }
 }

@@ -3,6 +3,7 @@ import { existsSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import test from 'node:test'
+import { symlinkOrSkip } from './win-compat.mjs'
 import { executeTool, runAgent } from '../lib/agent.js'
 
 function fakeFetch(responses) {
@@ -159,7 +160,7 @@ test('routine_view is available from the routine index', async () => {
   }
 })
 
-test('path guard blocks protected files and symlink escapes', async () => {
+test('path guard blocks protected files and symlink escapes', async (t) => {
   const cwd = mkdtempSync(join(tmpdir(), 'advisers-path-'))
   const outside = mkdtempSync(join(tmpdir(), 'advisers-outside-'))
   try {
@@ -167,7 +168,10 @@ test('path guard blocks protected files and symlink escapes', async () => {
     await assert.rejects(() => executeTool('file_write', { path: 'package.json', content: 'x' }, { cwd }), /protected/)
     await assert.rejects(() => executeTool('file_write', { path: 'Package.json', content: 'x' }, { cwd }), /protected/)
     await assert.rejects(() => executeTool('file_write', { path: '.GIT/hooks/post-checkout', content: 'x' }, { cwd }), /protected/)
-    await import('node:fs/promises').then((fs) => fs.symlink(outside, join(cwd, 'out')))
+    // The protected-path assertions above still ran on Windows; only the
+    // symlink-escape half needs SeCreateSymbolicLinkPrivilege, so skip it with
+    // an auditable reason there (windows triage C2).
+    if (!symlinkOrSkip(t, outside, join(cwd, 'out'), 'dir')) return
     await assert.rejects(() => executeTool('file_write', { path: 'out/pwn.txt', content: 'x' }, { cwd }), /symlink/)
   } finally {
     rmSync(cwd, { recursive: true, force: true })

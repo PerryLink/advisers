@@ -1,9 +1,21 @@
 /**
- * Advisers MCP server (JSON-RPC 2.0 over stdio, protocol '2024-11-05').
+ * Advisers MCP server (JSON-RPC 2.0 over stdio; legacy '2024-11-05' handshake
+ * plus the stateless modern '2026-07-28' revision — dual-era since 0.4.0).
  *
  * This module is the testable library extracted from the MCP section of
  * 'bin/advisers.js'. The binary owns process wiring (home, audit key, sqlite);
  * this module owns the protocol surface and never touches the network.
+ *
+ * Era rules (0.4.0):
+ * - A request is served by the modern path only when it carries the per-request
+ *   metadata in 'params._meta' (io.modelcontextprotocol/protocolVersion or
+ *   .../clientCapabilities) and is not 'initialize'. The modern path is a strict
+ *   allowlist (server/discover, tools/list, tools/call, resources/list,
+ *   resources/read) that returns the SAME read-model payload wrapped in the
+ *   modern result envelope (resultType + optional ttlMs/cacheScope + _meta).
+ * - Every other request keeps the legacy dispatcher byte-for-byte, so 0.3.x
+ *   clients observe exactly the old responses. ADVISERS_MCP_MODERN=off disables
+ *   the era layer entirely.
  *
  * Surface (0.2.0):
  * - 5 read-only tools: today / commit_ls / who / evidence / remind
@@ -49,13 +61,65 @@ export const PROTOCOL_VERSION = '2024-11-05'
  *
  * The 2025-06-18 / 2025-11-25 revisions keep the same initialize/tools/
  * resources lifecycle this server implements, so echoing the client's
- * supported version is safe; anything else (including the stateless
- * 2026-07-28 modern revision, which needs server/discover) falls back to
- * PROTOCOL_VERSION. The modern revisions are NOT implemented here: this
- * server deliberately does not advertise server/discover, so a modern client
- * probes once, gets an unknown-method error, and falls back to initialize.
+ * supported version is safe; anything else (including a stray 2026-07-28
+ * value, which is modern-era and never negotiated through initialize) falls
+ * back to PROTOCOL_VERSION. The modern revision is served statelessly through
+ * the per-request `_meta` path below; dual-era clients pick it with
+ * `server/discover` and legacy clients keep the handshake.
  */
 export const SUPPORTED_PROTOCOL_VERSIONS = Object.freeze(['2024-11-05', '2025-06-18', '2025-11-25'])
+/**
+ * Modern (stateless) MCP revision served by the era layer (0.4.0).
+ *
+ * Spec: <https://modelcontextprotocol.io/specification/2026-07-28/>. There is
+ * no initialize handshake: every request declares its protocol version and
+ * client capabilities in `params._meta` and the server answers it statelessly.
+ */
+export const MODERN_PROTOCOL_VERSION = '2026-07-28'
+export const SUPPORTED_MODERN_PROTOCOL_VERSIONS = Object.freeze([MODERN_PROTOCOL_VERSION])
+/** Reserved modern `_meta` keys (spec: basic/index#_meta). */
+export const META_PROTOCOL_VERSION = 'io.modelcontextprotocol/protocolVersion'
+export const META_CLIENT_CAPABILITIES = 'io.modelcontextprotocol/clientCapabilities'
+export const META_SERVER_INFO = 'io.modelcontextprotocol/serverInfo'
+/**
+ * Explicit modern method allowlist. The modern era removed initialize/ping/
+ * logging/roots and keeps resources/subscribe out; anything not listed here is
+ * answered with -32601 instead of falling through to the legacy dispatcher.
+ */
+export const MODERN_METHODS = Object.freeze(['server/discover', 'tools/list', 'tools/call', 'resources/list', 'resources/read'])
+/**
+ * Cache hints for cacheable modern results (spec: server/utilities/caching).
+ * The tool/resource catalogue is static for the process lifetime, so it is safe
+ * to cache publicly; ledger reads are private and stale immediately.
+ */
+export const MODERN_CACHE_HINTS = Object.freeze({
+  discover: Object.freeze({ ttlMs: 300000, cacheScope: 'public' }),
+  toolsList: Object.freeze({ ttlMs: 300000, cacheScope: 'public' }),
+  resourcesList: Object.freeze({ ttlMs: 300000, cacheScope: 'public' }),
+  resourcesRead: Object.freeze({ ttlMs: 0, cacheScope: 'private' }),
+})
+/** ADVISERS_MCP_MODERN values that disable the modern era (default: enabled). */
+const MODERN_OFF_VALUES = Object.freeze(['off', '0', 'false', 'no', 'disabled'])
+/** True unless ADVISERS_MCP_MODERN explicitly disables the modern era. */
+export function resolveModernEnabled(env = process.env) {
+  const raw = env?.ADVISERS_MCP_MODERN
+  if (raw === undefined || raw === null) return true
+  return !MODERN_OFF_VALUES.includes(String(raw).trim().toLowerCase())
+}
+/**
+ * Modern per-request metadata, or null for a legacy request. `initialize` is
+ * never modern (the handshake IS the legacy-era discriminator), and a request
+ * with no modern `_meta` key stays on the legacy path even when `_meta` exists
+ * for another reason (e.g. `progressToken`) — era is never guessed.
+ */
+function modernRequestMeta(params) {
+  if (!params || typeof params !== 'object' || Array.isArray(params)) return null
+  const meta = params._meta
+  if (!meta || typeof meta !== 'object' || Array.isArray(meta)) return null
+  if (!Object.prototype.hasOwnProperty.call(meta, META_PROTOCOL_VERSION)
+    && !Object.prototype.hasOwnProperty.call(meta, META_CLIENT_CAPABILITIES)) return null
+  return meta
+}
 export const SERVER_NAME = 'advisers'
 /** Hard cap for one stdio JSON-RPC line (bytes). */
 export const MAX_LINE_BYTES = 1024 * 1024
@@ -481,10 +545,19 @@ export function readReceiptDirectory(dir) {
  *        `advisers_who` (whose payload is full Commitment rows): `(ids: string[])
  *        => Map<string, object> | object[]`. Only the capped <= 20 rows per
  *        bucket are hydrated; omitted => the narrow who path is not used.
+ * @param {boolean} [options.modern] Dual-era (0.4.0): serve the stateless
+ *        2026-07-28 revision for requests that carry modern per-request
+ *        `params._meta`. Defaults to `ADVISERS_MCP_MODERN` (enabled unless the
+ *        env value is off/0/false/no/disabled); explicit `false` forces
+ *        legacy-only, `true` forces dual-era even when the env disables it.
  * @returns {{protocolVersion: string, handle: Function, handleLine: Function, serve: Function, tools: Function, resources: Function}}
  */
-export function createMcpServer({ store, ledger, loadLedger, loadStore, loadCommitmentView, loadCommitmentRecords, version = '0.0.0', audit, readPack, now = () => new Date(), clearance = 0 } = {}) {
+export function createMcpServer({ store, ledger, loadLedger, loadStore, loadCommitmentView, loadCommitmentRecords, version = '0.0.0', audit, readPack, now = () => new Date(), clearance = 0, modern } = {}) {
   const serverVersion = String(version ?? '0.0.0')
+  // 0.4.0 MCP modern: dual-era switch. The env var is read per factory call, so
+  // `ADVISERS_MCP_MODERN=off advisers mcp --stdio` is a one-restart rollback to
+  // the exact 0.3.2 surface without touching the CLI wiring.
+  const modernEnabled = modern === undefined ? resolveModernEnabled() : modern === true
   // Protocol version agreed by the last legacy `initialize` (advisory only:
   // the legacy method surface is identical for every supported revision).
   let negotiatedProtocolVersion = PROTOCOL_VERSION
@@ -1084,6 +1157,108 @@ export function createMcpServer({ store, ledger, loadLedger, loadStore, loadComm
     }
   }
 
+  /* -------------------------- modern (2026-07-28) -------------------------- */
+
+  /** Modern result envelope: resultType is mandatory; the payload is untouched. */
+  function modernResult(result, cache) {
+    const envelope = {
+      resultType: 'complete',
+      ...result,
+      _meta: { [META_SERVER_INFO]: { name: SERVER_NAME, version: serverVersion } },
+    }
+    if (cache) {
+      envelope.ttlMs = cache.ttlMs
+      envelope.cacheScope = cache.cacheScope
+    }
+    return envelope
+  }
+
+  /** Modern JSON-RPC error response (errors never carry resultType). */
+  function modernError(id, error) {
+    const payload = { code: error.code, message: error.message }
+    if (error.data !== undefined) payload.data = error.data
+    return { jsonrpc: '2.0', id, error: payload }
+  }
+
+  /**
+   * Wrap a legacy result response in the modern envelope. The payload object
+   * itself is spread unchanged, so tools/call content[0].text and resources/read
+   * contents[0].text stay byte-identical to the legacy response.
+   */
+  function modernWrappedResult(legacyResponse, cache) {
+    const result = legacyResponse?.result
+    if (!result || typeof result !== 'object' || Array.isArray(result)) return legacyResponse
+    return { jsonrpc: '2.0', id: legacyResponse.id, result: modernResult(result, cache) }
+  }
+
+  /**
+   * Validate the required per-request modern `_meta` fields. Missing or
+   * ill-typed metadata is a malformed request (-32602); a well-formed but
+   * unsupported version is -32022 with the supported list (client retries).
+   */
+  function modernMetaError(meta) {
+    const requested = meta[META_PROTOCOL_VERSION]
+    if (typeof requested !== 'string' || !requested.trim()) {
+      return { code: -32602, message: 'invalid params: _meta field ' + META_PROTOCOL_VERSION + ' must be a string' }
+    }
+    const version = requested.trim()
+    if (!SUPPORTED_MODERN_PROTOCOL_VERSIONS.includes(version)) {
+      return { code: -32022, message: 'Unsupported protocol version', data: { supported: [...SUPPORTED_MODERN_PROTOCOL_VERSIONS], requested: version } }
+    }
+    const capabilities = meta[META_CLIENT_CAPABILITIES]
+    if (capabilities === undefined || capabilities === null || typeof capabilities !== 'object' || Array.isArray(capabilities)) {
+      return { code: -32602, message: 'invalid params: _meta field ' + META_CLIENT_CAPABILITIES + ' must be an object' }
+    }
+    return null
+  }
+
+  /** This server returns a single static page; any client cursor is invalid. */
+  function assertNoModernCursor(params) {
+    if (Object.prototype.hasOwnProperty.call(params, 'cursor')) throw invalidParams('invalid cursor')
+  }
+
+  /**
+   * Stateless modern dispatcher (strict allowlist). Methods that only exist in
+   * the legacy lifecycle (initialize/ping/...) answer -32601 here instead of
+   * leaking into the legacy dispatcher; notifications are never answered.
+   */
+  async function handleModernRequest(hasId, id, method, params, meta) {
+    if (!hasId) return null
+    const metaError = modernMetaError(meta)
+    if (metaError) return modernError(id, metaError)
+    if (method.startsWith('notifications/')) return null
+    if (!MODERN_METHODS.includes(method)) return rpcError(id, -32601, 'unknown method')
+    try {
+      if (method === 'server/discover') {
+        return reply(id, modernResult({
+          supportedVersions: [...SUPPORTED_MODERN_PROTOCOL_VERSIONS],
+          capabilities: { tools: { listChanged: false }, resources: { listChanged: false } },
+        }, MODERN_CACHE_HINTS.discover))
+      }
+      if (method === 'tools/list') {
+        assertNoModernCursor(params)
+        return reply(id, modernResult({ tools: toolsList() }, MODERN_CACHE_HINTS.toolsList))
+      }
+      if (method === 'resources/list') {
+        assertNoModernCursor(params)
+        return reply(id, modernResult({ resources: RESOURCE_DEFINITIONS.map((entry) => ({ ...entry })) }, MODERN_CACHE_HINTS.resourcesList))
+      }
+      if (method === 'tools/call') {
+        return modernWrappedResult(await handleToolsCall(id, params))
+      }
+      // resources/read: modern uses -32602 for an unknown resource (legacy keeps
+      // -32002 for pre-0.4 clients); ledger reads are private and immediately stale.
+      const legacyResponse = await handleResourcesRead(id, params)
+      if (legacyResponse?.error) {
+        return legacyResponse.error.code === -32002 ? rpcError(id, -32602, 'resource not found') : legacyResponse
+      }
+      return modernWrappedResult(legacyResponse, MODERN_CACHE_HINTS.resourcesRead)
+    } catch (error) {
+      if (error instanceof RpcError) return rpcError(id, error.code, error.message)
+      return rpcError(id, -32603, 'internal error')
+    }
+  }
+
   /* ------------------------------ dispatcher ------------------------------ */
 
   function reply(id, result) {
@@ -1106,9 +1281,10 @@ export function createMcpServer({ store, ledger, loadLedger, loadStore, loadComm
    * Legacy `initialize` result. 0.3.0 P0-T3: echo the client's version when
    * this server implements that legacy revision (2024-11-05 / 2025-06-18 /
    * 2025-11-25); a missing or unknown version keeps the 2024-11-05 default so
-   * pre-0.3 clients observe exactly the old behaviour. 2026-07-28 modern is
-   * not advertised on purpose (it needs server/discover and stateless
-   * per-request `_meta`; see docs/MCP.md).
+   * pre-0.3 clients observe exactly the old behaviour. 2026-07-28 is never
+   * negotiated here: the modern revision is stateless and advertises itself
+   * through `server/discover`, so a modern client probes that method instead of
+   * calling initialize (dual-era; see docs/MCP.md).
    */
   function initializeResult(requestedVersion) {
     const requested = typeof requestedVersion === 'string' ? requestedVersion.trim() : ''
@@ -1215,6 +1391,16 @@ export function createMcpServer({ store, ledger, loadLedger, loadStore, loadComm
       return rpcError(hasId ? id : null, -32600, 'invalid request')
     }
     const method = message.method
+
+    // 0.4.0 dual-era: a request carrying the modern per-request `_meta` is
+    // served by the stateless modern path. `initialize` is never modern (the
+    // handshake is the legacy discriminator), and when ADVISERS_MCP_MODERN=off
+    // no request takes this branch, so the legacy dispatcher below is byte-for-
+    // byte the pre-0.4 surface.
+    if (modernEnabled && method !== 'initialize') {
+      const modernMeta = modernRequestMeta(message.params)
+      if (modernMeta) return handleModernRequest(hasId, id, method, message.params, modernMeta)
+    }
 
     try {
       if (method === 'initialize') {

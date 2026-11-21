@@ -12,6 +12,7 @@ import { existsSync, readdirSync, statSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
 import test from 'node:test'
 import { auditJson, cleanup, makeHome, runCli, runOk, seedCommitment } from './bin-ops-fixture.js'
+import { assertPrivateMode } from './win-compat.mjs'
 
 function managedBackups(home) {
   const dir = join(home, 'backups')
@@ -42,7 +43,7 @@ test('backup: managed backup writes .db + .sha256 + .anchor.json, aligns the aud
     assert.ok(existsSync(file))
     assert.ok(existsSync(file + '.sha256'))
     assert.ok(existsSync(file + '.anchor.json'))
-    assert.equal(statSync(file).mode & 0o777, 0o600)
+    assertPrivateMode(file, 0o600, 'managed backup')
     const after = auditJson(home)
     assert.equal(after.anchor.status, 'match', 'a fresh backup must not leave the live anchor grown/behind')
     assert.equal(after.anchor.count, before.head.count)

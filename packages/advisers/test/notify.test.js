@@ -3,9 +3,11 @@ import { chmodSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync 
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import test from 'node:test'
+import { skipOnWindows } from './win-compat.mjs'
 import { sendNotification } from '../lib/notify.js'
 
-test('E1-T3: custom notification adapter receives title/body and no client text is required', async () => {
+test('E1-T3: custom notification adapter receives title/body and no client text is required', async (t) => {
+  if (skipOnWindows(t, 'notification external adapter commands are spawned as a single executable path on Windows, so a POSIX #!/bin/sh probe cannot run (quoted-argv adapter contract tracked; docs/WINDOWS.md section 8, windows triage B)')) return
   const root = mkdtempSync(join(tmpdir(), 'advisers-notify-'))
   const log = join(root, 'notify.log')
   try {

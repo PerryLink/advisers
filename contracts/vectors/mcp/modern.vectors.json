@@ -1,0 +1,754 @@
+{
+  "version": 1,
+  "schema": "../../mcp/responses-v2.schema.json",
+  "description": "Conformance vectors for the modern 2026-07-28 MCP result envelopes (resultType, cache hints, serverInfo metadata, server/discover payload, -32022 unsupported-version error). Values are frozen response lines captured from the real server with a fixed server version; the legacy payload shapes are covered by responses.vectors.json against responses-v1.schema.json.",
+  "covers": [
+    "#/$defs/DiscoverResult",
+    "#/$defs/ResourceReadResult",
+    "#/$defs/ResourcesListResult",
+    "#/$defs/ToolCallResult",
+    "#/$defs/ToolsListResult",
+    "#/$defs/UnsupportedProtocolVersionError"
+  ],
+  "cases": [
+    {
+      "id": "discover.valid",
+      "target": "#/$defs/DiscoverResult",
+      "expect": "accept",
+      "value": {
+        "jsonrpc": "2.0",
+        "id": 1,
+        "result": {
+          "resultType": "complete",
+          "supportedVersions": [
+            "2026-07-28"
+          ],
+          "capabilities": {
+            "tools": {
+              "listChanged": false
+            },
+            "resources": {
+              "listChanged": false
+            }
+          },
+          "_meta": {
+            "io.modelcontextprotocol/serverInfo": {
+              "name": "advisers",
+              "version": "0.4.0"
+            }
+          },
+          "ttlMs": 300000,
+          "cacheScope": "public"
+        }
+      }
+    },
+    {
+      "id": "discover.missing-result-type",
+      "target": "#/$defs/DiscoverResult",
+      "expect": "reject",
+      "value": {
+        "jsonrpc": "2.0",
+        "id": 2,
+        "result": {
+          "supportedVersions": [
+            "2026-07-28"
+          ],
+          "capabilities": {
+            "tools": {
+              "listChanged": false
+            },
+            "resources": {
+              "listChanged": false
+            }
+          },
+          "_meta": {
+            "io.modelcontextprotocol/serverInfo": {
+              "name": "advisers",
+              "version": "0.4.0"
+            }
+          },
+          "ttlMs": 300000,
+          "cacheScope": "public"
+        }
+      }
+    },
+    {
+      "id": "discover.bad-cache-scope",
+      "target": "#/$defs/DiscoverResult",
+      "expect": "reject",
+      "value": {
+        "jsonrpc": "2.0",
+        "id": 3,
+        "result": {
+          "resultType": "complete",
+          "supportedVersions": [
+            "2026-07-28"
+          ],
+          "capabilities": {
+            "tools": {
+              "listChanged": false
+            },
+            "resources": {
+              "listChanged": false
+            }
+          },
+          "_meta": {
+            "io.modelcontextprotocol/serverInfo": {
+              "name": "advisers",
+              "version": "0.4.0"
+            }
+          },
+          "ttlMs": 300000,
+          "cacheScope": "shared"
+        }
+      }
+    },
+    {
+      "id": "discover.negative-ttl",
+      "target": "#/$defs/DiscoverResult",
+      "expect": "reject",
+      "value": {
+        "jsonrpc": "2.0",
+        "id": 4,
+        "result": {
+          "resultType": "complete",
+          "supportedVersions": [
+            "2026-07-28"
+          ],
+          "capabilities": {
+            "tools": {
+              "listChanged": false
+            },
+            "resources": {
+              "listChanged": false
+            }
+          },
+          "_meta": {
+            "io.modelcontextprotocol/serverInfo": {
+              "name": "advisers",
+              "version": "0.4.0"
+            }
+          },
+          "ttlMs": -1,
+          "cacheScope": "public"
+        }
+      }
+    },
+    {
+      "id": "discover.missing-capabilities",
+      "target": "#/$defs/DiscoverResult",
+      "expect": "reject",
+      "value": {
+        "jsonrpc": "2.0",
+        "id": 5,
+        "result": {
+          "resultType": "complete",
+          "supportedVersions": [
+            "2026-07-28"
+          ],
+          "_meta": {
+            "io.modelcontextprotocol/serverInfo": {
+              "name": "advisers",
+              "version": "0.4.0"
+            }
+          },
+          "ttlMs": 300000,
+          "cacheScope": "public"
+        }
+      }
+    },
+    {
+      "id": "discover.empty-supported-versions",
+      "target": "#/$defs/DiscoverResult",
+      "expect": "reject",
+      "value": {
+        "jsonrpc": "2.0",
+        "id": 6,
+        "result": {
+          "resultType": "complete",
+          "supportedVersions": [],
+          "capabilities": {
+            "tools": {
+              "listChanged": false
+            },
+            "resources": {
+              "listChanged": false
+            }
+          },
+          "_meta": {
+            "io.modelcontextprotocol/serverInfo": {
+              "name": "advisers",
+              "version": "0.4.0"
+            }
+          },
+          "ttlMs": 300000,
+          "cacheScope": "public"
+        }
+      }
+    },
+    {
+      "id": "tools-list.valid",
+      "target": "#/$defs/ToolsListResult",
+      "expect": "accept",
+      "value": {
+        "jsonrpc": "2.0",
+        "id": 10,
+        "result": {
+          "resultType": "complete",
+          "tools": [
+            {
+              "name": "advisers_today",
+              "description": "Read the open commitments.",
+              "inputSchema": {
+                "type": "object",
+                "properties": {}
+              }
+            }
+          ],
+          "_meta": {
+            "io.modelcontextprotocol/serverInfo": {
+              "name": "advisers",
+              "version": "0.4.0"
+            }
+          },
+          "ttlMs": 300000,
+          "cacheScope": "public"
+        }
+      }
+    },
+    {
+      "id": "tools-list.missing-result-type",
+      "target": "#/$defs/ToolsListResult",
+      "expect": "reject",
+      "value": {
+        "jsonrpc": "2.0",
+        "id": 11,
+        "result": {
+          "tools": [
+            {
+              "name": "advisers_today",
+              "description": "d",
+              "inputSchema": {
+                "type": "object"
+              }
+            }
+          ],
+          "_meta": {
+            "io.modelcontextprotocol/serverInfo": {
+              "name": "advisers",
+              "version": "0.4.0"
+            }
+          },
+          "ttlMs": 300000,
+          "cacheScope": "public"
+        }
+      }
+    },
+    {
+      "id": "tools-list.empty-tools",
+      "target": "#/$defs/ToolsListResult",
+      "expect": "reject",
+      "value": {
+        "jsonrpc": "2.0",
+        "id": 12,
+        "result": {
+          "resultType": "complete",
+          "tools": [],
+          "_meta": {
+            "io.modelcontextprotocol/serverInfo": {
+              "name": "advisers",
+              "version": "0.4.0"
+            }
+          },
+          "ttlMs": 300000,
+          "cacheScope": "public"
+        }
+      }
+    },
+    {
+      "id": "tools-list.tool-missing-input-schema",
+      "target": "#/$defs/ToolsListResult",
+      "expect": "reject",
+      "value": {
+        "jsonrpc": "2.0",
+        "id": 13,
+        "result": {
+          "resultType": "complete",
+          "tools": [
+            {
+              "name": "advisers_today",
+              "description": "d"
+            }
+          ],
+          "_meta": {
+            "io.modelcontextprotocol/serverInfo": {
+              "name": "advisers",
+              "version": "0.4.0"
+            }
+          },
+          "ttlMs": 300000,
+          "cacheScope": "public"
+        }
+      }
+    },
+    {
+      "id": "tools-list.missing-ttl",
+      "target": "#/$defs/ToolsListResult",
+      "expect": "reject",
+      "value": {
+        "jsonrpc": "2.0",
+        "id": 14,
+        "result": {
+          "resultType": "complete",
+          "tools": [
+            {
+              "name": "advisers_today",
+              "description": "d",
+              "inputSchema": {
+                "type": "object"
+              }
+            }
+          ],
+          "_meta": {
+            "io.modelcontextprotocol/serverInfo": {
+              "name": "advisers",
+              "version": "0.4.0"
+            }
+          },
+          "cacheScope": "public"
+        }
+      }
+    },
+    {
+      "id": "tool-call.valid",
+      "target": "#/$defs/ToolCallResult",
+      "expect": "accept",
+      "value": {
+        "jsonrpc": "2.0",
+        "id": 20,
+        "result": {
+          "resultType": "complete",
+          "content": [
+            {
+              "type": "text",
+              "text": "{\n  \"open\": 0\n}"
+            }
+          ],
+          "isError": false,
+          "_meta": {
+            "io.modelcontextprotocol/serverInfo": {
+              "name": "advisers",
+              "version": "0.4.0"
+            }
+          }
+        }
+      }
+    },
+    {
+      "id": "tool-call.valid-tool-error",
+      "target": "#/$defs/ToolCallResult",
+      "expect": "accept",
+      "value": {
+        "jsonrpc": "2.0",
+        "id": 21,
+        "result": {
+          "resultType": "complete",
+          "content": [
+            {
+              "type": "text",
+              "text": "unknown client id"
+            }
+          ],
+          "isError": true,
+          "_meta": {
+            "io.modelcontextprotocol/serverInfo": {
+              "name": "advisers",
+              "version": "0.4.0"
+            }
+          }
+        }
+      }
+    },
+    {
+      "id": "tool-call.missing-result-type",
+      "target": "#/$defs/ToolCallResult",
+      "expect": "reject",
+      "value": {
+        "jsonrpc": "2.0",
+        "id": 22,
+        "result": {
+          "content": [
+            {
+              "type": "text",
+              "text": "{}"
+            }
+          ],
+          "isError": false,
+          "_meta": {
+            "io.modelcontextprotocol/serverInfo": {
+              "name": "advisers",
+              "version": "0.4.0"
+            }
+          }
+        }
+      }
+    },
+    {
+      "id": "tool-call.bad-content-type",
+      "target": "#/$defs/ToolCallResult",
+      "expect": "reject",
+      "value": {
+        "jsonrpc": "2.0",
+        "id": 23,
+        "result": {
+          "resultType": "complete",
+          "content": [
+            {
+              "type": "image",
+              "text": "{}"
+            }
+          ],
+          "isError": false,
+          "_meta": {
+            "io.modelcontextprotocol/serverInfo": {
+              "name": "advisers",
+              "version": "0.4.0"
+            }
+          }
+        }
+      }
+    },
+    {
+      "id": "tool-call.bad-is-error",
+      "target": "#/$defs/ToolCallResult",
+      "expect": "reject",
+      "value": {
+        "jsonrpc": "2.0",
+        "id": 24,
+        "result": {
+          "resultType": "complete",
+          "content": [
+            {
+              "type": "text",
+              "text": "{}"
+            }
+          ],
+          "isError": "false",
+          "_meta": {
+            "io.modelcontextprotocol/serverInfo": {
+              "name": "advisers",
+              "version": "0.4.0"
+            }
+          }
+        }
+      }
+    },
+    {
+      "id": "tool-call.empty-content",
+      "target": "#/$defs/ToolCallResult",
+      "expect": "reject",
+      "value": {
+        "jsonrpc": "2.0",
+        "id": 25,
+        "result": {
+          "resultType": "complete",
+          "content": [],
+          "isError": false,
+          "_meta": {
+            "io.modelcontextprotocol/serverInfo": {
+              "name": "advisers",
+              "version": "0.4.0"
+            }
+          }
+        }
+      }
+    },
+    {
+      "id": "resources-list.valid",
+      "target": "#/$defs/ResourcesListResult",
+      "expect": "accept",
+      "value": {
+        "jsonrpc": "2.0",
+        "id": 30,
+        "result": {
+          "resultType": "complete",
+          "resources": [
+            {
+              "uri": "advisers://today",
+              "name": "today",
+              "mimeType": "application/json"
+            }
+          ],
+          "_meta": {
+            "io.modelcontextprotocol/serverInfo": {
+              "name": "advisers",
+              "version": "0.4.0"
+            }
+          },
+          "ttlMs": 300000,
+          "cacheScope": "public"
+        }
+      }
+    },
+    {
+      "id": "resources-list.bad-uri",
+      "target": "#/$defs/ResourcesListResult",
+      "expect": "reject",
+      "value": {
+        "jsonrpc": "2.0",
+        "id": 31,
+        "result": {
+          "resultType": "complete",
+          "resources": [
+            {
+              "uri": "today",
+              "name": "today",
+              "mimeType": "application/json"
+            }
+          ],
+          "_meta": {
+            "io.modelcontextprotocol/serverInfo": {
+              "name": "advisers",
+              "version": "0.4.0"
+            }
+          },
+          "ttlMs": 300000,
+          "cacheScope": "public"
+        }
+      }
+    },
+    {
+      "id": "resources-list.missing-cache-scope",
+      "target": "#/$defs/ResourcesListResult",
+      "expect": "reject",
+      "value": {
+        "jsonrpc": "2.0",
+        "id": 32,
+        "result": {
+          "resultType": "complete",
+          "resources": [
+            {
+              "uri": "advisers://today",
+              "name": "today",
+              "mimeType": "application/json"
+            }
+          ],
+          "_meta": {
+            "io.modelcontextprotocol/serverInfo": {
+              "name": "advisers",
+              "version": "0.4.0"
+            }
+          },
+          "ttlMs": 300000
+        }
+      }
+    },
+    {
+      "id": "resources-list.missing-resources",
+      "target": "#/$defs/ResourcesListResult",
+      "expect": "reject",
+      "value": {
+        "jsonrpc": "2.0",
+        "id": 33,
+        "result": {
+          "resultType": "complete",
+          "_meta": {
+            "io.modelcontextprotocol/serverInfo": {
+              "name": "advisers",
+              "version": "0.4.0"
+            }
+          },
+          "ttlMs": 300000,
+          "cacheScope": "public"
+        }
+      }
+    },
+    {
+      "id": "resource-read.valid",
+      "target": "#/$defs/ResourceReadResult",
+      "expect": "accept",
+      "value": {
+        "jsonrpc": "2.0",
+        "id": 40,
+        "result": {
+          "resultType": "complete",
+          "contents": [
+            {
+              "uri": "advisers://today",
+              "mimeType": "application/json",
+              "text": "{\n  \"open\": 0\n}"
+            }
+          ],
+          "_meta": {
+            "io.modelcontextprotocol/serverInfo": {
+              "name": "advisers",
+              "version": "0.4.0"
+            }
+          },
+          "ttlMs": 0,
+          "cacheScope": "private"
+        }
+      }
+    },
+    {
+      "id": "resource-read.short-text",
+      "target": "#/$defs/ResourceReadResult",
+      "expect": "reject",
+      "value": {
+        "jsonrpc": "2.0",
+        "id": 41,
+        "result": {
+          "resultType": "complete",
+          "contents": [
+            {
+              "uri": "advisers://today",
+              "mimeType": "application/json",
+              "text": "x"
+            }
+          ],
+          "_meta": {
+            "io.modelcontextprotocol/serverInfo": {
+              "name": "advisers",
+              "version": "0.4.0"
+            }
+          },
+          "ttlMs": 0,
+          "cacheScope": "private"
+        }
+      }
+    },
+    {
+      "id": "resource-read.missing-ttl",
+      "target": "#/$defs/ResourceReadResult",
+      "expect": "reject",
+      "value": {
+        "jsonrpc": "2.0",
+        "id": 42,
+        "result": {
+          "resultType": "complete",
+          "contents": [
+            {
+              "uri": "advisers://today",
+              "mimeType": "application/json",
+              "text": "{}"
+            }
+          ],
+          "_meta": {
+            "io.modelcontextprotocol/serverInfo": {
+              "name": "advisers",
+              "version": "0.4.0"
+            }
+          },
+          "cacheScope": "private"
+        }
+      }
+    },
+    {
+      "id": "resource-read.empty-contents",
+      "target": "#/$defs/ResourceReadResult",
+      "expect": "reject",
+      "value": {
+        "jsonrpc": "2.0",
+        "id": 43,
+        "result": {
+          "resultType": "complete",
+          "contents": [],
+          "_meta": {
+            "io.modelcontextprotocol/serverInfo": {
+              "name": "advisers",
+              "version": "0.4.0"
+            }
+          },
+          "ttlMs": 0,
+          "cacheScope": "private"
+        }
+      }
+    },
+    {
+      "id": "unsupported-version.valid",
+      "target": "#/$defs/UnsupportedProtocolVersionError",
+      "expect": "accept",
+      "value": {
+        "jsonrpc": "2.0",
+        "id": 50,
+        "error": {
+          "code": -32022,
+          "message": "Unsupported protocol version",
+          "data": {
+            "supported": [
+              "2026-07-28"
+            ],
+            "requested": "2025-11-25"
+          }
+        }
+      }
+    },
+    {
+      "id": "unsupported-version.bad-code",
+      "target": "#/$defs/UnsupportedProtocolVersionError",
+      "expect": "reject",
+      "value": {
+        "jsonrpc": "2.0",
+        "id": 51,
+        "error": {
+          "code": -32602,
+          "message": "Unsupported protocol version",
+          "data": {
+            "supported": [
+              "2026-07-28"
+            ],
+            "requested": "2025-11-25"
+          }
+        }
+      }
+    },
+    {
+      "id": "unsupported-version.missing-data",
+      "target": "#/$defs/UnsupportedProtocolVersionError",
+      "expect": "reject",
+      "value": {
+        "jsonrpc": "2.0",
+        "id": 52,
+        "error": {
+          "code": -32022,
+          "message": "Unsupported protocol version"
+        }
+      }
+    },
+    {
+      "id": "unsupported-version.empty-supported",
+      "target": "#/$defs/UnsupportedProtocolVersionError",
+      "expect": "reject",
+      "value": {
+        "jsonrpc": "2.0",
+        "id": 53,
+        "error": {
+          "code": -32022,
+          "message": "Unsupported protocol version",
+          "data": {
+            "supported": [],
+            "requested": "2025-11-25"
+          }
+        }
+      }
+    },
+    {
+      "id": "unsupported-version.missing-requested",
+      "target": "#/$defs/UnsupportedProtocolVersionError",
+      "expect": "reject",
+      "value": {
+        "jsonrpc": "2.0",
+        "id": 54,
+        "error": {
+          "code": -32022,
+          "message": "Unsupported protocol version",
+          "data": {
+            "supported": [
+              "2026-07-28"
+            ]
+          }
+        }
+      }
+    }
+  ]
+}

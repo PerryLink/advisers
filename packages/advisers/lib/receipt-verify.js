@@ -40,6 +40,9 @@ import { createHash } from 'node:crypto'
 import { closeSync, existsSync, openSync, readFileSync, readdirSync, readSync, statSync } from 'node:fs'
 import { join, resolve } from 'node:path'
 import {
+  EVIDENCE_KINDS,
+  EVIDENCE_PACK_VERSIONS,
+  EVIDENCE_RESOLUTIONS,
   MAX_QUOTE_CHARS,
   RECEIPT_DELIVERIES_PREFIX,
   RECEIPT_MANIFEST_FORMAT,
@@ -48,6 +51,7 @@ import {
   RECEIPT_SCOPES,
   RECEIPT_SHA256SUMS_FILE,
   RECEIPT_SUBJECT_KINDS,
+  VERIFICATION_BASES,
   isUnsafePackPath,
   sha256Hex,
 } from './evidence.js'
@@ -494,33 +498,122 @@ function validateAnchor(anchor, index, sums, errors) {
   }
 }
 
-function validateEvidenceSource(source, where, errors) {
+const TYPED_ITEM_STRING_FIELDS = Object.freeze(['ref', 'sessionId', 'turnId', 'messageId', 'subject', 'docId', 'pageId', 'url', 'tool', 'chunkId'])
+
+function validateEvidenceQuote(source, where, errors) {
+  if (typeof source.quote !== 'string') {
+    addError(errors, 'schema: ' + where + '.quote must be a string')
+    return
+  }
+  if (Array.from(source.quote).length > MAX_QUOTE_CHARS) {
+    addError(errors, 'schema: ' + where + '.quote is longer than ' + MAX_QUOTE_CHARS + ' characters')
+  }
+  if (!isSha256Hex(source.quoteSha256)) addError(errors, 'schema: ' + where + '.quoteSha256 must be 64 lowercase hex characters')
+  else if (sha256Hex(source.quote) !== source.quoteSha256) {
+    addError(errors, 'evidence quoteSha256 mismatch at ' + where)
+  }
+  if (!isNonNegativeInteger(source.quoteChars)) addError(errors, 'schema: ' + where + '.quoteChars must be a non-negative integer')
+  else if (source.quoteChars < Array.from(source.quote).length) {
+    addError(errors, 'schema: ' + where + '.quoteChars is smaller than the stored quote')
+  }
+  if (typeof source.truncated !== 'boolean') addError(errors, 'schema: ' + where + '.truncated must be a boolean')
+}
+
+function validateEvidenceSourceV2(source, where, errors) {
+  if (!isPlainObject(source)) {
+    addError(errors, 'schema: ' + where + ' must be an object')
+    return
+  }
+  if (!EVIDENCE_KINDS.includes(source.kind)) {
+    addError(errors, 'schema: ' + where + '.kind must be one of ' + EVIDENCE_KINDS.map((kind) => '"' + kind + '"').join(', '))
+  }
+  if (typeof source.type !== 'string' || !source.type) addError(errors, 'schema: ' + where + '.type must be a non-empty string')
+  if (!EVIDENCE_RESOLUTIONS.includes(source.resolution)) {
+    addError(errors, 'schema: ' + where + '.resolution must be one of ' + EVIDENCE_RESOLUTIONS.map((value) => '"' + value + '"').join(', '))
+  } else if (source.resolution !== 'verified') {
+    // The sources[] array is "locally resolved at build time". Unverifiable or
+    // not_checked items belong in their own arrays; a pack must not smuggle
+    // manual/unverifiable evidence in as a source.
+    addError(errors, 'schema: ' + where + '.resolution must be "verified" for entries in sources[]')
+  }
+  if ((source.kind === 'manual' || source.type === 'manual') && source.resolution === 'verified') {
+    addError(errors, 'manual evidence must not be marked verified: ' + where)
+  }
+  if (source.type === 'conversation') {
+    if (typeof source.sessionId !== 'string') addError(errors, 'schema: ' + where + '.sessionId must be a string')
+    if (typeof source.turnId !== 'string') addError(errors, 'schema: ' + where + '.turnId must be a string')
+  } else {
+    if ('sessionId' in source && typeof source.sessionId !== 'string') addError(errors, 'schema: ' + where + '.sessionId must be a string')
+    if ('turnId' in source && typeof source.turnId !== 'string') addError(errors, 'schema: ' + where + '.turnId must be a string')
+  }
+  validateEvidenceQuote(source, where, errors)
+  if ('quoteVerified' in source && typeof source.quoteVerified !== 'boolean') {
+    addError(errors, 'schema: ' + where + '.quoteVerified must be a boolean')
+  }
+  for (const key of TYPED_ITEM_STRING_FIELDS) {
+    if (key in source && typeof source[key] !== 'string') addError(errors, 'schema: ' + where + '.' + key + ' must be a string')
+  }
+  if ('retained' in source && typeof source.retained !== 'boolean') addError(errors, 'schema: ' + where + '.retained must be a boolean')
+  if ('chunkIndex' in source && !isNonNegativeInteger(source.chunkIndex)) {
+    addError(errors, 'schema: ' + where + '.chunkIndex must be a non-negative integer')
+  }
+  if ('sourceDigest' in source && !isSha256Hex(source.sourceDigest)) {
+    addError(errors, 'schema: ' + where + '.sourceDigest must be 64 lowercase hex characters')
+  }
+  if ('turnSeq' in source && !Number.isInteger(source.turnSeq)) addError(errors, 'schema: ' + where + '.turnSeq must be an integer')
+  if ('turnRole' in source && typeof source.turnRole !== 'string') addError(errors, 'schema: ' + where + '.turnRole must be a string')
+}
+
+function validateEvidenceSource(source, where, errors, version) {
+  if (version >= 2) {
+    validateEvidenceSourceV2(source, where, errors)
+    return
+  }
   if (!isPlainObject(source)) {
     addError(errors, 'schema: ' + where + ' must be an object')
     return
   }
   if (typeof source.sessionId !== 'string') addError(errors, 'schema: ' + where + '.sessionId must be a string')
   if (typeof source.turnId !== 'string') addError(errors, 'schema: ' + where + '.turnId must be a string')
-  if (typeof source.quote !== 'string') addError(errors, 'schema: ' + where + '.quote must be a string')
-  else {
-    if (Array.from(source.quote).length > MAX_QUOTE_CHARS) {
-      addError(errors, 'schema: ' + where + '.quote is longer than ' + MAX_QUOTE_CHARS + ' characters')
-    }
-    if (!isSha256Hex(source.quoteSha256)) addError(errors, 'schema: ' + where + '.quoteSha256 must be 64 lowercase hex characters')
-    else if (typeof source.quote === 'string' && sha256Hex(source.quote) !== source.quoteSha256) {
-      addError(errors, 'evidence quoteSha256 mismatch at ' + where)
-    }
-  }
-  if (!isNonNegativeInteger(source.quoteChars)) addError(errors, 'schema: ' + where + '.quoteChars must be a non-negative integer')
-  else if (typeof source.quote === 'string' && source.quoteChars < Array.from(source.quote).length) {
-    addError(errors, 'schema: ' + where + '.quoteChars is smaller than the stored quote')
-  }
-  if (typeof source.truncated !== 'boolean') addError(errors, 'schema: ' + where + '.truncated must be a boolean')
+  validateEvidenceQuote(source, where, errors)
   if ('turnSeq' in source && !Number.isInteger(source.turnSeq)) addError(errors, 'schema: ' + where + '.turnSeq must be an integer')
   if ('turnRole' in source && typeof source.turnRole !== 'string') addError(errors, 'schema: ' + where + '.turnRole must be a string')
 }
 
-function validateEvidenceEntry(entry, index, errors) {
+function validateEvidenceTypedItem(item, where, errors, { requireKind = false } = {}) {
+  if (!isPlainObject(item)) {
+    addError(errors, 'schema: ' + where + ' must be an object')
+    return false
+  }
+  if (typeof item.reason !== 'string' || !item.reason) addError(errors, 'schema: ' + where + '.reason must be a non-empty string')
+  if (requireKind && !EVIDENCE_KINDS.includes(item.kind)) {
+    addError(errors, 'schema: ' + where + '.kind must be one of ' + EVIDENCE_KINDS.map((kind) => '"' + kind + '"').join(', '))
+  } else if ('kind' in item && !EVIDENCE_KINDS.includes(item.kind)) {
+    addError(errors, 'schema: ' + where + '.kind must be one of ' + EVIDENCE_KINDS.map((kind) => '"' + kind + '"').join(', '))
+  }
+  if ('type' in item && (typeof item.type !== 'string' || !item.type)) addError(errors, 'schema: ' + where + '.type must be a non-empty string')
+  for (const key of TYPED_ITEM_STRING_FIELDS) {
+    if (key in item && typeof item[key] !== 'string') addError(errors, 'schema: ' + where + '.' + key + ' must be a string')
+  }
+  if ('retained' in item && typeof item.retained !== 'boolean') addError(errors, 'schema: ' + where + '.retained must be a boolean')
+  if ('chunkIndex' in item && !isNonNegativeInteger(item.chunkIndex)) {
+    addError(errors, 'schema: ' + where + '.chunkIndex must be a non-negative integer')
+  }
+  if ('quote' in item) {
+    if (typeof item.quote !== 'string') addError(errors, 'schema: ' + where + '.quote must be a string')
+    else {
+      if (Array.from(item.quote).length > MAX_QUOTE_CHARS) {
+        addError(errors, 'schema: ' + where + '.quote is longer than ' + MAX_QUOTE_CHARS + ' characters')
+      }
+      if (!isSha256Hex(item.quoteSha256) || sha256Hex(item.quote) !== item.quoteSha256) {
+        addError(errors, 'evidence quoteSha256 mismatch at ' + where)
+      }
+    }
+  }
+  return true
+}
+
+function validateEvidenceEntry(entry, index, errors, version) {
   const where = 'manifest.evidence.entries[' + index + ']'
   if (!isPlainObject(entry)) {
     addError(errors, 'schema: ' + where + ' must be an object')
@@ -530,11 +623,15 @@ function validateEvidenceEntry(entry, index, errors) {
   if (typeof entry.id !== 'string') addError(errors, 'schema: ' + where + '.id must be a string')
   if (typeof entry.found !== 'boolean') addError(errors, 'schema: ' + where + '.found must be a boolean')
   if (!Array.isArray(entry.sources)) addError(errors, 'schema: ' + where + '.sources must be an array')
-  else entry.sources.forEach((source, sourceIndex) => validateEvidenceSource(source, where + '.sources[' + sourceIndex + ']', errors))
+  else entry.sources.forEach((source, sourceIndex) => validateEvidenceSource(source, where + '.sources[' + sourceIndex + ']', errors, version))
   if (!Array.isArray(entry.missing)) addError(errors, 'schema: ' + where + '.missing must be an array')
   else {
     entry.missing.forEach((item, itemIndex) => {
       const itemWhere = where + '.missing[' + itemIndex + ']'
+      if (version >= 2) {
+        validateEvidenceTypedItem(item, itemWhere, errors)
+        return
+      }
       if (!isPlainObject(item)) {
         addError(errors, 'schema: ' + itemWhere + ' must be an object')
         return
@@ -556,6 +653,85 @@ function validateEvidenceEntry(entry, index, errors) {
       }
     })
   }
+  for (const key of ['unverifiable', 'notChecked']) {
+    if (!(key in entry)) continue
+    if (!Array.isArray(entry[key])) {
+      addError(errors, 'schema: ' + where + '.' + key + ' must be an array')
+      continue
+    }
+    entry[key].forEach((item, itemIndex) => {
+      validateEvidenceTypedItem(item, where + '.' + key + '[' + itemIndex + ']', errors, { requireKind: key === 'notChecked' })
+    })
+  }
+}
+
+function tallyEvidenceItems(entries) {
+  const byKind = {}
+  for (const kind of EVIDENCE_KINDS) byKind[kind] = 0
+  let sourceCount = 0
+  let missingCount = 0
+  let unverifiableCount = 0
+  let operatorEnteredCount = 0
+  let notCheckedCount = 0
+  for (const entry of entries) {
+    if (!isPlainObject(entry)) continue
+    for (const key of ['sources', 'missing', 'unverifiable', 'notChecked']) {
+      const list = Array.isArray(entry[key]) ? entry[key] : []
+      if (key === 'sources') sourceCount += list.length
+      else if (key === 'missing') missingCount += list.length
+      else if (key === 'unverifiable') unverifiableCount += list.length
+      else notCheckedCount += list.length
+      for (const item of list) {
+        const kind = EVIDENCE_KINDS.includes(item?.kind) ? item.kind : 'observed'
+        byKind[kind] += 1
+        if (key === 'unverifiable' && (item?.kind === 'manual' || item?.type === 'manual')) operatorEnteredCount += 1
+      }
+    }
+  }
+  return { byKind, sourceCount, missingCount, unverifiableCount, operatorEnteredCount, notCheckedCount }
+}
+
+function validateEvidenceV2(evidence, errors) {
+  const tallied = tallyEvidenceItems(evidence.entries)
+  if (!isNonNegativeInteger(evidence.notCheckedCount)) {
+    addError(errors, 'schema: manifest.evidence.notCheckedCount must be a non-negative integer (v2)')
+  } else if (evidence.notCheckedCount !== tallied.notCheckedCount) {
+    addError(errors, 'schema: manifest.evidence.notCheckedCount disagrees with the entries')
+  }
+  if (!isNonNegativeInteger(evidence.unverifiableCount)) {
+    addError(errors, 'schema: manifest.evidence.unverifiableCount must be a non-negative integer (v2)')
+  } else if (evidence.unverifiableCount !== tallied.unverifiableCount) {
+    addError(errors, 'schema: manifest.evidence.unverifiableCount disagrees with the entries')
+  }
+  if (!isNonNegativeInteger(evidence.operatorEnteredCount)) {
+    addError(errors, 'schema: manifest.evidence.operatorEnteredCount must be a non-negative integer (v2)')
+  } else if (evidence.operatorEnteredCount !== tallied.operatorEnteredCount) {
+    addError(errors, 'schema: manifest.evidence.operatorEnteredCount disagrees with the entries')
+  }
+  if (!isPlainObject(evidence.byKind)) {
+    addError(errors, 'schema: manifest.evidence.byKind must be an object (v2)')
+  } else {
+    let declaredTotal = 0
+    for (const kind of Object.keys(evidence.byKind)) {
+      if (!EVIDENCE_KINDS.includes(kind)) addError(errors, 'schema: manifest.evidence.byKind has an unknown kind: ' + kind)
+    }
+    for (const kind of EVIDENCE_KINDS) {
+      const value = evidence.byKind[kind]
+      if (!isNonNegativeInteger(value)) {
+        addError(errors, 'schema: manifest.evidence.byKind.' + kind + ' must be a non-negative integer')
+      } else {
+        declaredTotal += value
+        if (value !== tallied.byKind[kind]) {
+          addError(errors, 'schema: manifest.evidence.byKind.' + kind + ' disagrees with the entries')
+        }
+      }
+    }
+    const totalItems = tallied.sourceCount + tallied.missingCount + tallied.unverifiableCount + tallied.notCheckedCount
+    if (declaredTotal !== totalItems) addError(errors, 'schema: manifest.evidence.byKind does not sum to the evidence item total')
+  }
+  if (typeof evidence.verificationBasis !== 'string' || !VERIFICATION_BASES.includes(evidence.verificationBasis)) {
+    addError(errors, 'schema: manifest.evidence.verificationBasis must be one of ' + VERIFICATION_BASES.map((value) => '"' + value + '"').join(', ') + ' (v2)')
+  }
 }
 
 function validateEvidence(evidence, errors) {
@@ -564,12 +740,15 @@ function validateEvidence(evidence, errors) {
     return
   }
   if (typeof evidence.format !== 'string' || !evidence.format) addError(errors, 'schema: manifest.evidence.format must be a non-empty string')
-  if (!Number.isInteger(evidence.version) || evidence.version < 1) addError(errors, 'schema: manifest.evidence.version must be a positive integer')
+  if (!Number.isInteger(evidence.version) || !EVIDENCE_PACK_VERSIONS.includes(evidence.version)) {
+    addError(errors, 'schema: manifest.evidence.version must be ' + EVIDENCE_PACK_VERSIONS.join(' or ') + ' (got ' + JSON.stringify(evidence.version) + ')')
+  }
   if (!Array.isArray(evidence.entries)) {
     addError(errors, 'schema: manifest.evidence.entries must be an array')
     return
   }
-  evidence.entries.forEach((entry, index) => validateEvidenceEntry(entry, index, errors))
+  const version = Number.isInteger(evidence.version) ? evidence.version : 1
+  evidence.entries.forEach((entry, index) => validateEvidenceEntry(entry, index, errors, version))
   if (evidence.entryCount !== evidence.entries.length) {
     addError(errors, 'schema: manifest.evidence.entryCount must equal the number of entries')
   }
@@ -606,6 +785,7 @@ function validateEvidence(evidence, errors) {
     }
     if (declared !== evidence.entries.length) addError(errors, 'schema: manifest.evidence.counts do not sum to entryCount')
   }
+  if (version >= 2) validateEvidenceV2(evidence, errors)
 }
 
 function validateReceiptManifest(manifest, sums, errors, result) {

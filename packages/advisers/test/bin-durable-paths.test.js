@@ -6,6 +6,7 @@ import { join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import test from 'node:test'
 import { tosEnv } from './tos-fixture.js'
+import { assertPrivateMode } from './win-compat.mjs'
 
 // Windows P0 regression (0.3 research 16-ops-security-privacy.md §4.1 / R1):
 // lib/fs-safe.js used to fsync a read-only file handle, which Windows rejects
@@ -56,7 +57,7 @@ test('backup/export/import --replace/vault seal+unseal work on the durable fsync
     assert.ok(existsSync(backup), 'backup file must exist')
     assert.ok(statSync(backup).size > 0, 'backup must be non-empty')
     assert.equal(statSync(backup).size, statSync(join(home, 'state.db')).size, 'backup must be a complete copy at checkpoint time')
-    assert.equal(statSync(backup).mode & 0o777, 0o600, 'backup must stay private')
+    assertPrivateMode(backup, 0o600, 'backup')
 
     // 2) `advisers export --out`: durable atomic write (temp file + fsync + rename).
     const exported = join(root, 'smoke-export.json')

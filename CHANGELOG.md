@@ -1,5 +1,202 @@
 # Changelog
 
+## 0.4.0 (2026-11-21)
+
+"Local knowledge, mail and money" feature release. 0.4.0 is the single 0.4 line
+approved for this cycle and carries all ten 0.4 directions — the knowledge base,
+IMAP mail entry, the interactive shell, proactive briefs, the policy/evidence
+subset, receivables and client packs, MCP modern dual-era, Windows CI plus a
+portable ZIP, the v2026.11.4 legal revision, and the docs/release closeout — on
+top of one **schema v22** migration. The default posture is unchanged: every new
+local command works offline and without a model call, there is still no
+background daemon, and IMAP sync is the one new explicit network path (TLS-only,
+user-invoked, read-only).
+
+Status: **published 2026-11-21.** npm `latest` = `0.4.0`, and `next` also points
+at `0.4.0` after this release advanced it. The eight workspace packages are
+lockstep at `0.4.0`: the six published packages (`advisers`, `advisers-core`,
+`advisers-office`, `advisers-policy-strict`, `advisers-bridge-hermes`,
+`dsh-advisers`) and the two private `advisers-link-*` packages held at the same
+version. The eight internal workspace pins, the three version constants and
+`pnpm-lock.yaml` follow; the six per-package `THIRD-PARTY-NOTICES.md` files were
+regenerated (version line only; the dependency closure is unchanged). The
+packaged and public legal texts are **v2026.11.4 (2026-11-21)**. The six tarballs
+are published from GitHub Actions OIDC/Trusted Publishing with SLSA provenance
+naming the release tag ref; verify with
+`node scripts/verify-release.mjs --version 0.4.0 --tag latest --sbom artifacts/sbom.cdx.json --require-sbom`. Release notes, the CycloneDX
+SBOM and `SHA256SUMS` are attached to
+<https://github.com/PerryLink/advisers/releases/tag/v0.4.0>.
+
+### Schema v22
+
+One migration adds the 0.4 data objects: `kb_documents`, `kb_chunks`,
+`kb_fact_links`, `kb_pages` (plus the `kb_fts`/`kb_pages_fts` external-content
+indexes), `mail_accounts`, `mail_messages`, `mail_sync_runs` (plus the
+`mail_cursors` bookkeeping table), `receivables` and `payments`. `DATA_TABLES`
+covers the exported data tables and never exports the derived FTS/cursor
+tables. The migration makes the pre-migration backup
+(`state.db.before-migrate-v*`) and is transactional: a failure rolls the whole
+step back. **Downgrade is not supported**: a 0.3.2 binary opening a v22
+database fails with `E_SCHEMA_NEWER`; restore the pre-migration backup (or
+`export` + fresh `import`) to go back. A JSON store (`ADVISERS_STORE=json`)
+keeps working but has no KB/mail/payment tables.
+
+### Knowledge base (`kb ...`)
+
+- `advisers kb add <file>... [--kind] [--client/--project/--matter] [--title]
+  [--replace]` extracts text and chunks the document into the local ledger;
+  `kb ls`, `kb show` (metadata by default; chunks only with `--chunks`), `kb rm`
+  (tombstone, no longer searchable), `kb purge` (physical delete; `--yes`
+  required), `kb reindex`, `kb link|unlink` (document <-> fact).
+- `search --scope turns|kb|pages|facts|all` keeps the legacy default (`turns`)
+  byte-compatible and adds lexical recall over chunks and compiled pages. FTS5
+  trigram covers queries of 3+ characters; shorter CJK queries fall back to a
+  degraded LIKE path instead of silently returning zero rows.
+- Deterministic compiled pages (`kb page ls|show|rebuild|diff`): client/project
+  dossiers, matter timelines and fact pages are generated from the ledger with
+  per-assertion source refs and an `inputsSha256` staleness check. No model is
+  called; pages are stored in the database and are a rebuildable projection,
+  not a fourth ledger.
+- Fact time travel: `fact show|history|as-of` reads the existing
+  `valid_from`/`valid_to`/`supersedes` chain without a second write path (no
+  `--known-at`; as-of uses local-day boundaries).
+- Zero network/zero model: `kb add/search/page` are covered by the
+  deterministic no-key eval subset. Scanned/image-only files are marked
+  `needsOcr` and are not silently indexed.
+
+### Mail entry (`mail ...`)
+
+- Local mail accounts (`mail account add|ls|show|test|remove`) store
+  configuration only; the IMAP password goes to a `0600` credentials file under
+  `$ADVISERS_HOME` (atomic write, never in the database, argv, logs or audit),
+  and the account is not used for anything until `mail sync`.
+- `mail sync [<account>] [--since-days N] [--limit N] [--full] [--dry-run]` is
+  the single IMAP entry point: TLS-only (993 implicit TLS or STARTTLS),
+  read-only (`EXAMINE` + `FETCH BODY.PEEK[]`), restart-safe
+  `UIDVALIDITY`/UID cursor, no deletion on the server. A `UIDVALIDITY` change
+  fails closed instead of re-syncing or deleting local rows.
+- `mail ls|show|extract|link|dismiss|purge` are local-only. Extraction defaults
+  to deterministic local rules and creates **pending** candidates only (nothing
+  auto-accepts); model extraction is an explicitly opt-in later path.
+- `.eml` import is the offline fallback for mailboxes that do not allow
+  password/IMAP access (for example OAuth-only Gmail Workspace or Microsoft
+  365). Body retention defaults to 30 days; `mail purge` follows the same
+  dry-run -> `--yes` discipline as `kb purge`.
+
+### Interactive shell / TUI
+
+- The REPL is backed by a minimal `node:readline` shell with a tested state
+  machine: command completion, confirmation prompts, a bounded queue, in-memory
+  history (not persisted), double Ctrl+C handling, Esc handling for a pending
+  input, bracketed-paste protection (a paste is never executed line-by-line)
+  and whole-line sanitization so untrusted text cannot inject ANSI/control
+  sequences.
+- The shell command surface reuses the existing read functions 1:1
+  (`/help /status /history /resume /new /file /files /clear /retry /verbose
+  /more /quit` plus read-only `/today /remind /who /client /evidence`); writes
+  stay in the CLI. Non-TTY and piped stdin keep the previous plain/one-shot
+  behaviour, and the frozen `tui --once/--json` output remains byte-identical.
+
+### Proactive briefs, urgency and scheduler v2
+
+- `urgency` v1 is deterministic and explainable: stable `terms` (overdue, due
+  today/near, third party, mine, remind offsets, age, timed) with a
+  `modelVersion`, human-readable `whyNow`, and low/medium/high/critical levels.
+  It is a sorting aid, not a scientific score.
+- `morning` keeps its deterministic brief and can archive it
+  (`briefs/YYYY-MM-DD.md`, `latest.md`, retention with a minimum keep); the
+  archive is local files plus an audit row and is part of the privacy data
+  list.
+- Scheduler status/plan moves to a v2 multi-marker form that stays readable
+  across versions (a 0.3.2 reader still reads the stable fields), and the
+  opt-in reminder webhook now signs payloads with Standard Webhooks HMAC
+  (`webhook-id`/`webhook-timestamp`/`webhook-signature`, timestamp tolerance,
+  replay guard). Quiet hours are off by default and can be overridden.
+- Reminder webhook **payload bytes are unchanged** from 0.3.2; signing is
+  additive.
+
+### Policy and evidence 2.0 subset
+
+- `lib/policy/*` provides a pure decision engine (`evaluate`), one-shot decision
+  tokens with digest-checked execution (`authorize`/`runWithDecision`), a
+  surface registry, an egress registry (`checkEgress`) and the `0600` atomic
+  consent store (`consent.json`, channel `tty|flag|env`). Policy detail travels
+  in `error.details`; exit codes stay 0/1/3 (exit 4/5/6 are 0.5 work).
+- The evidence resolver now has four honest states and accepts the new source
+  kinds (`mail`, `kb_chunk`/`kb_page`, web/tool), so a mail or KB reference is
+  no longer reported as `missing` when the underlying row exists. Receipt pack
+  v2 records a `verificationBasis` and the verifier re-checks the counts; v1
+  packs still verify.
+- TOS consent and model-egress consent are recorded separately: accepting the
+  terms does not authorise sending content to a model provider.
+
+### Receivables, payments and client pack v2
+
+- `receivable add|ls|show|edit|void` and `payment add|ls|void` add a
+  commitment sidecar for money owed: amounts are decimal strings stored as
+  integer minor units, in the four quote-template currencies (CNY/USD/EUR/HKD),
+  with partial and multiple payments, overpayment, void, and a
+  same-transaction auto-complete of the linked commitment.
+- `receivable ls` reports per-currency totals (open/overdue/paid) and aging
+  buckets; `client show` gains an additive `receivables` block and
+  `status --json` gains the new counters. No invoices, receipts, contracts,
+  automatic reminders or payment rails; no FX or cross-currency totals.
+- `client export <id> --pack [dir]` writes a directory pack (`manifest.json`
+  format `advisers-client-status-pack` v1 with subject/scope/counts/
+  `verificationBasis`, plus `status.md`/`status.json`/`README.txt`/
+  `SHA256SUMS`); `evidence verify` dispatches to the matching verifier. Amounts
+  stay out of receipt packs, the client status pack, MCP, DSH and Pet Brief in
+  0.4.0.
+
+### MCP modern dual-era
+
+- The MCP server speaks `2026-07-28` as a dual-era server: `server/discover`,
+  per-request `_meta` validation, an explicit modern-method allowlist, and
+  modern result envelopes (`resultType` + optional `ttlMs`/`cacheScope`,
+  `_meta`) with mapped error codes. Legacy clients receive byte-identical
+  responses; `ADVISERS_MCP_MODERN=off` is a one-restart rollback.
+- The legacy tool/resource surface is unchanged: 8 tools / 5 resources, and the
+  DSH adapter remains 6 tools. The new contract artifacts are additive
+  (`contracts/mcp/versions-v2.json`, `responses-v2.schema.json`,
+  `contracts/vectors/mcp/modern.vectors.json`).
+
+### Windows and distribution
+
+- CI gains a `windows-full` job (Node 24 and 22.16 matrix, full test suite with
+  explicit timeouts); the 36-failure triage from the real-machine run is
+  recorded with per-file classification.
+- `scripts/portable-zip.mjs` / `pack-portable.mjs` build and verify an offline
+  portable ZIP. npm remains the only official channel and the portable ZIP is
+  the offline channel. `docs/WINDOWS.md` scopes support to Windows 11
+  25H2/26H2 x64 and keeps the real-machine/full-suite record as a release
+  checklist item. No Homebrew/winget/MSI/store packaging.
+
+### Legal and privacy texts v2026.11.4
+
+TOS/PRIVACY/SAFETY/DISCLAIMER move to **v2026.11.4 (2026-11-21)** for the new
+data planes: mail bodies and credentials, KB extracted text and compiled pages,
+receivables/payments records, the interactive shell and brief archive, the
+separate model-egress consent, and the 30-day mail retention. Gated commands
+re-confirm the revised terms; `check-tos --release` is a release gate.
+
+### Contracts and docs
+
+- Contracts stay additive: CLI read models/commands add the KB/mail/receivable
+  shapes, MCP adds the modern-era v2 artifacts, and the existing frozen vectors
+  keep their meaning.
+- [docs/WINDOWS.md](docs/WINDOWS.md) is new; [MCP](docs/MCP.md),
+  [contracts](docs/CONTRACTS.md) and the legal texts carry the additive 0.4
+  content. The release checklist in [docs/RELEASING.md](docs/RELEASING.md) is
+  unchanged: docs first, main push -> CI green -> annotated tag -> tag-ref
+  dispatch -> post-publish `verify-release`.
+
+Still not in 0.4.0: model-backed `kb compile`/`kb ask`, embeddings/vector
+search, model mail extraction, a full PolicyGrant with exit 4-6, DSH ledger
+writes, an MCP "modern compliant" certification beyond the dual-era layer, TUI
+history persistence/a full-screen board, Pet Brief v3, Homebrew/winget/MSI
+packaging, and the external legal review. The real-Windows full-suite record
+and the feature suites stay release-checklist items.
+
 ## 0.3.2 (2026-11-21)
 
 "Customer loop and performance closeout" minor release: the customer/project

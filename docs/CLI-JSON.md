@@ -1,9 +1,15 @@
-# CLI JSON contract v1 (E6-T1 + 0.2.0 data plane)
+# CLI JSON contract v1 (E6-T1 + 0.2.0 data plane; 0.4.0 additive surfaces)
 
 Advisers is CLI-first. Scripts should be able to consume every read-only view without
 parsing human text. JSON mode never mixes human prose into stdout; diagnostics go to
 stderr and `--json` must not require a TTY. Shapes are additive: new optional keys may
 appear, existing keys keep their meaning.
+
+> Status: **0.4.0 (schema v22)**. Every 0.4.0 change in this document is additive
+> inside the v1 contract: new commands, new optional fields and new `--scope` values.
+> Existing commands, keys, ordering and exit codes are unchanged, so a 0.3.2 consumer
+> keeps working without modification. The 0.4.0-only additions are marked
+> **(0.4.0)**; anything not marked is 0.3.2/earlier behaviour.
 
 ## Current JSON surfaces (2026-11; 0.2.3 additions marked)
 
@@ -32,6 +38,16 @@ appear, existing keys keep their meaning.
 | `advisers morning --json` (alias `digest morning`) | deterministic brief payload (below) | v1 (0.2.3) |
 | `advisers template quote\|proposal <data.json> <out> --json` | generation result + totals + verification (below) | v1 (0.2.3) |
 | `advisers verify <file> --content --template quote\|proposal --data <json>` | `{structure,content{checks[],template{...}}}` (below) | v1 (0.2.3) |
+| `advisers search <q> --json [--scope turns\|kb\|pages\|facts\|all]` | unified search payload (below) | v1 (0.4.0 additive) |
+| `advisers kb add\|ls\|show\|rm\|purge\|reindex --json` | KB document payloads (below, [KB.md](KB.md)) | v1 (0.4.0 additive) |
+| `advisers kb page ls\|show\|rebuild\|diff --json` | compiled-page payloads (below) | v1 (0.4.0 additive) |
+| `advisers fact show\|history\|as-of --json` | fact time-travel payloads (below) | v1 (0.4.0 additive) |
+| `advisers mail account add\|ls\|show\|rm --json` | account payloads (below) | v1 (0.4.0 additive) |
+| `advisers mail sync\|ls\|show\|extract\|import\|purge --json` | mail payloads (below) | v1 (0.4.0 additive) |
+| `advisers receivable add\|ls\|show\|edit\|void --json` / `payment add\|ls\|void --json` | money sidecar payloads (below, [CLIENTS.md](CLIENTS.md)) | v1 (0.4.0 additive) |
+| `advisers consent status\|grant\|revoke --json` | consent file status/entry (below) | v1 (0.4.0 additive) |
+| `advisers privacy --matrix --json` | policy surface matrix (below) | v1 (0.4.0 additive) |
+| `advisers client export --pack --json` | client status pack v2 summary (below, [CLIENTS.md](CLIENTS.md)) | v1 (0.4.0 additive) |
 
 ### `today --json`
 
@@ -313,7 +329,8 @@ ledger, no network). Proposal uses `proposal.*` check ids. Exit 1 when any check
 
 ### `client` / `project --json` (0.3.0)
 
-Contract v1 additive commands for the customer/project dimension (schema v21); the
+Contract v1 additive commands for the customer/project dimension (schema v21; v22
+adds the money sidecar, mail and KB tables without changing these shapes); the
 full product contract is [CLIENTS.md](CLIENTS.md). Rows are SQLite-only (the legacy
 JSON store answers `E_STORE`), and every `--json` stdout is one pure JSON document.
 
@@ -356,6 +373,280 @@ JSON store answers `E_STORE`), and every `--json` stdout is one pure JSON docume
   additive `schemaVersion`; `import --replace` restores the ledger **and** the customer tables in one
   transaction, refuses a newer `schemaVersion` before writing, and aborts atomically on a dangling
   reference. See [CLIENTS.md §5](CLIENTS.md#5-export--import-parity).
+
+## 0.4.0 additive read models
+
+Every shape in this section is new in 0.4.0 and additive to contract v1: old keys
+keep their meaning and old consumers can ignore the new objects. Commands marked
+**not wired in 0.4.0** are accepted by the library/design but are not reachable from
+the 0.4.0 CLI yet; do not script against them before they appear in
+`advisers --help`.
+
+### `search --json` (0.4.0)
+
+`advisers search <q> [--scope turns|kb|pages|facts|all] [--client/--matter/--kind]
+[--limit 1..200] [--clearance 0-3] [--json]`
+
+- **Without `--scope`** the command keeps 0.3.2 behaviour byte for byte: plain turn
+  search with the same human lines; `--json` does not change that legacy path.
+- `--json` and the scoped path are additive and require `--scope`.
+  `search --scope turns --json` returns the unified envelope for turns only.
+- `kb search <q>` is the KB alias (`--scope kb|pages|all`).
+- Scope behaviour in 0.4.0: `kb` searches document titles + chunks; `pages` searches
+  compiled pages; `all` merges KB + pages + turns. The value `facts` is accepted by
+  the parser but **currently resolves to the KB scope** — fact/preference search is
+  still `memory search` / the legacy `search` path; a real fact scope is a 0.4.x
+  item, so `counts.facts`/`counts.preferences` stay 0 in the scoped payload.
+- `--client`/`--matter`/`--kind` filter KB/pages hits; turns are not filtered.
+- Query length is capped at 200 code points (`E_QUERY_TOO_LONG`). A 3+ character
+  query uses FTS `MATCH`; a 2-character CJK query or an untokenizable token uses a
+  `LIKE` scan and adds `degraded` values. FTS syntax is never passed through.
+
+```json
+{
+  "ok": true, "command": "search", "query": "报价", "scope": "kb",
+  "limit": 20, "clearance": 3, "degraded": ["short_query_like"],
+  "counts": {"turns": 0, "kbDocs": 1, "kbChunks": 3, "kbPages": 0, "facts": 0, "preferences": 0},
+  "hits": [
+    {"kind": "kb_doc", "ref": {"kind": "kb_doc", "id": "kb_..."}, "docId": "kb_...",
+     "title": "报价单", "snippet": "", "highlights": [], "matchPath": "title", "at": "..."},
+    {"kind": "kb_chunk", "ref": {"kind": "kb_chunk", "id": "chk_..."}, "docId": "kb_...",
+     "title": "报价单", "snippet": "...报价...", "highlights": [{"start": 0, "end": 2}],
+     "matchPath": "like"}
+  ],
+  "total": 4, "truncated": false, "protectedExcluded": 0
+}
+```
+
+Hit kinds: `turn`, `kb_doc`, `kb_chunk`, `kb_page`, `fact`, `preference`. `ref` is a
+stable reference (`{kind,id}`); KB ids are never reused. `highlights` are character
+offsets into `snippet` (never HTML/Markdown), and `protectedExcluded` counts rows
+hidden by clearance (only the count is emitted).
+
+### `kb add|ls|show|rm|purge|reindex --json` (0.4.0)
+
+Full semantics, formats and limits: [KB.md](KB.md).
+
+- `kb add <file>...` always returns the **batch envelope** (one file is a batch of one):
+
+```json
+{
+  "ok": true, "command": "kb add",
+  "counts": {"added": 1, "skipped": 0, "failed": 0, "chunks": 16, "textBytes": 12000},
+  "added": [{"id": "kb_...", "title": "报价单", "kind": "contract", "sizeBytes": 10123,
+             "textBytes": 12000, "chunks": 16, "truncated": false, "needsOcr": false,
+             "encoding": "utf-8"}],
+  "skipped": [], "failed": [],
+  "truncated": 0, "needsOcr": 0
+}
+```
+
+  `truncated`/`needsOcr` are **counts** of the added files that hit a limit or need OCR,
+  not booleans. `skipped` is `[{file,code:"E_KB_DUPLICATE",existingId}]` where `file`
+  is a basename; `failed` is `[{file,code,message}]` (also basename-only). A batch with
+  failures exits 1; per-file duplicates are skip-level. `--from <list.txt>` appends
+  one path per line (`#` comments allowed).
+- `kb ls`: `{ok, command:"kb ls", documents:[document], total, truncated, limit, clearance, protectedExcluded}`.
+  Filters: `--client`, `--matter`, `--kind`; `--all` includes tombstones (they carry
+  `status:"deleted"`/`deletedAt`).
+- `kb show`: `{ok, command:"kb show", document, chunks[], chunksTotal, clearance}`;
+  `chunks` is empty unless `--chunks N` (0..20) is given; each chunk preview is ≤400 chars.
+  `document.sourceName` is a basename; `sourceSha256` identifies the source bytes.
+- `kb rm`: `{ok, command:"kb rm", removed:true, document, counts:{chunks}}`.
+- `kb purge` (dry-run default): `{ok, command:"kb purge", dryRun:true, purged:false, document, counts:{chunks,factLinks}, hint}`;
+  with `--yes`: `{ok, command:"kb purge", dryRun:false, purged:true, document, counts:{chunks,factLinks}}`.
+- `kb reindex`: `{ok, command:"kb reindex", ...}` reports both KB FTS indexes and
+  rebuilds only when inconsistent (`--rebuild` forces). It never re-reads source files.
+
+### `kb page ls|show|rebuild|diff --json` (0.4.0)
+
+Pages are deterministic, rebuildable projections of the local ledger; the four kinds
+are `client`, `project`, `timeline`, `facts`. Full semantics: [KB.md](KB.md) §5.4.
+
+- `kb page ls` → `{ok, command:"kb page ls", pages:[{id,kind,subjectId,title,generatedAt,status,inputsSha256,stale?}], total, truncated, limit, clearance, protectedExcluded, staleCount?}`.
+  `--check` recomputes every page and reports `stale`/`staleCount` without writing;
+  `--kind`, `--limit` and `--clearance` filter the list.
+- `kb page show <id>` → `{ok, command:"kb page show", page:{id,kind,subjectId,title,markdown,data,sourceRefs,inputsSha256,generatedAt,status}, live:{inputsSha256,markdown,data,sourceRefs}, stale, stored:{exists,inputsSha256,generatedAt,status}, clearance, diff?}`.
+  Live content is recomputed by default (pure read); `--stored` shows the stored copy;
+  `--diff` adds a bounded unified diff when the page is stale.
+- `kb page rebuild` → `{ok, command:"kb page rebuild", dryRun, counts:{built,written,unchanged,skipped}, pages:[{id,kind}], degraded[], clearance}`.
+  Only changed hashes are written; `--only-stale` narrows the rebuild to stale pages;
+  one `kb.page.rebuild` audit row. `--dry-run` reports the plan without writing.
+- `kb page diff <id>` → `{ok, command:"kb page diff", pageId, stale, diff}`.
+
+### `fact show|history|as-of --json` (0.4.0)
+
+Read-only fact views over the existing facts table (no migration). A fact row is
+`{id,subject,predicate,object,matterId?,clientId?,authority,confidence,status,recordedAt,`
+`validFrom?,validTo?,expiredAt?,supersedes?,supersededBy?,shadowedBy?,lastSeenAt?,`
+`deletedAt?,deletedReason?,evidence[],fallback:{validFromFromRecordedAt}}`.
+
+- `fact show <id>` → `{ok, command:"fact show", fact, kbSources[], warnings[], includeDeleted}`.
+  `kbSources` is additive and lists explicit KB links (`kb_fact_links`); manual
+  `kb link` is **not wired in the 0.4.0 CLI**, so the array is normally empty.
+- `fact history <id>` → `{ok, command:"fact history", rootId, items[], warnings[], counts:{items}, includeDeleted}`;
+  walks `supersedes` back and `supersededBy` forward, tolerating broken links/cycles;
+  tombstones are included by default (the chain is the audit history).
+- `fact as-of <YYYY-MM-DD|ISO>` → `{ok, command:"fact as-of", at, asOfLocalDay, items[], counts:{groups,candidates,overlappingGroups}, warnings[], degraded[], includeDeleted, truncated}`.
+  Date-only values mean the start of that Asia/Shanghai day; superseded facts stay
+  visible for the past; deleted facts require `--include-deleted`.
+
+### `mail account ... --json` (0.4.0)
+
+Credentials never appear in JSON, argv, the database, logs or audit rows; the
+password is read from a TTY prompt or `--pass-stdin` (`--pass` is refused).
+
+- `mail account add` → `{ok, command:"mail account add", account:{...,hasCredential}}`.
+- `mail account ls` → `{ok, command:"mail account ls", accounts:[{...,hasCredential}], total}`.
+- `mail account show <ref>` → `{ok, command:"mail account show", account:{...,hasCredential}}`.
+- `mail account rm <ref>` → `{ok, command:"mail account rm", accountId, removed:true, credentialRemoved, messagesDeleted}`.
+
+`mail account test`, `mail link` and `mail dismiss` are **not wired in the 0.4.0 CLI**
+(0.4.x).
+
+### `mail sync|ls|show|extract|import|purge --json` (0.4.0)
+
+- `mail sync [account]` → `{ok, command:"mail sync", accountId, mailbox, uidValidity?, fetched, inserted, skipped, failed, duplicates, needsResync, dryRun, full, durationMs}`.
+  The only IMAP network path: read-only `EXAMINE`/`UID FETCH`, TLS only (implicit 993
+  or opt-in STARTTLS; never a cleartext fallback). Messages + cursor + run row commit
+  in one transaction after the network fetch. A UIDVALIDITY change is
+  `E_IMAP_UIDVALIDITY` and requires `--full`; nothing is deleted.
+- `mail ls` → `{ok, command:"mail ls", messages:[message], total, limit, offset, truncated}` where
+  `message = {id,accountId,mailbox,uid,uidvalidity?,messageId?,dedupeKey,from,subject,sentAt?,receivedAt,sizeBytes?,retained,purgedAt?,bodySha256?,attachments[],clientId?,projectId?,status,candidateIds[],createdAt,updatedAt}`.
+  `attachments` is metadata only (`{name,size,mime}`); attachment bytes are never stored.
+- `mail show <id>` → `{ok, command:"mail show", message}`; `--body` adds `bodyText`
+  (only while the body is retained, otherwise `E_MAIL_NOT_RETAINED`).
+- `mail extract [ids|--all-new] [--local|--model]` → `{ok, command:"mail extract", mode:"local"|"model", dryRun, scanned, candidates:[Candidate], skipped, failed, failures?, safetyWarnings?}`.
+  `--local` is the default (zero network, no key). `--model` requires explicit
+  `--yes` + `ADVISERS_API_KEY` + consent + `secrecy == 0`; candidates are always
+  `pending` and are never auto-accepted. `Candidate` reuses the
+  `memory candidates --json` shape with mail evidence (`{quote, source}`; no turn).
+- `mail import <file|dir>` (`.eml`/`.mbox`) → `{ok, command:"mail import", accountId, dryRun, files, scanned, inserted, skipped, failed}`.
+  Offline fallback for providers without password IMAP (Gmail Workspace/M365).
+- `mail purge [--older-than 30d]` → `{ok, command:"mail purge", dryRun, messagesPurged|wouldPurge, bytesFreed|bytesWouldFree, skippedPending}`.
+  Default retention is 30 days per account; metadata/`bodySha256` stay and messages
+  with pending candidates are skipped.
+
+### `receivable|payment --json` (0.4.0)
+
+The money sidecar records operator-entered local bookkeeping; it never moves money
+and never prints amounts into reminders, receipts, MCP/DSH or Pet Brief. Amounts are
+accepted as decimal strings ("8000.00"), stored as integer minor units (BigInt),
+capped at 1e12 minor units, and limited to CNY/USD/EUR/HKD (no FX, no cross-currency
+totals). Full semantics: [CLIENTS.md](CLIENTS.md) §11.
+
+- `receivable add` → `{receivable, commitment, createdMatter}` (write commands return
+  the library payload directly, without an `ok`/`command` envelope). `commitment` is
+  the follow-up "回款跟进" commitment that drives reminders; `createdMatter` says a
+  "回款" matter was created for the client.
+- `receivable edit` → `{receivable, commitment}`; `receivable void` →
+  `{receivable, alreadyVoid, reopenedCommitment, droppedCommitment, reason?}`.
+- `receivable show` → `{ok, command:"receivable show", receivable, payments:[payment], clearance, protectedExcluded}`.
+- `receivable ls` → `{ok, command:"receivable ls", receivables:[row], totals:[currencyTotal], total, truncated, limit, clearance, protectedExcluded}`.
+  Row: `{id,commitmentId,label,kind,memo?,clientId,clientName,projectId?,matterId?,deliveryId?,amountMinor,amount,currency,paidMinor,paid,outstandingMinor,outstanding,overpaidMinor?,overpaid?,state,dueAt,overdueDays,payments:{count,lastPaidAt?},reminderOffsets?,createdAt,updatedAt?,writtenOffAt?,deletedAt?,closedByPaymentId?}`.
+  `state` is derived (`open|partial|overdue|settled|written_off|void`) and never stored.
+- `payment add` → `{payment, receivable, commitment, completedCommitment}`; a full
+  payment completes the follow-up commitment in the same transaction unless
+  `--no-complete`. `payment void` → `{payment, receivable, alreadyVoid, reopenedCommitment, reason?}`
+  and reopens that commitment only when the payment is the one that closed it.
+- `payment ls` → `{ok, command:"payment ls", payments:[row], total, truncated, limit}`;
+  row: `{id,clientId,commitmentId?,amountMinor,amount,currency,paidAt,method,memo?,deletedAt?,createdAt,updatedAt?}`.
+- `receivable ls --aging` returns the summary payload
+  `{ok, command:"receivable summary", total, unsettled, settled, overdue, writtenOff, void, totals[], unmatchedPayments[], nextDueAt, clearance, protectedExcluded}`.
+- `client show --json` adds `receivables:{count,overdueCount,totals[],nextDueAt,protectedExcluded}`
+  (additive; amounts are per-currency and never sum across currencies).
+
+### `consent status|grant|revoke --json` (0.4.0)
+
+Consent is a separate, revocable record for model egress (`$ADVISERS_HOME/consent.json`,
+0600); accepting the TOS is **not** model-egress consent.
+
+- `consent status` → `{ok, command:"consent status", path, configured, entries:[entry]}` where
+  `entry = {surface,dataClass,provider,baseUrl?,grantedAt,channel,revokedAt,active}`.
+- `consent grant <surface> [--data-class mail|kb] [--provider] [--base-url]` →
+  `{ok, command:"consent grant", version, entry, record, auditWritten}`.
+  TTY requires an explicit confirmation; non-interactive requires `--yes`;
+  grant/revoke/use are audited (no message bodies or quotes).
+- `consent revoke <surface>` → `{ok, command:"consent revoke", revoked, entries, record, auditWritten}`
+  (`revoked` is the count of revoked entries; rows are kept with `revokedAt`).
+
+Provider/base-url changes invalidate a prior grant; `mail extract --model` refuses
+without a matching active grant (`E_POLICY_CONSENT_REQUIRED`).
+
+### `privacy --matrix --json` (0.4.0)
+
+```json
+{
+  "ok": true, "command": "privacy --matrix",
+  "policyVersion": 1, "rulesetVersion": "2026.11.4", "generatedAt": "...",
+  "rows": [{"surface": "mail.extract", "description": "...", "actions": ["read", "model-egress"],
+    "dataClass": "mail", "sink": "model", "default": "off",
+    "gate": "enforced-policy", "tosRef": "docs/TOS.md#9.3", "doc": "docs/ARCHITECTURE.md"}]
+}
+```
+
+`privacy` keeps its existing `--json` facts; `--matrix` is additive. The matrix is
+generated from the policy surface registry, and each row's `gate` is honest:
+`enforced-policy`, `legacy-gate`, `self-attested` or `not-wired`. Do not read it as a
+claim that every surface is fully policy-enforced (see [ARCHITECTURE.md](ARCHITECTURE.md) §9).
+
+### `client export --pack --json` and the client status pack v2 (0.4.0)
+
+`advisers client export <id> --pack [--out <dir>] [--force] [--json]` writes a directory pack
+(`manifest.json`, `status.md`, `status.json`, `README.txt`, `SHA256SUMS`; 0700 dir /
+0600 files, all files covered by coreutils-format sums). Without `dir` it defaults
+under `$ADVISERS_HOME/exports/client-<id>-<timestamp>/`; a non-empty target is
+refused unless `--force` is used (the old tree is moved aside, never deleted
+silently). The pack contains **no receivable/payment amounts** in 0.4.0
+(`--include-receivables` is reserved for 0.4.1 after legal sign-off and fails closed).
+
+```json
+{
+  "ok": true, "command": "client export --pack",
+  "format": "advisers-client-status-pack", "version": 1, "scope": "client",
+  "subject": {"kind": "client", "id": "cl_...", "name": "王工"},
+  "out": "/path/to/pack", "replaced": null, "generatedAt": "...",
+  "counts": {"...": 0}, "bytes": 12000, "fileCount": 4, "checksumCount": 5,
+  "manifestDigest": "<sha256>", "verificationBasis": "local-checksums-only",
+  "verification": {"ok": true, "errors": [], "warnings": [], "fileCount": 4, "checksumCount": 5},
+  "clearance": 0, "protectedExcluded": 0, "disclaimer": true
+}
+```
+
+`advisers evidence verify <dir>` dispatches on `manifest.format`: a client status pack
+uses the independent client-pack verifier (same envelope, plus `format`, `version`,
+`verificationBasis`, `totalBytes`, `limitViolation`), a delivery-receipt pack uses the
+receipt verifier, and an evidence pack keeps the existing evidence verifier. Offline
+verification proves internal consistency + SHA-256 only; it is not a signature or a
+third-party attestation (`verificationBasis: "local-checksums-only"`).
+
+### 0.4.0 additive fields on existing read models
+
+- `agenda --json`: commitment items (including `overdue[]`, `days[].items`,
+  `waiting[]`, `unscheduled[]`) gain an optional `urgency`; calendar items never do.
+  `urgency = {id,modelVersion:1,score,level,terms:[{id,contribution,explain}],topFactors[],whyNow,dueAt,excluded,degraded}`.
+  It is derived at read time and is **not** part of `dataSha256`.
+- `morning --json`: adds `top:[{id,kind,title,localTime?,urgency,whyNow,source:"today"|"overdue"}]`
+  (≤3 by default, `--top 1..5`), `urgencyModelVersion:1`, and `archive:{path,latestPath,keep,bytes,removed[],failed[]}`
+  when `--archive` was used. `counts` and `dataSha256` are unchanged, and the full
+  `mustDo` list keeps its 0.3.2 meaning.
+- `remind --json`: keeps `now`/`reminders` and adds `ok:true`, `command:"remind"`,
+  `timezone:"Asia/Shanghai"` and an optional per-reminder `urgency`. `--now ISO`
+  fixes both the planning instant and the echoed `now`. `--json` is a pure read and
+  never delivers notifications.
+- `evidence show --json`: additive `resolution`, `quoteVerified`, `notChecked[]`,
+  `summary.notCheckedCount` and (for facts) `kbSources[]`. The four resolutions are
+  `verified|missing|unverifiable|not_checked`; manual operator evidence stays
+  `unverifiable(operator_entered)`, and purged mail bodies are
+  `unverifiable(source_not_retained)`, never `missing`.
+- `deliveries --pack`: the evidence-pack manifest moves to **v2** (additive
+  `byKind{observed,derived,inferred,manual}`, `notCheckedCount`,
+  `verificationBasis:"build-time"`, typed source rows with `kind/type/resolution`).
+  The verifier accepts v1 and v2 packs; `deliveries --receipt` keeps its separate
+  delivery-receipt manifest v2 (subject/scope/lineage) from 0.3.2.
+- `status --json`: additive 0.4.0 counts `receivables` and `payments` (row counts,
+  never amounts); existing v1 keys keep their meaning. Treat any further new key as
+  additive.
 
 ## Exit codes
 

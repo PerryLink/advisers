@@ -2,7 +2,7 @@ import assert from 'node:assert/strict'
 import { execFileSync, spawnSync } from 'node:child_process'
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, utimesSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
-import { join } from 'node:path'
+import { basename, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import test from 'node:test'
 import { SqliteStore } from '../lib/sqlite.js'
@@ -106,7 +106,7 @@ test('selectSnapshot uses createdAt, not mtime, and warns when the sync tool rew
     utimesSync(older.file, future, future)
     utimesSync(newer.file, past, past)
     const selected = selectSnapshot({ dir, passphrase: PASSPHRASE })
-    assert.equal(selected.chosen.name, newer.file.split('/').pop(), 'content-newest snapshot must win over mtime')
+    assert.equal(selected.chosen.name, basename(newer.file), 'content-newest snapshot must win over mtime')
     assert.ok(selected.warnings.some((warning) => /mtimes disagree/.test(warning)), 'the mtime/createdAt disagreement is not silent')
   } finally { rmSync(root, { recursive: true, force: true }) }
 })
@@ -184,7 +184,7 @@ test('force still selects the content-newest snapshot when a stale mtime points 
     const localDb = join(homeB, 'state.db')
     seedDatabase(localDb, ['本机数据'])
     const result = pullSnapshot({ dir, dbPath: localDb, passphrase: PASSPHRASE, force: true })
-    assert.equal(result.file, newer.file.split('/').pop())
+    assert.equal(result.file, basename(newer.file))
     assert.equal(result.status, 'forced')
     assert.equal(rowCount(localDb), 2, 'the content-newest snapshot (2 rows) was installed, not the mtime-newest (1 row)')
   } finally { rmSync(root, { recursive: true, force: true }) }
@@ -205,7 +205,7 @@ test('a non-newest --file selection is warned about instead of pretending it is 
     mkdirSync(homeB, { recursive: true })
     const localDb = join(homeB, 'state.db')
     seedDatabase(localDb, ['本机'])
-    const result = pullSnapshot({ dir, dbPath: localDb, passphrase: PASSPHRASE, file: older.file.split('/').pop(), force: true })
+    const result = pullSnapshot({ dir, dbPath: localDb, passphrase: PASSPHRASE, file: basename(older.file), force: true })
     assert.equal(result.explicit, true)
     assert.ok(result.warnings.some((warning) => /--file selected .*newer createdAt/.test(warning)), '--force must not make an older --file selection look newest')
     assert.equal(rowCount(localDb), 1)
@@ -258,7 +258,7 @@ test('an unreadable snapshot makes the newest undecidable: pull requires --file,
       () => pullSnapshot({ dir, dbPath: localDb, passphrase: PASSPHRASE, file: 'advisers-dead-device-20260101T000000Z.enc.json', force: true }),
       /cannot be used/,
     )
-    const explicit = pullSnapshot({ dir, dbPath: localDb, passphrase: PASSPHRASE, file: good.file.split('/').pop() })
+    const explicit = pullSnapshot({ dir, dbPath: localDb, passphrase: PASSPHRASE, file: basename(good.file) })
     assert.equal(explicit.changed, true)
     assert.equal(rowCount(localDb), 1)
   } finally { rmSync(root, { recursive: true, force: true }) }

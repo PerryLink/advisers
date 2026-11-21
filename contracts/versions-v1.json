@@ -103,6 +103,21 @@
       "compat": "protocol negotiation",
       "consumer": "MCP clients"
     },
+    "mcpModern": {
+      "version": 2,
+      "status": "frozen",
+      "files": [
+        "mcp/versions-v2.json",
+        "mcp/responses-v2.schema.json"
+      ],
+      "vectors": "vectors/mcp/modern.vectors.json",
+      "supported": [
+        "2026-07-28"
+      ],
+      "compat": "additive",
+      "note": "0.4.0 dual-era MCP: the legacy negotiation matrix in mcp/versions-v1.json is unchanged, and this artifact adds the stateless modern 2026-07-28 era (server/discover, per-request _meta, resultType/ttlMs/cacheScope envelopes, modern error mapping). Additive, not in discovery.expected: status.contracts keeps mcpProtocol 2024-11-05 so 0.3.2 status consumers stay byte-compatible; modern clients discover the era through the MCP server/discover method instead. Conformance: responses-v2.schema.json covers the modern envelope only and the payload is validated against the frozen responses-v1.schema.json $defs.",
+      "consumer": "MCP clients (modern 2026-07-28 era)"
+    },
     "dshTools": {
       "version": 2,
       "status": "additive",

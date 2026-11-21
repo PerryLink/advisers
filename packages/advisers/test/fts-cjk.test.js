@@ -95,13 +95,13 @@ function triggerNames(db) {
   return db.prepare("SELECT name FROM sqlite_master WHERE type = 'trigger' AND name IN ('turns_ai','turns_ad','turns_au','summaries_ai','summaries_ad','summaries_au') ORDER BY name").all().map((row) => row.name)
 }
 
-test('fresh v21 databases install the v19 trigram FTS5 indexes', () => {
+test('fresh v22 databases install the v19 trigram FTS5 indexes', () => {
   const { root, db } = setup()
   try {
     const store = new SqliteStore(db)
     try {
-      assert.equal(SCHEMA_VERSION, 21)
-      assert.equal(store.getMeta('schema_version'), '21')
+      assert.equal(SCHEMA_VERSION, 22)
+      assert.equal(store.getMeta('schema_version'), '22')
       assert.equal(store.ftsTokenizer, 'trigram', 'trigram tokenizer is the default')
       assert.equal(store.ftsWarning, null)
       const ddl = (name) => store.db.prepare('SELECT sql FROM sqlite_master WHERE name = ?').get(name)?.sql ?? ''
@@ -373,7 +373,7 @@ test('reopening a migrated (and a fresh) database is idempotent', () => {
     // No migration means no new backup: the second open was a plain reopen.
     assert.equal(readdirSync(root).filter((name) => name.includes('before-migrate')).length, backupsAfterFirstOpen)
 
-    // A fresh v21 database reopens idempotently too: no migration, no backup,
+    // A fresh database reopens idempotently too: no migration, no backup,
     // one FTS table per source, six triggers, same search result.
     const fresh = setup()
     try {
@@ -439,7 +439,7 @@ test('future schema versions are still refused', () => {
     const store = new SqliteStore(db)
     store.close()
     const raw = new DatabaseSync(db)
-    raw.prepare("INSERT OR REPLACE INTO meta(key,value) VALUES('schema_version','22')").run()
+    raw.prepare("INSERT OR REPLACE INTO meta(key,value) VALUES('schema_version','23')").run()
     raw.close()
     assert.throws(() => new SqliteStore(db), /newer than this CLI/)
   } finally {
