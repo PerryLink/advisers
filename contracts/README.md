@@ -26,7 +26,7 @@ executable software: scripts and the CLI validate against it, and the checker
 | Artifact | Version | What it freezes |
 |---|---|---|
 | `versions-v1.json` | 1 | Manifest: every contract version + the expected `status.contracts` discovery payload. |
-| `cli/read-models-v1.schema.json` | 1 | JSON Schema `$defs` for the deterministic `--json` read payloads. The frozen 0.2.x/0.3.x set (status/today/commit/who/deliveries/agenda/morning/matter/evidence/privacy/tos/tick/remind) is extended by 0.4.0/0.4.1 **documented-additive** defs for kb/mail/money/consent/search/pack and the 0.4.1 review-link/delivery flags; see `x-documented-additive`. |
+| `cli/read-models-v1.schema.json` | 1 | JSON Schema `$defs` for the deterministic `--json` read payloads. The frozen 0.2.x/0.3.x set (status/today/commit/who/deliveries/agenda/morning/matter/evidence/privacy/tos/tick/remind) is extended by 0.4.0/0.4.1 **documented-additive** defs for kb/mail/money/consent/search/pack and the 0.4.1 review-link/delivery flags; 0.4.2 adds no contract entries (its new commands are documented additively in `docs/CLI-JSON.md`); see `x-documented-additive`. |
 | `cli/commands-v1.json` | 1 | command -> argv -> schema `$ref` map with determinism/needsKey/needsTos metadata and the fixture used by the checker. |
 | `cli/errors-v1.schema.json` | 1 | The stderr error envelope `{"error":{"code","message","hint?","details?"}}`. |
 | `cli/status-v1.json` | 1 | `advisers status --json` contract + the additive `contracts` discovery field rules. |

@@ -84,7 +84,7 @@ Labels and candidates are matched per message, one-to-one, by action. Then:
 
 ### Gated thresholds (release gate)
 
-| metric | threshold | baseline 2026-11-22 (0.4.1) |
+| metric | threshold | baseline 2026-11-22 (0.4.2) |
 | --- | --- | --- |
 | `precision` | >= 0.90 | 0.9524 (20/21) |
 | `recall` | >= 0.85 | 0.9524 (20/21) |

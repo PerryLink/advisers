@@ -11,10 +11,12 @@ from `refs/tags/v0.3.1`. Never repeat the 0.3.0 order.
 push, CI green, annotated `v0.4.0` tag, tag-ref dispatch, then the post-publish
 `verify-release` check and the Windows portable ZIP — and is the reference release
 for the 0.4 line (see §13). **0.4.1 (published 2026-11-21)** is the same-day
-follow-up patch and follows the identical order; its §13 record starts with
-placeholders for the tag object, publish run and `verify-release` count and is
-filled in once the publish completes. One runbook detail is easy to get wrong: the
-portable ZIP is assembled **after** the npm publish from the published tarballs, because
+follow-up patch and followed the identical order; its §13 record is complete.
+**0.4.2 (published 2026-11-22)** is the patch-release follow-up and follows the same
+order; its §13 record starts with `TBD` placeholders for the tag object, publish run,
+verification and asset hashes, filled in once the publish completes. One runbook
+detail is easy to get wrong: the portable ZIP is assembled **after** the npm publish
+from the published tarballs, because
 `pack-portable.mjs` installs `advisers@<version>` and `advisers-office@<version>`
 from the registry.
 
@@ -364,6 +366,38 @@ body or a log. CI publishing uses GitHub OIDC only.
 
 A short factual record per release; keep it terse and do not turn it into a
 changelog copy.
+
+### 0.4.2 (2026-11-22)
+
+- **Published:** npm `latest` = 0.4.2, `next` = 0.4.2; all eight workspace packages
+  lockstep at 0.4.2 (six published). Tag: `v0.4.2`, annotated object `TBD` (fill after
+  tag creation) -> commit `TBD` (fill after tagging); published from `refs/tags/v0.4.2`
+  (publish run `TBD`, fill after dispatch).
+- **Release shape:** patch on 0.4.1 — manual `fact add` (required evidence quote,
+  idempotent dedupe, one-transaction supersede/KB-link/audit), the read-only IMAP probe
+  (`mail account test`), the explicit foreground `mail sync --watch`, the `sync pull
+  --dry-run` preview, the backup-age hint in `doctor --check-db`, the subcommand
+  `--help` consistency pass, the local mail-extraction gold gate (`pnpm eval:mail-local`,
+  30 synthetic fixtures, wired into Linux CI) and the audit-driven documentation
+  corrections. No schema migration, no new runtime dependency, no frozen-contract change
+  and unchanged legal texts (v2026.11.4).
+- **Contracts:** unchanged (90 checks PASS); the new commands are documented additively
+  in `docs/CLI-JSON.md`.
+- **Artifacts:** CycloneDX SBOM and `SHA256SUMS` attached to the GitHub Release; the
+  Windows portable ZIP `advisers-0.4.2-win-x64.zip` is assembled after the npm publish
+  from the published tarballs (offline channel; verify its hash and attestation, it is
+  not npm-provenance-covered). Hashes: portable ZIP `TBD` and size `TBD`; SBOM asset
+  `TBD`; `SHA256SUMS-0.4.2.txt` asset `TBD`; `SHA256SUMS-0.4.2-portable.txt` asset `TBD`.
+- **Verification:** `verify-release --version 0.4.2 --tag latest --sbom
+  artifacts/sbom.cdx.json --require-sbom` -> `TBD` checks PASS (fill after publish); CI
+  on the release commit `TBD` (fill after push; Linux Node 22.16/24, `windows-smoke` and
+  blocking `windows-full`). Local pre-tag evidence on the follow-up tree `0c9de72`:
+  `check-docs`/`check-release`/`check-licenses` pass, `check-contracts` 90 checks PASS,
+  `pnpm eval:det` 30 cases / 277 checks PASS and `pnpm eval:mail-local` PASS (precision
+  95.2%, recall 95.2%, due 89.5%, author 100%).
+- **Release notes / assets:** <https://github.com/PerryLink/advisers/releases/tag/v0.4.2>
+  (created `TBD` with the SBOM, six-tarball `SHA256SUMS`, portable ZIP and its
+  checksums). The `TBD` placeholders are filled by the release operator after the publish.
 
 ### 0.4.1 (2026-11-21)
 

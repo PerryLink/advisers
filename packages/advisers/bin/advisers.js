@@ -7283,7 +7283,7 @@ const MAIL_USAGE = [
   'usage: advisers mail account add --name n --host h [--port 993] [--tls tls|starttls] --user u [--pass-stdin]',
   '                                [--mailbox INBOX] [--retention-days 30] [--client id] [--matter id] [--json]',
   '       advisers mail account ls|show <account>|rm <account> [--json]',
-  '       advisers mail account test <account> [--mailbox INBOX] [--timeout 30s] [--json]  (read-only IMAP probe)',
+  '       advisers mail account test <account> [--mailbox INBOX] [--timeout 1..120] [--json]  (read-only IMAP probe)',
   '       advisers mail sync [<account>] [--full] [--dry-run] [--since-days 30] [--limit 50] [--mailbox INBOX] [--json]',
   '       advisers mail ls [--account a] [--client id] [--status s] [--since 30d] [--limit n] [--json]',
   '       advisers mail show <id> [--body] [--json]',

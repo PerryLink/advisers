@@ -1,11 +1,12 @@
 # Deterministic eval suite (`pnpm eval:det`)
 
 > Status: introduced in the 0.3.0 line (published 2026-11-20); this tree is
-> `advisers@0.4.1` (the 0.4.0 feature release plus its same-day follow-up patch). The
-> published 0.4.0 adds one deterministic case — `det.mcp.modern-dual-era` (MCP
+> `advisers@0.4.2` (the 0.4.0 feature release plus the 0.4.1/0.4.2 follow-up patches).
+> The published 0.4.0 adds one deterministic case — `det.mcp.modern-dual-era` (MCP
 > `2026-07-28` modern envelopes behind the legacy surface); 0.4.1 adds the `kb`, `mail`
 > and `policy` groups (10 cases / 95 checks), for 30 cases / 277 checks in the default
-> run. The suite is a release gate for the deterministic contract, not a claim about
+> run; 0.4.2 adds the separate local mail-extraction gold gate (30 synthetic fixtures,
+> not counted in the eval:det cases). The suite is a release gate for the deterministic contract, not a claim about
 > model quality; the remaining KB/mail/policy/consent/receivable behaviour is also
 > covered by deterministic package tests.
 
@@ -63,7 +64,7 @@ removes `ADVISERS_API_KEY`, `DEEPSEEK_API_KEY`, `OPENAI_API_KEY`,
 `ADVISERS_MODEL` and `ADVISERS_BASE_URL` from every child environment and sets
 `ADVISERS_NO_MODEL=1`.
 
-## 0.4.0/0.4.1 coverage
+## 0.4.0/0.4.1/0.4.2 coverage
 
 The published 0.4.0 adds `det.mcp.modern-dual-era` in the `mcp` group (MCP
 `2026-07-28` dual-era: `server/discover`, per-request `_meta`, result envelopes,

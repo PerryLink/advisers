@@ -5,12 +5,12 @@
 ## 安装
 
 ```sh
-# 0.4.1 已于 2026-11-21 发布；npm @latest 现为 0.4.1（稳定渠道 = 默认 `latest`）：
+# 0.4.2 已于 2026-11-22 发布；npm @latest 现为 0.4.2（稳定渠道 = 默认 `latest`）：
 #   npm i -g --registry=https://registry.npmjs.org advisers@latest advisers-office@latest
 # 从 checkout 运行：
 #   corepack pnpm install && corepack pnpm -r build
 #   ADVISERS_OFFICE_LOCAL=1 node packages/advisers/bin/advisers.js status
-# `next` 渠道也指向 0.4.1：
+# `next` 渠道也指向 0.4.2：
 #   npm i -g --registry=https://registry.npmjs.org advisers@next advisers-office@next
 advisers soul init
 advisers brief "做一份 Q4 预算 Excel，周五前给老板"
@@ -36,7 +36,7 @@ CLI 是**本地秘书运行时**：一个 REPL、用户账/承诺账/流程账�
 
 ## 状态
 
-`0.4.1` 已于 2026-11-21 发布（npm `latest` = `0.4.1`；`next` 也为 `0.4.1`）。0.4.1 是 0.4.0 功能发布之上的当日补丁：接线 KB/邮件审查链接（`kb link/unlink`、`mail link/dismiss`），为 `remind --deliver --notify` 增加运行时安静时段 + 按本地日去重 + `--force-notify`，新增 `kb`/`mail`/`policy` 三组确定性评测（30 cases / 277 checks）与 38 个 documented-additive CLI 命令。0.4.0 的功能面不变：本地知识库（schema v22）、TLS-only IMAP 邮件入口、交互式壳、可解释的主动式晨报、Policy/Evidence 2.0 子集、回款/对账与客户状态包 v2、MCP modern dual-era、Windows CI 与便携 ZIP，以及 v2026.11.4 法务修订。所有新命令都不需要模型调用，也没有后台常驻进程，`mail sync` 是唯一新增的显式网络路径（TLS-only、只读、用户主动触发）。**schema v22 是单向迁移**：升级前 CLI 会写 `state.db.before-migrate-v*` 备份，0.3.2 打开 v22 数据库会报 `E_SCHEMA_NEWER`，降级需要恢复该备份。`0.4.0`/`0.3.2`/`0.3.1`/`0.3.0` 仍可按版本号安装但已被取代。运行时基线仍是「可信交付」feature line：所有出网面逐 item secrecy clearance、本地审计尾锚、备份轮换/可验证恢复与 `doctor --repair`、200k 读路径、MCP 输出上限 + legacy 协议协商、DSH 只读账本门面、机器可读契约、无 key 的确定性评测套件与 SBOM 门禁。`0.4.1` tarball 由 GitHub Actions OIDC/Trusted Publishing 发布，带 SLSA provenance；可用 `scripts/verify-release.mjs --version 0.4.1 --tag latest --sbom artifacts/sbom.cdx.json --require-sbom` 校验（SBOM 由 `pnpm run sbom` 生成）。Release notes：<https://github.com/PerryLink/advisers/releases/tag/v0.4.1>。模型化 `kb compile`/`kb ask`、embedding、完整 PolicyGrant/exit 4–6 与 DSH 写账本仍属后续版本；未交付清单见仓库 CHANGELOG。
+`0.4.2` 已于 2026-11-22 发布（npm `latest` = `0.4.2`；`next` 也为 `0.4.2`）。0.4.2 是 0.4.1 之上的补丁：新增手工事实录入（`fact add`，`--quote` 必填、重复幂等，事实 + supersede 链 + KB 链接 + 一条 `fact.add` 审计同事务提交）、只读 IMAP 探测（`mail account test`）、显式前台 `mail sync --watch`、`sync pull --dry-run` 预览、`doctor --check-db` 的备份年龄提示、子命令 `--help` 一致性（TOS 接受前即可用），以及零模型/零网络的 `pnpm eval:mail-local` 质量门（30 个合成 fixture，已接入 Linux CI），并按审计结论纠偏文档。0.4.0 的功能面不变：本地知识库（schema v22）、TLS-only IMAP 邮件入口、交互式壳、可解释的主动式晨报、Policy/Evidence 2.0 子集、回款/对账与客户状态包 v2、MCP modern dual-era、Windows CI 与便携 ZIP，以及 v2026.11.4 法务修订。所有新命令都不需要模型调用，也没有后台常驻进程，`mail sync` 是唯一新增的显式网络路径（TLS-only、只读、用户主动触发）。**schema v22 是单向迁移**：升级前 CLI 会写 `state.db.before-migrate-v*` 备份，0.3.2 打开 v22 数据库会报 `E_SCHEMA_NEWER`，降级需要恢复该备份。`0.4.1`/`0.4.0`/`0.3.2`/`0.3.1`/`0.3.0` 仍可按版本号安装但已被取代。运行时基线仍是「可信交付」feature line：所有出网面逐 item secrecy clearance、本地审计尾锚、备份轮换/可验证恢复与 `doctor --repair`、200k 读路径、MCP 输出上限 + legacy 协议协商、DSH 只读账本门面、机器可读契约、无 key 的确定性评测套件与 SBOM 门禁。`0.4.2` tarball 由 GitHub Actions OIDC/Trusted Publishing 发布，带 SLSA provenance；可用 `scripts/verify-release.mjs --version 0.4.2 --tag latest --sbom artifacts/sbom.cdx.json --require-sbom` 校验（SBOM 由 `pnpm run sbom` 生成）。Release notes：<https://github.com/PerryLink/advisers/releases/tag/v0.4.2>。模型化 `kb compile`/`kb ask`、embedding、完整 PolicyGrant/exit 4–6 与 DSH 写账本仍属后续版本；未交付清单见仓库 CHANGELOG。
 
 - SQLite 账本 `~/.advisers/state.db`（JSON fallback；schema v22 —— 0.4.0 一次迁移加入 KB/邮件/回款对象、无锁只读快照、增量写）；
 - soul 位于 `~/.advisers/soul.md`，人类独占；

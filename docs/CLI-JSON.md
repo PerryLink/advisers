@@ -5,12 +5,14 @@ parsing human text. JSON mode never mixes human prose into stdout; diagnostics g
 stderr and `--json` must not require a TTY. Shapes are additive: new optional keys may
 appear, existing keys keep their meaning.
 
-> Status: **0.4.1 (schema v22)**. Every 0.4.0/0.4.1 change in this document is additive
+> Status: **0.4.2 (schema v22)**. Every 0.4.x change in this document is additive
 > inside the v1 contract: new commands, new optional fields and new `--scope` values.
 > Existing commands, keys, ordering and exit codes are unchanged, so a 0.3.2 consumer
 > keeps working without modification. The 0.4.0-only additions are marked
-> **(0.4.0)**; 0.4.1 follow-ups (KB/mail review links, reminder delivery policy) are
-> called out inline; anything not marked is 0.3.2/earlier behaviour.
+> **(0.4.0)**; the 0.4.1 follow-ups (KB/mail review links, reminder delivery policy) and
+> the 0.4.2 follow-ups (manual fact entry, mail probe/watch, `sync pull --dry-run`, the
+> backup-age hint and subcommand `--help`) are called out inline; anything not marked is
+> 0.3.2/earlier behaviour.
 
 ## Current JSON surfaces (2026-11; 0.2.3 additions marked)
 
@@ -482,7 +484,7 @@ Read-only fact views over the existing facts table (no migration). A fact row is
 `validFrom?,validTo?,expiredAt?,supersedes?,supersededBy?,shadowedBy?,lastSeenAt?,`
 `deletedAt?,deletedReason?,evidence[],fallback:{validFromFromRecordedAt}}`.
 
-- `fact add <subject> <predicate> <object> --quote "evidence"` (main after 0.4.1) →
+- `fact add <subject> <predicate> <object> --quote "evidence"` (0.4.2) →
   `{ok, command:"fact add", fact, deduped, audit}`. This is the manual write side of
   the facts table: `authority="user"`, `status="confirmed"`, `confidence=1`,
   `evidence:[{quote, source?}]`; repeat entry of the same active identity returns
@@ -510,7 +512,7 @@ password is read from a TTY prompt or `--pass-stdin` (`--pass` is refused).
 - `mail account ls` → `{ok, command:"mail account ls", accounts:[{...,hasCredential}], total}`.
 - `mail account show <ref>` → `{ok, command:"mail account show", account:{...,hasCredential}}`.
 - `mail account rm <ref>` → `{ok, command:"mail account rm", accountId, removed:true, credentialRemoved, messagesDeleted}`.
-- `mail account test <ref>` (main after 0.4.1) → `{ok, command:"mail account test", accountId, host, port, tls, mailbox, latencyMs, uidValidity, messages, capabilities:{count,list,flags:{starttls,uidplus,idle,move},auth}}`.
+- `mail account test <ref>` (0.4.2) → `{ok, command:"mail account test", accountId, host, port, tls, mailbox, latencyMs, uidValidity, messages, capabilities:{count,list,flags:{starttls,uidplus,idle,move},auth}}`.
   Read-only probe: TLS/STARTTLS + LOGIN + CAPABILITY + EXAMINE, then LOGOUT; it never
   fetches bodies, writes no mail rows and uses the existing 30s bound. The built-in
   local `.eml` account has no server and fails with `E_MAIL_CONFIG` without network.
@@ -520,7 +522,7 @@ password is read from a TTY prompt or `--pass-stdin` (`--pass` is refused).
 ### `mail sync|ls|show|extract|import|purge --json` (0.4.0)
 
 - `mail sync [account]` → `{ok, command:"mail sync", accountId, mailbox, uidValidity?, fetched, inserted, skipped, failed, duplicates, needsResync, dryRun, full, durationMs}`; multiple accounts return `{ok, command:"mail sync", results:[...]}`.
-  `--watch [--interval 300s] [--max-runs n]` (main after 0.4.1) keeps the foreground
+  `--watch [--interval 300s] [--max-runs n]` (0.4.2) keeps the foreground
   command alive: each round opens the ledger, syncs and closes it again (so an idle
   watch does not hold the writer lock), a failed round backs off from 5s up to 5min,
   Ctrl+C stops after the in-flight round. `--json` prints the final
@@ -547,7 +549,7 @@ password is read from a TTY prompt or `--pass-stdin` (`--pass` is refused).
   Default retention is 30 days per account; metadata/`bodySha256` stay and messages
   with pending candidates are skipped.
 
-### `sync pull --dry-run` (main after 0.4.1)
+### `sync pull --dry-run` (0.4.2)
 
 `advisers sync pull --dir <dir> --dry-run [--file name] [--force] [--json]` runs the
 same snapshot selection/decryption/SHA-256/local-state checks as a real pull and

@@ -12,10 +12,11 @@ SQLite/FTS persistence lives in the `advisers` distribution; this package has no
 
 ## Status
 
-`0.4.1` was published on 2026-11-21 (npm `latest` = `0.4.1`; `next` is also `0.4.1`).
-0.4.1 is the current release (lockstep version): a same-day follow-up patch on the 0.4.0
-feature release whose additions (KB/mail review links, reminder delivery policy, the
-deterministic kb/mail/policy eval groups) live in `advisers`. This package's public surface
+`0.4.2` was published on 2026-11-22 (npm `latest` = `0.4.2`; `next` is also `0.4.2`).
+0.4.2 is the current release (lockstep version): a patch on the 0.4.1 same-day follow-up
+whose additions (manual fact entry, the read-only IMAP probe, foreground mail watch, the
+sync pull preview, the backup-age hint, help consistency and the local mail gold gate) live
+in `advisers`. This package's public surface
 is unchanged from 0.3.2 — the 0.4 work (knowledge base, mail entry, interactive shell,
 receivables, policy/evidence subset) lives in `advisers` and `dsh-advisers`. 0.3.1 was a
 release-metadata patch for 0.3.0, and the 0.2.4 candidate superseded by the 0.3.0 line was

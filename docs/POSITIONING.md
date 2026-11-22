@@ -18,8 +18,9 @@ an auditable commitment ledger, deterministic Office deliverables and reminders 
 not an always-on assistant. Three things a "secretary" may imply are explicit
 non-goals and product decisions: always-on recording/meeting transcription, a
 mobile app or companion push service, and automatic sending/rescheduling. They are
-not missing features and not roadmap promises. Likewise, 0.4.1 has no background
-daemon and no inbox watch; mail is read-only IMAP (no OAuth, no SMTP send), and IM
+not missing features and not roadmap promises. Likewise, 0.4.2 has no background
+daemon and no inbox IDLE watch; `mail sync --watch` is an explicit foreground poll you
+start and stop, mail is read-only IMAP (no OAuth, no SMTP send), and IM
 reachability requires an externally installed Hermes bridge. The verified boundary
 (what is implemented vs what is not) is recorded in
 [AUDIT-2026-11-22.md](AUDIT-2026-11-22.md); keep the README tagline as a

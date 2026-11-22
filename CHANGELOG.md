@@ -1,5 +1,131 @@
 # Changelog
 
+## 0.4.2 (2026-11-22)
+
+Patch release on the 0.4.1 tree. **No schema migration, no new runtime
+dependency and no change to a frozen contract**: the ledger stays schema v22,
+the packaged and public legal texts stay **v2026.11.4 (2026-11-21)**, and the
+published 0.4.0/0.4.1 CLI JSON, MCP and DSH shapes keep their meaning. 0.4.2
+carries the mainline follow-up work that landed after the `v0.4.1` tag — manual
+fact entry, the read-only IMAP probe, the foreground mail watch, the sync-pull
+preview, the backup-age hint in `doctor --check-db`, the subcommand `--help`
+consistency pass, the local mail-extraction quality gate and the audit-driven
+documentation corrections — plus the documentation restated for this tarball.
+
+Status: **published 2026-11-22.** npm `latest` = `0.4.2`, and `next` also points
+at `0.4.2` after this release advanced it. The eight workspace packages are
+lockstep at `0.4.2`: the six published packages (`advisers`, `advisers-core`,
+`advisers-office`, `advisers-policy-strict`, `advisers-bridge-hermes`,
+`dsh-advisers`) and the two private `advisers-link-*` packages held at the same
+version. The eight internal workspace pins, the three version constants and
+`pnpm-lock.yaml` follow; the six per-package `THIRD-PARTY-NOTICES.md` files were
+regenerated (version line only; the dependency closure is unchanged from 0.4.1).
+The six tarballs are published from GitHub Actions OIDC/Trusted Publishing with
+SLSA provenance naming the release tag ref; verify with
+`node scripts/verify-release.mjs --version 0.4.2 --tag latest --sbom artifacts/sbom.cdx.json --require-sbom`.
+Release notes, the CycloneDX SBOM and `SHA256SUMS` are attached to
+<https://github.com/PerryLink/advisers/releases/tag/v0.4.2>; the tag object,
+publish run, `verify-release` count and asset hashes are recorded in
+[docs/RELEASING.md](docs/RELEASING.md) §13 once the publish completes.
+
+### Manual fact entry (`fact add`)
+
+- `advisers fact add <subject> <predicate> <object> --quote "evidence"` is the
+  manual write side of the facts table: it records `authority="user"`,
+  `status="confirmed"`, `confidence=1` and an `evidence:[{quote, source?}]`
+  array, with optional `--matter`, `--valid-from`, `--source` and
+  `--supersedes`, and returns `{ok, command:"fact add", fact, deduped, audit}`.
+- `--doc` + `--relation source|mentions` maintains the explicit
+  `kb_fact_links` row in the same transaction (`--relation` defaults to
+  `source` when `--doc` is given). The fact, the supersede chain, the KB link
+  and one `fact.add` audit row commit atomically; any failure rolls the whole
+  entry back. Repeating the same active identity returns `deduped: true`
+  instead of a second fact, and a missing/empty `--quote` fails with `E_USAGE`
+  — no fact is accepted without evidence.
+
+### Mail: read-only probe and foreground watch
+
+- `advisers mail account test <ref> [--mailbox INBOX] [--timeout <seconds>] [--json]`
+  probes an existing account read-only: TLS/STARTTLS, LOGIN, CAPABILITY and
+  EXAMINE, then LOGOUT. It returns `{ok, command:"mail account test", accountId,
+  host, port, tls, mailbox, latencyMs, uidValidity, messages, capabilities}`,
+  never FETCHes a body, writes no mail rows and keeps the existing 30s bound.
+  The built-in local `.eml` account has no server and fails closed with
+  `E_MAIL_CONFIG` without network.
+- `advisers mail sync --watch [--interval 300s] [--max-runs n]` keeps the
+  explicit foreground command alive: each round opens the ledger, syncs and
+  closes it again (an idle watch holds no writer lock), a failed round backs
+  off from 5s up to 5min, and Ctrl+C/SIGTERM stops after the in-flight round
+  with exit code 130. `--interval` accepts 1s..24h and `--max-runs` bounds a
+  run. This is a foreground poll, not a daemon: no IDLE, no inbox listener and
+  nothing survives the process. `mail sync --help` and the other family
+  `--help` requests print their own usage before TOS acceptance.
+
+### Sync preview and `doctor` backup age
+
+- `advisers sync pull --dir <dir> --dry-run [--file name] [--force] [--json]`
+  runs the full pull decision path — snapshot selection, decryption, SHA-256
+  verification and local-state checks — but never swaps the database and
+  writes no backup, temp file or audit row. It returns
+  `wouldChange`/`wouldStatus`/`wouldBackup` plus the same warnings a real pull
+  would report; the non-dry-run behaviour is unchanged.
+- `advisers doctor --check-db` now appends the age of the newest managed backup
+  to the `db-backup` row (`age <n.n>d`) and hints at `advisers backup` when it
+  is older than seven days. The age is informational: a readable old backup
+  still passes.
+
+### Subcommand help and the local quality gate
+
+- Subcommand `--help` is a pure help request again: `kb add --help`,
+  `mail account add --help`, `client show --help`, `project show --help`,
+  `doctor --help`, `mail sync --help` and `sync --help` print their own usage
+  instead of failing with `E_USAGE`. `--help`/`-h` anywhere is now TOS-exempt,
+  so it also works on a fresh home before consent.
+- The CLI contracts are unchanged (90 checks): the new commands are documented
+  additively in [docs/CLI-JSON.md](docs/CLI-JSON.md) and do not alter the
+  frozen v1 entries.
+- `pnpm eval:mail-local` runs the new local mail-extraction gold set: 30
+  synthetic `.eml` fixtures (20 commitment-bearing, 10 negative) with 21 labelled
+  commitments. It gates candidate precision/recall/F1, due-date accuracy and author
+  accuracy, exits non-zero below threshold and is wired into the Linux CI test
+  job. Baseline: **precision 95.2%, recall 95.2%, due 89.5%, author 100%**. The
+  labels are author-written and the four known limitations are documented in
+  `eval/mail-local-gold/README.md`: this is a zero-model/zero-network
+  regression gate for the local rules, not an independent human gold set or a
+  general accuracy claim.
+
+### Audit-driven documentation corrections
+
+- README/README-zh and [docs/POSITIONING.md](docs/POSITIONING.md) restate the
+  local-workbench positioning and its non-goals (no resident recording, mobile
+  app or automatic sending); EVAL marks the `windows-full` job as blocking;
+  WINDOWS separates the Windows Server 2025 CI image from the Windows 11
+  real-machine record; KB/CLIENTS/REMINDERS add the verified boundaries; the
+  new [docs/AUDIT-2026-11-22.md](docs/AUDIT-2026-11-22.md) records the audit
+  summary and the unresolved gaps.
+- Current-version statements move to 0.4.2 across the READMEs and the status
+  headers (`ARCHITECTURE`, `QUICKSTART`, `PERFORMANCE`, `SECURITY`, `SBOM`,
+  `EVAL`, `CONTRACTS`, `WINDOWS`, `DELIVERY-RECEIPT`, `KB`, `CLI-JSON`,
+  `CLIENTS`, `MCP`, `POSITIONING`, `RELEASING`); the 0.4.1 and 0.4.0 sections
+  keep their historical record unchanged.
+
+Release gates on the 0.4.2 tree: `check-docs`, `check-release` and
+`check-licenses` pass after the version/docs bump. The 0.4.1 follow-up tree
+(commit `0c9de72`) had already recorded `check-contracts` at **90 checks**,
+`pnpm eval:det` at **30 cases / 277 checks**, `pnpm eval:mail-local` PASS (the
+baseline above), `check-tos --release`, the security/fault-injection suites and
+`pack-smoke` green, plus 55 targeted 0.4.2 tests in seven new test files; CI run
+`44975234220` was green on Linux (Node 22.16/24), `windows-smoke` and the
+blocking `windows-full` (Node 22.16/24). The post-publish `verify-release` run
+and its check count are recorded in [docs/RELEASING.md](docs/RELEASING.md) §13.
+
+Still not in 0.4.2: model-backed `kb compile`/`kb ask`, embeddings/vector
+search, model mail extraction, a full PolicyGrant with exit 4-6, DSH ledger
+writes, TUI history persistence, Pet Brief v3, Homebrew/winget/MSI packaging,
+OAuth/CalDAV/SMTP, a resident daemon or inbox IDLE watch, an independent human
+gold set and the external legal review — plus the Windows IME/Office/OneDrive/
+Terminal large-path items listed in [docs/WINDOWS.md](docs/WINDOWS.md) §8.
+
 ## 0.4.1 (2026-11-21)
 
 Same-day follow-up patch on the 0.4.0 feature release. **No schema migration, no

@@ -10,7 +10,7 @@ dimension: a **receivables/payments money sidecar** (§11), an offline-verifiabl
 **client status pack v2** (§9.2) and **mail-to-client hints** that are shown but
 never bound automatically (§12).
 
-- Status: **0.4.1, schema v22** (`SCHEMA_VERSION = 22`). The customer tables are
+- Status: **0.4.2, schema v22** (`SCHEMA_VERSION = 22`). The customer tables are
   still the three v21 tables (`clients`/`projects`/`client_notes`); v22 adds the
   money sidecar (`receivables`/`payments`) plus the KB/mail tables.
 - Store: SQLite only. The legacy `ADVISERS_STORE=json` store has no customer
