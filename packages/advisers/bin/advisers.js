@@ -10373,7 +10373,7 @@ async function capture(args) {
     // content safety gate still runs before any candidate is stored.
     const { inspectCaptureText } = await loadCapture()
     try { inspectCaptureText(text) } catch (error) {
-      if (asJson) console.error(JSON.stringify({ error: { code: error.code ?? 'E_CONTENT_BLOCKED', message: error.message } }))
+      if (asJson) console.error(JSON.stringify({ error: { code: error.code ?? 'E_CONTENT_SAFETY_BLOCKED', message: error.message } }))
       else console.error(error.message)
       process.exitCode = 1
       return
