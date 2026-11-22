@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict'
 import { spawnSync } from 'node:child_process'
-import { mkdirSync, mkdtempSync, readdirSync, rmSync, writeFileSync } from 'node:fs'
+import { cpSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { fileURLToPath } from 'node:url'
@@ -9,13 +9,10 @@ import test from 'node:test'
 const REPO_ROOT = fileURLToPath(new URL('../../../', import.meta.url))
 const RUNNER = join(REPO_ROOT, 'eval', 'run-mail-local-gold.mjs')
 const GOLD_DIR = join(REPO_ROOT, 'eval', 'mail-local-gold')
-const GATED_METRICS = ['precision', 'recall', 'f1', 'dueAccuracy', 'authorAccuracy']
-const KNOWN_LIMITATION_FILES = [
-  '09-en-relative-friday.eml',
-  '19-zh-implied-subject.eml',
-  '20-en-month-date.eml',
-  '30-neg-marketing-we.eml',
-]
+const GATED_DEV = ['precision', 'recall', 'f1', 'dueAccuracy', 'authorAccuracy', 'negativeFalsePositiveRate']
+const GATED_HELDOUT = ['precision', 'recall', 'f1', 'dueAccuracy', 'negativeFalsePositiveRate']
+const KNOWN_LIMITATION_FILES = ['09-en-relative-friday.eml', '19-zh-implied-subject.eml', '20-en-month-date.eml', '30-neg-marketing-we.eml']
+const SHA256_RE = /^[0-9a-f]{64}$/
 
 function sandbox() {
   const root = mkdtempSync(join(tmpdir(), 'advisers-mail-gold-test-'))
@@ -41,7 +38,7 @@ function runnerEnv(home) {
 }
 
 function runRunner(args, home) {
-  return spawnSync(process.execPath, [RUNNER, ...args], {
+  return spawnSync(process.execPath, [RUNNER, '--no-write', ...args], {
     cwd: REPO_ROOT,
     env: runnerEnv(home),
     encoding: 'utf8',
@@ -73,112 +70,146 @@ function writeFixture(dir, name, body, from, date) {
   writeFileSync(join(dir, name), content)
 }
 
-test('gold eval passes with the documented result shape and thresholds', () => {
+test('dev split: schema-v2 report, 90 fixtures, frozen corpus, all gates green', () => {
   const box = sandbox()
   try {
-    const run = runRunner(['--json'], box.home)
+    const run = runRunner(['--split', 'dev', '--json'], box.home)
     assert.equal(run.status, 0, run.stderr)
-    const result = parseStdout(run)
+    const report = parseStdout(run)
 
-    assert.equal(result.suite, 'mail-local-gold')
-    assert.equal(result.schema, 'advisers.mail-local-gold/v1')
-    assert.equal(result.mode, 'local-rules')
-    assert.equal(result.deterministic, true)
-    assert.equal(result.model.enabled, false)
-    assert.equal(result.model.calls, 0)
-    assert.equal(result.network.guarded, true)
-    assert.equal(result.network.attempts, 0)
-    assert.equal(result.passed, true)
-    assert.deepEqual(result.thresholdFailures, [])
-    assert.deepEqual(result.errors, [])
+    // Schema-v2 quality report contract shared with eval:det / model-contract.
+    assert.equal(report.schemaVersion, 2)
+    assert.equal(report.suite, 'mail-local-gold')
+    assert.equal(report.mode, 'local-gold')
+    assert.equal(report.corpus.id, 'mail-local-gold')
+    assert.equal(report.corpus.split, 'dev')
+    assert.match(report.corpus.sha256, SHA256_RE)
+    assert.equal(report.corpus.rows, 120)
+    assert.equal(report.fixtures.count, 90)
+    assert.match(report.fixtures.sha256, SHA256_RE)
+    assert.equal(report.network.guarded, true)
+    assert.equal(report.network.attempts, 0)
+    assert.deepEqual(report.failures, [])
+    assert.deepEqual(report.unknowns.filter((entry) => ['modelQuality', 'humanGold', 'liveModelQuality'].includes(entry.id)).map((entry) => entry.value), [null, null, null])
+    assert.equal(report.totals.failed, 0)
+    assert.equal(report.totals.checksFailed, 0)
 
-    // Gold-set size contract: 20-30 .eml fixtures, all labeled, none dangling.
-    assert.ok(result.gold.fixtures >= 20 && result.gold.fixtures <= 30, 'fixtures=' + result.gold.fixtures)
-    assert.equal(result.gold.fixtures, result.cases.length)
-    assert.ok(result.gold.expectedCandidates >= 1)
-    assert.ok(result.gold.positiveMessages >= 1)
-    assert.ok(result.gold.negativeMessages >= 1)
-    const onDisk = readdirSync(GOLD_DIR).filter((file) => file.endsWith('.eml')).sort()
-    assert.deepEqual(result.cases.map((row) => row.file).sort(), onDisk)
-    for (const row of result.cases) {
-      assert.ok(row.file.endsWith('.eml'), row.file)
-      assert.equal(typeof row.author, 'string')
-      assert.ok(row.author.length > 0, row.file + ' author')
-      assert.ok(Array.isArray(row.expected), row.file + ' expected')
-      assert.ok(Array.isArray(row.predicted), row.file + ' predicted')
-      assert.ok(Array.isArray(row.missing) && Array.isArray(row.extra), row.file + ' issues')
-      assert.equal(typeof row.matched, 'number')
-      assert.ok(Array.isArray(row.dueMismatches) && Array.isArray(row.authorMismatches) && Array.isArray(row.amountMismatches))
-    }
+    // Gold-set size contract: 90 dev fixtures, every case labeled, none dangling.
+    assert.equal(report.metrics.n, 90)
+    assert.equal(report.metrics.gold.fixtures, 90)
+    assert.ok(report.metrics.gold.positiveMessages >= 1)
+    assert.ok(report.metrics.gold.negativeMessages >= 1)
+    assert.equal(report.cases.length, 90)
+    assert.ok(report.cases.every((row) => row.split === 'dev'))
+    const onDisk = readdirSync(GOLD_DIR).filter((file) => file.endsWith('.eml'))
+    assert.equal(onDisk.length, 120)
+    const devFiles = onDisk.filter((file) => Number(file.slice(0, file.indexOf('-'))) <= 90)
+    assert.equal(devFiles.length, 90)
+    assert.deepEqual(report.cases.map((row) => row.file).sort(), devFiles.sort())
 
-    // Every gated metric is a number in [0, 1] that meets its own threshold.
-    for (const metric of GATED_METRICS) {
-      const value = result.metrics[metric]
-      assert.equal(typeof value, 'number', metric)
-      assert.ok(value >= 0 && value <= 1, metric + '=' + value)
-      assert.ok(value >= result.thresholds[metric], metric + ' failed its own threshold')
-    }
-    const precision = result.metrics.precision
-    const recall = result.metrics.recall
+    // Every gated metric passes and both metric families are present.
+    const gateIds = report.gates.map((entry) => entry.id)
+    for (const metric of GATED_DEV) assert.ok(gateIds.includes('mail.' + metric), metric)
+    assert.ok(gateIds.includes('mail.gold_valid'))
+    assert.ok(report.gates.every((entry) => entry.pass === true), JSON.stringify(report.gates))
+    const precision = report.metrics.precision
+    const recall = report.metrics.recall
     const expectedF1 = precision + recall > 0 ? (2 * precision * recall) / (precision + recall) : 0
-    assert.ok(Math.abs(result.metrics.f1 - expectedF1) < 0.0002, 'f1=' + result.metrics.f1 + ' expected=' + expectedF1)
-    assert.ok(result.metrics.dueAccuracy >= result.thresholds.dueAccuracy)
-    assert.ok(result.metrics.authorAccuracy >= result.thresholds.authorAccuracy)
+    assert.ok(Math.abs(report.metrics.f1 - expectedF1) < 0.001)
+    assert.ok(report.metrics.precision >= 0.9)
+    assert.ok(report.metrics.recall >= 0.85)
+    assert.ok(report.metrics.dueAccuracy >= 0.85)
+    assert.ok(report.metrics.authorAccuracy >= 0.9)
+    assert.ok(report.metrics.negativeFalsePositiveRate <= 0.1)
+    assert.ok(report.metrics.ci95.precision.high <= 1)
 
-    // Known limitations are labeled as such rather than hidden.
+    // Known limitations stay labeled as such rather than hidden.
     for (const file of KNOWN_LIMITATION_FILES) {
-      const row = result.cases.find((entry) => entry.file === file)
+      const row = report.cases.find((entry) => entry.file === file)
       assert.ok(row, 'missing known-limitation fixture ' + file)
       assert.match(row.note || '', /^Known/, file + ' must document its known limitation')
     }
 
-    // Zero side effects: the runner never writes ADVISERS_HOME / a database.
+    // Zero side effects: the runner never writes ADVISERS_HOME.
     assert.deepEqual(readdirSync(box.home), [])
-
-    const listed = runRunner(['--list'], box.home)
-    assert.equal(listed.status, 0, listed.stderr)
-    assert.equal(listed.stdout.trim().split('\n').length, result.gold.fixtures)
   } finally {
     box.cleanup()
   }
 })
 
-test('gold eval is deterministic across runs', () => {
+test('split metadata is valid and the held-out split is frozen and never scored in dev', () => {
   const box = sandbox()
   try {
-    const first = runRunner(['--json'], box.home)
-    const second = runRunner(['--json'], box.home)
+    const labels = JSON.parse(readFileSync(join(GOLD_DIR, 'labels.json'), 'utf8'))
+    assert.equal(labels.schema, 'advisers.mail-local-gold/v2')
+    assert.equal(labels.splitSizes.dev, 90)
+    assert.equal(labels.splitSizes.heldout, 30)
+    assert.deepEqual(labels.splitSizes, { dev: 90, heldout: 30 })
+    assert.match(labels.corpusSha256, SHA256_RE)
+    assert.equal(labels.license, 'CC-BY-NC-SA-4.0')
+    assert.equal(labels.provenance, 'synthetic')
+    for (const entry of labels.cases) {
+      assert.ok(entry.split === 'dev' || entry.split === 'heldout', entry.file)
+      assert.equal(typeof entry.provenance, 'string')
+      assert.ok(entry.provenance.length > 0)
+      assert.equal(typeof entry.reviewStatus, 'string')
+      assert.ok(entry.reviewStatus.length > 0)
+      assert.ok(Array.isArray(entry.expect), entry.file)
+    }
+    const heldout = labels.cases.filter((entry) => entry.split === 'heldout')
+    assert.equal(heldout.length, 30)
+    for (const entry of heldout) assert.ok(readdirSync(GOLD_DIR).includes(entry.file), entry.file)
+
+    // --list validates labels + corpusSha256 without running the extractor on held-out.
+    const listed = runRunner(['--list'], box.home)
+    assert.equal(listed.status, 0, listed.stderr)
+    const lines = listed.stdout.trim().split('\n')
+    assert.equal(lines.length, 120)
+    assert.equal(lines.filter((line) => line.startsWith('dev ')).length, 90)
+    assert.equal(lines.filter((line) => line.startsWith('heldout ')).length, 30)
+    assert.deepEqual(readdirSync(box.home), [])
+  } finally {
+    box.cleanup()
+  }
+})
+
+test('dev split metrics and per-case rows are deterministic across runs', () => {
+  const box = sandbox()
+  try {
+    const first = runRunner(['--split', 'dev', '--json'], box.home)
+    const second = runRunner(['--split', 'dev', '--json'], box.home)
     assert.equal(first.status, 0, first.stderr)
     assert.equal(second.status, 0, second.stderr)
     const left = parseStdout(first)
     const right = parseStdout(second)
     assert.deepEqual(left.metrics, right.metrics)
-    assert.deepEqual(left.counts, right.counts)
+    assert.deepEqual(left.gates, right.gates)
     assert.deepEqual(left.cases, right.cases)
+    assert.equal(left.corpus.sha256, right.corpus.sha256)
     assert.deepEqual(readdirSync(box.home), [])
   } finally {
     box.cleanup()
   }
 })
 
-test('human report is readable and exit code 0', () => {
+test('human report is readable and exits 0', () => {
   const box = sandbox()
   try {
-    const run = runRunner([], box.home)
+    const run = runRunner(['--split', 'dev'], box.home)
     assert.equal(run.status, 0, run.stderr)
     assert.equal(run.stderr, '')
     assert.match(run.stdout, /advisers eval:mail-local/)
     assert.match(run.stdout, /candidate precision/)
-    assert.match(run.stdout, /candidate recall/)
     assert.match(run.stdout, /due accuracy/)
+    assert.match(run.stdout, /negative false-positive rate/)
     assert.match(run.stdout, /PASS - all gated metrics meet their thresholds\./)
-    assert.match(run.stdout, /model calls 0; network attempts 0/)
+    assert.match(run.stdout, /network attempts 0/)
   } finally {
     box.cleanup()
   }
 })
 
-test('a metric below its threshold exits 1 and reports the regression', () => {
+test('legacy v1 custom gold below its threshold exits 1 and reports the failing gate', () => {
   const box = sandbox()
   try {
     const fixtures = join(box.root, 'threshold-gold')
@@ -197,17 +228,36 @@ test('a metric below its threshold exits 1 and reports the regression', () => {
 
     const run = runRunner(['--json', '--fixtures', fixtures], box.home)
     assert.equal(run.status, 1)
-    const result = parseStdout(run)
-    assert.equal(result.passed, false)
-    assert.deepEqual(result.errors, [])
-    assert.ok(result.thresholdFailures.some((failure) => failure.metric === 'recall'), JSON.stringify(result.thresholdFailures))
-    assert.ok(result.metrics.recall < result.thresholds.recall)
+    const report = parseStdout(run)
+    assert.equal(report.suite, 'mail-local-gold')
+    const recallGate = report.gates.find((entry) => entry.id === 'mail.recall')
+    assert.ok(recallGate, 'missing mail.recall gate')
+    assert.equal(recallGate.pass, false)
+    assert.ok(recallGate.actual < recallGate.threshold)
+    assert.equal(report.corpus.split, 'custom')
   } finally {
     box.cleanup()
   }
 })
 
-test('invalid gold set fails closed and unknown arguments are usage errors', () => {
+test('tampered fixture bytes are rejected by the frozen corpusSha256', () => {
+  const box = sandbox()
+  try {
+    const copy = join(box.root, 'tampered-gold')
+    cpSync(GOLD_DIR, copy, { recursive: true })
+    const target = join(copy, '01-zh-absolute-quote.eml')
+    writeFileSync(target, readFileSync(target, 'utf8') + 'tampered\n')
+    const run = runRunner(['--json', '--fixtures', copy], box.home)
+    assert.equal(run.status, 1)
+    const report = parseStdout(run)
+    assert.equal(report.totals.failed, 1)
+    assert.ok(report.environment.result.errors.some((error) => error.includes('corpusSha256 mismatch')), JSON.stringify(report.environment.result.errors))
+  } finally {
+    box.cleanup()
+  }
+})
+
+test('invalid gold set fails closed and usage errors exit 2', () => {
   const box = sandbox()
   try {
     const fixtures = join(box.root, 'invalid-gold')
@@ -218,21 +268,19 @@ test('invalid gold set fails closed and unknown arguments are usage errors', () 
       cases: [{ file: '01-missing.eml', author: '王工', expect: [] }],
     }
     writeFileSync(join(fixtures, 'labels.json'), JSON.stringify(labels, null, 2) + '\n')
-
     const invalid = runRunner(['--json', '--fixtures', fixtures], box.home)
     assert.equal(invalid.status, 1)
-    const result = parseStdout(invalid)
-    assert.equal(result.passed, false)
-    assert.ok(result.errors.some((error) => error.includes('missing fixture')), JSON.stringify(result.errors))
+    const report = parseStdout(invalid)
+    assert.equal(report.totals.failed, 1)
+    assert.ok(report.environment.result.errors.some((error) => error.includes('missing fixture')), JSON.stringify(report.environment.result.errors))
 
-    const usage = spawnSync(process.execPath, [RUNNER, '--bogus'], {
-      cwd: REPO_ROOT,
-      env: runnerEnv(box.home),
-      encoding: 'utf8',
-      timeout: 120_000,
-    })
-    assert.equal(usage.status, 2)
-    assert.match(usage.stderr, /unknown argument/)
+    const unknownArg = spawnSync(process.execPath, [RUNNER, '--bogus'], { cwd: REPO_ROOT, env: runnerEnv(box.home), encoding: 'utf8', timeout: 60_000 })
+    assert.equal(unknownArg.status, 2)
+    assert.match(unknownArg.stderr, /unknown argument/)
+
+    const unknownSplit = spawnSync(process.execPath, [RUNNER, '--split', 'test'], { cwd: REPO_ROOT, env: runnerEnv(box.home), encoding: 'utf8', timeout: 60_000 })
+    assert.equal(unknownSplit.status, 2)
+    assert.match(unknownSplit.stderr, /unknown split/)
   } finally {
     box.cleanup()
   }

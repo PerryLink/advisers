@@ -37,10 +37,12 @@ import tuiCases from '../eval/det/cases/tui.mjs'
 import kbCases from '../eval/det/cases/kb.mjs'
 import mailCases from '../eval/det/cases/mail.mjs'
 import policyCases from '../eval/det/cases/policy.mjs'
+import memoryCases from '../eval/det/cases/memory.mjs'
+import projectionCases from '../eval/det/cases/projection.mjs'
 
-const DEFAULT_SUITES = ['determinism', 'mcp', 'json', 'exit', 'tty', 'kb', 'mail', 'policy']
+const DEFAULT_SUITES = ['determinism', 'mcp', 'json', 'exit', 'tty', 'kb', 'mail', 'policy', 'memory', 'projection']
 const OPT_IN_SUITES = ['tui']
-const ALL_CASES = [...determinismCases, ...mcpCases, ...jsonCases, ...exitCases, ...ttyCases, ...tuiCases, ...kbCases, ...mailCases, ...policyCases]
+const ALL_CASES = [...determinismCases, ...mcpCases, ...jsonCases, ...exitCases, ...ttyCases, ...tuiCases, ...kbCases, ...mailCases, ...policyCases, ...memoryCases, ...projectionCases]
 
 function fail(message) {
   console.error('advisers eval:det: ' + message)
@@ -53,11 +55,11 @@ function parseArgs(argv) {
     const arg = argv[index]
     if (arg === '--help' || arg === '-h') {
       console.log([
-        'usage: node scripts/eval-det.mjs [--suite all|determinism,mcp,json,exit,tty|kb,mail,policy|tui]',
+        'usage: node scripts/eval-det.mjs [--suite all|determinism,mcp,json,exit,tty|kb,mail,policy,memory,projection|tui]',
         '       [--out <file>] [--no-write] [--json] [--verbose] [--list] [--update-baseline]',
         '',
         '  --suite <list>      comma-separated groups; "all" = ' + DEFAULT_SUITES.join(',') + '; "tui" is opt-in',
-        '  --out <file>        write the result JSON to <file> instead of eval/det/results/',
+        '  --out <file>        write the result JSON to <file> instead of eval/results/det/',
         '  --no-write          print the report but do not write a result file',
         '  --json              print the result JSON on stdout (instead of the human report)',
         '  --verbose           print passing cases too',
@@ -132,7 +134,7 @@ async function main() {
   })
   const network = networkSummary()
   const withHarness = [...results, ...harnessCases({ network })]
-  const result = finalize({ cases: withHarness, startedAt, filters: options.suites, baseline, network, workdirs: knownRoots() })
+  const result = finalize({ cases: withHarness, startedAt, filters: options.suites, baseline, network, workdirs: knownRoots(), command: ['node', 'scripts/eval-det.mjs', ...process.argv.slice(2)] })
   const written = writeResult(result, { outFile: options.out, outDir: RESULTS_DIR, noWrite: options.noWrite })
 
   if (options.json) {

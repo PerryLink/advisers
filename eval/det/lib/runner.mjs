@@ -49,7 +49,7 @@ export function harnessCases({ network }) {
 }
 
 /** Build the sanitized result object for this run. */
-export function finalize({ cases, startedAt, filters, baseline, network, workdirs }) {
+export function finalize({ cases, startedAt, filters, baseline, network, workdirs, command = [] }) {
   const durationMs = Math.max(0, Date.now() - Date.parse(startedAt))
-  return buildResult({ cases, startedAt, durationMs, baseline, filters, workdirs, network })
+  return buildResult({ cases, startedAt, durationMs, baseline, filters, workdirs, network, command })
 }

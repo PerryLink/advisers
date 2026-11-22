@@ -1,14 +1,19 @@
 # Advisers architecture
 
-> Status: **0.4.3 release tree (schema v22)**. The repository package version is
-> `0.4.3`; `0.4.2` is the previous patch, `0.4.1` the earlier same-day follow-up,
-> `0.4.0` the published feature release and `0.3.2` the baseline before it. 0.4.3 is
-> a patch on 0.4.2 (Chinese relative dates for `--due`, local-rule capture plus the
+> Status: **0.5.0 release tree (schema v22)**. The repository package version is
+> `0.5.0`; `0.4.3` is the previous release, `0.4.2`/`0.4.1` the earlier same-day
+> follow-ups, `0.4.0` the published feature release and `0.3.2` the baseline before it.
+> 0.5.0 is a "portable, disclosable, verifiable" release (portable home bundle v1,
+> context pack v1 + offline verify, additive MCP/DSH read disclosure, sync snapshot v2
+> with `sync.state.json`/conflict precheck, setup/demo/help onboarding, fail-closed
+> managed backups and the report-v2 quality gate) with **no schema change, no new
+> network path, no new runtime dependency and no frozen-shape change**. 0.4.3 was the
+> patch on 0.4.2 (Chinese relative dates for `--due`, local-rule capture plus the
 > read-only inbox, explicit-null `doctor --report` / `privacy --prove --brief` /
 > `profile`, the enhanced `remind --ics` export with a per-commitment notification
 > cooldown, quote/proposal schema v2 payment channels, receivable CSV export, the
 > restore drill, the global `--help` short-circuit and the mail-watch JSON/exit
-> contract) with **no schema change and no frozen-shape change**. 0.4.2 added manual
+> contract). 0.4.2 added manual
 > fact entry, the read-only IMAP probe, foreground mail watch, the `sync pull --dry-run`
 > preview, the backup-age hint, subcommand help consistency and the local mail gold
 > gate. 0.4.1 added the KB/mail review links, the reminder delivery policy, the
@@ -22,8 +27,8 @@
 > Windows support matrix. **Default remains zero model / zero network**: model egress
 > (chat/research/capture `--model`/mail `--model`) is explicit opt-in and mail/KB expose no model
 > or network path by default; mail sync is the only new network entry point and is
-> user-initiated. Anything marked *target* below is not shipped; `0.4.2`, `0.4.1`,
-> `0.4.0`, `0.3.2` and earlier remain installable by pinning but are superseded.
+> user-initiated. Anything marked *target* below is not shipped; `0.4.3`, `0.4.2`,
+> `0.4.1`, `0.4.0`, `0.3.2` and earlier remain installable by pinning but are superseded.
 > This document fixes the vocabulary and the invariants; the implementation is allowed to
 > be smaller than the document.
 
@@ -76,7 +81,7 @@
 ### 2.1 0.3.0 architecture invariants (reviewed per release)
 
 The 0.3.0 planning froze ten invariants for the read/model/contract surfaces. They are
-recorded here with an honest status on the 0.4.3 tree; "target" means the
+recorded here with an honest status on the 0.5.0 tree; "target" means the
 design is accepted but the code does **not** enforce it yet, and no release note may claim
 it.
 
@@ -171,7 +176,7 @@ adding a `MatterLink` table after the fact is a migration, adding it now is free
 The earlier plan put routines at 1.0; that makes the product a commitment
 tracker for a year. Routines must appear by 0.2 to keep the "intern" promise.
 
-## 9. Current limits (0.4.3 release tree; schema v22; 0.4.2/0.4.1 were the same-day follow-up patches and 0.4.0 the published feature release)
+## 9. Current limits (0.5.0 release tree; schema v22; 0.4.3 was the previous release, 0.4.2/0.4.1 the same-day follow-up patches and 0.4.0 the published feature release)
 
 - Ledger persisted in SQLite (`advisers/lib/sqlite.js`); JSON mode is a fallback but loses turns/search/audit (and has no KB/mail/money tables: those commands answer `E_STORE`/`E_SCHEMA_STALE`). Physical schema is **v22** (`SCHEMA_VERSION = 22`): v21 was the customer-entity step, v22 adds the KB, mail and money tables plus the two KB FTS indexes in one `kb-mail-payment-entities` migration (backup -> migrate -> verify; one-way, 0.3.2 fails with `E_SCHEMA_NEWER`). Date windows still run in JS (no `due_ms` migration).
 - **Default zero model / zero network.** CLI calls a model only for the pre-existing chat/capture/research/capture-imap paths when `ADVISERS_API_KEY` is set, and mail extraction uses local rules unless `mail extract --model` is explicit + consented. KB, the shell, urgency/morning, receivables, MCP/DSH reads and KB page rebuild are local-only; `mail sync` and `mail import` are the only new mail network/local-import entry points and always user-initiated. Without a key, record/search/build still work; natural-language replies that need a model fail honestly.
@@ -475,6 +480,35 @@ The 0.4.3 tree adds these follow-ups (all additive; no schema or frozen-shape ch
 - Five additive error codes (`E_CANDIDATE_NOT_FOUND`, `E_CAPTURE_EMPTY`,
   `E_CAPTURE_TOO_LONG`, `E_DUE_CONFLICT`, `E_DUE_UNRESOLVED`); the generated registry and
   docs are regenerated at 193 CLI codes.
+
+The 0.5.0 tree adds these surfaces (all additive; zero schema change, zero new network
+path, zero new runtime dependency):
+
+- `lib/bundle.js` + `export --bundle` / `import --bundle --verify [--dry-run] [--replace]`
+  — plaintext portable home bundle v1 (`manifest.json`/`ledger.json`/`facts.md`/`kb/`/
+  `pages/`/`IMPORT.md`/`SHA256SUMS`), `dataDigest`/counts parity, pre-import managed
+  backup, and no import of credentials, `audit.key`, scheduler, logs, soul or workspace.
+- `lib/context-pack.js` + `lib/context-candidates.js` + `context-pack create|verify` —
+  a bounded one-way disclosure directory (`<=16` items, `<=8 KiB`/item, `<=32 KiB` items,
+  `<=64 KiB` manifest, `<=256 KiB` total), secrecy filtered before counting, offline
+  verify, no import path and no read/execution authority.
+- `lib/disclosure.js` + the MCP/DSH read payloads — additive `disclosure` block and
+  per-row `view`; the tool surface stays 8/5 (DSH 6) and stripping the new fields
+  reproduces the 0.4.3 bytes.
+- `lib/sync.js` snapshot v2 + `lib/sync-state.js` + `lib/backup.js` preflight — snapshot
+  metadata (`dbMtimeMs/dbSha256/sourceSchemaVersion`), the `sync.state.json` baseline, a
+  stale-overwrite refusal (`E_SYNC_CONFLICT`) unless `--force`, and a genuinely read-only
+  `sync push --dry-run`.
+- `lib/setup.js`, `lib/preflight.js`, `lib/demo.js`/`lib/demo-data.js`,
+  `lib/help-topics.js`/`lib/help-usage.js` — `setup` (7 idempotent steps), an isolated
+  `demo`, and `help <topic>`/`help --list` onboarding.
+- Quality evidence (0.5.0 WF4): quality-report schema v2 +
+  `scripts/check-eval-report.mjs`, the `memory`/`projection` deterministic groups, the
+  KB-retrieval/mail-local gold sets and the model-contract gate; "regression gate
+  passes" is not an accuracy claim.
+- Eighteen additive 0.5.0 error codes (7 `E_BUNDLE_*`, 8 `E_CONTEXT_PACK_*`,
+  `E_SYNC_CONFLICT`, `E_SYNC_STATE_INVALID`, `E_DEMO_STEP`); the generated registry and
+  docs are regenerated at 211 CLI codes.
 
 ## 14. 0.4.0 module map and default posture
 

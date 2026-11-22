@@ -131,7 +131,7 @@ test('unregistered or ambiguous egress paths fail closed', () => {
   const ambiguous = checkEgress('fs', { surface: 'export' })
   assert.equal(ambiguous.registered, false)
   assert.equal(ambiguous.decision, 'deny')
-  assert.deepEqual(ambiguous.candidates, ['export.evidence-pack', 'export.receipt-pack'])
+  assert.deepEqual(ambiguous.candidates, ['export.context-pack', 'export.evidence-pack', 'export.receipt-pack'])
 })
 
 test('the registry covers the 0.4 data surfaces (mail.extract/kb.ask default off)', () => {
@@ -145,6 +145,21 @@ test('the registry covers the 0.4 data surfaces (mail.extract/kb.ask default off
   assert.ok(rows.has('export.evidence-pack'))
   assert.ok(rows.has('export.receipt-pack'))
   assert.ok(rows.has('agent.exec'))
+})
+
+test('0.5.0 context pack is registered as a local fs export, not a new network row', () => {
+  const rows = listEgress()
+  const contextPack = rows.find((row) => row.id === 'export.context-pack')
+  assert.ok(contextPack, 'export.context-pack must be registered')
+  assert.equal(contextPack.sink, 'fs')
+  assert.equal(contextPack.gate, 'enforced-policy')
+  assert.equal(contextPack.default, 'on')
+  assert.equal(contextPack.action, 'export')
+  assert.match(contextPack.tosRef, /^docs\/TOS\.md#/)
+  // Adding the context-pack row must not add or move a net/model/send sink row:
+  // the network egress surface stays the frozen 0.4.3 list.
+  const networkRows = rows.filter((row) => row.sink === 'net' || row.sink === 'send').map((row) => row.id).sort()
+  assert.deepEqual(networkRows, ['bridge.model', 'mail.sync', 'notify.webhook'])
 })
 
 test('legacy lib/egress.js exports and semantics are untouched', () => {

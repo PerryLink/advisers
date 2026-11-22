@@ -1,5 +1,148 @@
 # Changelog
 
+## 0.5.0 (2026-11-22)
+
+"Portable, disclosable, verifiable" release. 0.5.0 adds no new AI capability
+line; it turns the 0.4.x assets into artifacts a customer, another agent or a
+future reader can check offline. **Zero database schema change (still v22), zero
+new network path, zero new runtime dependency.** MCP stays 8 tools / 5 resources
+and DSH stays 6 tools; no new MCP/DSH tool or resource is added.
+
+Status: **published 2026-11-22.** npm `latest` = `0.5.0`, and `next` also points
+at `0.5.0` after this release advanced it. The eight workspace packages are
+lockstep at `0.5.0`: the six published packages (`advisers`, `advisers-core`,
+`advisers-office`, `advisers-policy-strict`, `advisers-bridge-hermes`,
+`dsh-advisers`) and the two private `advisers-link-*` packages held at the same
+version. The eight internal workspace pins, the three version constants and
+`pnpm-lock.yaml` follow; the six per-package `THIRD-PARTY-NOTICES.md` files were
+regenerated (version line only; the dependency closure is unchanged from 0.4.3).
+The six tarballs are published from GitHub Actions OIDC/Trusted Publishing with
+SLSA provenance naming the release tag ref; verify with
+`node scripts/verify-release.mjs --version 0.5.0 --tag latest --sbom artifacts/sbom.cdx.json --require-sbom`.
+Release notes, the CycloneDX SBOM and `SHA256SUMS` are attached to
+<https://github.com/PerryLink/advisers/releases/tag/v0.5.0>; the tag object,
+publish run, `verify-release` count and asset hashes are recorded in
+[docs/RELEASING.md](docs/RELEASING.md) §13 once the publish completes.
+
+### Features
+
+- **Portable home bundle v1** (`export --bundle <dir>` / `import --bundle <dir>
+  --verify [--dry-run] [--replace]`): a plaintext directory with
+  `manifest.json`, authoritative `ledger.json`, human-readable `facts.md` /
+  `kb/*.md` / `pages/*.md`, `IMPORT.md` and `SHA256SUMS`. A whole home moves to
+  another machine (or survives the product) without an account or network; the
+  acceptance metric is `dataDigest`/counts parity. Import bootstraps a clean home
+  or replaces a populated one after a pre-import managed backup, rebuilds compiled
+  KB pages/FTS and clears a stale `sync.state.json`. Credentials, `audit.key`,
+  `audit-anchor.json`, scheduler, logs, briefs, soul, workspace, mail cursors,
+  undo, exports and receipts never travel. Bundle v1 is **plaintext**
+  (`verificationBasis: local-checksums-only`; encryption is a later opt-in) and a
+  bundle is `scope: local-all`, not a selective export. New `E_BUNDLE_*` codes.
+- **Context pack v1** (`context-pack create|verify`): a bounded, one-way
+  disclosure directory (`manifest.json` / `README.txt` / `SHA256SUMS`) with a
+  subject, recipient, purpose enum (`client-delivery` / `external-review` /
+  `handoff`), expiry and a disclosure block. `create` without `--ids`/`--yes`
+  only lists read-only auto-assembled candidates (secrecy filtered before
+  counting; `excluded.byReason{secrecy,stale,unsupportedKind,notFound}`);
+  writing needs explicit selection plus recipient/purpose. Caps: <=16 items,
+  item <=8 KiB, items <=32 KiB, manifest <=64 KiB, total <=256 KiB.
+  `context-pack verify` is offline (no HOME, no DB, no network; exit 0/1) and
+  `--expect-manifest-sha256` pins the manifest. Money amounts, mail bodies, KB
+  full text, attachment bytes and file paths never enter a pack;
+  `confersReadAuthority`/`confersExecutionAuthority` are always false; there is
+  no import path. `evidence verify` dispatches context pack -> client pack ->
+  receipt. New `E_CONTEXT_PACK_*` codes.
+- **Read disclosure in MCP/DSH**: the five MCP read tools and five resources gain
+  an additive `disclosure{surface,tool,basis,callId,fields,view,clearance,
+  protectedExcluded,truncated,audited,digest}` block and per-row `view`
+  (`verified|pending|historical|derived`); the single `mcp.call` audit row carries
+  the call id/counts/field names/digest (metadata only). Legacy 8-tool/5-resource
+  and DSH 6-tool payloads are otherwise unchanged: stripping the new fields
+  reproduces the 0.4.3 bytes. DSH never writes the local audit chain, so its
+  disclosures are always `audited:false` with a fixed warning.
+- **Snapshot sync v2 and conflict precheck**: new snapshots record
+  `dbMtimeMs/dbSha256/sourceSchemaVersion` (v1 payloads remain readable);
+  `$ADVISERS_HOME/sync.state.json` stores the last push/pull baseline; push/pull
+  refuse a proved stale overwrite (`E_SYNC_CONFLICT`) unless `--force` (which
+  keeps and prints a `.before-sync-*` backup); `sync status --check` reports
+  `conflict/localChanged/remoteAdvanced` as a read-only query. The transfer
+  semantics remain whole-database last-writer-wins: this is a refusal guard, not
+  a merge.
+- **Onboarding**: `setup` (7 idempotent steps, `--dry-run`, `--json`, non-TTY
+  matrix; its own TOS refusal leaves HOME byte-empty), `demo` (steps run against
+  an isolated temp demo home; synthetic "one consulting delivery", zero
+  model/network; the CLI's TOS gate still applies; `--clean` only removes a
+  directory this run created under the OS temp root), `help <topic>` /
+  `help --list` (10 task topics with Chinese
+  aliases whose pages are byte-identical) and a unified Chinese error-hint
+  surface.
+- **Data safety**: fail-closed managed backup before destructive commands
+  (purge/kb purge/mail purge/client merge/`import --replace`); `doctor
+  --check-db --json` gains an additive `backup{status,managedCount,
+  newestManaged,...}` block without changing its exit code.
+- **Quality evidence**: evaluation report `schemaVersion: 2` with explicit
+  `unknowns`/null dimensions and a `check-eval-report` gate (`modelQuality:0`
+  must fail); memory/projection/model-contract deterministic suites and the
+  KB-retrieval/mail-local gold sets behind the release gate. "Regression gate
+  passes" is not an accuracy claim; independent human gold remains `null` until
+  the owner decision.
+- **Docs**: new [docs/PORTABILITY.md](docs/PORTABILITY.md),
+  [docs/CONTEXT-PACK.md](docs/CONTEXT-PACK.md) and
+  [docs/AGENT-INTEROP.md](docs/AGENT-INTEROP.md); rewritten
+  [docs/SYNC.md](docs/SYNC.md); positioning updated to "verifiable delivery &
+  commitment layer" with an explicit not-do list; MCP/CLI-JSON received the
+  0.5.0 additive surfaces.
+
+### Behaviour changes
+
+- `sync push --dry-run` is now genuinely read-only: no snapshot, no audit row,
+  no checkpoint, no `sync.state.json` write. 0.4.3 only advertised the flag in
+  help while still writing; a script that relied on that side effect is broken by
+  design.
+- The disclosure command name is `context-pack create|verify`. The earlier
+  `pack context`/`pack verify` names from one plan draft do not exist and have no
+  alias. `deliveries --pack`/`--receipt` are unchanged, and MCP
+  `advisers_pack_verify` still verifies evidence-pack v1 only.
+- A bundle is plaintext: `export --bundle --encrypted` is refused in 0.5.0 and
+  `import --bundle` requires an explicit `--replace` before overwriting a
+  populated ledger. Do not present a bundle as encryption, a signature, a trusted
+  timestamp or a compliance artifact.
+- `demo` is a real workflow demo (about ten child commands), not a five-second
+  preview: its runtime is not a contract, and the demo home is kept (no automatic
+  deletion).
+- TOS exemptions for read-only/untrusted-directory verification:
+  `import --bundle --verify --dry-run`, `context-pack verify`, `setup` (its first
+  step is a read-only preflight; lib/setup re-checks TOS before any write) and
+  `--help` work without consent. Real imports, real pushes/pulls and
+  `context-pack create` stay gated; `--replace` re-confirms the terms.
+- MCP and CLI JSON changes are additive; the new error codes are registered as
+  0.5.0 additive (`E_BUNDLE_*`, `E_CONTEXT_PACK_*`, `E_SYNC_CONFLICT`,
+  `E_SYNC_STATE_INVALID`, `E_DEMO_STEP`).
+
+### Known limits / not done
+
+- **Bundle v1 is not encrypted.** `--encrypted` is a later opt-in, not a 0.5.0
+  claim. A bundle contains customer, mail, KB and money data in plaintext; store
+  it accordingly.
+- **Context packs are CLI-only.** They are not exposed over MCP/DSH, are not
+  importable, and MCP `advisers_pack_verify` does not verify them.
+- **No merge and no background sync.** Sync remains manual, whole-database,
+  last-writer-wins with a conflict refusal guard; there is no daemon, no
+  continuous sync and no multi-writer resolution. A successful real `sync pull`
+  still prints the human summary even with `--json`; `sync pull --dry-run --json`
+  is the machine-readable pull plan.
+- **Not in 0.5.0**: handoff/session brief, v23 migration, mail follow-up,
+  `flow`, `draft-eml`/`notice`/monthly report subscriptions, OAuth/IMAP write,
+  sending/calendar write-back, CRM/portal, hosted payments/e-sign, cloud MCP
+  directories/paid MCP, plugin marketplace, mobile app, vector retrieval and
+  default encryption.
+- **Not verified in 0.5.0**: real-machine Windows 11 client smoke for the new
+  surfaces (CI coverage is recorded at the release commit); third-party
+  Codex/Goose/OpenClaw host integrations are configuration guidance only; no
+  independent human gold or usability pass has been completed.
+- Release mechanics (tag, publish, `verify-release` count, SBOM/asset hashes)
+  are recorded in `docs/RELEASING.md` section 13; that record starts with `TBD`
+  placeholders that the release operator fills in once the publish completes.
 ## 0.4.3 (2026-11-22)
 
 Patch release on the 0.4.2 tree. **No schema migration, no new runtime

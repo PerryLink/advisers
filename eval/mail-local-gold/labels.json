@@ -1,14 +1,27 @@
 {
-  "schema": "advisers.mail-local-gold/v1",
-  "description": "Hand-labeled synthetic gold set for the zero-model, zero-network local commitment extractor (packages/advisers/lib/mail-extract.js).",
+  "schema": "advisers.mail-local-gold/v2",
+  "description": "Hand-labeled synthetic gold set for the zero-model, zero-network local commitment extractor (packages/advisers/lib/mail-extract.js). 90 dev + 30 held-out fixtures; held-out is release-gate only.",
   "timeZone": "Asia/Shanghai",
+  "provenance": "synthetic",
+  "license": "CC-BY-NC-SA-4.0",
+  "reviewStatus": "implementer-labeled; independent human review pending (D2)",
+  "heldoutPolicy": "The 30 held-out fixtures and their labels are frozen by corpusSha256. Do not tune the extractor against held-out results; L0 (PR) runs only --split dev. The held-out split runs only in the release gate.",
   "dueDateSemantics": "dueAt is a calendar date (YYYY-MM-DD) in Asia/Shanghai. The local extractor resolves relative dates to 18:00 Asia/Shanghai by default, so this eval compares only the local calendar date, never the instant.",
   "matching": "A predicted candidate matches a labeled commitment when its action matches after normalization (verb/object inclusion, ignoring whitespace, case and a leading verb) and both commitments are in the same message.",
-  "reviewStatus": "Hand-labeled by the implementing agent from the .eml text. Synthetic fixtures, not real client mail. Independent human review is recommended before any external quality claim.",
+  "splitSizes": {
+    "dev": 90,
+    "heldout": 30
+  },
+  "fixtureCount": 120,
+  "corpusSha256": "4acae148ccd50376a07d1b64f17f822dc1543a43dc9f91b1e13426b37f6723e4",
   "cases": [
     {
       "file": "01-zh-absolute-quote.eml",
       "author": "王工",
+      "split": "dev",
+      "provenance": "synthetic",
+      "reviewStatus": "implementer-labeled; independent human review pending (D2)",
+      "topic": "zh-absolute",
       "expect": [
         {
           "action": "发出报价单",
@@ -20,6 +33,10 @@
     {
       "file": "02-zh-relative-friday.eml",
       "author": "张会计",
+      "split": "dev",
+      "provenance": "synthetic",
+      "reviewStatus": "implementer-labeled; independent human review pending (D2)",
+      "topic": "zh-relative",
       "expect": [
         {
           "action": "发对账单",
@@ -31,6 +48,10 @@
     {
       "file": "03-zh-next-week-submit.eml",
       "author": "陈工",
+      "split": "dev",
+      "provenance": "synthetic",
+      "reviewStatus": "implementer-labeled; independent human review pending (D2)",
+      "topic": "zh-relative",
       "expect": [
         {
           "action": "提交测试报告",
@@ -42,6 +63,10 @@
     {
       "file": "04-zh-tomorrow-contract.eml",
       "author": "刘律师",
+      "split": "dev",
+      "provenance": "synthetic",
+      "reviewStatus": "implementer-labeled; independent human review pending (D2)",
+      "topic": "zh-relative",
       "expect": [
         {
           "action": "寄合同",
@@ -53,6 +78,10 @@
     {
       "file": "05-zh-month-end-reconcile.eml",
       "author": "赵财务",
+      "split": "dev",
+      "provenance": "synthetic",
+      "reviewStatus": "implementer-labeled; independent human review pending (D2)",
+      "topic": "zh-relative",
       "expect": [
         {
           "action": "完成对账",
@@ -64,6 +93,10 @@
     {
       "file": "06-zh-money-payment.eml",
       "author": "孙经理",
+      "split": "dev",
+      "provenance": "synthetic",
+      "reviewStatus": "implementer-labeled; independent human review pending (D2)",
+      "topic": "money",
       "expect": [
         {
           "action": "支付货款",
@@ -77,6 +110,10 @@
     {
       "file": "07-zh-third-party-pay.eml",
       "author": "周经理",
+      "split": "dev",
+      "provenance": "synthetic",
+      "reviewStatus": "implementer-labeled; independent human review pending (D2)",
+      "topic": "third-party",
       "expect": [
         {
           "action": "付款",
@@ -88,6 +125,10 @@
     {
       "file": "08-en-absolute-deliver.eml",
       "author": "Alice Chen",
+      "split": "dev",
+      "provenance": "synthetic",
+      "reviewStatus": "implementer-labeled; independent human review pending (D2)",
+      "topic": "en-absolute",
       "expect": [
         {
           "action": "deliver final report",
@@ -99,6 +140,10 @@
     {
       "file": "09-en-relative-friday.eml",
       "author": "Bob Smith",
+      "split": "dev",
+      "provenance": "synthetic",
+      "reviewStatus": "implementer-labeled; independent human review pending (D2)",
+      "topic": "known-limitation",
       "expect": [
         {
           "action": "send updated quote",
@@ -110,6 +155,10 @@
     {
       "file": "10-en-html-deck.eml",
       "author": "Carol Wu",
+      "split": "dev",
+      "provenance": "synthetic",
+      "reviewStatus": "implementer-labeled; independent human review pending (D2)",
+      "topic": "html-only",
       "expect": [
         {
           "action": "send pitch deck",
@@ -121,6 +170,10 @@
     {
       "file": "11-zh-two-commitments.eml",
       "author": "吴工",
+      "split": "dev",
+      "provenance": "synthetic",
+      "reviewStatus": "implementer-labeled; independent human review pending (D2)",
+      "topic": "multi",
       "expect": [
         {
           "action": "发设计稿",
@@ -136,6 +189,10 @@
     {
       "file": "12-zh-quarter-end.eml",
       "author": "郑经理",
+      "split": "dev",
+      "provenance": "synthetic",
+      "reviewStatus": "implementer-labeled; independent human review pending (D2)",
+      "topic": "zh-relative",
       "expect": [
         {
           "action": "完成迁移",
@@ -147,6 +204,10 @@
     {
       "file": "13-zh-explicit-year.eml",
       "author": "钱总",
+      "split": "dev",
+      "provenance": "synthetic",
+      "reviewStatus": "implementer-labeled; independent human review pending (D2)",
+      "topic": "zh-absolute",
       "expect": [
         {
           "action": "发最终方案",
@@ -158,6 +219,10 @@
     {
       "file": "14-en-promise-pay.eml",
       "author": "Carol Wu",
+      "split": "dev",
+      "provenance": "synthetic",
+      "reviewStatus": "implementer-labeled; independent human review pending (D2)",
+      "topic": "en-absolute",
       "expect": [
         {
           "action": "pay invoice",
@@ -169,6 +234,10 @@
     {
       "file": "15-zh-tentative.eml",
       "author": "何工",
+      "split": "dev",
+      "provenance": "synthetic",
+      "reviewStatus": "implementer-labeled; independent human review pending (D2)",
+      "topic": "zh-relative",
       "expect": [
         {
           "action": "发报价",
@@ -180,6 +249,10 @@
     {
       "file": "16-zh-month-day-payment.eml",
       "author": "许会计",
+      "split": "dev",
+      "provenance": "synthetic",
+      "reviewStatus": "implementer-labeled; independent human review pending (D2)",
+      "topic": "zh-relative",
       "expect": [
         {
           "action": "打款",
@@ -191,6 +264,10 @@
     {
       "file": "17-zh-no-date-minutes.eml",
       "author": "唐助理",
+      "split": "dev",
+      "provenance": "synthetic",
+      "reviewStatus": "implementer-labeled; independent human review pending (D2)",
+      "topic": "no-date",
       "expect": [
         {
           "action": "整理会议纪要",
@@ -202,6 +279,10 @@
     {
       "file": "18-zh-reply.eml",
       "author": "韩工",
+      "split": "dev",
+      "provenance": "synthetic",
+      "reviewStatus": "implementer-labeled; independent human review pending (D2)",
+      "topic": "zh-relative",
       "expect": [
         {
           "action": "回复确认",
@@ -213,6 +294,10 @@
     {
       "file": "19-zh-implied-subject.eml",
       "author": "陈工",
+      "split": "dev",
+      "provenance": "synthetic",
+      "reviewStatus": "implementer-labeled; independent human review pending (D2)",
+      "topic": "known-limitation",
       "expect": [
         {
           "action": "答复",
@@ -224,6 +309,10 @@
     {
       "file": "20-en-month-date.eml",
       "author": "Alice Chen",
+      "split": "dev",
+      "provenance": "synthetic",
+      "reviewStatus": "implementer-labeled; independent human review pending (D2)",
+      "topic": "known-limitation",
       "expect": [
         {
           "action": "deliver report",
@@ -235,62 +324,1386 @@
     {
       "file": "21-neg-request.eml",
       "author": "王工",
+      "split": "dev",
+      "provenance": "synthetic",
+      "reviewStatus": "implementer-labeled; independent human review pending (D2)",
+      "topic": "negative-request",
       "expect": [],
       "note": "Pure request (请…) is not a commitment by the recipient of this mailbox."
     },
     {
       "file": "22-neg-reschedule.eml",
       "author": "陈工",
+      "split": "dev",
+      "provenance": "synthetic",
+      "reviewStatus": "implementer-labeled; independent human review pending (D2)",
+      "topic": "negative-reschedule",
       "expect": [],
       "note": "Meeting reschedule is a known non-commitment class."
     },
     {
       "file": "23-neg-vague.eml",
       "author": "何工",
+      "split": "dev",
+      "provenance": "synthetic",
+      "reviewStatus": "implementer-labeled; independent human review pending (D2)",
+      "topic": "negative-vague",
       "expect": [],
       "note": "Vague deferral (回头) is not a commitment."
     },
     {
       "file": "24-neg-newsletter.eml",
       "author": "办公优选",
+      "split": "dev",
+      "provenance": "synthetic",
+      "reviewStatus": "implementer-labeled; independent human review pending (D2)",
+      "topic": "negative-marketing",
       "expect": [],
       "note": "Marketing newsletter noise."
     },
     {
       "file": "25-neg-auto-notification.eml",
       "author": "发票系统",
+      "split": "dev",
+      "provenance": "synthetic",
+      "reviewStatus": "implementer-labeled; independent human review pending (D2)",
+      "topic": "negative-auto",
       "expect": [],
       "note": "Automated notification noise."
     },
     {
       "file": "26-neg-forwarded-request.eml",
       "author": "李经理",
+      "split": "dev",
+      "provenance": "synthetic",
+      "reviewStatus": "implementer-labeled; independent human review pending (D2)",
+      "topic": "negative-request",
       "expect": [],
       "note": "Forwarded request; every request sentence stays a non-commitment."
     },
     {
       "file": "27-neg-html-marketing.eml",
       "author": "云端服务",
+      "split": "dev",
+      "provenance": "synthetic",
+      "reviewStatus": "implementer-labeled; independent human review pending (D2)",
+      "topic": "negative-marketing",
       "expect": [],
       "note": "HTML marketing noise (no personal commitment)."
     },
     {
       "file": "28-neg-receipt.eml",
       "author": "吴工",
+      "split": "dev",
+      "provenance": "synthetic",
+      "reviewStatus": "implementer-labeled; independent human review pending (D2)",
+      "topic": "negative-receipt",
       "expect": [],
       "note": "Acknowledgement, not a commitment."
     },
     {
       "file": "29-neg-en-request.eml",
       "author": "Bob Smith",
+      "split": "dev",
+      "provenance": "synthetic",
+      "reviewStatus": "implementer-labeled; independent human review pending (D2)",
+      "topic": "negative-request",
       "expect": [],
       "note": "English request (Could you…) is not a commitment by the mailbox owner."
     },
     {
       "file": "30-neg-marketing-we.eml",
       "author": "云端服务",
+      "split": "dev",
+      "provenance": "synthetic",
+      "reviewStatus": "implementer-labeled; independent human review pending (D2)",
+      "topic": "known-limitation",
       "expect": [],
       "note": "Known false-positive class: first-person boilerplate in a marketing blast ('我们会发送…') is read as a user commitment; labeled negative so the precision miss is measured."
+    },
+    {
+      "file": "31-zh-tuesday-schedule.eml",
+      "author": "王工",
+      "split": "dev",
+      "provenance": "synthetic",
+      "reviewStatus": "implementer-labeled; independent human review pending (D2)",
+      "topic": "zh-relative",
+      "expect": [
+        {
+          "action": "发排期表",
+          "dueAt": "2026-11-17"
+        }
+      ],
+      "note": "Chinese relative weekday (周二前) resolved from the message date; carry construction 把…发."
+    },
+    {
+      "file": "32-zh-next-monday-acceptance.eml",
+      "author": "李经理",
+      "split": "dev",
+      "provenance": "synthetic",
+      "reviewStatus": "implementer-labeled; independent human review pending (D2)",
+      "topic": "zh-relative",
+      "expect": [
+        {
+          "action": "提交验收报告",
+          "dueAt": "2026-11-23"
+        }
+      ],
+      "note": "Chinese next-week weekday (下周一前)."
+    },
+    {
+      "file": "33-zh-reconcile-1128.eml",
+      "author": "张会计",
+      "split": "dev",
+      "provenance": "synthetic",
+      "reviewStatus": "implementer-labeled; independent human review pending (D2)",
+      "topic": "zh-relative",
+      "expect": [
+        {
+          "action": "完成对账",
+          "dueAt": "2026-11-28"
+        }
+      ],
+      "note": "Chinese month-day absolute date (11月28日)."
+    },
+    {
+      "file": "34-zh-tomorrow-plan.eml",
+      "author": "刘工",
+      "split": "dev",
+      "provenance": "synthetic",
+      "reviewStatus": "implementer-labeled; independent human review pending (D2)",
+      "topic": "zh-relative",
+      "expect": [
+        {
+          "action": "发修改后的方案",
+          "dueAt": "2026-11-20"
+        }
+      ],
+      "note": "明天 relative day with 下午; only the local calendar date is compared."
+    },
+    {
+      "file": "35-zh-next-monday-contract.eml",
+      "author": "赵律师",
+      "split": "dev",
+      "provenance": "synthetic",
+      "reviewStatus": "implementer-labeled; independent human review pending (D2)",
+      "topic": "zh-relative",
+      "expect": [
+        {
+          "action": "寄合同",
+          "dueAt": "2026-11-23"
+        }
+      ],
+      "note": "下周一 from a Friday message."
+    },
+    {
+      "file": "36-zh-this-friday-api.eml",
+      "author": "陈工",
+      "split": "dev",
+      "provenance": "synthetic",
+      "reviewStatus": "implementer-labeled; independent human review pending (D2)",
+      "topic": "zh-relative",
+      "expect": [
+        {
+          "action": "提供接口文档",
+          "dueAt": "2026-11-27"
+        }
+      ],
+      "note": "本周五 (explicit current-week weekday)."
+    },
+    {
+      "file": "37-zh-month-end-minutes.eml",
+      "author": "何助理",
+      "split": "dev",
+      "provenance": "synthetic",
+      "reviewStatus": "implementer-labeled; independent human review pending (D2)",
+      "topic": "zh-relative",
+      "expect": [
+        {
+          "action": "整理完会议纪要",
+          "dueAt": "2026-11-30"
+        }
+      ],
+      "note": "月底 month-end relative date."
+    },
+    {
+      "file": "38-zh-day-after-samples.eml",
+      "author": "周工",
+      "split": "dev",
+      "provenance": "synthetic",
+      "reviewStatus": "implementer-labeled; independent human review pending (D2)",
+      "topic": "zh-relative",
+      "expect": [
+        {
+          "action": "送样品",
+          "dueAt": "2026-11-27"
+        }
+      ],
+      "note": "后天 relative day."
+    },
+    {
+      "file": "39-zh-next-month-end-summary.eml",
+      "author": "钱经理",
+      "split": "dev",
+      "provenance": "synthetic",
+      "reviewStatus": "implementer-labeled; independent human review pending (D2)",
+      "topic": "zh-relative",
+      "expect": [
+        {
+          "action": "完成年终总结",
+          "dueAt": "2026-12-31"
+        }
+      ],
+      "note": "下个月底 crosses the month boundary."
+    },
+    {
+      "file": "40-zh-next-monday-expense.eml",
+      "author": "吴会计",
+      "split": "dev",
+      "provenance": "synthetic",
+      "reviewStatus": "implementer-labeled; independent human review pending (D2)",
+      "topic": "zh-relative",
+      "expect": [
+        {
+          "action": "发费用明细",
+          "dueAt": "2026-12-07"
+        }
+      ],
+      "note": "下周一 from the last day of November."
+    },
+    {
+      "file": "41-zh-iso-modules.eml",
+      "author": "孙工",
+      "split": "dev",
+      "provenance": "synthetic",
+      "reviewStatus": "implementer-labeled; independent human review pending (D2)",
+      "topic": "zh-absolute",
+      "expect": [
+        {
+          "action": "交付第一批模块",
+          "dueAt": "2026-12-10"
+        }
+      ],
+      "note": "ISO-style absolute date in Chinese mail."
+    },
+    {
+      "file": "42-zh-month-day-quote.eml",
+      "author": "李总",
+      "split": "dev",
+      "provenance": "synthetic",
+      "reviewStatus": "implementer-labeled; independent human review pending (D2)",
+      "topic": "zh-absolute",
+      "expect": [
+        {
+          "action": "寄报价单盖章",
+          "dueAt": "2026-12-05"
+        }
+      ],
+      "note": "Month-day absolute date with a carry verb construction."
+    },
+    {
+      "file": "43-zh-explicit-year-migration.eml",
+      "author": "陈经理",
+      "split": "dev",
+      "provenance": "synthetic",
+      "reviewStatus": "implementer-labeled; independent human review pending (D2)",
+      "topic": "zh-absolute",
+      "expect": [
+        {
+          "action": "完成全部迁移",
+          "dueAt": "2027-01-10"
+        }
+      ],
+      "note": "Explicit year + month + day (2027年1月10日)."
+    },
+    {
+      "file": "44-zh-slash-date-report.eml",
+      "author": "赵工",
+      "split": "dev",
+      "provenance": "synthetic",
+      "reviewStatus": "implementer-labeled; independent human review pending (D2)",
+      "topic": "zh-absolute",
+      "expect": [
+        {
+          "action": "提交测试报告",
+          "dueAt": "2026-12-15"
+        }
+      ],
+      "note": "Slash month/day date."
+    },
+    {
+      "file": "45-zh-slash-date-statement.eml",
+      "author": "周会计",
+      "split": "dev",
+      "provenance": "synthetic",
+      "reviewStatus": "implementer-labeled; independent human review pending (D2)",
+      "topic": "zh-absolute",
+      "expect": [
+        {
+          "action": "发对账单",
+          "dueAt": "2026-11-28"
+        }
+      ],
+      "note": "Slash date without a leading 会 (我…前 pattern)."
+    },
+    {
+      "file": "46-zh-year-end-report.eml",
+      "author": "郑经理",
+      "split": "dev",
+      "provenance": "synthetic",
+      "reviewStatus": "implementer-labeled; independent human review pending (D2)",
+      "topic": "zh-absolute",
+      "expect": [
+        {
+          "action": "提交年度报告",
+          "dueAt": "2026-12-31"
+        }
+      ],
+      "note": "Month-day that equals the year end."
+    },
+    {
+      "file": "47-zh-three-days-test-env.eml",
+      "author": "钱工",
+      "split": "dev",
+      "provenance": "synthetic",
+      "reviewStatus": "implementer-labeled; independent human review pending (D2)",
+      "topic": "zh-absolute",
+      "expect": [
+        {
+          "action": "完成测试环境准备",
+          "dueAt": "2026-11-27"
+        }
+      ],
+      "note": "N 天后 relative offset."
+    },
+    {
+      "file": "48-zh-explicit-year-final.eml",
+      "author": "孙总",
+      "split": "dev",
+      "provenance": "synthetic",
+      "reviewStatus": "implementer-labeled; independent human review pending (D2)",
+      "topic": "zh-absolute",
+      "expect": [
+        {
+          "action": "提交终稿",
+          "dueAt": "2026-12-20"
+        }
+      ],
+      "note": "Explicit-year Chinese date."
+    },
+    {
+      "file": "49-zh-en-mixed-report.eml",
+      "author": "Alice Chen",
+      "split": "dev",
+      "provenance": "synthetic",
+      "reviewStatus": "implementer-labeled; independent human review pending (D2)",
+      "topic": "bilingual",
+      "expect": [
+        {
+          "action": "提交 final version",
+          "dueAt": "2026-12-04"
+        }
+      ],
+      "note": "Bilingual mail: Chinese promise sentence with an English object."
+    },
+    {
+      "file": "50-en-mixed-chinese-greeting.eml",
+      "author": "Bob Smith",
+      "split": "dev",
+      "provenance": "synthetic",
+      "reviewStatus": "implementer-labeled; independent human review pending (D2)",
+      "topic": "bilingual",
+      "expect": [
+        {
+          "action": "send updated proposal",
+          "dueAt": "2026-12-08"
+        }
+      ],
+      "note": "English promise sentence inside a bilingual mail."
+    },
+    {
+      "file": "51-zh-mixed-deliver.eml",
+      "author": "陈工",
+      "split": "dev",
+      "provenance": "synthetic",
+      "reviewStatus": "implementer-labeled; independent human review pending (D2)",
+      "topic": "bilingual",
+      "expect": [
+        {
+          "action": "deliver 验收材料",
+          "dueAt": "2026-12-10"
+        }
+      ],
+      "note": "Chinese date + English verb in one sentence."
+    },
+    {
+      "file": "52-zh-mixed-campaign.eml",
+      "author": "李经理",
+      "split": "dev",
+      "provenance": "synthetic",
+      "reviewStatus": "implementer-labeled; independent human review pending (D2)",
+      "topic": "bilingual",
+      "expect": [
+        {
+          "action": "发 Q4 campaign 方案",
+          "dueAt": "2026-11-30"
+        }
+      ],
+      "note": "11月底 month-end with an English object."
+    },
+    {
+      "file": "53-en-mixed-audit.eml",
+      "author": "David Liu",
+      "split": "dev",
+      "provenance": "synthetic",
+      "reviewStatus": "implementer-labeled; independent human review pending (D2)",
+      "topic": "bilingual",
+      "expect": [
+        {
+          "action": "提交审计包",
+          "dueAt": "2026-12-11"
+        }
+      ],
+      "note": "Bilingual mail with a Chinese promise sentence."
+    },
+    {
+      "file": "54-en-pricing-sheet.eml",
+      "author": "Carol Wu",
+      "split": "dev",
+      "provenance": "synthetic",
+      "reviewStatus": "implementer-labeled; independent human review pending (D2)",
+      "topic": "bilingual",
+      "expect": [
+        {
+          "action": "share pricing sheet",
+          "dueAt": "2026-12-09"
+        }
+      ],
+      "note": "English promise with an ISO date."
+    },
+    {
+      "file": "55-zh-quoted-test-data.eml",
+      "author": "王工",
+      "split": "dev",
+      "provenance": "synthetic",
+      "reviewStatus": "implementer-labeled; independent human review pending (D2)",
+      "topic": "quote-chain",
+      "expect": [
+        {
+          "action": "发测试数据",
+          "dueAt": "2026-11-19"
+        }
+      ],
+      "note": "Reply with a quoted request (not a commitment) plus a Chinese promise."
+    },
+    {
+      "file": "56-zh-quoted-reconcile.eml",
+      "author": "李工",
+      "split": "dev",
+      "provenance": "synthetic",
+      "reviewStatus": "implementer-labeled; independent human review pending (D2)",
+      "topic": "quote-chain",
+      "expect": [
+        {
+          "action": "完成对账",
+          "dueAt": "2026-11-20"
+        }
+      ],
+      "note": "Quoted request with 请 inside a quoted block stays a non-commitment."
+    },
+    {
+      "file": "57-zh-quoted-contract.eml",
+      "author": "陈工",
+      "split": "dev",
+      "provenance": "synthetic",
+      "reviewStatus": "implementer-labeled; independent human review pending (D2)",
+      "topic": "quote-chain",
+      "expect": [
+        {
+          "action": "寄盖章件",
+          "dueAt": "2026-11-19"
+        }
+      ],
+      "note": "Quoted 麻烦 request plus a 我明天 promise."
+    },
+    {
+      "file": "58-zh-quoted-review.eml",
+      "author": "赵经理",
+      "split": "dev",
+      "provenance": "synthetic",
+      "reviewStatus": "implementer-labeled; independent human review pending (D2)",
+      "topic": "quote-chain",
+      "expect": [
+        {
+          "action": "确认评审时间",
+          "dueAt": "2026-11-23"
+        }
+      ],
+      "note": "Reply chain: quoted request and a promise with the same relative date."
+    },
+    {
+      "file": "59-zh-quoted-acceptance.eml",
+      "author": "周工",
+      "split": "dev",
+      "provenance": "synthetic",
+      "reviewStatus": "implementer-labeled; independent human review pending (D2)",
+      "topic": "quote-chain",
+      "expect": [
+        {
+          "action": "发验收材料",
+          "dueAt": "2026-11-23"
+        }
+      ],
+      "note": "Quoted request whose 我 is not a first-person promise."
+    },
+    {
+      "file": "60-zh-html-requirements.eml",
+      "author": "王工",
+      "split": "dev",
+      "provenance": "synthetic",
+      "reviewStatus": "implementer-labeled; independent human review pending (D2)",
+      "topic": "html-only",
+      "expect": [
+        {
+          "action": "完成需求文档",
+          "dueAt": "2026-11-27"
+        }
+      ],
+      "note": "HTML-only message (text/html fallback in parseMailMessage)."
+    },
+    {
+      "file": "61-zh-html-launch.eml",
+      "author": "李经理",
+      "split": "dev",
+      "provenance": "synthetic",
+      "reviewStatus": "implementer-labeled; independent human review pending (D2)",
+      "topic": "html-only",
+      "expect": [
+        {
+          "action": "上线新版官网",
+          "dueAt": "2026-12-02"
+        }
+      ],
+      "note": "HTML-only message with an ISO date."
+    },
+    {
+      "file": "62-zh-html-design.eml",
+      "author": "刘工",
+      "split": "dev",
+      "provenance": "synthetic",
+      "reviewStatus": "implementer-labeled; independent human review pending (D2)",
+      "topic": "html-only",
+      "expect": [
+        {
+          "action": "发设计稿",
+          "dueAt": "2026-11-19"
+        }
+      ],
+      "note": "HTML-only message with 明天."
+    },
+    {
+      "file": "63-zh-two-schedule-plan.eml",
+      "author": "王工",
+      "split": "dev",
+      "provenance": "synthetic",
+      "reviewStatus": "implementer-labeled; independent human review pending (D2)",
+      "topic": "multi",
+      "expect": [
+        {
+          "action": "发排期表",
+          "dueAt": "2026-11-17"
+        },
+        {
+          "action": "完成初版原型",
+          "dueAt": "2026-11-20"
+        }
+      ],
+      "note": "Two separate commitments in one message."
+    },
+    {
+      "file": "64-zh-two-reconcile.eml",
+      "author": "王会计",
+      "split": "dev",
+      "provenance": "synthetic",
+      "reviewStatus": "implementer-labeled; independent human review pending (D2)",
+      "topic": "multi",
+      "expect": [
+        {
+          "action": "完成对账",
+          "dueAt": "2026-11-30"
+        },
+        {
+          "action": "寄对账单",
+          "dueAt": "2026-11-25"
+        }
+      ],
+      "note": "Two commitments (month-end and next-week weekday)."
+    },
+    {
+      "file": "65-zh-two-report-deploy.eml",
+      "author": "陈工",
+      "split": "dev",
+      "provenance": "synthetic",
+      "reviewStatus": "implementer-labeled; independent human review pending (D2)",
+      "topic": "multi",
+      "expect": [
+        {
+          "action": "发测试报告",
+          "dueAt": "2026-11-19"
+        },
+        {
+          "action": "完成现场部署",
+          "dueAt": "2026-11-20"
+        }
+      ],
+      "note": "Two commitments with 明天/后天."
+    },
+    {
+      "file": "66-zh-two-quote-account.eml",
+      "author": "钱经理",
+      "split": "dev",
+      "provenance": "synthetic",
+      "reviewStatus": "implementer-labeled; independent human review pending (D2)",
+      "topic": "multi",
+      "expect": [
+        {
+          "action": "提交报价单",
+          "dueAt": "2026-11-20"
+        },
+        {
+          "action": "提供测试账号",
+          "dueAt": "2026-11-23"
+        }
+      ],
+      "note": "Two commitments without a leading 会/将."
+    },
+    {
+      "file": "67-zh-no-date-minutes.eml",
+      "author": "王工",
+      "split": "dev",
+      "provenance": "synthetic",
+      "reviewStatus": "implementer-labeled; independent human review pending (D2)",
+      "topic": "no-date",
+      "expect": [
+        {
+          "action": "整理会议纪要",
+          "dueAt": null
+        }
+      ],
+      "note": "Commitment without a usable date: 尽快 resolves to null and is excluded from due accuracy."
+    },
+    {
+      "file": "68-zh-no-date-invoice.eml",
+      "author": "李总",
+      "split": "dev",
+      "provenance": "synthetic",
+      "reviewStatus": "implementer-labeled; independent human review pending (D2)",
+      "topic": "no-date",
+      "expect": [
+        {
+          "action": "发开好的发票",
+          "dueAt": null
+        }
+      ],
+      "note": "No date expression in the message."
+    },
+    {
+      "file": "69-zh-no-date-reply.eml",
+      "author": "陈工",
+      "split": "dev",
+      "provenance": "synthetic",
+      "reviewStatus": "implementer-labeled; independent human review pending (D2)",
+      "topic": "no-date",
+      "expect": [
+        {
+          "action": "回复",
+          "dueAt": null
+        }
+      ],
+      "note": "Short no-date reply commitment."
+    },
+    {
+      "file": "70-zh-no-date-plan.eml",
+      "author": "赵经理",
+      "split": "dev",
+      "provenance": "synthetic",
+      "reviewStatus": "implementer-labeled; independent human review pending (D2)",
+      "topic": "no-date",
+      "expect": [
+        {
+          "action": "发方案",
+          "dueAt": null
+        }
+      ],
+      "note": "Tentative no-date commitment (争取/尽快)."
+    },
+    {
+      "file": "71-zh-third-confirm.eml",
+      "author": "客户周经理",
+      "split": "dev",
+      "provenance": "synthetic",
+      "reviewStatus": "implementer-labeled; independent human review pending (D2)",
+      "topic": "third-party",
+      "expect": [
+        {
+          "action": "确认方案",
+          "dueAt": "2026-11-25"
+        }
+      ],
+      "note": "Third-party promise (客户答应…): debtor third."
+    },
+    {
+      "file": "72-zh-third-shipping.eml",
+      "author": "供应商刘经理",
+      "split": "dev",
+      "provenance": "synthetic",
+      "reviewStatus": "implementer-labeled; independent human review pending (D2)",
+      "topic": "third-party",
+      "expect": [
+        {
+          "action": "发货",
+          "dueAt": "2026-12-01"
+        }
+      ],
+      "note": "Third-party promise with an absolute date."
+    },
+    {
+      "file": "73-zh-third-acceptance.eml",
+      "author": "乙方陈工",
+      "split": "dev",
+      "provenance": "synthetic",
+      "reviewStatus": "implementer-labeled; independent human review pending (D2)",
+      "topic": "third-party",
+      "expect": [
+        {
+          "action": "提交验收材料",
+          "dueAt": "2026-11-30"
+        }
+      ],
+      "note": "Third-party promise with 保证."
+    },
+    {
+      "file": "74-zh-third-prototype.eml",
+      "author": "对方吴工",
+      "split": "dev",
+      "provenance": "synthetic",
+      "reviewStatus": "implementer-labeled; independent human review pending (D2)",
+      "topic": "third-party",
+      "expect": [
+        {
+          "action": "寄出样机",
+          "dueAt": "2026-11-20"
+        }
+      ],
+      "note": "Third-party 对方同意 promise."
+    },
+    {
+      "file": "75-zh-travel-visit-log.eml",
+      "author": "王工",
+      "split": "dev",
+      "provenance": "synthetic",
+      "reviewStatus": "implementer-labeled; independent human review pending (D2)",
+      "topic": "travel",
+      "expect": [
+        {
+          "action": "发客户拜访记录",
+          "dueAt": "2026-11-21"
+        }
+      ],
+      "note": "Promise made from a travel context; 明天 from a Friday message."
+    },
+    {
+      "file": "76-zh-travel-expense.eml",
+      "author": "刘工",
+      "split": "dev",
+      "provenance": "synthetic",
+      "reviewStatus": "implementer-labeled; independent human review pending (D2)",
+      "topic": "travel",
+      "expect": [
+        {
+          "action": "提交差旅报销单",
+          "dueAt": "2026-11-25"
+        }
+      ],
+      "note": "Travel promise with 后天."
+    },
+    {
+      "file": "77-en-foreign-nda.eml",
+      "author": "Emily Wong",
+      "split": "dev",
+      "provenance": "synthetic",
+      "reviewStatus": "implementer-labeled; independent human review pending (D2)",
+      "topic": "foreign",
+      "expect": [
+        {
+          "action": "send signed NDA",
+          "dueAt": "2026-11-30"
+        }
+      ],
+      "note": "Foreign sender (.co.uk) with an ISO date."
+    },
+    {
+      "file": "78-en-foreign-compliance.eml",
+      "author": "Hans Müller",
+      "split": "dev",
+      "provenance": "synthetic",
+      "reviewStatus": "implementer-labeled; independent human review pending (D2)",
+      "topic": "foreign",
+      "expect": [
+        {
+          "action": "provide compliance certificate",
+          "dueAt": "2026-12-15"
+        }
+      ],
+      "note": "Foreign sender (.de) with We will promise."
+    },
+    {
+      "file": "79-neg-request-report.eml",
+      "author": "王工",
+      "split": "dev",
+      "provenance": "synthetic",
+      "reviewStatus": "implementer-labeled; independent human review pending (D2)",
+      "topic": "negative-request",
+      "expect": [],
+      "note": "Pure request (请…发给) is not a commitment."
+    },
+    {
+      "file": "80-neg-request-contract.eml",
+      "author": "李总",
+      "split": "dev",
+      "provenance": "synthetic",
+      "reviewStatus": "implementer-labeled; independent human review pending (D2)",
+      "topic": "negative-request",
+      "expect": [],
+      "note": "麻烦 request starting the sentence."
+    },
+    {
+      "file": "81-neg-request-confirm.eml",
+      "author": "陈工",
+      "split": "dev",
+      "provenance": "synthetic",
+      "reviewStatus": "implementer-labeled; independent human review pending (D2)",
+      "topic": "negative-request",
+      "expect": [],
+      "note": "能否 question, not a promise."
+    },
+    {
+      "file": "82-neg-request-en-deck.eml",
+      "author": "Bob Smith",
+      "split": "dev",
+      "provenance": "synthetic",
+      "reviewStatus": "implementer-labeled; independent human review pending (D2)",
+      "topic": "negative-request",
+      "expect": [],
+      "note": "English Could you request."
+    },
+    {
+      "file": "83-neg-reschedule-meeting.eml",
+      "author": "王工",
+      "split": "dev",
+      "provenance": "synthetic",
+      "reviewStatus": "implementer-labeled; independent human review pending (D2)",
+      "topic": "negative-reschedule",
+      "expect": [],
+      "note": "Meeting reschedule is a known non-commitment class."
+    },
+    {
+      "file": "84-neg-reschedule-review.eml",
+      "author": "陈经理",
+      "split": "dev",
+      "provenance": "synthetic",
+      "reviewStatus": "implementer-labeled; independent human review pending (D2)",
+      "topic": "negative-reschedule",
+      "expect": [],
+      "note": "我这边 + 推迟 is a reschedule, not a promise."
+    },
+    {
+      "file": "85-neg-reschedule-delivery.eml",
+      "author": "李工",
+      "split": "dev",
+      "provenance": "synthetic",
+      "reviewStatus": "implementer-labeled; independent human review pending (D2)",
+      "topic": "negative-reschedule",
+      "expect": [],
+      "note": "顺延 reschedule without a firm promise."
+    },
+    {
+      "file": "86-neg-auto-shipping.eml",
+      "author": "订单系统",
+      "split": "dev",
+      "provenance": "synthetic",
+      "reviewStatus": "implementer-labeled; independent human review pending (D2)",
+      "topic": "negative-auto",
+      "expect": [],
+      "note": "Automated shipping notification noise."
+    },
+    {
+      "file": "87-neg-auto-statement.eml",
+      "author": "对账系统",
+      "split": "dev",
+      "provenance": "synthetic",
+      "reviewStatus": "implementer-labeled; independent human review pending (D2)",
+      "topic": "negative-auto",
+      "expect": [],
+      "note": "Automated notification (no human commitment)."
+    },
+    {
+      "file": "88-neg-auto-reply.eml",
+      "author": "王工",
+      "split": "dev",
+      "provenance": "synthetic",
+      "reviewStatus": "implementer-labeled; independent human review pending (D2)",
+      "topic": "negative-auto",
+      "expect": [],
+      "note": "Auto-reply out-of-office text stays a non-commitment."
+    },
+    {
+      "file": "89-neg-marketing-promo.eml",
+      "author": "市场部",
+      "split": "dev",
+      "provenance": "synthetic",
+      "reviewStatus": "implementer-labeled; independent human review pending (D2)",
+      "topic": "negative-marketing",
+      "expect": [],
+      "note": "Marketing promotion noise."
+    },
+    {
+      "file": "90-neg-html-promo.eml",
+      "author": "云端服务",
+      "split": "dev",
+      "provenance": "synthetic",
+      "reviewStatus": "implementer-labeled; independent human review pending (D2)",
+      "topic": "negative-marketing",
+      "expect": [],
+      "note": "HTML marketing noise."
+    },
+    {
+      "file": "91-zh-relative-acceptance.eml",
+      "author": "何工",
+      "split": "heldout",
+      "provenance": "synthetic",
+      "reviewStatus": "implementer-labeled; independent human review pending (D2)",
+      "topic": "zh-relative",
+      "expect": [
+        {
+          "action": "完成接口联调",
+          "dueAt": "2026-12-08"
+        }
+      ],
+      "note": "Held-out: month-day absolute date."
+    },
+    {
+      "file": "92-zh-relative-test-report.eml",
+      "author": "郑工",
+      "split": "heldout",
+      "provenance": "synthetic",
+      "reviewStatus": "implementer-labeled; independent human review pending (D2)",
+      "topic": "zh-relative",
+      "expect": [
+        {
+          "action": "发测试报告",
+          "dueAt": "2026-12-07"
+        }
+      ],
+      "note": "Held-out: 下周一 from a Wednesday message."
+    },
+    {
+      "file": "93-zh-relative-audit.eml",
+      "author": "秦会计",
+      "split": "heldout",
+      "provenance": "synthetic",
+      "reviewStatus": "implementer-labeled; independent human review pending (D2)",
+      "topic": "zh-relative",
+      "expect": [
+        {
+          "action": "提交年度审计材料",
+          "dueAt": "2026-12-20"
+        }
+      ],
+      "note": "Held-out: month-day date."
+    },
+    {
+      "file": "94-zh-relative-vendor-review.eml",
+      "author": "许经理",
+      "split": "heldout",
+      "provenance": "synthetic",
+      "reviewStatus": "implementer-labeled; independent human review pending (D2)",
+      "topic": "zh-relative",
+      "expect": [
+        {
+          "action": "完成供应商评估",
+          "dueAt": "2026-12-11"
+        }
+      ],
+      "note": "Held-out: 下周五 from a Friday message."
+    },
+    {
+      "file": "95-zh-relative-month-end-docs.eml",
+      "author": "邓工",
+      "split": "heldout",
+      "provenance": "synthetic",
+      "reviewStatus": "implementer-labeled; independent human review pending (D2)",
+      "topic": "zh-relative",
+      "expect": [
+        {
+          "action": "完成部署文档整理",
+          "dueAt": "2026-12-31"
+        }
+      ],
+      "note": "Held-out: 月底 month-end."
+    },
+    {
+      "file": "96-zh-absolute-demo-env.eml",
+      "author": "王总",
+      "split": "heldout",
+      "provenance": "synthetic",
+      "reviewStatus": "implementer-labeled; independent human review pending (D2)",
+      "topic": "zh-absolute",
+      "expect": [
+        {
+          "action": "交付演示环境",
+          "dueAt": "2026-12-18"
+        }
+      ],
+      "note": "Held-out: ISO date."
+    },
+    {
+      "file": "97-zh-absolute-training.eml",
+      "author": "李工",
+      "split": "heldout",
+      "provenance": "synthetic",
+      "reviewStatus": "implementer-labeled; independent human review pending (D2)",
+      "topic": "zh-absolute",
+      "expect": [
+        {
+          "action": "发培训材料",
+          "dueAt": "2026-12-15"
+        }
+      ],
+      "note": "Held-out: month-day date with a carry construction."
+    },
+    {
+      "file": "98-zh-absolute-cutover.eml",
+      "author": "刘经理",
+      "split": "heldout",
+      "provenance": "synthetic",
+      "reviewStatus": "implementer-labeled; independent human review pending (D2)",
+      "topic": "zh-absolute",
+      "expect": [
+        {
+          "action": "完成系统切换",
+          "dueAt": "2026-12-28"
+        }
+      ],
+      "note": "Held-out: explicit-year date with the 我们…前 pattern."
+    },
+    {
+      "file": "99-zh-absolute-annual-bill.eml",
+      "author": "陈会计",
+      "split": "heldout",
+      "provenance": "synthetic",
+      "reviewStatus": "implementer-labeled; independent human review pending (D2)",
+      "topic": "zh-absolute",
+      "expect": [
+        {
+          "action": "寄出年度账单",
+          "dueAt": "2026-12-22"
+        }
+      ],
+      "note": "Held-out: slash date."
+    },
+    {
+      "file": "100-en-mixed-release-notes.eml",
+      "author": "Grace Liu",
+      "split": "heldout",
+      "provenance": "synthetic",
+      "reviewStatus": "implementer-labeled; independent human review pending (D2)",
+      "topic": "bilingual",
+      "expect": [
+        {
+          "action": "submit release notes",
+          "dueAt": "2026-12-16"
+        }
+      ],
+      "note": "Held-out: bilingual mail with an English commitment."
+    },
+    {
+      "file": "101-en-mixed-migration-plan.eml",
+      "author": "Sam Wu",
+      "split": "heldout",
+      "provenance": "synthetic",
+      "reviewStatus": "implementer-labeled; independent human review pending (D2)",
+      "topic": "bilingual",
+      "expect": [
+        {
+          "action": "deliver migration plan",
+          "dueAt": "2026-12-21"
+        }
+      ],
+      "note": "Held-out: bilingual mail with an English commitment."
+    },
+    {
+      "file": "102-zh-mixed-budget.eml",
+      "author": "Mia Zhang",
+      "split": "heldout",
+      "provenance": "synthetic",
+      "reviewStatus": "implementer-labeled; independent human review pending (D2)",
+      "topic": "bilingual",
+      "expect": [
+        {
+          "action": "发 revised budget",
+          "dueAt": "2026-12-16"
+        }
+      ],
+      "note": "Held-out: 下周三 with an English object."
+    },
+    {
+      "file": "103-zh-quoted-signoff.eml",
+      "author": "周工",
+      "split": "heldout",
+      "provenance": "synthetic",
+      "reviewStatus": "implementer-labeled; independent human review pending (D2)",
+      "topic": "quote-chain",
+      "expect": [
+        {
+          "action": "回复确认签收单",
+          "dueAt": "2026-12-11"
+        }
+      ],
+      "note": "Held-out: quoted request + 本周五 promise."
+    },
+    {
+      "file": "104-zh-quoted-test-account.eml",
+      "author": "吴工",
+      "split": "heldout",
+      "provenance": "synthetic",
+      "reviewStatus": "implementer-labeled; independent human review pending (D2)",
+      "topic": "quote-chain",
+      "expect": [
+        {
+          "action": "提供测试账号",
+          "dueAt": "2026-12-14"
+        }
+      ],
+      "note": "Held-out: quoted request + promise on the same relative date."
+    },
+    {
+      "file": "105-zh-html-acceptance.eml",
+      "author": "刘工",
+      "split": "heldout",
+      "provenance": "synthetic",
+      "reviewStatus": "implementer-labeled; independent human review pending (D2)",
+      "topic": "html-only",
+      "expect": [
+        {
+          "action": "提交验收报告",
+          "dueAt": "2026-12-24"
+        }
+      ],
+      "note": "Held-out: HTML-only message."
+    },
+    {
+      "file": "106-zh-two-review-opinions.eml",
+      "author": "陈经理",
+      "split": "heldout",
+      "provenance": "synthetic",
+      "reviewStatus": "implementer-labeled; independent human review pending (D2)",
+      "topic": "multi",
+      "expect": [
+        {
+          "action": "完成方案评审",
+          "dueAt": "2026-12-16"
+        },
+        {
+          "action": "发评审意见",
+          "dueAt": "2026-12-14"
+        }
+      ],
+      "note": "Held-out: two commitments in one message."
+    },
+    {
+      "file": "107-zh-two-voucher-report.eml",
+      "author": "赵会计",
+      "split": "heldout",
+      "provenance": "synthetic",
+      "reviewStatus": "implementer-labeled; independent human review pending (D2)",
+      "topic": "multi",
+      "expect": [
+        {
+          "action": "发付款凭证",
+          "dueAt": "2026-12-17"
+        },
+        {
+          "action": "完成报销单提交",
+          "dueAt": "2026-12-18"
+        }
+      ],
+      "note": "Held-out: two commitments with 明天/本周五."
+    },
+    {
+      "file": "108-zh-no-date-feedback.eml",
+      "author": "李总",
+      "split": "heldout",
+      "provenance": "synthetic",
+      "reviewStatus": "implementer-labeled; independent human review pending (D2)",
+      "topic": "no-date",
+      "expect": [
+        {
+          "action": "整理客户反馈",
+          "dueAt": null
+        }
+      ],
+      "note": "Held-out: no-date commitment."
+    },
+    {
+      "file": "109-zh-no-date-addendum.eml",
+      "author": "王工",
+      "split": "heldout",
+      "provenance": "synthetic",
+      "reviewStatus": "implementer-labeled; independent human review pending (D2)",
+      "topic": "no-date",
+      "expect": [
+        {
+          "action": "发补充协议",
+          "dueAt": null
+        }
+      ],
+      "note": "Held-out: no-date commitment."
+    },
+    {
+      "file": "110-zh-third-final-quote.eml",
+      "author": "客户王总",
+      "split": "heldout",
+      "provenance": "synthetic",
+      "reviewStatus": "implementer-labeled; independent human review pending (D2)",
+      "topic": "third-party",
+      "expect": [
+        {
+          "action": "确认最终报价",
+          "dueAt": "2026-12-23"
+        }
+      ],
+      "note": "Held-out: third-party promise."
+    },
+    {
+      "file": "111-zh-third-samples.eml",
+      "author": "厂家赵经理",
+      "split": "heldout",
+      "provenance": "synthetic",
+      "reviewStatus": "implementer-labeled; independent human review pending (D2)",
+      "topic": "third-party",
+      "expect": [
+        {
+          "action": "寄出样品",
+          "dueAt": "2026-12-21"
+        }
+      ],
+      "note": "Held-out: third-party promise with 下周一."
+    },
+    {
+      "file": "112-zh-travel-report.eml",
+      "author": "吴工",
+      "split": "heldout",
+      "provenance": "synthetic",
+      "reviewStatus": "implementer-labeled; independent human review pending (D2)",
+      "topic": "travel",
+      "expect": [
+        {
+          "action": "提交差旅报告",
+          "dueAt": "2026-12-17"
+        }
+      ],
+      "note": "Held-out: travel promise with 明天."
+    },
+    {
+      "file": "113-en-foreign-addendum.eml",
+      "author": "Olga Petrova",
+      "split": "heldout",
+      "provenance": "synthetic",
+      "reviewStatus": "implementer-labeled; independent human review pending (D2)",
+      "topic": "foreign",
+      "expect": [
+        {
+          "action": "send signed addendum",
+          "dueAt": "2026-12-30"
+        }
+      ],
+      "note": "Held-out: foreign sender with an ISO date."
+    },
+    {
+      "file": "114-zh-quoted-budget.eml",
+      "author": "周经理",
+      "split": "heldout",
+      "provenance": "synthetic",
+      "reviewStatus": "implementer-labeled; independent human review pending (D2)",
+      "topic": "reply-chain",
+      "expect": [
+        {
+          "action": "发预算意见",
+          "dueAt": "2026-12-19"
+        }
+      ],
+      "note": "Held-out: quoted request + 我明天 promise."
+    },
+    {
+      "file": "115-neg-request-receipts.eml",
+      "author": "刘工",
+      "split": "heldout",
+      "provenance": "synthetic",
+      "reviewStatus": "implementer-labeled; independent human review pending (D2)",
+      "topic": "negative-request",
+      "expect": [],
+      "note": "Held-out: 麻烦 request."
+    },
+    {
+      "file": "116-neg-request-en-inventory.eml",
+      "author": "Sam Wu",
+      "split": "heldout",
+      "provenance": "synthetic",
+      "reviewStatus": "implementer-labeled; independent human review pending (D2)",
+      "topic": "negative-request",
+      "expect": [],
+      "note": "Held-out: English Can you request."
+    },
+    {
+      "file": "117-neg-reschedule-session.eml",
+      "author": "陈工",
+      "split": "heldout",
+      "provenance": "synthetic",
+      "reviewStatus": "implementer-labeled; independent human review pending (D2)",
+      "topic": "negative-reschedule",
+      "expect": [],
+      "note": "Held-out: reschedule."
+    },
+    {
+      "file": "118-neg-auto-invoice.eml",
+      "author": "发票系统",
+      "split": "heldout",
+      "provenance": "synthetic",
+      "reviewStatus": "implementer-labeled; independent human review pending (D2)",
+      "topic": "negative-auto",
+      "expect": [],
+      "note": "Held-out: automated notification."
+    },
+    {
+      "file": "119-neg-auto-vacation.eml",
+      "author": "李工",
+      "split": "heldout",
+      "provenance": "synthetic",
+      "reviewStatus": "implementer-labeled; independent human review pending (D2)",
+      "topic": "negative-auto",
+      "expect": [],
+      "note": "Held-out: auto-reply out-of-office text."
+    },
+    {
+      "file": "120-neg-html-year-end.eml",
+      "author": "年终活动",
+      "split": "heldout",
+      "provenance": "synthetic",
+      "reviewStatus": "implementer-labeled; independent human review pending (D2)",
+      "topic": "negative-marketing",
+      "expect": [],
+      "note": "Held-out: HTML marketing noise."
     }
   ]
 }

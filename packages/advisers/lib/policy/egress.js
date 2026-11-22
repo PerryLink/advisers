@@ -69,6 +69,8 @@ export const EGRESS_REGISTRY = Object.freeze([
   Object.freeze({ id: 'kb.ask.model', surface: 'kb.ask', action: 'model-egress', dataClass: 'kb', sink: 'model', entry: 'lib/kb.js (model ask planned 0.4.x; local kbSearch ships in 0.4)', default: 'off', gate: 'enforced-policy', tosRef: 'docs/TOS.md#9.3' }),
   Object.freeze({ id: 'export.evidence-pack', surface: 'export', action: 'export', dataClass: 'ledger', sink: 'fs', entry: 'lib/evidence.js#buildEvidencePack', default: 'on', gate: 'enforced-policy', tosRef: 'docs/TOS.md#9.3' }),
   Object.freeze({ id: 'export.receipt-pack', surface: 'export', action: 'export', dataClass: 'ledger', sink: 'fs', entry: 'lib/evidence.js#buildReceiptPack', default: 'on', gate: 'enforced-policy', tosRef: 'docs/TOS.md#9.3' }),
+  // 0.5.0 context pack: a local filesystem export surface (no network row).
+  Object.freeze({ id: 'export.context-pack', surface: 'export', action: 'export', dataClass: 'ledger', sink: 'fs', entry: 'lib/context-pack.js#buildContextPack', default: 'on', gate: 'enforced-policy', tosRef: 'docs/TOS.md#9.3' }),
   Object.freeze({ id: 'export.pet-brief', surface: 'pet-brief', action: 'export', dataClass: 'ledger', sink: 'fs', entry: 'lib/pet-brief.js#buildPetBrief', default: 'on', gate: 'legacy-gate', tosRef: 'docs/TOS.md#9.3' }),
   Object.freeze({ id: 'kb.ingest.local', surface: 'kb.ingest', action: 'write-ledger', dataClass: 'kb', sink: 'fs', entry: 'lib/kb.js#kbAdd', default: 'on', gate: 'self-attested', tosRef: 'docs/TOS.md#9.3' }),
   Object.freeze({ id: 'agent.exec', surface: 'agent', action: 'exec', dataClass: 'tool', sink: 'spawn', entry: 'lib/agent.js#executeTool', default: 'on', gate: 'legacy-gate', tosRef: 'docs/TOS.md#5' }),

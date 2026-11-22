@@ -33,6 +33,13 @@
  * intact), post-install verification failure (rollback), anchor-behind gate,
  * rotation dry-run/containment/unreadable protection.
  *
+ * 0.5.0 (050-S1, plan 121 §3): ensureSafetyBackup() writes (or reuses) a
+ * fail-closed `pre-*` managed backup before a destructive command -- a failed
+ * backup aborts the command with a structured code and leaves the ledger
+ * untouched; inspectBackupFreshness() produces the additive doctor backup{}
+ * block (count/newest age/readability/plaintext copies) without changing any
+ * command exit code. Both are additive: every existing export keeps its output.
+ *
  * Library-only: no bin/ wiring (Wave 2), no network, no new dependency. Uses
  * only node:fs/node:crypto/node:sqlite (through lib/sqlite.js) and lib/fs-safe.
  */
@@ -73,6 +80,19 @@ const MAX_TAG_CHARS = 32
 const HASH_CHUNK_BYTES = 1024 * 1024
 /** Tables whose row counts are compared after a backup copy (same set as sqlite.js). */
 const BACKUP_SAMPLE_TABLES = ['matters', 'facts', 'commitments', 'preferences', 'audit']
+
+/** A safety backup with the same tag + database sha256 is reused within this window. */
+export const SAFETY_BACKUP_REUSE_MS = 10 * 60 * 1000
+/** The newest managed backup older than this many days is reported as stale. */
+export const BACKUP_STALE_DAYS = 30
+/** The newest managed backup older than this many days gets an informational warning. */
+export const BACKUP_OLD_DAYS = 7
+/**
+ * Plaintext database copies the freshness report must see (same set as the 0.4.3
+ * doctor checks): pre-unseal/migrate/sync copies and `<import-backup-*.db>`.
+ * Managed `<home>/backups/state-*.db` files are counted separately.
+ */
+export const PLAINTEXT_BACKUP_FILE_RE = /^(?:state\.db\.before-(?:unseal|migrate|sync)-|import-backup-.*\.db$)/
 
 function failure(code, message, extra = {}) {
   return { ok: false, code, errors: message ? [message] : [], warnings: [], ...extra }
@@ -1342,4 +1362,348 @@ export function restoreBackup({
     warnings,
     errors: [],
   }
+}
+
+// ---------------------------------------------------------------------------
+// 0.5.0 050-S1: fail-closed safety backups + backup freshness inspection
+// ---------------------------------------------------------------------------
+
+/** Empty structured result for the safety-backup helpers (all keys additive). */
+function safetyBackupResult(fields = {}) {
+  return {
+    ok: false,
+    code: null,
+    errors: [],
+    warnings: [],
+    path: null,
+    reused: false,
+    tag: null,
+    sha256: null,
+    bytes: null,
+    createdAt: null,
+    ageMs: null,
+    skipped: false,
+    reason: null,
+    checkpoint: null,
+    ...fields,
+  }
+}
+
+function closeStoreQuietly(store) {
+  try { store?.close() } catch {}
+}
+
+/** Normalize a `now` option (Date | epoch ms | undefined) to epoch milliseconds. */
+function safetyNowMs(now) {
+  if (now instanceof Date) {
+    const value = now.getTime()
+    return Number.isFinite(value) ? value : Date.now()
+  }
+  if (Number.isFinite(now)) return Number(now)
+  return Date.now()
+}
+
+function createdAtOfManagedBackup(path) {
+  const parsed = parseBackupFileName(basename(String(path)))
+  return parsed ? parsed.atIso : null
+}
+
+function roundAgeDays(value) {
+  return Math.round(Number(value) * 100) / 100
+}
+
+/**
+ * Find a recent managed backup that can stand in for a new safety backup: same
+ * tag, same database sha256, taken within maxAgeMs. Read-only.
+ *
+ * Only the recorded `.sha256` sidecar is accepted as evidence: a managed backup
+ * without a sidecar (or with a different hash) is never reused, because a safety
+ * backup may not be assumed correct without its checksum record.
+ */
+export function findReusableManagedBackup({ home, tag = null, sha256, now = Date.now(), maxAgeMs = SAFETY_BACKUP_REUSE_MS, fs = nodeFs } = {}) {
+  const result = { ok: false, found: false, path: null, name: null, tag: null, sha256: null, atMs: null, ageMs: null, reason: null, warnings: [], errors: [] }
+  if (!home) { result.errors.push('findReusableManagedBackup requires {home}'); result.reason = 'missing-home'; return result }
+  const tagCheck = normalizeBackupTag(tag)
+  if (!tagCheck.ok) { result.errors.push(tagCheck.error); result.reason = 'invalid-tag'; return result }
+  result.tag = tagCheck.tag
+  if (typeof sha256 !== 'string' || !/^[0-9a-f]{64}$/.test(sha256)) {
+    result.ok = true
+    result.reason = 'database-sha-unknown'
+    result.warnings.push('the database sha256 is unknown, so no recent safety backup can be reused')
+    return result
+  }
+  const listed = listBackups({ home, fs })
+  if (!listed.ok) { result.errors.push(...listed.errors); result.reason = 'list-failed'; return result }
+  result.ok = true
+  const nowMs = safetyNowMs(now)
+  let newest = null
+  for (const entry of listed.entries) {
+    if (entry.tag !== tagCheck.tag) continue
+    if (!newest || entry.atMs > newest.atMs) newest = entry
+  }
+  if (!newest) { result.reason = 'no-matching-backup'; return result }
+  const ageMs = Math.max(0, nowMs - newest.atMs)
+  result.atMs = newest.atMs
+  result.ageMs = ageMs
+  if (ageMs > maxAgeMs) { result.reason = 'backup-too-old'; return result }
+  const sidecar = readBackupSha256(newest.path, { fs })
+  if (!sidecar.found) { result.reason = 'no-sha256-sidecar'; return result }
+  if (!sidecar.ok) { result.reason = 'sidecar-malformed'; result.warnings.push(...sidecar.errors); return result }
+  if (sidecar.sha256 !== sha256) { result.reason = 'sha256-mismatch'; return result }
+  result.found = true
+  result.path = newest.path
+  result.name = newest.name
+  result.sha256 = sha256
+  result.reason = 'reused'
+  return result
+}
+
+/**
+ * Fail-closed managed backup before a destructive command (0.5.0 050-S1).
+ *
+ * Order: checkpoint the WAL (TRUNCATE; busy is a failure, never a warning) ->
+ * sha256 the checkpointed database -> reuse a managed backup with the same tag +
+ * sha256 taken in the last `reuseMs` -> otherwise create a fresh managed backup
+ * (`rotate:false`, so nothing is ever deleted here) with `.sha256`/`.anchor.json`
+ * sidecars and verifyChain enabled.
+ *
+ * A result with `ok:false` means the caller MUST abort the destructive command:
+ * no partial backup is left behind (createBackup removes its temp copy). A
+ * JSON-store home (no SQLite database) is the documented compatibility exception:
+ * `ok:true, skipped:true, reason:'no-database'` so the JSON command keeps its
+ * 0.4.3 behaviour after a warning.
+ */
+export function ensureSafetyBackup({ home, dbPath, store = null, tag = null, now = Date.now(), reuseMs = SAFETY_BACKUP_REUSE_MS, verifyChain = true, checkpoint = true, writeAnchor = true, fs = nodeFs } = {}) {
+  const tagCheck = normalizeBackupTag(tag)
+  const result = safetyBackupResult({ tag: tagCheck.ok ? tagCheck.tag : null })
+  if (!tagCheck.ok) return { ...result, code: 'E_BACKUP_TAG_INVALID', errors: [tagCheck.error] }
+  if (!home) return { ...result, code: 'E_BACKUP_DIR_REQUIRED', errors: ['ensureSafetyBackup requires {home}'] }
+  const nowMs = safetyNowMs(now)
+  if (!dbPath) {
+    result.ok = true
+    result.skipped = true
+    result.reason = 'no-database'
+    result.warnings.push('there is no SQLite database path, so no managed safety backup was written (JSON-store compatibility)')
+    return result
+  }
+  const source = resolve(String(dbPath))
+  let sourceInfo
+  try { sourceInfo = fsStat(fs, source) } catch (error) {
+    if (isMissingError(error)) {
+      result.ok = true
+      result.skipped = true
+      result.reason = 'no-database'
+      result.warnings.push('there is no SQLite database at ' + source + ', so no managed safety backup was written (JSON-store compatibility)')
+      return result
+    }
+    return { ...result, code: 'E_BACKUP_SOURCE_MISSING', errors: ['cannot stat the live database ' + source + ': ' + String(error?.code ?? error?.message ?? error)] }
+  }
+  if (!sourceInfo.isFile()) return { ...result, code: 'E_BACKUP_SOURCE_MISSING', errors: ['the live database path is not a regular file: ' + source] }
+  let ownedStore = null
+  let activeStore = store ?? null
+  if (checkpoint) {
+    try {
+      if (!activeStore) { ownedStore = new SqliteStore(source); activeStore = ownedStore }
+      if (typeof activeStore.checkpoint !== 'function') {
+        closeStoreQuietly(ownedStore)
+        return { ...result, code: 'E_BACKUP_STORE_INVALID', errors: ['the supplied store does not implement checkpoint()'] }
+      }
+      const checkpointInfo = activeStore.checkpoint({ mode: 'TRUNCATE' })
+      result.checkpoint = checkpointInfo ?? null
+      if (checkpointInfo?.busy) {
+        closeStoreQuietly(ownedStore)
+        return { ...result, code: 'E_BACKUP_BUSY', errors: ['another connection blocked the WAL checkpoint, so no safety backup was written; close other advisers processes and retry'] }
+      }
+    } catch (error) {
+      closeStoreQuietly(ownedStore)
+      return { ...result, code: error?.code ?? 'E_BACKUP_CHECKPOINT_FAILED', errors: ['cannot checkpoint the WAL before the safety backup: ' + String(error?.message ?? error).slice(0, 200)] }
+    }
+  }
+  try {
+    let walBytes = 0
+    try { walBytes = Number(fsStat(fs, source + '-wal').size) || 0 } catch {}
+    if (walBytes > 0) return { ...result, code: 'E_BACKUP_HAS_WAL', errors: ['the WAL still holds ' + walBytes + ' bytes after the checkpoint; a safety backup taken now could miss committed rows'] }
+    const hashed = sha256FileSync(source, { fs })
+    result.sha256 = hashed.sha256
+    result.bytes = hashed.bytes
+    const reusable = findReusableManagedBackup({ home, tag: tagCheck.tag, sha256: hashed.sha256, now: nowMs, maxAgeMs: reuseMs, fs })
+    if (reusable.ok && reusable.found) {
+      result.ok = true
+      result.reused = true
+      result.reason = 'reused'
+      result.path = reusable.path
+      result.ageMs = reusable.ageMs
+      result.createdAt = createdAtOfManagedBackup(reusable.path)
+      return result
+    }
+    let created = null
+    for (let attempt = 0; attempt < 5; attempt++) {
+      created = createManagedBackup({
+        home,
+        dbPath: source,
+        store: activeStore,
+        tag: tagCheck.tag,
+        at: new Date(nowMs + attempt),
+        rotate: false,
+        verifyChain,
+        writeSha256: true,
+        writeAnchor,
+        fs,
+      })
+      if (created.ok || created.code !== 'E_BACKUP_EXISTS') break
+    }
+    if (!created?.ok) {
+      return {
+        ...result,
+        code: created?.code ?? 'E_BACKUP_FAILED',
+        errors: [...(created?.errors ?? ['the safety backup could not be written'])],
+        warnings: [...result.warnings, ...(created?.warnings ?? [])],
+      }
+    }
+    result.ok = true
+    result.path = created.path
+    result.createdAt = createdAtOfManagedBackup(created.path)
+    result.bytes = created.bytes ?? hashed.bytes
+    result.sha256 = created.sha256 ?? hashed.sha256
+    if (created.sha256 && created.sha256 !== hashed.sha256) result.warnings.push('the database changed while the safety backup was taken; the backup contains newer bytes than the hash that was checked')
+    result.warnings.push(...(created.warnings ?? []))
+    return result
+  } finally {
+    closeStoreQuietly(ownedStore)
+  }
+}
+
+/** Count rows that mean "this ledger holds user data" for the freshness warning. */
+function countLedgerUserRows({ dbPath = null, store = null, fs = nodeFs } = {}) {
+  const tables = ['matters', 'facts', 'commitments', 'preferences', 'links', 'updates', 'deliveries', 'turns']
+  let owned = null
+  let active = store && store.db ? store : null
+  try {
+    if (!active && dbPath && fsExists(fs, String(dbPath))) {
+      owned = new SqliteStore(String(dbPath), { readOnly: true })
+      active = owned
+    }
+    if (!active) return null
+    let total = 0
+    for (const table of tables) {
+      try { total += Number(active.db.prepare('SELECT COUNT(*) AS n FROM ' + table).get()?.n ?? 0) } catch {}
+    }
+    try { total += Number(active.db.prepare("SELECT COUNT(*) AS n FROM audit WHERE action NOT LIKE 'tos.%' AND action NOT LIKE 'sync.%'").get()?.n ?? 0) } catch {}
+    return total
+  } catch {
+    return null
+  } finally {
+    closeStoreQuietly(owned)
+  }
+}
+
+/**
+ * Read-only backup freshness for the additive `doctor --check-db --json`
+ * backup{} block (0.5.0 050-S1).
+ *
+ * Reports the managed GFS backup directory (count/newest/readability/sidecars),
+ * the newest legacy plaintext copy in HOME (pre-unseal/migrate/sync, import
+ * backup) and the keep policy. Status is `none` (no managed backup), `stale`
+ * (newest > BACKUP_STALE_DAYS), `ok`, or `error` (directory unreadable).
+ * Warnings only: this function never changes doctor's exit code and never runs
+ * the full `backups verify` chain (only a cheap quick_check on the newest file).
+ */
+export function inspectBackupFreshness({ home, now = Date.now(), dbPath = null, store = null, keep = null, fs = nodeFs } = {}) {
+  const nowMs = safetyNowMs(now)
+  const result = {
+    ok: true,
+    dir: null,
+    status: 'none',
+    managedCount: 0,
+    newestManaged: null,
+    newestPlaintext: null,
+    keepPolicy: null,
+    warnings: [],
+    errors: [],
+    checkedAt: new Date(nowMs).toISOString(),
+  }
+  if (!home) {
+    result.ok = false
+    result.status = 'error'
+    result.errors.push('inspectBackupFreshness requires {home}')
+    return result
+  }
+  result.dir = backupDir({ home })
+  const keepCheck = normalizeKeepPolicy(keep)
+  const policy = keepCheck.ok ? keepCheck.policy : { mode: 'gfs', ...DEFAULT_KEEP_POLICY }
+  if (!keepCheck.ok) result.warnings.push(keepCheck.error)
+  result.keepPolicy = {
+    ...policy,
+    gfsTarget: policy.mode === 'gfs'
+      ? Number(policy.daily) + Number(policy.weekly) + Number(policy.monthly)
+      : Number(policy.count ?? 1),
+  }
+  const listed = listBackups({ home, fs })
+  if (!listed.ok) {
+    result.ok = false
+    result.status = 'error'
+    result.errors.push(...listed.errors)
+    return result
+  }
+  result.managedCount = listed.entries.length
+  let newestAgeDays = null
+  if (listed.entries.length) {
+    const newest = listed.entries[0]
+    newestAgeDays = Math.max(0, (nowMs - newest.atMs) / 86400000)
+    const probe = probeBackupReadable(newest.path, { fs })
+    result.newestManaged = {
+      path: newest.path,
+      name: newest.name,
+      tag: newest.tag,
+      createdAt: newest.createdAt,
+      ageDays: roundAgeDays(newestAgeDays),
+      bytes: newest.size,
+      sidecars: { ...newest.sidecars },
+      readable: probe.ok,
+    }
+    if (!probe.ok) {
+      result.newestManaged.error = String(probe.error ?? probe.quickCheck ?? 'unknown error').slice(0, 200)
+      result.warnings.push('the newest managed backup ' + newest.name + ' could not be read: ' + result.newestManaged.error + '; run `advisers backups verify`')
+    }
+  }
+  let plaintextNewest = null
+  let dirents = []
+  try { dirents = readdirSync(home, { withFileTypes: true }) } catch (error) {
+    result.warnings.push('cannot list ' + home + ': ' + String(error?.code ?? error?.message ?? error))
+  }
+  for (const dirent of dirents) {
+    if (!dirent.isFile()) continue
+    if (!PLAINTEXT_BACKUP_FILE_RE.test(dirent.name)) continue
+    const file = join(home, dirent.name)
+    let info
+    try { info = statSync(file) } catch { continue }
+    if (!info.isFile() || info.size <= 0) continue
+    if (!plaintextNewest || info.mtimeMs > plaintextNewest.mtimeMs) plaintextNewest = { path: file, name: dirent.name, mtimeMs: info.mtimeMs, bytes: info.size }
+  }
+  if (plaintextNewest) {
+    result.newestPlaintext = {
+      path: plaintextNewest.path,
+      name: plaintextNewest.name,
+      modifiedAt: new Date(plaintextNewest.mtimeMs).toISOString(),
+      ageDays: roundAgeDays(Math.max(0, (nowMs - plaintextNewest.mtimeMs) / 86400000)),
+      bytes: plaintextNewest.bytes,
+    }
+  }
+  const userRows = countLedgerUserRows({ dbPath, store, fs })
+  if (userRows !== null && userRows > 0 && result.managedCount === 0) {
+    result.warnings.push('the ledger holds ' + userRows + ' user row(s) but no managed backup exists; destructive commands will refuse until one can be written (run `advisers backup`)')
+  }
+  if (result.managedCount === 0) {
+    result.status = 'none'
+  } else if (newestAgeDays !== null && newestAgeDays > BACKUP_STALE_DAYS) {
+    result.status = 'stale'
+    result.warnings.push('the newest managed backup is ' + roundAgeDays(newestAgeDays) + ' days old (> ' + BACKUP_STALE_DAYS + '); run `advisers backup`')
+  } else {
+    result.status = 'ok'
+    if (newestAgeDays !== null && newestAgeDays > BACKUP_OLD_DAYS) result.warnings.push('the newest managed backup is ' + roundAgeDays(newestAgeDays) + ' days old; run `advisers backup` for a fresher copy')
+  }
+  if (result.managedCount > 0 && result.keepPolicy.mode === 'gfs' && result.managedCount < result.keepPolicy.gfsTarget && newestAgeDays !== null && newestAgeDays > BACKUP_OLD_DAYS) {
+    result.warnings.push('only ' + result.managedCount + ' managed backup(s) exist (GFS target ' + result.keepPolicy.gfsTarget + '); rotation has probably not run')
+  }
+  return result
 }

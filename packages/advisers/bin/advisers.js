@@ -72,6 +72,11 @@ import {
   paymentChannelRequiredTexts,
   paymentChannelSummary,
 } from '../lib/payment-channels.js'
+// 0.5.0 (050-U1a): the canonical `-h/--help` usage map and tokenizer live in
+// lib/help-usage.js (one source shared with lib/help-topics.js). bin merges the
+// additive 0.5.0 surfaces this file wires (bundle flags, context-pack, sync
+// --check, help topics) on top of the lib map below.
+import { HELP_USAGE_LINES as HELP_USAGE_BASE_LINES, helpRequestTokens } from '../lib/help-usage.js'
 
 /**
  * P1-1: lazy-load the heavy / rarely used libraries.
@@ -160,6 +165,16 @@ const loadProfileLib = lazyModule(() => import('../lib/profile.js'))
 // Money sidecar: the library lands with the 0.4.0 receivables wave; the loader
 // fails only when a money command is actually run, never at startup.
 const loadReceivablesLib = lazyModule(() => import('../lib/receivables.js'))
+// 0.5.0 (WF1/WF2/WF3/WF5): bundle v1, context packs + candidates, sync state,
+// setup/demo onboarding and help topics each land as their own lib module
+// (single-writer rule: bin is the only file that wires them). Each loader is
+// memoized and only runs when its command is actually invoked, so a command that
+// never uses these modules (including --version/help) keeps the 0.4.3 graph.
+const loadBundle = lazyModule(() => import('../lib/bundle.js'))
+const loadContextPack = lazyModule(() => import('../lib/context-pack.js'))
+const loadHelpTopics = lazyModule(() => import('../lib/help-topics.js'))
+const loadSetup = lazyModule(() => import('../lib/setup.js'))
+const loadDemo = lazyModule(() => import('../lib/demo.js'))
 
 let core
 if (process.env.ADVISERS_CORE_LOCAL === '1') {
@@ -1239,6 +1254,10 @@ Usage:
   advisers chat [--file <path>] [--allow-path <dir>]... [text]
                               one-shot task, or start the local conversation
   advisers init               initialize home + soul
+  advisers setup [--json] [--yes] [--accept-tos] [--dry-run] [--no-demo]
+                              first-run wizard: read-only preflight, TOS, init, demo, next steps
+  advisers demo [--json] [--home <dir>] [--out <dir>] [--clean]
+                              synthetic 7-minute "one deal" in an isolated temp home (no network)
   advisers doctor [--check-db] [--json]
                               check Node/SQLite/Office/policy/model; --check-db adds
                               quick_check + FTS integrity + WAL + backup + plaintext/temp checks
@@ -1354,7 +1373,12 @@ Usage:
   advisers why <pref-id>      explain a preference
   advisers forget <pref-id>   forget a preference (tombstone)
   advisers export [--all] [--encrypted] [--out file]  export ledger (AES-256-GCM with passphrase)
+  advisers export --bundle <dir> [--force] [--json]  portable bundle v1 (plaintext) for a clean home
   advisers import <file> [--replace]  import an export (encrypted or plain)
+  advisers import --bundle <dir> [--verify] [--dry-run] [--replace] [--json]
+                              verify + import a bundle; --verify --dry-run is a read-only plan
+  advisers context-pack create --subject client:<id>|matter:<id> ...  assemble a disclosure pack
+  advisers context-pack verify <dir> [--json]  offline verify a context pack (exit 0/1)
   advisers vault seal [--out f] [--remove] | unseal [f] | status  AES-256-GCM database vault
   advisers sync push|pull|status --dir <dir>  file-based E2EE snapshot sync (user-provided dir)
   advisers backup [<path.db>|--out f] [--tag name] [--keep daily=7,weekly=4,monthly=3] [--dry-run|--apply] [--json]
@@ -1435,7 +1459,7 @@ Usage:
   advisers soul set <file>    set soul.md from a file (human action)
   advisers soul init          write a minimal starter soul.md
   advisers tos show|status [--json]|accept|revoke  使用条款：全文/状态/接受/撤回
-  advisers help
+  advisers help [<topic>] [--list]  topic help (10 topics + Chinese aliases)
 
 Environment:
   ADVISERS_HOME   default ~/.advisers
@@ -1732,6 +1756,16 @@ const DOCTOR_USAGE = 'usage: advisers doctor [--check-db] [--json]\n       advis
 const BACKUP_USAGE = 'usage: advisers backup [--out <file> | <path.db>] [--tag <name>] [--keep daily=7,weekly=4,monthly=3] [--dry-run|--apply] [--json]\n       advisers backup <path.db>          explicit copy, never rotated'
 const BACKUPS_USAGE = 'usage: advisers backups ls [--json] [--limit <n>]\n       advisers backups verify [--json] [--limit <n>]'
 const RESTORE_USAGE = 'usage: advisers restore <backup-file> [--dry-run] [--yes] [--allow-anchor-behind] [--allow-broken-audit-chain] [--json]'
+// 0.5.0 (050-B1/B2/S2/C1/U2): usage text for the additive command surfaces. The
+// `-h/--help` short-circuit reads HELP_USAGE_LINES below; these constants are the
+// single source for per-command usage errors so the two cannot drift.
+const EXPORT_USAGE = 'usage: advisers export [--all] [--out <file>] [--encrypted]\n       advisers export --bundle <dir> [--force] [--json]'
+const IMPORT_USAGE = 'usage: advisers import <file> [--replace]\n       advisers import --bundle <dir> [--verify] [--dry-run] [--replace] [--json]'
+const SYNC_USAGE = 'usage: advisers sync push|pull|status --dir <sync-dir> [--force] [--file name] [--device name] [--dry-run] [--json]\n       advisers sync status [--dir <sync-dir>] [--check] [--json]'
+const CONTEXT_PACK_USAGE = 'usage: advisers context-pack create --subject client:<id>|matter:<id> [--since 180d] [--candidate-limit 50] [--json]\n       advisers context-pack create --subject ... --ids <id,...>|--yes --recipient <name> --purpose client-delivery|external-review|handoff [--expires 24h|<ISO>] [--include-quotes] [--out <dir>] [--force] [--json]\n       advisers context-pack verify <dir> [--expect-manifest-sha256 <64hex>] [--json]'
+const SETUP_USAGE = 'usage: advisers setup [--yes] [--accept-tos [VERSION]] [--dry-run] [--json] [--no-demo] [--mail none|eml:<path|dir>] [--name <称呼>] [--soul-file <file>]'
+const DEMO_USAGE = 'usage: advisers demo [weekly|quote|receipt] [--out <dir>] [--home <dir>] [--json] [--clean]'
+const HELP_TOPIC_USAGE = 'usage: advisers help [<topic>] [--list]'
 
 /**
  * Read --remind / --remind-offsets from parsed flags and strictly normalise.
@@ -5157,6 +5191,17 @@ function printPreferences() {
  * `doctor.repair` audit row and a fresh audit anchor. Unsupported --only items
  * and unknown flags fail closed with E_USAGE instead of being ignored.
  */
+/** One human line for the additive doctor --check-db backup block (never a FAIL). */
+function backupFreshnessLine(backup) {
+  const status = String(backup?.status ?? 'unknown')
+  const managed = Number.isInteger(backup?.managedCount) ? backup.managedCount : 0
+  const newest = backup?.newestManaged
+  const age = newest && Number.isFinite(Number(newest.ageDays)) ? `, newest ${Number(newest.ageDays).toFixed(1)}d` : ''
+  const plaintext = backup?.newestPlaintext ? ', plaintext copy present' : ''
+  const warnings = Array.isArray(backup?.warnings) ? backup.warnings.length : 0
+  return `status=${status} managed=${managed}${age}${plaintext}${warnings ? ` warnings=${warnings}` : ''}`
+}
+
 async function doctor(args = []) {
   if (args.includes('--help') || args.includes('-h')) { console.log(DOCTOR_USAGE); return }
   const parsed = parseStrictFlags(args, {
@@ -5325,8 +5370,31 @@ async function doctor(args = []) {
   check('office', officeOk, officeOk ? 'advisers-office resolvable' : 'npm i -g advisers-office@next, or ADVISERS_OFFICE_LOCAL=1 in checkout')
   check('policy', Boolean(StrictPolicyPack), StrictPolicyPack ? 'strict pack loaded' : 'policy pack missing')
   check('model', true, process.env.ADVISERS_API_KEY ? 'API key present (not tested)' : 'optional; ADVISERS_API_KEY not set')
-  const ok = !rows.some((row) => !row.ok)
-  // 0.4.3 (043-3, plan 91 §5.3): `doctor --report` is the machine report whose
+  // 0.5.0 (050-S1.3, 121 §2): structured backup freshness for --check-db. It is
+  // additive and read-only: it never joins the PASS/FAIL table and never changes
+  // the exit code (an old backup is a warning, not a broken install).
+  let backupFreshness = null
+  if (checkDb) {
+    try {
+      const backupLib = await loadBackup()
+      backupFreshness = backupLib.inspectBackupFreshness({
+        home: HOME,
+        now: Date.now(),
+        dbPath: mode === 'sqlite' ? DB : null,
+      })
+    } catch (error) {
+      backupFreshness = {
+        ok: false,
+        status: 'error',
+        managedCount: 0,
+        newestManaged: null,
+        newestPlaintext: null,
+        warnings: [],
+        errors: [String(error?.message ?? error)],
+      }
+    }
+  }
+  const ok = !rows.some((row) => !row.ok)  // 0.4.3 (043-3, plan 91 §5.3): `doctor --report` is the machine report whose
   // unknowns are explicit null — never 0/false/PASS. `ok` reflects only this
   // check table; the measured dimensions were not measured by this build.
   if (flags.report === true) {
@@ -5353,11 +5421,12 @@ async function doctor(args = []) {
     return
   }
   if (asJson) {
-    console.log(JSON.stringify({ ok, mode: 'diagnose', checks: rows }, null, 2))
+    console.log(JSON.stringify({ ok, mode: 'diagnose', checks: rows, ...(backupFreshness ? { backup: backupFreshness } : {}) }, null, 2))
     if (!ok) process.exitCode = 1
     return
   }
   for (const row of rows) console.log(`${row.ok ? 'PASS' : 'FAIL'}  ${row.name}  ${row.detail}`)
+  if (backupFreshness) console.log('backup  ' + backupFreshnessLine(backupFreshness))
   if (!ok) process.exitCode = 1
 }
 
@@ -8693,6 +8762,28 @@ function applyDataImport(store, tables) {
 
 async function importLedger(file, { replace = false } = {}) {
   if (!file) { console.error('usage: advisers import <file> [--replace]'); process.exitCode = 1; return }
+  // 0.5.0: a directory is never an export file. A context pack is evidence-only
+  // (no write-back path) and a bundle directory has its own `import --bundle`
+  // surface; refuse both explicitly instead of surfacing a misleading EISDIR.
+  try {
+    if (statSync(file).isDirectory()) {
+      let format = null
+      try { format = (await (await loadBundle()).readBundleManifestHeader(file))?.format ?? null } catch {}
+      if (format === 'advisers-context-pack') {
+        console.error('import failed: a context pack is a disclosure artifact and cannot be imported; run `advisers context-pack verify <dir>` instead.')
+        process.exitCode = 1
+        return
+      }
+      if (format === 'advisers-bundle') {
+        console.error('import failed: this is a bundle directory; run `advisers import --bundle <dir> [--verify] [--replace]` instead.')
+        process.exitCode = 1
+        return
+      }
+      console.error('import failed: import takes a JSON export file; use `import --bundle <dir>` for a bundle directory')
+      process.exitCode = 1
+      return
+    }
+  } catch {}
   if (!replace) { console.error('import replaces the local ledger; pass --replace to confirm'); process.exitCode = 1; return }
   let payload
   try {
@@ -11990,29 +12081,123 @@ function reportSyncPullResult(result) {
 }
 
 async function syncCommand(args) {
-  if (args.includes('--help') || args.includes('-h')) { console.log('usage: advisers sync push|pull|status --dir <sync-dir> [--force] [--file name] [--device name] [--dry-run] [--json]'); return }
-  const { flags, positional } = parseFlags(args)
+  if (args.includes('--help') || args.includes('-h')) { console.log(SYNC_USAGE); return }
+  const parsed = parseStrictFlags(args, {
+    booleans: ['check', 'dry-run', 'force', 'json'],
+    values: ['dir', 'file', 'device'],
+    positional: true,
+  })
+  if (!parsed.ok) return usageFail(parsed.error, SYNC_USAGE)
+  const { flags, positional } = parsed
   const sub = positional[0]
   const dir = typeof flags.dir === 'string' ? flags.dir : undefined
-  if (!dir) { console.error('usage: advisers sync push|pull|status --dir <sync-dir> [--dry-run]'); process.exitCode = 1; return }
+  const asJson = flags.json === true
+  const check = flags.check === true
+  if (check && sub !== 'status') return usageFail('--check is only valid with sync status', SYNC_USAGE)
+  if (positional.length > 1) return usageFail('sync accepts one subcommand (push|pull|status)', SYNC_USAGE)
   if (sub === 'status') {
+    if (!dir) { console.error('usage: advisers sync status --dir <sync-dir> [--check] [--json]'); process.exitCode = 1; return }
+    // 0.5.0 (050-S2.4, 121 S2.4): --check compares the local ledger, the last
+    // push/pull baseline (sync.state.json) and the newest snapshot. It is a
+    // read-only query: a conflict is reported in the payload, not as a crash.
+    if (check) return await syncStatusCheckCommand(dir, asJson)
     const { listSnapshots } = await loadSync()
     const snaps = listSnapshots(dir)
-    if (flags.json) { console.log(JSON.stringify(snaps, null, 2)); return }
+    if (asJson) { console.log(JSON.stringify(snaps, null, 2)); return }
     console.log(`sync dir: ${dir}`)
     if (!snaps.length) { console.log('no snapshots'); return }
     for (const s of snaps.slice(0, 10)) console.log(`  ${s.name}  ${(s.bytes / 1024).toFixed(1)} KB  ${new Date(s.mtimeMs).toISOString()}`)
     return
   }
+  if (sub !== 'push' && sub !== 'pull') { console.error('usage: advisers sync push|pull|status --dir <sync-dir> [--dry-run]'); process.exitCode = 1; return }
+  if (!dir) { console.error('usage: advisers sync push|pull|status --dir <sync-dir> [--dry-run]'); process.exitCode = 1; return }
   const pass = syncPass(); if (!pass) return
   ensureHome()
-  // P1-3: push checkpoints/copies the live database and pull replaces it, so both
-  // must not run while another process holds the store (or be run by two sync
-  // commands at once). The lock is held for the whole operation.
-  if (sub === 'push' || sub === 'pull') ensureInstanceLock()
-  if (sub === 'push') {
-    if (!existsSync(DB)) { console.error(`no database at ${DB}`); process.exitCode = 1; return }
-    const device = typeof flags.device === 'string' ? flags.device : hostname()
+  // P1-3: push checkpoints/copies the live database and pull replaces it, so
+  // both must not run while another process holds the store (or be run by two
+  // sync commands at once). The lock is held for the whole operation.
+  ensureInstanceLock()
+  if (sub === 'push') await syncPushCommand({ dir, pass, flags })
+  else await syncPullCommand({ dir, pass, flags })
+}
+
+/** JSON/human refusal for a stale-overwrite precheck (E_SYNC_CONFLICT, exit 1). */
+function refuseSyncWrite(precheck, direction, asJson) {
+  const payload = {
+    ok: false,
+    command: 'sync',
+    direction,
+    code: 'E_SYNC_CONFLICT',
+    status: precheck?.status ?? 'conflict',
+    conflict: precheck?.conflict === true,
+    localChanged: precheck?.localChanged ?? null,
+    remoteAdvanced: precheck?.remoteAdvanced ?? null,
+    sameDevice: precheck?.sameDevice ?? null,
+    reason: precheck?.reason ?? null,
+    baseline: precheck?.baseline ?? null,
+    newest: precheck?.newest ?? null,
+    warnings: precheck?.warnings ?? [],
+  }
+  if (asJson) console.log(JSON.stringify(payload, null, 2))
+  else {
+    console.error(`sync ${direction} refused: E_SYNC_CONFLICT (${payload.reason ?? 'both sides changed since the last baseline'})`)
+    console.error('  the sync directory and this device both advanced since the last push/pull; a plain write would overwrite newer data.')
+    console.error('  inspect with `advisers sync status --check --json`; re-run with --force to overwrite anyway (a backup is kept).')
+  }
+  process.exitCode = 1
+}
+
+/** `sync status --check`: read-only conflict/baseline report (needs the passphrase to read snapshots). */
+async function syncStatusCheckCommand(dir, asJson) {
+  const pass = syncPass(); if (!pass) return
+  const sync = await loadSync()
+  if (typeof sync.precheckSync !== 'function') {
+    console.error('sync status --check requires the 0.5.0 sync library (precheck unavailable in this build)')
+    process.exitCode = 1
+    return
+  }
+  const { precheckSync } = sync
+  try {
+    const precheck = precheckSync({
+      direction: 'status',
+      dir,
+      dbPath: existsSync(DB) ? DB : null,
+      passphrase: pass,
+      localDevice: await readSyncDevice(),
+      home: HOME,
+    })
+    if (!precheck?.ok && precheck?.code) {
+      if (asJson) { console.log(JSON.stringify(precheck, null, 2)); process.exitCode = 1; return }
+      console.error('sync status --check failed: ' + String(precheck.code) + (precheck.errors?.length ? ': ' + precheck.errors.join(' | ') : ''))
+      process.exitCode = 1
+      return
+    }
+    if (asJson) { console.log(JSON.stringify(precheck, null, 2)); return }
+    console.log('sync check: ' + String(precheck.status ?? 'unknown') + (precheck.conflict === true ? ' (conflict)' : ''))
+    console.log('  localChanged=' + String(precheck.localChanged) + ' remoteAdvanced=' + String(precheck.remoteAdvanced) + ' sameDevice=' + String(precheck.sameDevice))
+    if (precheck.local) console.log('  local: sha256=' + String(precheck.local.sha256 ?? 'null') + ' walBytes=' + String(precheck.local.walBytes ?? 0) + ' schema=' + String(precheck.local.sourceSchemaVersion ?? '?'))
+    if (precheck.newest) console.log('  newest: ' + String(precheck.newest.file ?? '?') + ' device=' + String(precheck.newest.device ?? '?') + ' createdAt=' + String(precheck.newest.createdAt ?? '?'))
+    for (const warning of precheck.warnings ?? []) console.error('warning: ' + warning)
+  } catch (error) {
+    console.error(`sync status --check failed: ${error.message}`)
+    process.exitCode = 1
+  }
+}
+
+/** `sync push`: real --dry-run (zero writes), conflict precheck and state baseline. */
+async function syncPushCommand({ dir, pass, flags }) {
+  if (!existsSync(DB)) { console.error(`no database at ${DB}`); process.exitCode = 1; return }
+  const asJson = flags.json === true
+  const device = typeof flags.device === 'string' ? flags.device : hostname()
+  const force = flags.force === true
+  const dryRun = flags['dry-run'] === true
+  const sync = await loadSync()
+  const { pushSnapshot } = sync
+  // Compatibility guard while the 0.5.0 lib is not present yet: the 0.4.3 sync
+  // library has no precheck/plan; keep the legacy push bytes and refuse only the
+  // new --dry-run (which the old library cannot honour without writing).
+  if (typeof sync.precheckSync !== 'function' || typeof sync.planPushSnapshot !== 'function') {
+    if (dryRun) { console.error('sync push --dry-run requires the 0.5.0 sync library (plan unavailable in this build)'); process.exitCode = 1; return }
     try {
       const store = new SqliteStore(DB)
       try {
@@ -12021,66 +12206,137 @@ async function syncCommand(args) {
         store.appendAudit({ actor: 'local', action: 'sync.push', allowed: true, reason: basename(dir) })
         const afterAudit = store.checkpoint()
         if (afterAudit.busy) throw new Error('database is busy (another advisers process is writing); close it and retry sync push')
-      } finally {
-        try { store.close() } catch {}
-      }
-      const { pushSnapshot } = await loadSync()
-      const result = pushSnapshot({ dir, dbPath: DB, passphrase: pass, device })
+      } finally { try { store.close() } catch {} }
+      const legacy = pushSnapshot({ dir, dbPath: DB, passphrase: pass, device })
       await rememberSyncDevice(device)
-      console.log(`pushed ${result.file}`)
-      console.log(`sha256 ${result.sha256}`)
+      if (asJson) { console.log(JSON.stringify(legacy, null, 2)); return }
+      console.log(`pushed ${legacy.file}`)
+      console.log(`sha256 ${legacy.sha256}`)
     } catch (error) { console.error(`sync push failed: ${error.message}`); process.exitCode = 1 }
-  } else if (sub === 'pull') {
-    const force = Boolean(flags.force)
-    const dryRun = flags['dry-run'] === true
-    const { pullSnapshot, cleanupStalePullTemps } = await loadSync()
-    try {
-      // Capture the local write time before checkpointing (checkpoint touches mtime).
-      const localMtimeMs = latestLocalDbMtime()
-      if (existsSync(DB)) {
-        const checkpoint = checkpointLocalDatabase()
-        if (checkpoint.busy && !force) throw new Error('local database is busy (another advisers process is writing); close it and retry sync pull, or re-run with --force (a backup is kept)')
-        if (!checkpoint.busy && checkpoint.error) console.error(`note: local database could not be checkpointed (${checkpoint.error.message}); the snapshot replaces it and a backup is kept.`)
-      }
-      const result = pullSnapshot({
-        dir,
-        dbPath: DB,
-        passphrase: pass,
-        file: typeof flags.file === 'string' ? flags.file : undefined,
-        force,
-        localMtimeMs,
-        localDevice: await readSyncDevice(),
-        dryRun,
-      })
-      if (dryRun) {
-        if (flags.json) { console.log(JSON.stringify(result, null, 2)); return }
-        const snapshotLabel = `${result.file} (${result.device ?? 'unknown device'}, ${result.createdAt ?? 'unknown time'})`
-        for (const warning of result.warnings ?? []) console.error('warning: ' + warning)
-        if (!result.wouldChange) console.log(`dry-run: no change; the local database already matches ${snapshotLabel}`)
-        else console.log(`dry-run: would ${result.wouldStatus === 'bootstrapped' ? 'bootstrap from' : result.wouldStatus === 'forced' ? 'force-replace with' : 'pull'} ${snapshotLabel}${result.wouldBackup ? '; a backup of the current database would be written first' : ''}; local database unchanged`)
+    return
+  }
+  const { precheckSync, planPushSnapshot } = sync
+  try {
+    const precheck = precheckSync({ direction: 'push', dir, dbPath: DB, passphrase: pass, device, home: HOME })
+    if (precheck?.wouldRefuse === true && !force) return refuseSyncWrite(precheck, 'push', asJson)
+    for (const warning of precheck?.warnings ?? []) console.error('warning: ' + warning)
+    if (dryRun) {
+      // Real dry-run (fixes the 0.4.3 fake one): no snapshot, no audit row, no
+      // checkpoint, no sync state. WAL non-empty is reported as sha256:null.
+      const plan = planPushSnapshot({ dir, dbPath: DB, passphrase: pass, device })
+      if (!plan?.ok) {
+        if (asJson) console.log(JSON.stringify({ ok: false, command: 'sync', direction: 'push', dryRun: true, code: plan?.code ?? null, errors: plan?.errors ?? [] }, null, 2))
+        else console.error('sync push --dry-run failed: ' + String(plan?.errors?.[0] ?? plan?.code ?? 'unknown'))
+        process.exitCode = 1
         return
       }
-      // 0.2.3 Wave 1: distinguish bootstrapped / forced / plain pull / unchanged.
-      reportSyncPullResult(result)
-      if (result.changed) {
-        try { dbStore()?.appendAudit({ actor: 'local', action: 'sync.pull', allowed: true, reason: result.file }) }
-        catch (error) { console.error(`warning: database replaced but the sync.pull audit row failed: ${error.message}`); process.exitCode = 1 }
-      }
-    } catch (error) {
-      // Failure cleanup: the library removes its own staged temp file, but a
-      // previously crashed pull may have left stale plaintext staging files.
-      // Only stale files whose pid is gone are removed (never a live pull).
-      try {
-        const swept = cleanupStalePullTemps(HOME)
-        if (swept.removed.length) console.error(`note: removed ${swept.removed.length} stale sync-pull temp file(s)`)
-        if (swept.errors.length) console.error(`warning: could not clean sync-pull temp file(s): ${swept.errors.slice(0, 2).join(' | ')}`)
-      } catch {}
-      console.error(`sync pull failed: ${error.message}`)
-      process.exitCode = 1
+      if (asJson) { console.log(JSON.stringify({ ok: true, command: 'sync', direction: 'push', dryRun: true, ...plan, precheck }, null, 2)); return }
+      console.log(`dry-run: would push ${plan.file} (${plan.bytes ?? '?'} bytes${plan.walBytes ? `; WAL non-empty (${plan.walBytes} bytes): dbSha256=null, cannot judge` : ''})`)
+      console.log('dry-run: nothing written (no snapshot, no audit row, no sync state)')
+      for (const warning of plan.warnings ?? []) console.error('warning: ' + warning)
+      return
     }
-  } else { console.error('usage: advisers sync push|pull|status --dir <sync-dir>'); process.exitCode = 1 }
+    // Real push: checkpoint and append the sync.push audit row before the lib
+    // snapshot. precheck ran BEFORE the audit row on purpose (121 S2.4).
+    const store = new SqliteStore(DB)
+    try {
+      const checkpoint = store.checkpoint()
+      if (checkpoint.busy) throw new Error('database is busy (another advisers process is writing); close it and retry sync push')
+      store.appendAudit({ actor: 'local', action: 'sync.push', allowed: true, reason: basename(dir) })
+      const afterAudit = store.checkpoint()
+      if (afterAudit.busy) throw new Error('database is busy (another advisers process is writing); close it and retry sync push')
+    } finally {
+      try { store.close() } catch {}
+    }
+    const result = pushSnapshot({ dir, dbPath: DB, passphrase: pass, device, home: HOME, precheck: false, force })
+    await rememberSyncDevice(device)
+    if (asJson) { console.log(JSON.stringify({ ok: true, command: 'sync', direction: 'push', ...result }, null, 2)); return }
+    console.log(`pushed ${result.file}`)
+    console.log(`sha256 ${result.sha256}`)
+    if (force && precheck && precheck.status !== 'clear') console.log('precheck: ' + String(precheck.status) + ' overridden by --force')
+    // Safety contract (121 S2.4): a forced write keeps and prints the backup.
+    if (force && result.backup) console.log('backup: ' + String(result.backup))
+    for (const warning of result.warnings ?? []) console.error('warning: ' + warning)
+    for (const warning of result.state?.warnings ?? []) console.error('warning: sync state: ' + warning)
+  } catch (error) {
+    console.error(`sync push failed: ${error.message}`)
+    process.exitCode = 1
+  }
 }
 
+/** `sync pull`: precheck before checkpoint, --force backup, post-pull state refresh. */
+async function syncPullCommand({ dir, pass, flags }) {
+  const asJson = flags.json === true
+  const force = flags.force === true
+  const dryRun = flags['dry-run'] === true
+  const sync = await loadSync()
+  const { pullSnapshot, cleanupStalePullTemps } = sync
+  // 0.5.0 precheck/state/sha helpers; absent on the 0.4.3 library, in which case
+  // the legacy pull path is kept exactly (the lib still refuses stale snapshots).
+  const hasPrecheck = typeof sync.precheckSync === 'function'
+  const refreshSyncStateLocalSha = typeof sync.refreshSyncStateLocalSha === 'function' ? sync.refreshSyncStateLocalSha : null
+  try {
+    const localMtimeMs = latestLocalDbMtime()
+    const localDevice = await readSyncDevice()
+    let precheck = null
+    if (hasPrecheck) {
+      precheck = sync.precheckSync({ direction: 'pull', dir, dbPath: DB, passphrase: pass, localDevice, home: HOME })
+      if (precheck?.wouldRefuse === true && !force) return refuseSyncWrite(precheck, 'pull', asJson)
+      for (const warning of precheck?.warnings ?? []) console.error('warning: ' + warning)
+    }
+    // Capture the local write time before checkpointing (checkpoint touches mtime).
+    if (existsSync(DB)) {
+      const checkpoint = checkpointLocalDatabase()
+      if (checkpoint.busy && !force) throw new Error('local database is busy (another advisers process is writing); close it and retry sync pull, or re-run with --force (a backup is kept)')
+      if (!checkpoint.busy && checkpoint.error) console.error(`note: local database could not be checkpointed (${checkpoint.error.message}); the snapshot replaces it and a backup is kept.`)
+    }
+    const result = pullSnapshot({
+      dir,
+      dbPath: DB,
+      passphrase: pass,
+      file: typeof flags.file === 'string' ? flags.file : undefined,
+      force,
+      localMtimeMs,
+      localDevice,
+      dryRun,
+      ...(hasPrecheck ? { home: HOME, precheck: false } : {}),
+    })
+    if (dryRun) {
+      if (asJson) { console.log(JSON.stringify(result, null, 2)); return }
+      const snapshotLabel = `${result.file} (${result.device ?? 'unknown device'}, ${result.createdAt ?? 'unknown time'})`
+      for (const warning of result.warnings ?? []) console.error('warning: ' + warning)
+      if (!result.wouldChange) console.log(`dry-run: no change; the local database already matches ${snapshotLabel}`)
+      else console.log(`dry-run: would ${result.wouldStatus === 'bootstrapped' ? 'bootstrap from' : result.wouldStatus === 'forced' ? 'force-replace with' : 'pull'} ${snapshotLabel}${result.wouldBackup ? '; a backup of the current database would be written first' : ''}; local database unchanged`)
+      return
+    }
+    // 0.2.3 Wave 1: distinguish bootstrapped / forced / plain pull / unchanged.
+    reportSyncPullResult(result)
+    if (result.changed) {
+      try { dbStore()?.appendAudit({ actor: 'local', action: 'sync.pull', allowed: true, reason: result.file }) }
+      catch (error) { console.error(`warning: database replaced but the sync.pull audit row failed: ${error.message}`); process.exitCode = 1 }
+      // The audit row changes the database bytes: refresh the baseline so the
+      // next precheck does not report a fake local change (121 S2.4).
+      if (refreshSyncStateLocalSha) {
+        try { refreshSyncStateLocalSha({ home: HOME, dbPath: DB }) }
+        catch (error) { console.error(`warning: the database was replaced but the sync state baseline could not be refreshed: ${error?.message ?? error}`) }
+      }
+    }
+    if (force && result.backup) console.log(`backup: ${result.backup} (kept; --force replaced the local database)`)
+    for (const warning of result.warnings ?? []) console.error('warning: ' + warning)
+    for (const warning of result.state?.warnings ?? []) console.error('warning: sync state: ' + warning)
+  } catch (error) {
+    // Failure cleanup: the library removes its own staged temp file, but a
+    // previously crashed pull may have left stale plaintext staging files.
+    // Only stale files whose pid is gone are removed (never a live pull).
+    try {
+      const swept = cleanupStalePullTemps(HOME)
+      if (swept.removed.length) console.error(`note: removed ${swept.removed.length} stale sync-pull temp file(s)`)
+      if (swept.errors.length) console.error(`warning: could not clean sync-pull temp file(s): ${swept.errors.slice(0, 2).join(' | ')}`)
+    } catch {}
+    console.error(`sync pull failed: ${error.message}`)
+    process.exitCode = 1
+  }
+}
 /** Read-side source v2 compatibility for the JSON evidence view. */
 async function normalizeEvidenceSources(result) {
   const { normalizeSource } = await loadSource()
@@ -12151,6 +12407,25 @@ async function printEvidence(args) {
   if (positional[0] === 'verify') {
     const dir = positional[1] ?? (typeof flags.dir === 'string' ? flags.dir : undefined)
     if (!dir) { console.error('usage: advisers evidence verify <dir>'); process.exitCode = 1; return }
+    // 0.5.0 (122 §3.1/§3.4): dispatch order is context → client → receipt. A
+    // context pack is verified by its own offline verifier (untrusted input:
+    // limits first, no HOME read); a client status pack keeps the 0.4.0 path;
+    // everything else stays on the frozen receipt verifier.
+    try {
+      const contextPack = await loadContextPack()
+      const header = contextPack.readContextPackManifestHeader(dir)
+      if (header?.ok && header.format === contextPack.CONTEXT_PACK_FORMAT) {
+        const result = contextPack.verifyContextPackDir(dir)
+        console.log(JSON.stringify(result, null, 2))
+        if (result.code === contextPack.CONTEXT_PACK_LIMIT_CODE) {
+          const violation = result.limitViolation ?? {}
+          console.error(sanitizeConsoleText(contextPack.CONTEXT_PACK_LIMIT_CODE + ': context pack ' + (violation.limit ?? 'limit') + ' exceeded ' + (violation.max ?? '?') + ' (actual ' + (violation.actual ?? '?') + '); refusing to verify a pack that could exhaust memory or time.', { max: 2000 }))
+          console.error('hint: inspect the directory before retrying; a legitimate context pack is far below these limits.')
+        }
+        process.exitCode = result.ok ? 0 : 1
+        return
+      }
+    } catch {}
     // 0.4.0: dispatch by manifest.format. A client status pack is verified by
     // the client-pack verifier (its own limits/semantics); everything else stays
     // on the frozen receipt verifier.
@@ -13357,6 +13632,10 @@ async function soul(sub, file) {
 const TOS_EXEMPT_COMMANDS = new Set([
   'help', '--help', '-h', 'version', '--version', '-v', 'status', 'doctor', 'init', 'tos',
   'privacy', 'export', 'audit', 'purge', 'backups', 'profile',
+  // 0.5.0 (050-U2 / D12): `setup` is exempt at the global L1 gate because its
+  // first step is a read-only preflight; lib/setup.js then runs its own TOS
+  // check (with no HOME write) so a non-TTY fresh home exits 3 and stays empty.
+  'setup',
 ])
 /** Known commands. Unknown commands keep the plain "unknown command" error, not the gate. */
 const KNOWN_COMMANDS = new Set([
@@ -13373,6 +13652,10 @@ const KNOWN_COMMANDS = new Set([
   // 0.3.0 customer entities: reads and writes both go through the L1/TOS gate
   // (they touch the local ledger); there is no exempt customer command.
   'client', 'project',
+  // 0.5.0: bundle is wired through `export`/`import`; context packs, setup and
+  // demo are new command names. `context-pack verify` and `setup` are exempt
+  // from the global gate (see tosGate; setup runs its own read-only TOS check).
+  'context-pack', 'setup', 'demo',
 ])
 
 /** Append a TOS audit row; audit is best-effort (JSON store has no audit chain). */
@@ -13451,6 +13734,18 @@ function resolveTosFacts(tos) {
   return { info, envOverride }
 }
 
+/**
+ * 0.5.0 D12: `import --bundle <dir> --verify --dry-run` is the bundle counterpart
+ * of `evidence verify`: it verifies an untrusted directory and plans an import
+ * without creating ~/.advisers state, so it is exempt from the global L1 gate.
+ * The scoping is intentionally strict: a real import (no --dry-run) or a
+ * dry-run without verification stays gated and requires TOS acceptance.
+ */
+function importBundleDryRunVerify(args) {
+  const hasBundle = args.some((arg) => arg === '--bundle' || arg.startsWith('--bundle='))
+  return hasBundle && args.includes('--verify') && args.includes('--dry-run')
+}
+
 /** L1 gate: run before dispatch; exits the process on block/reject (exit 3 / exit 1). */
 async function tosGate() {
   const isTTY = Boolean(process.stdin.isTTY)
@@ -13458,6 +13753,12 @@ async function tosGate() {
   // Offline receipt verification must work on a clean machine without a
   // ~/.advisers consent record (docs/DELIVERY-RECEIPT.md); it reads only <dir>.
   else if (command === 'evidence' && args[0] === 'verify') return
+  // 0.5.0 D12: verification-only surfaces are exempt because they are offline
+  // reads of an untrusted directory that create no ~/.advisers state. Real
+  // writes (`import --bundle` without --dry-run, `context-pack create`) stay
+  // gated like every other command that reads/writes the local ledger.
+  else if (command === 'context-pack' && args[0] === 'verify') return
+  else if (command === 'import' && importBundleDryRunVerify(args)) return
   // `--help`/`-h` anywhere is a pure help request: it must work before TOS
   // acceptance (and before HOME/database setup), like the top-level help.
   else if (args.includes('--help') || args.includes('-h')) return
@@ -13694,173 +13995,547 @@ async function tosCommand(argv) {
 // general help (human-only, no frozen contract).
 // ---------------------------------------------------------------------------
 
-/** Canonical usage line(s) per command path. Human-only; no frozen contract. */
-const HELP_USAGE_LINES = new Map(Object.entries({
-  version: 'usage: advisers version',
-  status: 'usage: advisers status [--json]',
-  doctor: 'usage: advisers doctor [--check-db] [--json] [--report]\n       advisers doctor --repair [--dry-run|--yes] [--only lock,temp,wal,fts] [--json]',
-  init: 'usage: advisers init',
-  chat: 'usage: advisers chat [--file <path>] [--allow-path <dir>]... <text>',
-  history: 'usage: advisers history',
-  mcp: 'usage: advisers mcp --stdio',
-  deliver: 'usage: advisers deliver [--commit id] [--type confirmation|weekly|statement|ledger] [--format docx|xlsx|pdf] [--out f]',
-  timestamp: 'usage: advisers timestamp <file> [--out proof]',
-  tui: 'usage: advisers tui [--once] [--json] [--width <40..200>] [--plain|--accessible] [--color auto|always|never]',
-  ocr: 'usage: advisers ocr <image> [--out text]',
-  evidence: 'usage: advisers evidence show <id> [--json]\n       advisers evidence verify <dir>',
-  'evidence show': 'usage: advisers evidence show <id> [--json]',
-  'evidence verify': 'usage: advisers evidence verify <dir>',
-  receipt: 'usage: advisers receipt',
-  deliveries: 'usage: advisers deliveries [--pack|--receipt] [--out dir] [--ids ...] [--all] [--json]',
-  commit: 'usage: advisers commit add|edit|ls|done|snooze ...',
-  'commit add': 'usage: advisers commit add "<action>" --quote "<原话>" [--due ISO|相对日期] [--debtor user|agent] [--creditor name] [--matter id] [--remind-offsets "-1d,-2h"]',
-  'commit edit': 'usage: advisers commit edit <id> [--action text] [--due ISO|相对日期] [--matter id] [--remind-offsets "<list>" | --no-remind]',
-  'commit ls': 'usage: advisers commit ls [--json]',
-  'commit done': 'usage: advisers commit done <id> --evidence "<证据/原话>"',
-  'commit snooze': 'usage: advisers commit snooze <id> <hours>',
-  help: 'usage: advisers help [<topic>] [--list]',
-  'learn ls': 'usage: advisers learn ls',
-  'learn review': 'usage: advisers learn review <run-id>',
-  diff: 'usage: advisers diff',
-  undo: 'usage: advisers undo [--list] [--force]',
-  compact: 'usage: advisers compact ls|rollback <version>',
-  search: 'usage: advisers search <text> [--scope turns|kb|pages|facts|all] [--json]',
-  nudge: 'usage: advisers nudge list|done|ignore <nudge-id>',
-  risks: 'usage: advisers risks',
-  'pet-brief': 'usage: advisers pet-brief [--json] [--out [path]] [--check [--strict]] [--display-policy public|private|none]',
-  today: 'usage: advisers today [--calendar] [--sources] [--json] [--limit n]',
-  tick: 'usage: advisers tick',
-  week: 'usage: advisers week [--json]',
-  ui: 'usage: advisers ui [--port n]',
-  remind: 'usage: advisers remind [--json] [--now ISO] [--ics [path]] [--deliver [--notify]] [--quiet-hours HH:MM-HH:MM] [--force-notify]\n       advisers remind install|uninstall|status [--apply] [--schedule "0 9 * * *"]',
-  'remind install': 'usage: advisers remind install [--apply] [--schedule "0 9 * * *"] [--morning [--morning-time 08:30] [--morning-days 1-5]]',
-  'remind uninstall': 'usage: advisers remind uninstall [--apply]',
-  'remind status': 'usage: advisers remind status',
-  calendar: 'usage: advisers calendar import --ics <file>',
-  'calendar import': 'usage: advisers calendar import --ics <file>',
-  who: 'usage: advisers who [--json]',
-  memory: 'usage: advisers memory [--all]\n       advisers memory search <q> | candidates [--json] [--all] | accept <id> | reject <id> [--reason <r>]',
-  digest: 'usage: advisers digest day|week|morning',
-  prefs: 'usage: advisers prefs [--all]',
-  privacy: 'usage: advisers privacy [--json] [--prove [--brief]]\n       advisers privacy --matrix [--json]',
-  audit: 'usage: advisers audit [--check-db] [--json]\n       advisers audit --write-anchor [--json] | --expect-count <N> [--expect-head <64 hex>] | --rebuild-fts',
-  purge: 'usage: advisers purge <matter-id> [--yes]',
-  decay: 'usage: advisers decay',
-  correct: 'usage: advisers correct <statement>',
-  ls: 'usage: advisers ls',
-  why: 'usage: advisers why <pref-id|fact-id>',
-  forget: 'usage: advisers forget <pref-id>',
-  sync: 'usage: advisers sync push|pull|status --dir <sync-dir> [--force] [--file name] [--device name] [--dry-run] [--json]',
-  'sync push': 'usage: advisers sync push --dir <sync-dir> [--force] [--file name] [--device name] [--dry-run] [--json]',
-  'sync pull': 'usage: advisers sync pull --dir <sync-dir> [--force] [--file name] [--dry-run] [--json]',
-  'sync status': 'usage: advisers sync status [--dir <sync-dir>] [--json]',
-  vault: 'usage: advisers vault seal [--out file] [--remove] | unseal [file] | status',
-  export: 'usage: advisers export [--all] [--out <file>] [--encrypted]',
-  import: 'usage: advisers import <file> [--replace]',
-  backup: 'usage: advisers backup [--out <file> | <path.db>] [--tag <name>] [--keep daily=7,weekly=4,monthly=3] [--dry-run|--apply] [--json]',
-  backups: 'usage: advisers backups ls|verify [--json] [--limit <n>]',
-  'backups ls': 'usage: advisers backups ls [--json] [--limit <n>]',
-  'backups verify': 'usage: advisers backups verify [--json] [--limit <n>]',
-  restore: 'usage: advisers restore <backup-file> [--dry-run] [--yes] [--allow-anchor-behind] [--allow-broken-audit-chain] [--json]',
-  brief: 'usage: advisers brief [--deep] <text>',
-  review: 'usage: advisers review <file> --request "..."',
-  research: 'usage: advisers research --web|--url <url> [--deep] <query>',
-  capture: 'usage: advisers capture [--file <path|->] [--source wechat|meeting|email|note|stdin] [--date ISO] [--matter id] [--rules|--local|--model] [--json] [<text>]\n       advisers capture --from-mail <file|dir> [--limit n]\n       advisers capture --from-transcript <file>\n       advisers capture --from-imap',
-  policy: 'usage: advisers policy check <text>',
-  'office-read': 'usage: advisers office-read <file>',
-  verify: 'usage: advisers verify <file> [--json] [--content] [--template quote|proposal --data <file>]',
-  'office-edit': 'usage: advisers office-edit <file> <ops.json> [out]',
-  office: 'usage: advisers office <docx|xlsx|pptx|xmind|mermaid|drawio> <spec.json> <out>',
-  routine: 'usage: advisers routine ls|add|approve|archive|patches|patch|diff|apply|reject|revert|check|curate|restore ...',
-  template: 'usage: advisers template quote|proposal <data.json> <out.docx|out.xlsx> [--json] [--record-delivery] [--matter id]\n       advisers template <weekly|budget|presentation|flow|mindmap|minutes|notice> <data.json> <out>',
-  link: 'usage: advisers link ls|add|confirm|suggest|updates|propose-update|apply|diff|reject|rollback ...',
-  bridge: 'usage: advisers bridge --dir <BRIDGE_DIR> [--name advisers]',
-  soul: 'usage: advisers soul show | set <file> | init',
-  'soul show': 'usage: advisers soul show',
-  'soul set': 'usage: advisers soul set <file>',
-  'soul init': 'usage: advisers soul init',
-  tos: 'usage: advisers tos <show|status|accept|revoke>',
-  'tos show': 'usage: advisers tos show [--as-version <version>]',
-  'tos status': 'usage: advisers tos status [--json]',
-  'tos accept': 'usage: advisers tos accept',
-  'tos revoke': 'usage: advisers tos revoke [--yes]',
-  matter: 'usage: advisers matter <add|ls|show|rename|archive|use> ...',
-  agenda: 'usage: advisers agenda [--days 1..31] [--from YYYY-MM-DD] [--matter id] [--no-calendar] [--include-done] [--json] [--now ISO]',
-  morning: 'usage: advisers morning [--days 1..31] [--matter id] [--top 1..5] [--out file] [--archive [--keep 1..365]] [--json] [--now ISO]',
-  fact: 'usage: advisers fact add <subject> <predicate> <object> --quote "..." [--json]\n       advisers fact show <id> | history <id> | as-of <YYYY-MM-DD|ISO> [--json]',
-  consent: 'usage: advisers consent status|grant <surface>|revoke <surface> [--data-class mail|kb] [--yes] [--json]',
-  agent: 'usage: advisers agent ...',
-  // 0.4.0 command families
-  kb: 'usage: advisers kb add <file>... [--title s] [--kind k] [--client id] [--project id] [--matter id] [--secrecy 0-3] [--replace] [--from list.txt] [--json]\n       advisers kb ls|show <id>|rm <id>|purge <id>|reindex [--json] | kb search <q> | kb page ls|show|rebuild|diff',
-  'kb add': 'usage: advisers kb add <file>... [--title s] [--kind quote|contract|receipt|delivery|note|other] [--client id] [--project id] [--matter id] [--secrecy 0-3] [--replace] [--from list.txt] [--json]',
-  'kb ls': 'usage: advisers kb ls [--client id] [--matter id] [--kind k] [--all] [--limit n] [--clearance 0-3] [--json]',
-  'kb show': 'usage: advisers kb show <id> [--chunks 0..20] [--clearance 0-3] [--json]',
-  'kb rm': 'usage: advisers kb rm <id> [--json]',
-  'kb purge': 'usage: advisers kb purge <id> [--dry-run|--yes] [--json]',
-  'kb reindex': 'usage: advisers kb reindex [--rebuild] [--json]',
-  'kb search': 'usage: advisers kb search <query> [--scope kb|pages|all] [--limit n] [--clearance 0-3] [--json]',
-  'kb page': 'usage: advisers kb page ls|show|rebuild|diff ... [--json]',
-  'kb page ls': 'usage: advisers kb page ls [--kind client|project|timeline|facts] [--check] [--limit n] [--json]',
-  'kb link': 'usage: advisers kb link <doc-id> --fact <fact-id> [--relation source|mentions] [--chunk id] [--json]',
-  'kb unlink': 'usage: advisers kb unlink <doc-id> --fact <fact-id> [--relation source|mentions] [--json]',
-  mail: 'usage: advisers mail account add|ls|show|test|rm ...\n       advisers mail sync [<acct>] [--full] [--dry-run] [--json] [--watch [--interval 300s] [--max-runs n]]\n       advisers mail ls|show <id> [--body]|purge|import|extract|link|dismiss ... [--json]',
-  'mail account': 'usage: advisers mail account add|ls|show|test|rm ...',
-  'mail account add': 'usage: advisers mail account add|ls|show|test|rm ...\n  advisers mail account add --name n --host h [--port 993] [--tls tls|starttls] --user u [--pass-stdin]',
-  'mail account ls': 'usage: advisers mail account ls [--json]',
-  'mail account show': 'usage: advisers mail account show <acct> [--json]',
-  'mail account test': 'usage: advisers mail account test <acct> [--json]',
-  'mail account rm': 'usage: advisers mail account rm <acct> [--json]',
-  'mail sync': 'usage: advisers mail sync [<account>] [--full] [--dry-run] [--since-days n] [--limit n] [--mailbox INBOX] [--json] [--watch [--interval 300s] [--max-runs n]]',
-  'mail ls': 'usage: advisers mail ls [--account a] [--client id] [--status s] [--since 30d] [--limit n] [--json]',
-  'mail show': 'usage: advisers mail show <id> [--body] [--json]',
-  'mail purge': 'usage: advisers mail purge [--older-than 30d] [--dry-run|--yes] [--account a] [--json]',
-  'mail import': 'usage: advisers mail import <file|dir> [--limit n] [--dry-run] [--client id] [--project id] [--json]',
-  'mail extract': 'usage: advisers mail extract [<id>...] [--all-new] [--local|--model] [--yes] [--matter id] [--limit n] [--dry-run] [--json]',
-  'mail link': 'usage: advisers mail link <message> [--client id] [--project id] [--json]',
-  'mail dismiss': 'usage: advisers mail dismiss <message> [--json]',
-  receivable: 'usage: advisers receivable add <client-id> "<label>" --amount 8000.00 [--due DATE] [--currency CNY] [--json]\n       advisers receivable ls|show <id>|edit <id>|void <id> [--aging] [--json]\n       advisers receivable export [--out f.csv] [--json]',
-  'receivable add': 'usage: advisers receivable add <client-id> "<label>" --amount 8000.00 [--due DATE|相对日期] [--currency CNY] [--client-matter id] [--json]',
-  'receivable ls': 'usage: advisers receivable ls [--client id] [--status s] [--aging] [--clearance 0-3] [--json]',
-  'receivable show': 'usage: advisers receivable show <id> [--json]',
-  'receivable edit': 'usage: advisers receivable edit <id> [--label s] [--amount n] [--due DATE|相对日期] [--json]',
-  'receivable void': 'usage: advisers receivable void <id> [--reason s] [--json]',
-  'receivable export': 'usage: advisers receivable export [--client id] [--project id] [--currency c] [--status active|all] [--due-within 7d|30d] [--clearance 0-3] [--out f.csv|-] [--bom] [--json]',
-  payment: 'usage: advisers payment add <client-id> --amount 4000.00 [--receivable rcv] [--method bank] [--json]\n       advisers payment ls|void <id> [--json]',
-  'payment add': 'usage: advisers payment add <client-id> --amount 4000.00 [--receivable rcv] [--currency CNY] [--paid-at ISO] [--method bank|wechat|alipay|cash|other] [--json]',
-  'payment ls': 'usage: advisers payment ls [--receivable id] [--json]',
-  'payment void': 'usage: advisers payment void <id> [--json]',
-  client: 'usage: advisers client <add|list|show|timeline|archive|merge|export|note> ...',
-  'client add': 'usage: advisers client add "<name>" [--aliases a,b] [--tags t1,t2] [--secrecy 0-3] [--note text] [--link-matter <id>] [--json]',
-  'client list': 'usage: advisers client list [--all] [--limit n] [--json]',
-  'client show': 'usage: advisers client show <id> [--timeline-limit n] [--clearance 0-3] [--json]',
-  'client timeline': 'usage: advisers client timeline <id> [--since 90d|ISO] [--kind delivery,note,commitment] [--limit n] [--clearance 0-3] [--json]',
-  'client archive': 'usage: advisers client archive <id> [--dry-run] [--json]',
-  'client merge': 'usage: advisers client merge <from-id> <into-id> [--dry-run] [--json]',
-  'client export': 'usage: advisers client export <id> [--format md|docx] [--out <file>] [--redact-names] [--pack] [--json]',
-  'client note': 'usage: advisers client note add|list <id> ...',
-  'client note add': 'usage: advisers client note add <id> "<summary>" [--kind k] [--at ISO] [--project id] [--matter id] [--json]',
-  'client note list': 'usage: advisers client note list <id> [--project <id>] [--limit n] [--json]',
-  project: 'usage: advisers project <add|list|show|archive> ...',
-  'project add': 'usage: advisers project add <client-id> "<name>" [--start YYYY-MM-DD] [--end YYYY-MM-DD] [--default-matter <id>] [--note text] [--json]',
-  'project list': 'usage: advisers project list [--client <id>] [--all] [--limit n] [--json]',
-  'project show': 'usage: advisers project show <id> [--timeline-limit n] [--clearance 0-3] [--json]',
-  'project archive': 'usage: advisers project archive <id> [--dry-run] [--json]',
-  // 0.4.3 additions
-  inbox: 'usage: advisers inbox ls [--source capture|mail|all] [--limit n] [--offset n] [--clearance 0-3] [--json]\n       advisers inbox show <candidate-id> [--clearance 0-3] [--json]',
-  profile: 'usage: advisers profile show [--json]\n       advisers profile export [--out <file>] [--json]',
-}))
+/* ---------------------------------------------------------------------------
+ * 0.5.0 (050-B1/B2): portable bundle v1 (`export --bundle`, `import --bundle`).
+ *
+ * lib/bundle.js owns the on-disk format, limits, checksum parsing, staging and
+ * the single import transaction; bin owns the CLI surface: strict flags, the
+ * pre-dispatch TOS exemption for `import --bundle --verify --dry-run`, the L2
+ * re-confirmation for --replace, the instance lock and the additive JSON
+ * payloads. The legacy `export --all` / `import <file>` bytes are untouched.
+ * ------------------------------------------------------------------------- */
 
-/** Leading non-flag tokens before the first `-h/--help`, capped at 4. */
-function helpRequestTokens(argv) {
-  const tokens = []
-  for (const token of argv) {
-    if (token === '--help' || token === '-h') continue
-    if (typeof token !== 'string' || token.startsWith('-')) break
-    tokens.push(token)
-    if (tokens.length >= 4) break
+/** Print one bundle operation failure (code/errors/warnings) and exit 1. */
+function reportBundleFailure(result, asJson, label) {
+  const code = result?.code ?? null
+  const errors = Array.isArray(result?.errors) ? result.errors : []
+  const warnings = Array.isArray(result?.warnings) ? result.warnings : []
+  if (asJson) {
+    console.log(JSON.stringify({
+      ok: false,
+      label,
+      code,
+      errors,
+      warnings,
+      bundleDir: result?.bundleDir,
+      backup: result?.backup ?? null,
+      rolledBack: result?.rolledBack === true,
+      verification: result?.verification ?? null,
+    }, null, 2))
+  } else {
+    console.error(`${label}: FAILED${code ? ' (' + code + ')' : ''}`)
+    for (const line of errors) console.error('  ' + sanitizeConsoleText(line, { max: 4000 }))
+    for (const line of warnings) console.error('  warning: ' + line)
+    if (result?.rolledBack === true) console.error('  the local database was rolled back; the pre-import backup is kept.')
+    if (result?.backup?.path) console.error('  pre-import backup: ' + result.backup.path)
   }
-  return tokens
+  process.exitCode = 1
 }
+
+/** `export --bundle <dir>`: build+verify+rename a plaintext bundle directory. */
+async function exportBundleCommand(flags) {
+  const outDir = typeof flags.bundle === 'string' ? flags.bundle : undefined
+  if (!outDir) return usageFail('--bundle requires a directory', EXPORT_USAGE)
+  if (flags.all === true) return usageFail('--bundle cannot be combined with --all', EXPORT_USAGE)
+  // B3 (encrypted bundle) is a 0.5.0 stretch that the 0.5.0 bundle v1 does not
+  // claim: fail closed with a plain message instead of a misleading passphrase
+  // error, and the release notes/PORTABILITY say bundle v1 is plaintext.
+  if (flags.encrypted === true) return usageFail('bundle v1 is plaintext (local-checksums-only); --encrypted is not available in 0.5.0', EXPORT_USAGE)
+  // A bundle is the SQLite data surface; the legacy JSON store has no bundle.
+  // The lib can only detect an *existing* JSON home, so bin fails closed first
+  // (a fresh ADVISERS_STORE=json HOME would otherwise be mistaken for SQLite).
+  if (mode !== 'sqlite') return usageFail('bundle requires the SQLite store (ADVISERS_STORE=sqlite)', EXPORT_USAGE)
+  const asJson = flags.json === true
+  const { exportBundle } = await loadBundle()
+  let result
+  try {
+    result = exportBundle({
+      home: HOME,
+      dbPath: mode === 'sqlite' ? DB : undefined,
+      outDir,
+      force: flags.force === true,
+      env: process.env,
+    })
+  } catch (error) {
+    if (!(error instanceof Error)) throw error
+    if (asJson) console.log(JSON.stringify({ ok: false, label: 'export --bundle', code: error?.code ?? null, errors: [String(error?.message ?? error)] }, null, 2))
+    else console.error('export --bundle failed: ' + sanitizeConsoleText(String(error?.message ?? error), { max: 4000 }))
+    process.exitCode = 1
+    return
+  }
+  if (!result?.ok) return reportBundleFailure(result, asJson, 'export --bundle')
+  if (asJson) {
+    console.log(JSON.stringify({
+      ok: true,
+      command: 'export',
+      mode: 'bundle',
+      out: result.out,
+      format: result.format,
+      version: result.version,
+      scope: result.scope,
+      generatedAt: result.generatedAt,
+      schemaVersion: result.schemaVersion,
+      counts: result.counts,
+      tables: result.tables,
+      dataDigest: result.dataDigest,
+      manifestDigest: result.manifestDigest,
+      fileCount: result.fileCount,
+      checksumCount: result.checksumCount,
+      bytes: result.bytes,
+      verificationBasis: 'local-checksums-only',
+      verification: result.verification,
+      warnings: result.warnings ?? [],
+    }, null, 2))
+    return
+  }
+  console.log('wrote bundle ' + result.out)
+  console.log('  files=' + result.fileCount + ' checksums=' + result.checksumCount + ' bytes=' + result.bytes + ' dataDigest=' + result.dataDigest)
+  console.log('  verificationBasis=local-checksums-only（只证包内自洽，不是签名/时间戳；bundle v1 为明文，请勿外发）')
+  for (const warning of result.warnings ?? []) console.log('  warning: ' + warning)
+}
+
+/** `import --bundle <dir> [--verify] [--dry-run] [--replace]` (TOS: dry-run verify exempts). */
+async function importBundleCommand(args) {
+  const parsed = parseStrictFlags(args, { booleans: ['verify', 'dry-run', 'replace', 'json'], values: ['bundle'], positional: false })
+  if (!parsed.ok) return usageFail(parsed.error, IMPORT_USAGE)
+  const flags = parsed.flags
+  const bundleDir = typeof flags.bundle === 'string' ? flags.bundle : undefined
+  if (!bundleDir) return usageFail('--bundle requires a bundle directory', IMPORT_USAGE)
+  const asJson = flags.json === true
+  const dryRun = flags['dry-run'] === true
+  const replaceRequested = flags.replace === true
+  // Bundle import restores SQLite tables; the JSON store has no import path
+  // (same fail-closed reason as export above).
+  if (mode !== 'sqlite') return usageFail('bundle requires the SQLite store (ADVISERS_STORE=sqlite)', IMPORT_USAGE)
+  const verifyRequested = flags.verify === true
+  const bundle = await loadBundle()
+  // A context pack is evidence-only: never offer an import path for it.
+  try {
+    const header = bundle.readBundleManifestHeader(bundleDir)
+    if (header?.ok && header.format === 'advisers-context-pack') {
+      const message = 'a context pack is a disclosure artifact and cannot be imported; run `advisers context-pack verify <dir>` instead.'
+      if (asJson) console.log(JSON.stringify({ ok: false, label: 'import --bundle', code: 'E_USAGE', errors: [message] }, null, 2))
+      else console.error('import --bundle failed: ' + message)
+      process.exitCode = 1
+      return
+    }
+  } catch {}
+  if (!dryRun) {
+    ensureHome()
+    ensureInstanceLock()
+    // Replacing a populated local ledger with someone else's database is the
+    // same modification surface as `import --replace` (TOS L2). A bootstrap
+    // into a clean home is not a destructive replace and does not re-confirm.
+    if (replaceRequested) await requireTosReaccept({ scope: 'import', subject: basename(String(bundleDir)), action: 'import --bundle --replace' })
+  }
+  let result
+  try {
+    result = bundle.importBundle({
+      bundleDir: String(bundleDir),
+      home: HOME,
+      dbPath: mode === 'sqlite' ? DB : undefined,
+      dryRun,
+      verify: true,
+      replace: replaceRequested,
+      backup: true,
+    })
+  } catch (error) {
+    if (!(error instanceof Error)) throw error
+    if (asJson) console.log(JSON.stringify({ ok: false, label: dryRun ? 'import --bundle --dry-run' : 'import --bundle', code: error?.code ?? null, errors: [String(error?.message ?? error)] }, null, 2))
+    else console.error((dryRun ? 'import --bundle --dry-run' : 'import --bundle') + ' failed: ' + sanitizeConsoleText(String(error?.message ?? error), { max: 4000 }))
+    process.exitCode = 1
+    return
+  }
+  if (!result?.ok) return reportBundleFailure(result, asJson, dryRun ? 'import --bundle --dry-run' : 'import --bundle')
+  const payload = {
+    ok: true,
+    command: 'import',
+    mode: 'bundle',
+    dryRun,
+    verify: verifyRequested,
+    bundleDir: result.bundleDir,
+    bootstrap: result.bootstrap === true,
+    replaced: result.replaced === true,
+    backup: result.backup ?? null,
+    dataDigest: result.dataDigest,
+    counts: result.counts,
+    tables: result.tables,
+    restored: result.restored,
+    pagesRebuilt: result.pagesRebuilt,
+    ftsRebuilt: result.ftsRebuilt,
+    syncStateCleared: result.syncStateCleared,
+    verificationBasis: 'local-checksums-only',
+    verification: result.verification ?? null,
+    warnings: result.warnings ?? [],
+  }
+  if (asJson) { console.log(JSON.stringify(payload, null, 2)); return }
+  if (dryRun) {
+    console.log('dry-run: bundle ' + result.bundleDir + ' verified; the local database was NOT modified')
+    if (result.bootstrap) console.log('  would bootstrap a clean local ledger from the bundle')
+    else if (result.replaced) console.log('  would replace the local ledger (a pre-import backup would be written first)')
+    console.log('  dataDigest=' + result.dataDigest)
+    for (const warning of result.warnings ?? []) console.log('  warning: ' + warning)
+    return
+  }
+  console.log('imported bundle ' + result.bundleDir + ' into ' + HOME)
+  console.log('  ' + (result.bootstrap ? 'bootstrapped a clean local ledger' : 'replaced the local ledger') + (result.backup?.path ? '; pre-import backup: ' + result.backup.path : ''))
+  console.log('  dataDigest=' + result.dataDigest)
+  if (result.pagesRebuilt !== undefined) console.log('  kb pages rebuilt=' + result.pagesRebuilt + ' ftsRebuilt=' + (result.ftsRebuilt === true))
+  console.log('  跨机重建：advisers kb page rebuild（Markdown 投影只是人读副本）')
+  for (const warning of result.warnings ?? []) console.log('  warning: ' + warning)
+}
+
+/* ---------------------------------------------------------------------------
+ * 0.5.0 (050-C1/C2): context packs — candidate assembly, pack write, offline verify.
+ *
+ * lib/context-pack.js owns the manifest/limits/whitelist/forbidden-key verifier and
+ * the write path; lib/context-candidates.js owns the read-only subject → candidates
+ * assembly. bin owns: strict flags, the TOS exemption for `context-pack verify`
+ * only, the third `evidence verify` dispatch (context → client → receipt), and the
+ * explicit import refusal (a context pack is evidence-only and never written back).
+ * ------------------------------------------------------------------------- */
+
+/** Print one context-pack failure (code/errors/warnings/hint) and exit 1. */
+function reportContextPackFailure(result, asJson, label) {
+  const code = result?.code ?? null
+  const errors = Array.isArray(result?.errors) ? result.errors : []
+  const warnings = Array.isArray(result?.warnings) ? result.warnings : []
+  const hint = typeof result?.hint === 'string' ? result.hint : ''
+  if (asJson) {
+    console.log(JSON.stringify({ ok: false, label, code, errors, warnings, hint: hint || undefined }, null, 2))
+  } else {
+    console.error(`${label}: FAILED${code ? ' (' + code + ')' : ''}`)
+    for (const line of errors) console.error('  ' + sanitizeConsoleText(line, { max: 4000 }))
+    if (hint) console.error('  hint: ' + hint)
+    for (const line of warnings) console.error('  warning: ' + line)
+  }
+  process.exitCode = 1
+}
+
+async function contextPackCommand(args) {
+  const sub = args[0]
+  if (sub === 'create') return await contextPackCreateCommand(args.slice(1))
+  if (sub === 'verify') return await contextPackVerifyCommand(args.slice(1))
+  return usageFail('context-pack requires create|verify', CONTEXT_PACK_USAGE)
+}
+
+/** Offline verify: never reads HOME; exit 0/1 (context pack is untrusted input). */
+async function contextPackVerifyCommand(args) {
+  const parsed = parseStrictFlags(args, { booleans: ['json'], values: ['expect-manifest-sha256'], positional: true })
+  if (!parsed.ok) return usageFail(parsed.error, CONTEXT_PACK_USAGE)
+  const dir = parsed.positional[0]
+  if (!dir) return usageFail('context-pack verify requires a directory', CONTEXT_PACK_USAGE)
+  if (parsed.positional.length > 1) return usageFail('context-pack verify accepts exactly one directory', CONTEXT_PACK_USAGE)
+  const expected = parsed.flags['expect-manifest-sha256']
+  if (expected !== undefined && !/^[0-9a-f]{64}$/i.test(String(expected))) return usageFail('--expect-manifest-sha256 requires 64 hex characters', CONTEXT_PACK_USAGE)
+  const asJson = parsed.flags.json === true
+  const lib = await loadContextPack()
+  let result
+  try {
+    result = lib.verifyContextPackDir(dir, expected !== undefined ? { expectManifestSha256: String(expected).toLowerCase() } : {})
+  } catch (error) {
+    if (!(error instanceof Error)) throw error
+    if (asJson) console.log(JSON.stringify({ ok: false, label: 'context-pack verify', code: error?.code ?? null, errors: [String(error?.message ?? error)] }, null, 2))
+    else console.error('context-pack verify failed: ' + sanitizeConsoleText(String(error?.message ?? error), { max: 4000 }))
+    process.exitCode = 1
+    return
+  }
+  if (result?.code === lib.CONTEXT_PACK_LIMIT_CODE) {
+    const violation = result?.limitViolation ?? {}
+    console.error(sanitizeConsoleText(lib.CONTEXT_PACK_LIMIT_CODE + ': context pack ' + (violation.limit ?? 'limit') + ' exceeded ' + (violation.max ?? '?') + ' (actual ' + (violation.actual ?? '?') + '); refusing to verify a pack that could exhaust memory or time.', { max: 2000 }))
+    console.error('hint: inspect the directory before retrying; a legitimate context pack is far below these limits.')
+  }
+  if (asJson) console.log(JSON.stringify(result, null, 2))
+  else if (result?.ok) {
+    console.log('context pack: OK  ' + String(result.format ?? 'advisers-context-pack') + ' v' + String(result.version ?? 1))
+    console.log('  dir=' + String(result.dir ?? dir) + ' files=' + String(result.fileCount ?? '?') + ' checksums=' + String(result.checksumCount ?? '?') + ' bytes=' + String(result.bytes ?? '?'))
+    console.log('  manifestDigest=' + String(result.manifestDigest ?? '?'))
+    console.log('  verificationBasis=' + String(result.verificationBasis ?? 'local-checksums-only') + '（只证包内自洽，不是签名/时间戳/来源真实性）')
+    for (const warning of result.warnings ?? []) console.log('  warning: ' + warning)
+  } else {
+    console.error('context pack: INVALID' + (result?.code ? ' (' + result.code + ')' : ''))
+    for (const line of result?.errors ?? []) console.error('  ' + sanitizeConsoleText(line, { max: 4000 }))
+    for (const warning of result?.warnings ?? []) console.error('  warning: ' + warning)
+  }
+  process.exitCode = result?.ok ? 0 : 1
+}
+
+/** Read-only candidates, or the single write path (create + verify + rename in lib). */
+async function contextPackCreateCommand(args) {
+  const parsed = parseStrictFlags(args, {
+    booleans: ['yes', 'include-quotes', 'force', 'json'],
+    values: ['subject', 'ids', 'recipient', 'recipient-email', 'purpose', 'expires', 'out', 'since', 'candidate-limit'],
+    positional: false,
+  })
+  if (!parsed.ok) return usageFail(parsed.error, CONTEXT_PACK_USAGE)
+  const flags = parsed.flags
+  const asJson = flags.json === true
+  const subject = typeof flags.subject === 'string' ? flags.subject.trim() : ''
+  if (!/^(?:client|matter):[A-Za-z0-9_.:-]+$/.test(subject)) return usageFail('--subject must be client:<id> or matter:<id>', CONTEXT_PACK_USAGE)
+  const idsGiven = typeof flags.ids === 'string' && flags.ids.trim() ? flags.ids.trim() : undefined
+  const yes = flags.yes === true
+  if (idsGiven && yes) return usageFail('pass either --ids or --yes, not both', CONTEXT_PACK_USAGE)
+  if (!idsGiven && !yes) {
+    // Candidate mode is a read-only look at the local ledger: no pack is written.
+    // createContextPack() is the single entry point and returns the candidate
+    // payload when neither ids nor yes is given (122 §3.2).
+    ensureHome()
+    const store = openReadStore()
+    const lib = await loadContextPack()
+    let listing
+    try {
+      listing = lib.createContextPack({
+        store,
+        subject,
+        candidateLimit: flags['candidate-limit'] !== undefined ? Number(flags['candidate-limit']) : undefined,
+        since: typeof flags.since === 'string' ? flags.since : undefined,
+      })
+    } catch (error) {
+      if (!(error instanceof Error)) throw error
+      return reportContextPackFailure({ code: error?.code ?? null, errors: [String(error?.message ?? error)], hint: error?.hint }, asJson, 'context-pack create')
+    }
+    if (!listing?.ok) return reportContextPackFailure(listing, asJson, 'context-pack create')
+    if (asJson) { console.log(JSON.stringify(listing, null, 2)); return }
+    printContextCandidates(listing)
+    return
+  }
+  // Write path. The recipient/purpose/expires are the disclosure record; lib
+  // validates the closed purpose set and the expires shape (E_CONTEXT_PACK_INVALID).
+  ensureHome()
+  const store = openReadStore()
+  const lib = await loadContextPack()
+  const recipient = flags['recipient-email'] !== undefined
+    ? { name: String(flags.recipient ?? ''), email: String(flags['recipient-email']) }
+    : (typeof flags.recipient === 'string' ? flags.recipient : undefined)
+  const out = typeof flags.out === 'string' && flags.out ? flags.out : undefined
+  const defaultOut = out ?? lib.suggestContextPackOutDir(HOME, subject, new Date().toISOString())
+  let result
+  try {
+    result = lib.createContextPack({
+      store,
+      subject,
+      ids: idsGiven,
+      yes,
+      recipient,
+      purpose: typeof flags.purpose === 'string' ? flags.purpose : undefined,
+      expires: typeof flags.expires === 'string' ? flags.expires : undefined,
+      out: defaultOut,
+      force: flags.force === true,
+      includeQuotes: flags['include-quotes'] === true,
+      since: typeof flags.since === 'string' ? flags.since : undefined,
+      candidateLimit: flags['candidate-limit'] !== undefined ? Number(flags['candidate-limit']) : undefined,
+    })
+  } catch (error) {
+    if (!(error instanceof Error)) throw error
+    return reportContextPackFailure({ code: error?.code ?? null, errors: [String(error?.message ?? error)], hint: error?.hint }, asJson, 'context-pack create')
+  }
+  if (!result?.ok) return reportContextPackFailure(result, asJson, 'context-pack create')
+  if (asJson) { console.log(JSON.stringify(result, null, 2)); return }
+  const disclosure = result.disclosure ?? {}
+  console.log('wrote context pack ' + String(result.out ?? defaultOut))
+  console.log('  items=' + String(disclosure.itemCount ?? disclosure.selectedCount ?? '?') + ' files=' + String(result.fileCount ?? 3) + ' bytes=' + String(result.bytes ?? '?') + ' manifestDigest=' + String(result.manifestDigest ?? '?'))
+  console.log('  recipient=' + String(disclosure.recipientName ?? result.recipient?.name ?? '?') + ' purpose=' + String(result.purpose ?? '?') + ' expiresAt=' + String(result.expiresAt ?? '?'))
+  console.log('  边界：接收方拿到即可复制；包内无金额/邮件正文/附件/KB 全文；verificationBasis=local-checksums-only。')
+  console.log('  verify: advisers context-pack verify ' + String(result.out ?? defaultOut) + ' --json')
+}
+
+/** Human table for the read-only candidate mode (copyable next line at the end). */
+function printContextCandidates(listing) {
+  const candidates = Array.isArray(listing.candidates) ? listing.candidates : []
+  console.log('context-pack candidates for ' + String(listing.subject?.kind ?? '') + ':' + String(listing.subject?.id ?? '') + '  (' + candidates.length + ')')
+  for (const candidate of candidates) {
+    console.log('  ' + String(candidate.ref ?? '?') + '  ' + String(candidate.kind ?? '?') + '  ' + String(candidate.at ?? '?') + '  ' + String(candidate.title ?? '').slice(0, 80) + (candidate.selectable === false ? '  [not selectable]' : ''))
+  }
+  const counts = listing.counts ?? {}
+  const excluded = listing.excluded ?? {}
+  console.log('  counts=' + JSON.stringify(counts) + ' excluded=' + JSON.stringify(excluded.byReason ?? excluded))
+  console.log('  未写盘：加 --ids <ref,...> 打包所选，或 --yes 打包全部 selectable 候选；再用 --recipient/--purpose/--out 写入。')
+}
+
+/* ---------------------------------------------------------------------------
+ * 0.5.0 (050-U1/U2): help topics, setup wizard and demo.
+ *
+ * The libs are pure (no argv parsing, no printing, no process.exit): bin owns
+ * the flags, the TOS decision and the JSON/human output. `setup` is exempt from
+ * the global L1 gate but runs its own READ-ONLY TOS check before any HOME write,
+ * so a non-TTY setup without acceptance exits 3 and leaves HOME byte-empty.
+ * ------------------------------------------------------------------------- */
+
+/** Validate `--mail none|eml:<path|dir>` for lib/setup.js (it consumes the raw string). */
+function parseSetupMailFlag(value) {
+  if (value === undefined || value === true) return 'none'
+  const raw = String(value).trim()
+  if (!raw || raw === 'none') return 'none'
+  if (raw.startsWith('eml:')) {
+    if (!raw.slice('eml:'.length)) throw Object.assign(new Error('--mail eml: requires a path or directory'), { code: 'E_USAGE' })
+    return raw
+  }
+  throw Object.assign(new Error('--mail must be none or eml:<path|dir>'), { code: 'E_USAGE' })
+}
+
+/** Error reporter shared by setup/demo (the libs throw typed errors). */
+function reportOnboardingFailure(error, asJson) {
+  const code = error?.code ?? 'E_IO'
+  const message = sanitizeConsoleText(String(error?.message ?? error), { max: 4000 })
+  const hint = typeof error?.hint === 'string' ? error.hint : ''
+  if (asJson) console.error(JSON.stringify({ error: { code, message, hint: hint || undefined } }))
+  else {
+    console.error(`advisers: ${code}: ${message}`)
+    if (hint) console.error('hint: ' + hint)
+  }
+  process.exitCode = Number.isInteger(error?.exitCode) ? error.exitCode : 1
+}
+
+/** `advisers setup`: TOS read-only gate first, then plan (--dry-run) or apply. */
+async function setupCommand(args) {
+  const parsed = parseStrictFlags(args, {
+    booleans: ['yes', 'dry-run', 'json', 'no-demo'],
+    values: ['mail', 'name', 'soul-file'],
+    positional: false,
+  })
+  if (!parsed.ok) return usageFail(parsed.error, SETUP_USAGE)
+  const flags = parsed.flags
+  const asJson = flags.json === true
+  const isTTY = Boolean(process.stdin.isTTY)
+  const dryRun = flags['dry-run'] === true
+  const yes = flags.yes === true
+  // A non-TTY (or --json) apply must be explicit: --yes applies, --dry-run plans.
+  // A TTY without --yes is allowed by lib/setup.js (interactive session), so it
+  // is not a caller bug there.
+  if (!yes && !dryRun && (!isTTY || asJson)) {
+    // Plan-only is explicit (--dry-run); a bare `setup --json` is a caller bug.
+    if (asJson) console.error(JSON.stringify({ error: { code: 'E_USAGE', message: 'setup requires --yes to apply (or --dry-run to print the plan)' } }))
+    else console.error('advisers: E_USAGE: setup requires --yes to apply (or --dry-run to print the plan)' + String.fromCharCode(10) + SETUP_USAGE)
+    process.exitCode = 1
+    return
+  }
+  let mail
+  try { mail = parseSetupMailFlag(flags.mail) } catch (error) { return reportOnboardingFailure(error, asJson) }
+  const setup = await loadSetup()
+  const options = {
+    yes,
+    dryRun,
+    json: asJson,
+    acceptTos: acceptTosFlag,
+    noDemo: flags['no-demo'] === true,
+    mail,
+    name: typeof flags.name === 'string' ? flags.name : undefined,
+    soulFile: typeof flags['soul-file'] === 'string' ? flags['soul-file'] : undefined,
+  }
+  // Step 2 of the wizard is the TOS gate. It must run BEFORE any ensureHome /
+  // runSetup write so the "not accepted -> exit 3, HOME byte-empty" matrix holds.
+  const tos = setup.inspectSetupTos({ home: HOME, acceptTosFlag, env: process.env, isTTY })
+  if (tos?.error) return reportOnboardingFailure(Object.assign(new Error(tos.error), { code: 'E_USAGE' }), asJson)
+  if (!tos?.accepted && !dryRun) {
+    if (tos?.explicit?.ok) {
+      const tosLib = await loadTos()
+      const { info } = resolveTosFacts(tosLib)
+      await recordTosAcceptance(tosLib, info, { channel: tos.explicit.channel, nonInteractive: true })
+    } else if (isTTY) {
+      const tosLib = await loadTos()
+      const { info } = resolveTosFacts(tosLib)
+      const answer = await tosLib.promptForConsent({ version: info.version, url: info.url })
+      if (!answer.accepted) { console.error(`未接受使用条款 v${info.version}；setup 已停止（未写入任何文件）。`); process.exitCode = 1; return }
+      await recordTosAcceptance(tosLib, info, { channel: 'interactive', nonInteractive: false })
+    } else {
+      console.error(tosRequiredLine(tos?.version ?? ''))
+      process.exitCode = 3
+      return
+    }
+  }
+  try {
+    // --dry-run only ever calls the pure buildSetupPlan (no mkdir/write).
+    const payload = dryRun
+      ? setup.buildSetupPlan({ home: HOME, options, env: process.env, isTTY })
+      : await setup.runSetup({ home: HOME, options, env: process.env, isTTY })
+    if (asJson) console.log(JSON.stringify(payload, null, 2))
+    else for (const line of setup.setupHumanLines(payload)) console.log(line)
+    process.exitCode = payload?.ok === false ? 1 : 0
+  } catch (error) {
+    if (!(error instanceof Error)) throw error
+    reportOnboardingFailure(error, asJson)
+  }
+}
+
+/** `advisers demo`: synthetic one-deal flow in an isolated temporary home. */
+async function demoCommand(args) {
+  const parsed = parseStrictFlags(args, { booleans: ['json', 'clean'], values: ['out', 'home'], positional: true })
+  if (!parsed.ok) return usageFail(parsed.error, DEMO_USAGE)
+  const flags = parsed.flags
+  if (parsed.positional.length > 1) return usageFail('demo accepts at most one kind (weekly|quote|receipt)', DEMO_USAGE)
+  const asJson = flags.json === true
+  const demo = await loadDemo()
+  try {
+    const payload = await demo.runDemo({
+      home: typeof flags.home === 'string' ? flags.home : undefined,
+      out: typeof flags.out === 'string' ? flags.out : undefined,
+      clean: flags.clean === true,
+      isTTY: Boolean(process.stdin.isTTY),
+      env: process.env,
+      kind: parsed.positional[0],
+    })
+    if (asJson) console.log(JSON.stringify(payload, null, 2))
+    else for (const line of demo.demoHumanLines(payload)) console.log(line)
+    process.exitCode = payload?.ok === false ? 1 : 0
+  } catch (error) {
+    if (!(error instanceof Error)) throw error
+    reportOnboardingFailure(error, asJson)
+  }
+}
+
+/**
+ * `advisers help [<topic>] [--list]`. Resolution order (124 §4): topic/Chinese
+ * alias first, then a known command path (its usage), then unknown -> exit 1 with
+ * an empty stdout. The content is single-sourced from lib/help-topics.js, so
+ * `help quote` and `help 报价` are byte-identical.
+ */
+async function helpCommand(args) {
+  const parsed = parseStrictFlags(args, { booleans: ['list'], positional: true })
+  if (!parsed.ok) return usageFail(parsed.error, HELP_TOPIC_USAGE)
+  const topics = await loadHelpTopics()
+  if (parsed.flags.list === true) {
+    for (const line of topics.helpListLines()) console.log(line)
+    return
+  }
+  if (!parsed.positional.length) { help(); return }
+  const request = topics.resolveHelpRequest(parsed.positional)
+  if (request?.kind === 'topic') {
+    const text = topics.renderHelpTopic(request.topicId)
+    if (typeof text === 'string') { writeSync(1, text.endsWith(String.fromCharCode(10)) ? text : text + String.fromCharCode(10)); return }
+  }
+  if (request?.kind === 'usage' && typeof request.text === 'string') {
+    writeSync(1, request.text.endsWith(String.fromCharCode(10)) ? request.text : request.text + String.fromCharCode(10))
+    return
+  }
+  // The lib map only knows 0.4.3 + setup/demo; bin merges the surfaces it wires.
+  const commandTokens = parsed.positional.filter((token) => !token.startsWith('-'))
+  for (let length = Math.min(commandTokens.length, 4); length >= 1; length--) {
+    const line = HELP_USAGE_LINES.get(commandTokens.slice(0, length).join(' '))
+    if (line) {
+      writeSync(1, line.endsWith(String.fromCharCode(10)) ? line : line + String.fromCharCode(10))
+      return
+    }
+  }
+  const unknown = parsed.positional[0]
+  console.error('advisers: E_USAGE: 未知帮助主题 "' + sanitizeConsoleText(String(unknown), { max: 200 }) + '"')
+  console.error('hint: advisers help --list')
+  process.exitCode = 1
+}
+
+// 0.5.0 (050-U1a): the 0.4.3 map + setup/demo entries are imported from
+// lib/help-usage.js; this file merges the additive surfaces it wires. Keep this
+// list small: only command lines whose flags are owned by bin 0.5.0 belong here.
+const HELP_USAGE_LINES = new Map(HELP_USAGE_BASE_LINES)
+for (const [key, line] of Object.entries({
+  export: EXPORT_USAGE,
+  import: IMPORT_USAGE,
+  sync: SYNC_USAGE,
+  'sync status': 'usage: advisers sync status [--dir <sync-dir>] [--check] [--json]',
+  help: HELP_TOPIC_USAGE,
+  'context-pack': 'usage: advisers context-pack create|verify ...',
+  'context-pack create': CONTEXT_PACK_USAGE,
+  'context-pack verify': 'usage: advisers context-pack verify <dir> [--expect-manifest-sha256 <64hex>] [--json]',
+})) HELP_USAGE_LINES.set(key, line)
 
 /** Longest known command path in argv; null for the top-level help request. */
 function helpRequestUsage(argv) {
@@ -13911,7 +14586,11 @@ if (!command) {
 } else if (command === 'version' || command === '--version' || command === '-v') {
   console.log(VERSION)
 } else if (command === 'help' || command === '--help') {
-  help()
+  await helpCommand(args)
+} else if (command === 'setup') {
+  await setupCommand(args)
+} else if (command === 'demo') {
+  await demoCommand(args)
 } else if (command === 'chat') {
   await chat(args)
 } else if (command === 'status') {
@@ -13937,6 +14616,8 @@ if (!command) {
   await ocrCommand(args)
 } else if (command === 'evidence') {
   await printEvidence(args)
+} else if (command === 'context-pack') {
+  await contextPackCommand(args)
 } else if (command === 'receipt') {
   printReceipt()
 } else if (command === 'deliveries') {
@@ -14480,11 +15161,20 @@ if (!command) {
   else if (sub === 'status' || !sub) vaultStatus()
   else { console.error('usage: advisers vault seal [--out file] [--remove] | unseal [file] | status'); process.exitCode = 1 }
 } else if (command === 'export') {
-  const parsed = parseStrictFlags(args, { booleans: ['all', 'encrypted'], values: ['out'], positional: false })
-  if (!parsed.ok) usageFail(parsed.error, 'usage: advisers export [--all] [--out <file>] [--encrypted]')
-  else await exportLedger(parsed.flags.all === true, { encrypted: parsed.flags.encrypted === true, out: typeof parsed.flags.out === 'string' ? parsed.flags.out : undefined })
+  const parsed = parseStrictFlags(args, { booleans: ['all', 'encrypted', 'force', 'json'], values: ['out', 'bundle'], positional: false })
+  if (!parsed.ok) usageFail(parsed.error, EXPORT_USAGE)
+  else if (typeof parsed.flags.bundle === 'string') await exportBundleCommand(parsed.flags)
+  else {
+    // Legacy bytes first: `export --json` used to be an unknown option, so the
+    // new --json flag is only accepted together with --bundle.
+    if (parsed.flags.json === true || parsed.flags.force === true) usageFail('--json/--force are only valid with --bundle', EXPORT_USAGE)
+    await exportLedger(parsed.flags.all === true, { encrypted: parsed.flags.encrypted === true, out: typeof parsed.flags.out === 'string' ? parsed.flags.out : undefined })
+  }
 } else if (command === 'import') {
-  await importLedger(args.find((a) => !a.startsWith('--')), { replace: args.includes('--replace') })
+  // 0.5.0: `import --bundle <dir>` is a directory import with verify/dry-run;
+  // the legacy positional JSON file path keeps its exact 0.4.3 behaviour.
+  if (args.some((arg) => arg === '--bundle' || arg.startsWith('--bundle='))) await importBundleCommand(args)
+  else await importLedger(args.find((a) => !a.startsWith('--')), { replace: args.includes('--replace') })
 } else if (command === 'backup') {
   await backupCommand(args)
 } else if (command === 'backups') {

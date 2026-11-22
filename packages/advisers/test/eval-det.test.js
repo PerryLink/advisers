@@ -176,15 +176,28 @@ test('eval-det: entry point runs a green suite and writes a sanitized result', (
     assert.equal(run.status, 0, 'exit suite must pass: ' + run.stdout + run.stderr)
     assert.ok(existsSync(outFile), 'result file must be written')
     const result = JSON.parse(readFileSync(outFile, 'utf8'))
-    assert.equal(result.schemaVersion, 1)
+    assert.equal(result.schemaVersion, 2)
     assert.equal(result.suite, 'det')
     assert.equal(result.mode, 'det')
     assert.deepEqual(result.filters, ['exit'])
     assert.ok(result.totals.cases >= 4)
     assert.equal(result.totals.failed, 0)
     assert.equal(result.network.attempts, 0)
+    assert.equal(result.network.guarded, true)
     assert.equal(result.cli.version, JSON.parse(readFileSync(join(repoRoot, 'packages/advisers/package.json'), 'utf8')).version)
+    assert.equal(typeof result.cli.dirty, 'boolean')
     assert.equal(typeof result.environment.home, 'string')
+    assert.ok(Array.isArray(result.command) && result.command.length > 0, 'command must be recorded')
+    assert.equal(result.metrics, null, 'mode det must not carry quality metrics')
+    assert.equal(result.model, null)
+    assert.ok(Array.isArray(result.unknowns), 'unknowns must be explicit')
+    for (const id of ['modelQuality', 'humanGold', 'liveModelQuality']) {
+      const entry = result.unknowns.find((unknown) => unknown.id === id)
+      assert.ok(entry, id + ' must be listed in unknowns')
+      assert.equal(entry.value, null, id + ' must be explicit null')
+    }
+    for (const entry of result.gates) assert.equal(entry.pass, true, entry.id + ' gate must pass')
+    for (const failure of result.failures) assert.match(failure.detailSha256, /^[0-9a-f]{64}$/)
     assert.ok(!JSON.stringify(result).includes(dir), 'result must not contain the output temp dir')
     assert.ok(!JSON.stringify(result).includes(repoRoot), 'result must not contain the repo root')
     for (const testCase of result.cases) assert.ok(testCase.checks.length > 0, testCase.id + ' must report checks')
@@ -205,4 +218,55 @@ test('eval-det: --list prints case ids without running the CLI', () => {
   assert.match(run.stdout, /det\.morning\.golden-hash/)
   assert.match(run.stdout, /det\.agenda\.json-byte-stable/)
   assert.doesNotMatch(run.stdout, /det\.mcp\./)
+})
+
+const qualityLib = await load('eval/lib/quality-report.mjs')
+
+test('eval-det: quality-report v2 builder/validator and the committed schema agree', () => {
+  assert.equal(qualityLib.QUALITY_SCHEMA_VERSION, 2)
+  const schema = JSON.parse(readFileSync(join(repoRoot, 'eval/schema/quality-result-v2.schema.json'), 'utf8'))
+  assert.equal(schema.properties.schemaVersion.const, 2)
+  for (const key of ['suite', 'mode', 'corpus', 'fixtures', 'cli', 'baseline', 'metrics', 'gates', 'totals', 'network', 'unknowns', 'failures', 'redaction', 'reproduce']) {
+    assert.ok(schema.required.includes(key), 'schema.required must include ' + key)
+  }
+  const report = qualityLib.buildQualityReport({
+    suite: 'unit-suite',
+    suiteVersion: 1,
+    mode: 'det',
+    command: ['node', 'scripts/eval-det.mjs', '--no-write'],
+    fixtures: { sha256: qualityLib.sha256Hex('fixture'), count: 1 },
+    totals: { cases: 1, passed: 1, failed: 0, checks: 1, checksFailed: 0 },
+    cli: { version: '0.4.3', commit: 'f29d268', node: process.version, os: process.platform, dirty: true },
+    baseline: { file: 'eval/det/baseline.json', sha256: qualityLib.sha256File(join(repoRoot, 'eval/det/baseline.json')), recordedAt: '2026-11-21T04:35:27.000Z' },
+    gates: [qualityLib.gate('cases.failed', 0, 0, '=')],
+    reproduce: { command: 'node scripts/eval-det.mjs', env: { TZ: 'Asia/Shanghai' }, fixedNow: null, seed: null },
+  })
+  const verdict = qualityLib.validateQualityReport(report)
+  assert.equal(verdict.ok, true, JSON.stringify(verdict.errors))
+  // Explicit-null rule: a measured-quality value in mode det is rejected.
+  const withQuality = { ...report, metrics: { modelQuality: 0 } }
+  const qualityVerdict = qualityLib.validateQualityReport(withQuality)
+  assert.equal(qualityVerdict.ok, false)
+  assert.ok(qualityVerdict.errors.some((error) => error.code === 'MODE_METRICS'))
+  // Release evidence additionally requires a commit and a clean worktree.
+  const dirtyRelease = qualityLib.validateQualityReport(report, { release: true })
+  assert.equal(dirtyRelease.ok, false)
+  assert.ok(dirtyRelease.errors.some((error) => error.code === 'RELEASE_DIRTY'))
+})
+
+test('eval-det: check-eval-report self-test passes', () => {
+  const run = spawnSync(process.execPath, [join(repoRoot, 'scripts/check-eval-report.mjs'), '--self-test'], { cwd: repoRoot, encoding: 'utf8' })
+  assert.equal(run.status, 0, run.stdout + run.stderr)
+  assert.match(run.stdout, /self-test — 5\/5 passed/)
+})
+
+test('eval-det: memory and projection suites are registered with their case counts', () => {
+  const memory = spawnSync(process.execPath, [scriptPath, '--list', '--suite', 'memory'], { cwd: repoRoot, encoding: 'utf8' })
+  assert.equal(memory.status, 0, memory.stderr)
+  assert.equal(memory.stdout.trim().split('\n').length, 12, 'memory group must expose 12 cases')
+  assert.match(memory.stdout, /det\.memory\.overlapping-intervals-warn-and-resolve/)
+  const projection = spawnSync(process.execPath, [scriptPath, '--list', '--suite', 'projection'], { cwd: repoRoot, encoding: 'utf8' })
+  assert.equal(projection.status, 0, projection.stderr)
+  assert.equal(projection.stdout.trim().split('\n').length, 5, 'projection group must expose 5 cases')
+  assert.match(projection.stdout, /det\.projection\.today-parity/)
 })

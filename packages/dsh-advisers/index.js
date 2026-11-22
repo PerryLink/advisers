@@ -12,7 +12,7 @@ import { ERROR_CODES as READ_ERROR_CODES, ReadToolError, createLedgerReader } fr
 
 export const name = 'advisers'
 export const inject = ['tools']
-export const version = '0.4.3'
+export const version = '0.5.0'
 
 // ---------------------------------------------------------------------------
 // Read-only ledger views: advisers_today / advisers_who / advisers_evidence.
@@ -78,6 +78,48 @@ function contentSafetyBlock(text, surface = 'dsh.tool') {
   }
 }
 
+/** Row-level 0.5.0 read view (same closed vocabulary as the MCP disclosure). */
+const readViewSchema = {
+  type: 'string',
+  enum: ['verified', 'pending', 'historical', 'derived'],
+  description: "Row view: 'verified' only when a local evidence pointer resolved (the DSH adapter has no turn store, so it never reports verified), 'pending' for a current row, 'historical' for a closed/superseded row, 'derived' for a computed client projection.",
+}
+
+/**
+ * 0.5.0 additive disclosure block for every DSH read result. Metadata only
+ * (field names/counts/digest); audited is always false because the adapter
+ * never writes the advisers tamper-evident audit chain.
+ */
+const disclosureViewCountsSchema = {
+  type: 'object',
+  additionalProperties: false,
+  required: true,
+  properties: {
+    verified: { type: 'number', required: true },
+    pending: { type: 'number', required: true },
+    historical: { type: 'number', required: true },
+    derived: { type: 'number', required: true },
+  },
+}
+
+const disclosureSchema = {
+  type: 'object',
+  additionalProperties: false,
+  properties: {
+    surface: { type: 'string', enum: ['dsh'], required: true, description: "Always 'dsh': this disclosure belongs to the DSH host surface." },
+    tool: { type: 'string', required: true, description: 'DSH tool name this result belongs to.' },
+    basis: { type: 'string', enum: ['local-resolution', 'preview'], required: true, description: "'local-resolution' = real read-only ledger; 'preview' = the marked no-ledger/JSON-store fallback." },
+    callId: { type: 'string', required: true, description: 'Content-addressed disclosure id (dc_ + 16 hex over the disclosure metadata).' },
+    fields: { type: 'array', items: { type: 'string' }, required: true, description: 'Sorted returned field names (never values).' },
+    view: { ...disclosureViewCountsSchema, required: true },
+    clearance: { type: 'number', required: true },
+    protectedExcluded: { type: 'number', required: true },
+    truncated: { type: 'boolean', required: true },
+    audited: { type: 'boolean', const: false, required: true, description: 'Always false: the DSH adapter never writes the advisers audit chain.' },
+    digest: { type: 'string', required: true, description: 'sha256 over the disclosure metadata (not over record values).' },
+  },
+}
+
 const commitmentViewSchema = {
   type: 'object',
   additionalProperties: false,
@@ -89,6 +131,7 @@ const commitmentViewSchema = {
     status: { type: 'string', required: true },
     dueAt: { type: 'string' },
     matterId: { type: 'string' },
+    view: readViewSchema,
   },
 }
 
@@ -143,6 +186,11 @@ const sourceDataSchema = {
   protectedExcluded: {
     type: 'number',
     description: 'Count of records withheld because their matter secrecy is above the clearance (content never returned).',
+  },
+  disclosure: {
+    ...disclosureSchema,
+    required: true,
+    description: 'Additive 0.5.0 read disclosure: fields/view counts/clearance/digest; audited is always false for the DSH adapter.',
   },
 }
 
@@ -286,6 +334,7 @@ const evidenceRecordSchema = {
     statement: { type: 'string' },
     preferenceKind: { type: 'string' },
     priority: { type: 'string' },
+    view: readViewSchema,
   },
 }
 
@@ -357,6 +406,7 @@ const clientListRowSchema = {
     nextDueAt: nullableClientDateSchema,
     clearance: { type: 'number', required: true },
     protectedExcluded: { type: 'number', required: true },
+    view: readViewSchema,
   },
 }
 
@@ -370,6 +420,7 @@ const clientIdentitySchema = {
     aliases: { type: 'array', items: { type: 'string' }, required: true },
     tags: { type: 'array', items: { type: 'string' }, required: true },
     secrecyDefault: { type: 'number', required: true },
+    view: readViewSchema,
   },
 }
 

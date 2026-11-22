@@ -1033,6 +1033,212 @@
         "clearance": 0,
         "protectedExcluded": 0
       }
+    },
+    {
+      "id": "disclosure.valid",
+      "target": "#/$defs/Disclosure",
+      "expect": "accept",
+      "why": "The additive 0.5.0 read disclosure block (metadata only).",
+      "value": {
+        "surface": "mcp",
+        "tool": "advisers_today",
+        "basis": "local-resolution",
+        "callId": "dc_0123456789abcdef",
+        "fields": [
+          "action",
+          "creditor",
+          "debtor",
+          "dueAt",
+          "id"
+        ],
+        "view": {
+          "verified": 1,
+          "pending": 1,
+          "historical": 0,
+          "derived": 0
+        },
+        "clearance": 0,
+        "protectedExcluded": 1,
+        "truncated": false,
+        "audited": true,
+        "digest": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+      }
+    },
+    {
+      "id": "disclosure.reject-surface",
+      "target": "#/$defs/Disclosure",
+      "expect": "reject",
+      "why": "The MCP contract only accepts surface 'mcp'; the DSH adapter has its own host schema.",
+      "value": {
+        "surface": "dsh",
+        "tool": "advisers_today",
+        "basis": "local-resolution",
+        "callId": "dc_0123456789abcdef",
+        "fields": [
+          "action",
+          "creditor",
+          "debtor",
+          "dueAt",
+          "id"
+        ],
+        "view": {
+          "verified": 1,
+          "pending": 1,
+          "historical": 0,
+          "derived": 0
+        },
+        "clearance": 0,
+        "protectedExcluded": 1,
+        "truncated": false,
+        "audited": true,
+        "digest": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+      }
+    },
+    {
+      "id": "disclosure.reject-callid",
+      "target": "#/$defs/Disclosure",
+      "expect": "reject",
+      "why": "callId is content-addressed: dc_ plus 16 hex.",
+      "value": {
+        "surface": "mcp",
+        "tool": "advisers_today",
+        "basis": "local-resolution",
+        "callId": "dc_not-a-hash",
+        "fields": [
+          "action",
+          "creditor",
+          "debtor",
+          "dueAt",
+          "id"
+        ],
+        "view": {
+          "verified": 1,
+          "pending": 1,
+          "historical": 0,
+          "derived": 0
+        },
+        "clearance": 0,
+        "protectedExcluded": 1,
+        "truncated": false,
+        "audited": true,
+        "digest": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+      }
+    },
+    {
+      "id": "read-view.valid",
+      "target": "#/$defs/ReadView",
+      "expect": "accept",
+      "value": "historical"
+    },
+    {
+      "id": "read-view.reject-unknown",
+      "target": "#/$defs/ReadView",
+      "expect": "reject",
+      "value": "unverified"
+    },
+    {
+      "id": "payload.today.with-disclosure",
+      "target": "#/$defs/TodayResource",
+      "expect": "accept",
+      "why": "Additive 0.5.0: a today payload may carry row views and the disclosure block.",
+      "value": {
+        "open": 1,
+        "commitments": [
+          {
+            "id": "cm_mwnqdoen_233c7729_1",
+            "debtor": "user",
+            "creditor": "王工",
+            "action": "发报价单",
+            "dueAt": "2026-12-01T10:00:00+08:00",
+            "view": "verified"
+          }
+        ],
+        "clearance": 0,
+        "protectedExcluded": 0,
+        "total": 1,
+        "truncated": false,
+        "disclosure": {
+          "surface": "mcp",
+          "tool": "advisers_today",
+          "basis": "local-resolution",
+          "callId": "dc_0123456789abcdef",
+          "fields": [
+            "action",
+            "creditor",
+            "debtor",
+            "dueAt",
+            "id"
+          ],
+          "view": {
+            "verified": 1,
+            "pending": 1,
+            "historical": 0,
+            "derived": 0
+          },
+          "clearance": 0,
+          "protectedExcluded": 1,
+          "truncated": false,
+          "audited": true,
+          "digest": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+        }
+      }
+    },
+    {
+      "id": "payload.clients.list.with-disclosure",
+      "target": "#/$defs/ClientsResource",
+      "expect": "accept",
+      "why": "Additive 0.5.0: the strict ClientsResource payload accepts row views and the disclosure block.",
+      "value": {
+        "clients": [
+          {
+            "id": "cl_mwnqdoen_233c7729_1",
+            "name": "王工",
+            "status": "active",
+            "aliases": [],
+            "secrecyDefault": 0,
+            "tags": [],
+            "counts": {
+              "matters": 1,
+              "mattersArchived": 0,
+              "deliveries": 0,
+              "notes": 0,
+              "commitments": 1,
+              "openMine": 1,
+              "openWaiting": 0,
+              "overdue": 0
+            },
+            "nextDueAt": null,
+            "clearance": 0,
+            "protectedExcluded": 0,
+            "view": "derived"
+          }
+        ],
+        "total": 1,
+        "truncated": false,
+        "limit": 20,
+        "clearance": 0,
+        "protectedExcluded": 0,
+        "disclosure": {
+          "surface": "mcp",
+          "tool": "advisers_clients",
+          "basis": "local-resolution",
+          "callId": "dc_fedcba9876543210",
+          "fields": [
+            "clients"
+          ],
+          "view": {
+            "verified": 0,
+            "pending": 0,
+            "historical": 0,
+            "derived": 1
+          },
+          "clearance": 0,
+          "protectedExcluded": 1,
+          "truncated": false,
+          "audited": true,
+          "digest": "sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+        }
+      }
     }
   ]
 }

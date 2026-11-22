@@ -1,11 +1,11 @@
 # Knowledge base (KB): deterministic compiled pages and local search
 
-> Status: **0.4.3, schema v22** (`SCHEMA_VERSION = 22`). The KB is a local,
+> Status: **0.5.0, schema v22** (`SCHEMA_VERSION = 22`). The KB is a local,
 > deterministic knowledge layer: it indexes extracted text from your own files,
 > builds compiled pages from the local ledger, and answers lexical searches. It is
 > **not** RAG, not a chatbot, not a vector store, and it does not call a model or
-> the network in 0.4.0. The modern-MCP/DSH surfaces do not expose KB content in
-> 0.4.0 (see [MCP.md](MCP.md)).
+> the network in 0.4.x/0.5.0. The modern-MCP/DSH surfaces do not expose KB content in
+> 0.4.x and 0.5.0 (see [MCP.md](MCP.md)); 0.5.0 adds no KB surface.
 
 ## 1. Product positioning: why this is not RAG and not a chat product
 
@@ -50,7 +50,7 @@ rebuild`, no model), not a model-written wiki and not automatic capture; the
 ledger rows and evidence stay authoritative. The same audit confirmed that KB
 documents do not extract facts automatically, a `mail sync` message does not enter
 the KB automatically (KB ingestion is only an explicit `kb add` of a file), the
-KB is not exposed over MCP/DSH in 0.4.3, and 1–2 character CJK queries are a
+KB is not exposed over MCP/DSH in 0.4.3/0.5.0, and 1–2 character CJK queries are a
 **performance** fallback (`LIKE`, `degraded:["short_query_like"]`) with correct
 results, not a correctness gap. `sync`/`backup`/`vault` are whole-database
 operations and therefore include the KB; see

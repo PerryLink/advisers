@@ -1,6 +1,6 @@
 # Windows support
 
-> Status: **0.4.3, 2026-11-22.** Windows is the primary target platform (the product
+> Status: **0.5.0, 2026-11-22.** Windows is the primary target platform (the product
 > and its docs are Windows-first), but "supported" is a claim this page scopes
 > precisely: Windows 11 25H2/26H2 x64 only, npm as the official channel, and the
 > portable ZIP as the offline channel. The 0.4 line has two kinds of evidence: a
@@ -318,7 +318,7 @@ the manual real-machine record:
   behaviour: green CI changes the test-surface result, not the 36-item real
   client list. The full Windows suite must be green (or every skip justified) on
   a real Windows 11 client before the README claims full Windows verification;
-  that claim is not made in 0.4.3.
+  that claim is not made in 0.5.0.
 
 Known limitations in 0.4.x:
 

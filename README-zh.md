@@ -1,6 +1,6 @@
 # Advisers（幕僚）
 
-**一个本地优先、可审计、中文 Office 优先的顾问工作台（承诺账 + Office 交付 + 提醒）。**
+**一个给技术型独立顾问的「可验证交付与承诺层」——本地账本、离线可验回执、可携带。**
 
 > **AI 与合规提示** —— Advisers 是本地优先的工作助手，不是情感陪伴，也不提供法律、医疗、
 > 金融等专业意见；AI 输出可能出错，使用前请自行核验。禁止用于违法、侵权、欺诈、骚扰、
@@ -16,7 +16,8 @@
 > 本地数据库**默认不加密**；完整出网清单（默认模型服务商为 DeepSeek）与删除边界见
 > [隐私与数据流说明](docs/PRIVACY.md)。
 
-Advisers 不是聊天框，也不是情感陪伴。它维护三本账：
+Advisers 不是聊天框，也不是情感陪伴。它是一个本地优先的顾问账本：确定性的
+Office 交付、逐字证据与离线可验回执，围绕三本账：
 
 - **用户账**：你是谁、偏好、边界、证据；
 - **承诺账**：谁欠谁、何时到期、外部完成证据；
@@ -24,20 +25,20 @@ Advisers 不是聊天框，也不是情感陪伴。它维护三本账：
 
 核心独立运行（不依赖 cordis）；DSH 是薄的 cordis 兼容宿主适配器，提供六个工具（`advisers_brief`、`advisers_office`、`advisers_today`、`advisers_who`、`advisers_evidence`、`advisers_clients`），不是功能完整的第二产品。
 
-**边界：本地工作台，不是常驻秘书。** 这里的「秘书」指上面的账本/Office/提醒闭环，不代表常驻录音或会议转写，不代表移动 App 或伴侣端，也不代表自动代发或自动改期——这些是明确的产品非目标，不是待补的按钮（见 [docs/POSITIONING.md](docs/POSITIONING.md)）。0.4.3 没有后台常驻 daemon、没有收件箱 IDLE 监听；`mail sync --watch` 是你显式启动/停止的前台轮询，邮件是只读 IMAP，IM 只能经另装 Hermes 的 bridge 间接可达。
+**边界：本地账本与可验证交付层，不是常驻助手。** 旧文案里的「秘书」指上面的账本/Office/提醒闭环，不代表常驻录音或会议转写，不代表移动 App 或伴侣端，也不代表自动代发或自动改期——这些是明确的产品非目标，不是待补的按钮（见 [docs/POSITIONING.md](docs/POSITIONING.md)）。0.4.3/0.5.0 这条线没有后台常驻 daemon、没有收件箱 IDLE 监听；`mail sync --watch` 是你显式启动/停止的前台轮询，邮件是只读 IMAP，IM 只能经另装 Hermes 的 bridge 间接可达。0.5.0 **不新增任何出网路径**、不新增运行时依赖、不改 schema（仍 v22）；新增物都是本地文件（bundle、context pack、sync baseline）。
 
 ## 状态
 
-**`0.4.3` 已于 2026-11-22 发布**，当前 npm **`latest`** 为 `0.4.3`，**`next`** 也随本次发布推进到 `0.4.3`。仓库版本锁步在 `0.4.3`。`0.4.3` 是 0.4.2 之上的补丁（0.4.2 与 0.4.1 是 0.4.0 之上的当日收尾补丁，不是新的功能线）：新增 `--due` 中文相对日期（今天/明天/后天/周X/下周X/月底/季度末/N 天后，`YYYY-MM-DD` 视为当日 18:00 Asia/Shanghai；不可解析报 `E_DUE_UNRESOLVED`、多日期冲突报 `E_DUE_CONFLICT`，原始字符串不再入库）、无 key 时默认走本地规则的 `capture`（`--file -` 读 stdin，`--rules`/`--local` 强制离线，仅产 pending 候选）与只读的 `inbox ls|show`、显式 null 的 `doctor --report` / 四行 `privacy --prove --brief` / 只读 `profile show|export`、增强的 `remind --ics`（VTIMEZONE + TZID + 承诺 id）与逐承诺 24 小时通知冷却（`--force-notify` 可绕过，本地日志始终写入）、quote/proposal schema v2 的 `payment.channels[]`（bank/wechat/alipay/stripe_link/wise_link，掩码账号与 https 链接白名单）与 `receivable export --csv`（16 列 RFC 4180、显式 `--out`、0600）、端到端 `scripts/restore-drill.mjs`（已接入 Linux CI）、全局 `--help` 无副作用短路，以及 `mail sync --watch` 的 JSON/退出码契约（0/1/130/143）。0.4.0 的功能面不变：本地知识库（schema v22）、TLS-only IMAP 邮件入口、交互式壳、可解释的主动式晨报、Policy/Evidence 2.0 子集、回款/对账与客户状态包 v2、MCP modern dual-era、Windows CI 与便携 ZIP，以及 v2026.11.4 法务修订。默认仍然本地：所有新命令都不需要模型调用，也没有后台常驻进程，`mail sync` 是唯一新增的显式网络路径（TLS-only、只读、用户主动触发）。**schema v22 是单向迁移**：升级前 CLI 会写 `state.db.before-migrate-v*` 备份，0.3.2 打开 v22 数据库会报 `E_SCHEMA_NEWER`，降级需要恢复该备份。`0.4.2`/`0.4.1`/`0.4.0`/`0.3.2`/`0.3.1`/`0.3.0` 仍可按版本号安装但已被取代，请使用 `0.4.3`。更早的 `0.2.4` 是**未发布的 release candidate**，已被 0.3.0 线取代（`v0.2.4` tag 指向更早的 commit，npm 上没有 0.2.4 tarball，不要尝试安装它）。6 个发布包为 `advisers`、`advisers-core`、`advisers-office`、`advisers-policy-strict`、`advisers-bridge-hermes`、`dsh-advisers`；两个私有 `advisers-link-*` 包保持同版本但不发布。`0.4.3` tarball 由 GitHub Actions OIDC/Trusted Publishing 发布（不依赖长期 npm token），带 SLSA provenance（`https://slsa.dev/provenance/v1`），且 provenance 记录的是发布 tag ref 而不是分支。Release notes：<https://github.com/PerryLink/advisers/releases/tag/v0.4.3>（该 Release 同时附 CycloneDX SBOM 与 6 个 tarball 的 `SHA256SUMS`）。可自行验证：
+**`0.5.0` 已于 2026-11-22 发布**，当前 npm **`latest`** 为 `0.5.0`，**`next`** 也随本次发布推进到 `0.5.0`。仓库版本锁步在 `0.5.0`。`0.5.0` 是「可携带、可披露、可验收」发布，不是新的 AI 功能线：可携带 home **bundle v1**（`export --bundle` / `import --bundle --verify`，明文 + 校验清单）、离线可验的 **context pack v1**（`context-pack create|verify`，人工选定、无回灌路径、不授读取/执行权）、additive 的 **MCP/DSH 披露**（`disclosure` + 逐行 `view`，工具数量不变）、**sync 快照 v2** 与 `sync.state.json`、真正只读的 `sync push --dry-run`、冲突预检与 `sync status --check`（传输语义仍是整库 last-writer-wins）、`setup`/`demo`/`help <topic>` 上手、破坏性命令前的托管备份 fail-closed，以及报告 v2 质量门。0.4.0 的功能面不变：本地知识库（schema v22）、TLS-only IMAP 邮件入口、交互式壳、可解释的主动式晨报、Policy/Evidence 2.0 子集、回款/对账与客户状态包 v2、MCP modern dual-era、Windows CI 与便携 ZIP，以及 v2026.11.4 法务修订。控制面仍默认本地：没有后台常驻进程，`mail sync` 是唯一显式网络路径（TLS-only、只读、用户主动触发）。零 schema 变更（仍 v22）、零新增出网、零新增运行时依赖。详见 [PORTABILITY.md](docs/PORTABILITY.md)、[CONTEXT-PACK.md](docs/CONTEXT-PACK.md)、[AGENT-INTEROP.md](docs/AGENT-INTEROP.md)、[SYNC.md](docs/SYNC.md) 与 [POSITIONING.md](docs/POSITIONING.md)。**schema v22 是单向迁移**：升级前 CLI 会写 `state.db.before-migrate-v*` 备份，0.3.2 打开 v22 数据库会报 `E_SCHEMA_NEWER`，降级需要恢复该备份。`0.4.3`/`0.4.2`/`0.4.1`/`0.4.0`/`0.3.2`/`0.3.1`/`0.3.0` 仍可按版本号安装但已被取代，请使用 `0.5.0`。更早的 `0.2.4` 是**未发布的 release candidate**，已被 0.3.0 线取代（`v0.2.4` tag 指向更早的 commit，npm 上没有 0.2.4 tarball，不要尝试安装它）。6 个发布包为 `advisers`、`advisers-core`、`advisers-office`、`advisers-policy-strict`、`advisers-bridge-hermes`、`dsh-advisers`；两个私有 `advisers-link-*` 包保持同版本但不发布。`0.5.0` tarball 由 GitHub Actions OIDC/Trusted Publishing 发布（不依赖长期 npm token），带 SLSA provenance（`https://slsa.dev/provenance/v1`），且 provenance 记录的是发布 tag ref 而不是分支。Release notes：<https://github.com/PerryLink/advisers/releases/tag/v0.5.0>（该 Release 同时附 CycloneDX SBOM 与 6 个 tarball 的 `SHA256SUMS`）。可自行验证：
 
 ```sh
-npm view advisers@0.4.3 dist.attestations --json --registry=https://registry.npmjs.org/
+npm view advisers@0.5.0 dist.attestations --json --registry=https://registry.npmjs.org/
 corepack pnpm install && corepack pnpm run sbom   # 生成 artifacts/sbom.cdx.json（gitignored）
-node scripts/verify-release.mjs --version 0.4.3 --tag latest \
+node scripts/verify-release.mjs --version 0.5.0 --tag latest \
   --sbom artifacts/sbom.cdx.json --require-sbom
 ```
 
-0.4.3 建立在「可信交付」线（0.3.0：证据可核或诚实标注 missing/unverifiable、数据能救、200k 行账本可用、provenance 可验）与 0.3.2 客户/性能收尾之上。0.4 的新增内容按主题记录在文档中：[Windows 支持矩阵](docs/WINDOWS.md)、[MCP 输出上限与协议协商](docs/MCP.md)、[200k 读 A/B 与写放大修复](docs/PERFORMANCE.md)、[只读账本门面](docs/LEDGER-READ-API.md)、[接口契约](docs/CONTRACTS.md)、[TUI 输出内核](docs/TUI.md) 与 [发布清单](docs/RELEASING.md)。每个版本记录自己的 `verify-release` check 数，不沿用旧版本数字。
+0.5.0 建立在「可信交付」线（0.3.0：证据可核或诚实标注 missing/unverifiable、数据能救、200k 行账本可用、provenance 可验）与 0.3.2 客户/性能收尾之上。0.4/0.5 的新增内容按主题记录在文档中：[Windows 支持矩阵](docs/WINDOWS.md)、[MCP 输出上限与协议协商](docs/MCP.md)、[200k 读 A/B 与写放大修复](docs/PERFORMANCE.md)、[只读账本门面](docs/LEDGER-READ-API.md)、[接口契约](docs/CONTRACTS.md)、[TUI 输出内核](docs/TUI.md) 与 [发布清单](docs/RELEASING.md)。每个版本记录自己的 `verify-release` check 数，不沿用旧版本数字。
 
 > 需要 **Node >= 22.16**；Windows/PowerShell/BOM 说明见 [docs/QUICKSTART.md](docs/QUICKSTART.md)。
 
@@ -63,6 +64,7 @@ node scripts/verify-release.mjs --version 0.4.3 --tag latest \
 - **0.4.1 收尾**：`kb link/unlink` 与 `mail link/dismiss` 把 KB/邮件引用变成显式、可审计的审查决定（未知 id 失败关闭）；`remind --deliver --notify` 增加运行时 `--quiet-hours HH:MM-HH:MM`（跨午夜；只抑制通知通道，本地日志行始终写入）、按本地日去重（通知去重元数据本地保留 30 天）与 `--force-notify`；确定性评测新增 `kb`/`mail`/`policy` 三组（30 cases / 277 checks），CLI 契约新增 38 个 documented-additive 命令 / 76 个向量（90 checks 门禁）；
 - **0.4.2 收尾**：`fact add <subject> <predicate> <object> --quote "..."` 录入手工事实（`authority=user`、`status=confirmed`、`confidence=1`，支持 `--matter`/`--valid-from`/`--source`/`--doc`/`--relation`/`--supersedes`；重复活动身份幂等，事实 + supersede 链 + KB 链接 + 一条 `fact.add` 审计同事务提交，失败全回滚；缺 quote 直接 `E_USAGE`）；`mail account test` 只读探测（TLS/STARTTLS + LOGIN + CAPABILITY + EXAMINE，30s 上限，不抓正文、不写邮件表）；`mail sync --watch` 是显式前台轮询（每轮开/关账本、失败 5s→5min 退避、Ctrl+C 在当前轮结束后停止；不是 daemon、没有 IDLE）；`sync pull --dry-run` 只预测 bootstrap/强制/普通拉取/无变化，不换库、不写备份/临时文件/审计；`doctor --check-db` 附最新托管备份年龄（>7 天提示 `advisers backup`）；子命令 `--help` 打印自身 usage 且可在 TOS 接受前运行。纯增量：无 schema 迁移、无新增运行时依赖、不改冻结契约。
 - **0.4.3 收尾**：`commit`/`receivable --due` 支持中文相对日期（今天/明天/后天/周X/下周X/月底/季度末/N 天后；`YYYY-MM-DD` 视为当日 18:00 Asia/Shanghai），无法解析报 `E_DUE_UNRESOLVED`、多日期冲突报 `E_DUE_CONFLICT`，原始字符串不再入库；无 key 时 `capture` 默认走本地规则（`--file -` 读 stdin，`--rules`/`--local` 强制离线，stderr 提示 `[local]`，仅产 pending），新增只读 `inbox ls|show`（clearance 先过滤后计数）；`doctor --report` 对未测量维度显式输出 `null` + 理由，`privacy --prove --brief` 输出四行数据流摘要，`profile show|export` 只读投影偏好（`dataSha256`、导出 0600）；`remind --ics` 输出 `VTIMEZONE`/`TZID`/承诺 id，`remind --deliver --notify` 增加逐承诺 24h 冷却（`--force-notify` 可绕过，本地日志始终写入）；quote/proposal `schemaVersion: 2` 增加校验过的 `payment.channels[]`，`receivable export --csv` 输出 16 列 RFC 4180（显式 `--out`、0600、`--bom`、`--json` 仅元数据）；`--help`/`-h` 全局无副作用短路；`mail sync --watch` 增加 `--json`/`--json-lines` 与 0/1/130/143 退出码。纯增量：无 schema 迁移、无新增运行时依赖、无冻结形状变化（新增 5 个错误码进 additive 注册表）。
+- **0.5.0** —— 可携带、可披露、可验收：**bundle v1**（`export --bundle <dir>` 写出明文目录：manifest.json + ledger.json + facts.md + kb/ + pages/ + IMPORT.md + SHA256SUMS；`import --bundle <dir> --verify` 可引导干净 home 或替换已有库并先写 pre-import 托管备份；验收指标是 `dataDigest`/counts 相等；凭据/`audit.key`/scheduler/logs/soul/workspace 不入包，**bundle v1 为明文**，加密是后续 opt-in）；**context pack v1**（`context-pack create --subject client:<id>|matter:<id>` 先只读列候选并按 secrecy 先过滤后计数、输出排除计数；写入需显式 `--ids` 或 `--yes` + recipient/purpose/expiry；`context-pack verify` 离线 0/1，无回灌路径，`confersReadAuthority/confersExecutionAuthority` 恒 false；金额/邮件正文/KB 全文/文件路径不进包）；**披露**（五个 MCP 只读工具与五个 resources 增加 additive `disclosure` 块与逐行 `view`，8/5 与 DSH 6 工具不变，剥掉新字段逐字节回到 0.4.3；DSH 因不写本地审计链而恒为 `audited:false`）；**sync v2**（快照记录 `dbMtimeMs/dbSha256/sourceSchemaVersion`、v1 仍可读；`sync.state.json` 基线；`sync push --dry-run` 真正零写；push/pull 对已证实的过期覆盖拒绝（`E_SYNC_CONFLICT`）除非 `--force`；`sync status --check` 报告 conflict/localChanged/remoteAdvanced；LWW 仍是传输语义，没有 merge）；**上手与安全**（`setup` 7 步幂等、非 TTY 矩阵、TOS 拒绝时 HOME 零字节；`demo` 在隔离临时 home 跑全合成「顾问一单」，零模型零网络（demo 步骤只写隔离 home；CLI 的 TOS 门禁仍适用）；`help <topic>` 10 个主题 + 中文别名逐字节相同；purge/merge/import 前托管备份 fail-closed；`doctor --check-db --json` 附备份新鲜度）。无后台 daemon、无新增出网路径。
 - `research --web/--url` 是唯一内置的**网页**出网路径；设置 key 后 `chat`/`capture`/`review`/`brief --deep`/`learn review` 会把输入发给配置的模型 API；`status`/`office`/`template`/`verify`/`commit` 等纯本地命令不联网。research 对 `secrecy > 0` 的 matter 拒绝（fail closed）。
 - 提醒：`remind` + `.ics`/VALARM 导出 + 可选的本地调度脚本；`.ics` 日历只读导入；
 - 只读入口：`capture --from-mail` / `--from-transcript`（去重、全部候选需人工 accept、secret matter 拒绝）；
@@ -73,13 +75,13 @@ node scripts/verify-release.mjs --version 0.4.3 --tag latest \
 - Pet Brief（只读脱敏投影，契约 v0.2：`schemaVersion: 2` + `displayPolicy`，默认 `private`；v0.1 brief 按 legacy 可读）：`pet-brief --json|--out|--check [--strict]|--print-schema|--display-policy public|private|none`；`secrecy >= 2` 全排除、confidence < 0.7 丢弃、5 分钟 TTL、每节 10 项上限；不调模型、不联网、不改账本；桌宠 UI/传输尚未接通。见 `docs/PET-BRIEF-PRODUCER.md`。
 
 ```sh
-# 0.4.3 已于 2026-11-22 发布（npm `latest` = 0.4.3；`next` 也指向 0.4.3）。
-# 从 checkout 运行（开发用途；同为 0.4.3 版本）：
+# 0.5.0 已于 2026-11-22 发布（npm `latest` = 0.5.0；`next` 也指向 0.5.0）。
+# 从 checkout 运行（开发用途；同为 0.5.0 版本）：
 #   corepack pnpm install && corepack pnpm -r build
 #   ADVISERS_OFFICE_LOCAL=1 node packages/advisers/bin/advisers.js status
-# 从 npm 安装（稳定渠道 = 默认 `latest`，当前为 0.4.3）：
+# 从 npm 安装（稳定渠道 = 默认 `latest`，当前为 0.5.0）：
 #   npm i -g --registry=https://registry.npmjs.org advisers@latest advisers-office@latest
-# `next` 渠道也指向 0.4.3：
+# `next` 渠道也指向 0.5.0：
 #   npm i -g --registry=https://registry.npmjs.org advisers@next advisers-office@next
 advisers soul init
 advisers commit add "周五前发报价给王工" --quote "周五前发报价给王工" --due 2026-11-13T18:00:00+08:00
@@ -90,7 +92,19 @@ advisers office docx spec.json out.docx
 advisers verify out.docx
 ```
 
-npm 标签：**`latest`** 是稳定渠道（当前为 **`0.4.3`**，2026-11-22 已发布）；**`next`** 是预发布渠道（同样为 `0.4.3`）。`0.2.4` 是已被 0.3.0 线取代的**从未发布的 candidate**，不能从 npm 安装。`0.4.3` 取代 `0.4.2`/`0.4.1`/`0.4.0`/`0.3.2`/`0.3.1`/`0.3.0`：旧 tarball 仍可按版本号安装，但其文档是旧版本且无法原地修复（npm unpublish 需要 owner 2FA）。`0.4.3` 是 0.4.0 功能发布之上的补丁。需要可复现安装时请固定版本（当前 `advisers@0.4.3`），并直接查询官方 registry（`npm view advisers dist-tags --registry=https://registry.npmjs.org/`）——镜像可能滞后。
+npm 标签：**`latest`** 是稳定渠道（当前为 **`0.5.0`**，2026-11-22 已发布）；**`next`** 是预发布渠道（同样为 `0.5.0`）。`0.2.4` 是已被 0.3.0 线取代的**从未发布的 candidate**，不能从 npm 安装。`0.5.0` 取代 `0.4.3`/`0.4.2`/`0.4.1`/`0.4.0`/`0.3.2`/`0.3.1`/`0.3.0`：旧 tarball 仍可按版本号安装，但其文档是旧版本且无法原地修复（npm unpublish 需要 owner 2FA）。`0.5.0` 是当前功能发布。需要可复现安装时请固定版本（当前 `advisers@0.5.0`），并直接查询官方 registry（`npm view advisers dist-tags --registry=https://registry.npmjs.org/`）——镜像可能滞后。
+
+## 安全边界（0.5.0 新增项）
+
+- 可携带 bundle 是**明文**（`verificationBasis: local-checksums-only`），包含源 home 的
+  客户/邮件/金额等个人数据；请放在加密盘、不要外发。0.5.0 的 bundle v1 没有加密，
+  加密是后续 opt-in。
+- 快照同步是另一件事：快照用你提供的口令做 AES-256-GCM 加密
+  （`ADVISERS_SYNC_PASSPHRASE`），同步目录由你已有的存储工具复制；整库传输仍为
+  last-writer-wins。
+- bundle / context pack 的校验和只证明包内自洽，**不是签名、不是可信时间戳、
+  不是来源真实性、不是合规认证**；`verified` 只表示本地证据指针解析成功，不表示
+  “记录为真”。
 
 ## 许可
 

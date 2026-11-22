@@ -156,8 +156,8 @@ test('privacy brief: claims project the four docs instead of telling a second st
     }
   }
   assert.ok(byKey.get('at-rest').claim.includes('默认明文'))
-  assert.match(byKey.get('sync').claim, /last-snapshot-wins/i)
-  assert.match(readDoc('docs/SYNC.md'), /Last-snapshot-wins/i)
+  assert.match(byKey.get('sync').claim, /last-writer-wins/i)
+  assert.match(readDoc('docs/SYNC.md'), /last-writer-wins/i)
 })
 
 test('privacy brief: vault state is reported when known, never invented', () => {

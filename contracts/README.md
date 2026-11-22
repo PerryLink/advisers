@@ -26,24 +26,24 @@ executable software: scripts and the CLI validate against it, and the checker
 | Artifact | Version | What it freezes |
 |---|---|---|
 | `versions-v1.json` | 1 | Manifest: every contract version + the expected `status.contracts` discovery payload. |
-| `cli/read-models-v1.schema.json` | 1 | JSON Schema `$defs` for the deterministic `--json` read payloads. The frozen 0.2.x/0.3.x set (status/today/commit/who/deliveries/agenda/morning/matter/evidence/privacy/tos/tick/remind) is extended by 0.4.0/0.4.1 **documented-additive** defs for kb/mail/money/consent/search/pack and the 0.4.1 review-link/delivery flags; 0.4.2 adds no contract entries and 0.4.3 adds only the five additive error codes (its new commands are documented additively in `docs/CLI-JSON.md`); see `x-documented-additive`. |
+| `cli/read-models-v1.schema.json` | 1 | JSON Schema `$defs` for the deterministic `--json` read payloads. The frozen 0.2.x/0.3.x set (status/today/commit/who/deliveries/agenda/morning/matter/evidence/privacy/tos/tick/remind) is extended by 0.4.0/0.4.1 **documented-additive** defs for kb/mail/money/consent/search/pack and the 0.4.1 review-link/delivery flags; 0.4.2 adds no contract entries, 0.4.3 adds only the five additive error codes and 0.5.0 adds only its 18 additive error codes (the new 0.5.0 commands are documented additively in `docs/CLI-JSON.md`); see `x-documented-additive`. |
 | `cli/commands-v1.json` | 1 | command -> argv -> schema `$ref` map with determinism/needsKey/needsTos metadata and the fixture used by the checker. |
 | `cli/errors-v1.schema.json` | 1 | The stderr error envelope `{"error":{"code","message","hint?","details?"}}`. |
 | `cli/status-v1.json` | 1 | `advisers status --json` contract + the additive `contracts` discovery field rules. |
 | `cli/exit-codes-v1.json` | 1 | Exit codes 0/1/3 + probe commands that assert them. |
 | `cli/exit-codes-v2.draft.json` | 2-draft | Reserved 4/5/6 for the policy engine. **NOT ACTIVE**; scripts must key on `error.code`. |
-| `errors/codes.v1.json` | 1 | Generated error-code registry (source of truth: `packages/advisers/lib/error-codes.js`). |
+| `errors/codes.v1.json` | 1 | Generated error-code registry (source of truth: `packages/advisers/lib/error-codes.js`); 0.5.0 adds 18 codes (211 CLI codes). |
 | `mcp/tools-v1.json` | 1 | 8 MCP tools: name, description snapshot, inputSchema, annotations, side effect. |
 | `mcp/resources-v1.json` | 1 | 5 MCP resources: URI, name, mimeType, payload schema ref. |
 | `mcp/versions-v1.json` | 1 | Supported legacy protocol versions + negotiation status + methods. |
 | `mcp/errors-v1.json` | 1 | JSON-RPC error codes `-32600/-32601/-32602/-32603/-32700/-32002` + tool `isError` envelope. |
-| `mcp/responses-v1.schema.json` | 1 | JSON Schema for initialize/tools-list/resources-list/resources-read/tool-call/error responses and the JSON payloads inside them. |
+| `mcp/responses-v1.schema.json` | 1 | JSON Schema for initialize/tools-list/resources-list/resources-read/tool-call/error responses and the JSON payloads inside them. 0.5.0 adds the additive `Disclosure`/`ReadView` `$defs` (older payloads stay valid). |
 | `mcp/versions-v2.json` | 2 | MCP dual-era rulebook (0.4.0): legacy matrix reference + the stateless modern 2026-07-28 era (per-request `_meta`, `server/discover`, `resultType`/`ttlMs`/`cacheScope`, error mapping, `ADVISERS_MCP_MODERN` switch). Additive; no frozen v1 artifact changed. |
 | `mcp/responses-v2.schema.json` | 2 | JSON Schema for the modern result/error envelopes only; the payload inside tools-list/tools-call/resources-list/resources-read stays byte-identical and is validated against the frozen `responses-v1.schema.json` `$defs`. |
 | `vectors/mcp/modern.vectors.json` | 1 | Accept/reject conformance vectors for every top-level `$def` of `responses-v2.schema.json`. |
 | `vectors/cli/read-models.vectors.json` | 1 | Accept/reject conformance vectors for every top-level read-model payload. |
 | `vectors/cli/errors.vectors.json` | 1 | Accept/reject vectors for the error envelope. |
-| `vectors/mcp/responses.vectors.json` | 1 | Accept/reject vectors for MCP envelopes and payloads. |
+| `vectors/mcp/responses.vectors.json` | 1 | Accept/reject vectors for MCP envelopes and payloads; 0.5.0 adds the disclosure accept/reject cases. |
 | `CONSUMERS.json` | 1 | Who consumes which contract (and whether it runs in this repo's CI). |
 | `README.md`, `LICENSE` | 1 | Rules and intended license. |
 

@@ -1,0 +1,13 @@
+From: 发票系统 <billing@vendor.example>
+To: me@example.com
+Subject: 电子发票
+Date: Fri, 04 Dec 2026 00:00:00 +0800
+Message-ID: <mail-gold-118-neg-auto-invoice.eml@gold.example>
+MIME-Version: 1.0
+Content-Type: text/plain; charset=UTF-8
+
+您好：
+
+发票已开具，电子版将于 12月20日 发送至您的邮箱。
+
+发票系统

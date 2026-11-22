@@ -1,6 +1,8 @@
 # MCP 接入（stdio；legacy 协商 2024-11-05 / 2025-06-18 / 2025-11-25 + modern 2026-07-28 dual-era）
 
-状态（2026-11-22，包版本 **0.4.3**）：0.4.0 把 MCP 从“仅 legacy”升级为 **dual-era** 服务器（0.4.1/0.4.2/0.4.3 均不改 MCP 协议面）——同一进程既服务 legacy `initialize` 生命周期，也服务无状态的 modern `2026-07-28` 请求（`server/discover` + 每请求 `_meta` + `resultType` envelope）；**工具面不变**（8 工具 / 5 resources），KB 与邮件在 0.4.0 **不暴露**给 MCP/DSH。legacy 面的名字、参数、payload 形状与 0.3.2 逐字节一致；`ADVISERS_MCP_MODERN=off` 可一键退回 0.3.2 行为。
+状态（2026-11-22，**0.5.0 已发布**；npm `latest` = `0.5.0`，`next` 也为 `0.5.0`）：0.4.0 把 MCP 从“仅 legacy”升级为 **dual-era** 服务器——同一进程既服务 legacy `initialize` 生命周期，也服务无状态的 modern `2026-07-28` 请求（`server/discover` + 每请求 `_meta` + `resultType` envelope）；**工具面不变**（8 工具 / 5 resources），KB 与邮件仍**不暴露**给 MCP/DSH。legacy 面的名字、参数、payload 形状与 0.3.2 逐字节一致；`ADVISERS_MCP_MODERN=off` 可一键退回 0.3.2 行为。
+
+0.5.0 只加**披露元数据**、不改工具/资源数量：五个只读工具与五个 resources 的成功结果多一个 additive `disclosure` 块和逐行 `view` 标签（§3.5），MCP 写入的审计行 `mcp.call` 的 reason 带上 callId/计数/字段名/digest；DSH 适配器不写本地审计链，因此 DSH 的 `audited` 恒为 `false`。剥掉 `disclosure` 与 `view` 后，0.4.3 的 payload 逐字节复现（测试断言）。
 
 - **0.2.0 库**：MCP server 已从 `bin/advisers.js` 抽成可测试库 `packages/advisers/lib/mcp-server.js`（工厂 `createMcpServer({store, ledger | loadLedger, version, audit, clearance})`）。0.3.2 起库提供 **6 个只读工具 + 2 个白名单工具 + 5 个只读 resources**（客户只读投影见 §3.4）。
 - **CLI 入口（已接线，2026-11-17）**：`advisers mcp --stdio` 与库是同一实现——`bin/advisers.js` 只负责注入 home/store/ledger/version/audit，然后调用 `createMcpServer(...).serve()`；8 工具 + 5 resources 均从 CLI 可用，并自 `0.2.0` 起随 npm 包发布（2026-11-17 已上 `latest`）。仓库内的 `node scripts/mcp-dev.mjs` 保留为开发/双进程冒烟入口，不再是试用新接口的前提。
@@ -174,6 +176,36 @@ claude mcp add advisers -- advisers mcp --stdio
 - **只读投影边界**：先按 `max(client.secrecyDefault, matter.secrecy)` 过滤再计数/分页；备注（client notes）只计数、不返回正文；`timeline` 只含 delivery/commitment（不含 note/对话原文），未解析 matter 的 delivery 视为 protected。未知 id 返回 `isError: true` 的 `unknown client id`（不回显具体 id）。
 - `ADVISERS_STORE=json`（旧 JSON store 没有客户表）时返回结构化 `isError`，文案提示需要 SQLite 账本（`customer data requires the SQLite ledger (ADVISERS_STORE=sqlite)`）；不崩溃、不返回空假数据。审计 action 仍为 `mcp.call`，resource 读取审计 `resource:advisers://clients`。
 
+### 3.5 披露块与 `view` 标签（0.5.0，additive）
+
+五个只读工具（`advisers_today` / `advisers_commit_ls` / `advisers_who` / `advisers_evidence` / `advisers_clients`）与五个 resources 的**成功结果**额外带：
+
+```json
+{
+  "disclosure": {
+    "surface": "mcp",
+    "tool": "advisers_today",
+    "basis": "local-resolution",
+    "callId": "dc_0123456789abcdef",
+    "fields": ["action", "dueAt", "id", "status", "view"],
+    "view": {"verified": 2, "pending": 1, "historical": 0, "derived": 0},
+    "clearance": 0,
+    "protectedExcluded": 0,
+    "truncated": false,
+    "audited": true,
+    "digest": "sha256:…"
+  }
+}
+```
+
+- `fields` 是返回行自身 key 的**排序并集（只有字段名，从不含值/引文/路径）**；`view` 是闭集计数（`verified`/`pending`/`historical`/`derived`）；`clearance`/`protectedExcluded`/`truncated` 与既有读模型同口径。
+- 行级 `view` 也是 additive：`verified` 只表示该行的本地证据指针**在读取时**解析成功（不是“记录为真”）；`pending` 表示当前记录没有解析成功的本地证据指针；`historical` 表示已关闭/已被取代/已过期；`derived` 表示派生投影（客户行）。
+- `callId`/`digest` 由披露元数据内容寻址（同一读形状 → 同一 id/digest；时间上的唯一性由审计序号提供，不用 nonce）。
+- `audited`：有可写审计链的 MCP CLI 进程（正常的 SQLite 账本 `advisers mcp --stdio`）为 `true`，且 `mcp.call` 审计行的 reason 扩展为 `callId=… view=verified:2,pending:1,historical:0,derived:0 clearance=0 fields=… digest=…`（仍不含值）。若进程没有审计 sink（JSON store、嵌入方未注入 `audit`、或审计写入失败），结果为 `audited:false` 并附固定 `warning`（审计链不可用，本次读取未入本地防篡改日志）——绝不谎报 `true`。
+- **DSH 适配器**不是 MCP 端、也不写本地审计链：DSH 的披露块 `surface:"dsh"`、`audited:false`，且因为没有 turn store，行 `view` 最多到 `historical`/`pending`/`derived`，**从不声称 `verified`**。
+- 旧字节兼容：`advisers_remind`、`advisers_capture_candidate`、`advisers_pack_verify` 的 payload 不变；对同一请求剥掉 `disclosure` 与全部 `view` 字段后与 0.4.3 逐字节一致（`test/mcp-disclosure.test.js`、`test/disclosure.test.js` 断言）。
+- 边界：披露块是**元数据**，不读 KB/邮件正文、不含金额；它不改变任何读模型的可见性、clearance 或截断口径。
+
 ## 4. Resources（只读 JSON）
 
 | URI | 内容 |
@@ -249,7 +281,8 @@ modern（`2026-07-28`，无状态；`contracts/mcp/versions-v2.json` 是唯一�
 ## 6. 安全与审计边界
 
 - 无网络、无模型调用、无 token；与 `advisers research`/IMAP 等出网路径完全独立。
-- 每个 `tools/call` 经注入的 `audit` 回调写 `{actor:"mcp", action, allowed, reason}`；只读为 `mcp.call`，写候选为 `mcp.capture.candidate`，校验为 `mcp.pack.verify`。
+- 每个 `tools/call` 经注入的 `audit` 回调写 `{actor:"mcp", action, allowed, reason}`；只读为 `mcp.call`，写候选为 `mcp.capture.candidate`，校验为 `mcp.pack.verify`。0.5.0 起只读 `mcp.call` 的 reason 追加 `callId/view 计数/clearance/fields/digest`（只有元数据，无记录值/引文/路径）；resource 读取仍审计为 `resource:<uri>` 并同样带披露元数据。
+- 违规/失败路径不伪造 `audited:true`：没有审计 sink 时只读结果带 `audited:false` + 固定 warning；写调用在审计失败时仍 fail-closed（候选回滚）。
 - 候选写入永不自动 accept；没有直接写账本的 MCP 路径。
 - 错误信息不回显原始参数、引文或绝对路径。
 - 回执校验拒绝符号链接、超大文件与 `SHA256SUMS` 中不安全的路径。
@@ -259,7 +292,8 @@ modern（`2026-07-28`，无状态；`contracts/mcp/versions-v2.json` 是唯一�
 - 不做 MCP client / 上游会议或邮件 ingest / OAuth / 订阅（`resources/subscribe`、`subscriptions/listen`）。
 - 不提供 HTTP/SSE 传输，不做多租户或远程暴露；只有 stdio。
 - modern 面只做 §5.1 的 5 个方法：不做 `prompts/*`、`resources/templates/list`、分页（不发 `nextCursor`，带 cursor 即 `-32602`）、多轮请求（`resultType` 只有 `complete`，没有 `input_required`）、sampling/elicitation/roots、logging。
-- **0.4.0 不向 MCP/DSH 暴露 KB 与邮件**：工具仍是 8 个、resources 仍是 5 个，没有新增 KB/邮件工具、resource 或字段；KB 正文、邮件正文与金额只存在于本地账本/CLI（金额也从不进入 MCP/DSH）。暴露 KB/邮件需要 opt-in + clearance 0 + untrusted 边界 + 法务文本，属于 0.4.x/0.5。
+- **0.5.0 仍不向 MCP/DSH 暴露 KB、邮件、金额、bundle 与 context pack**：工具仍是 8 个、resources 仍是 5 个（DSH 仍 6 个）；0.5.0 只给五个读工具/五个 resources 加了 disclosure 元数据（§3.5），没有新增数据面。KB 正文、邮件正文/标题与金额只存在于本地账本/CLI；context pack 与 bundle 只在 CLI 文件系统路径上，MCP `advisers_pack_verify` **不**校验 context pack（仍是 evidence-pack v1 目录）。暴露 KB/邮件需要 opt-in + clearance 0 + untrusted 边界 + 法务文本，不在 0.5.0。
+- 不新增 MCP 写工具、不做 `handoff`/`handoff_claim`、不做自动 accept/自动发送/日历写回；MCP 没有业务动作面。
 - 不捆绑 `--tools=readonly|standard` profile：那不是 MCP 协议特性（规范只有 `annotations.readOnlyHint`），是 Advisers 自订信任边界，另立项。
 
 ## 8. bin 接线（已完成 2026-11-17）
@@ -321,6 +355,8 @@ node --experimental-strip-types --test test/mcp-modern.test.js       # 0.4.0 dua
 node --experimental-strip-types --test test/mcp-modern-cli.test.js   # modern 的真实 stdio 会话
 node --experimental-strip-types --test test/mcp-modern-contract.test.js # v2 契约/向量
 node --experimental-strip-types --test test/cli-mcp-json.test.js     # 真实 CLI stdio 接线
+node --experimental-strip-types --test test/mcp-disclosure.test.js   # 0.5.0 disclosure 块/行 view/旧字节兼容
+node --experimental-strip-types --test test/disclosure.test.js       # view/verification/callId/digest 纯函数
 cd ../..
 node scripts/check-contracts.mjs --mcp   # legacy 目录/响应 + modern envelope 与契约对齐
 node scripts/check-contracts.mjs --status  # status --json 的 contracts 发现字段

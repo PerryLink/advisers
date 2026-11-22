@@ -28,6 +28,8 @@ after(() => { rmSync(EMPTY_ROOT, { recursive: true, force: true }) })
 
 const READ_ONLY_TOOL_NAMES = ['advisers_evidence', 'advisers_today', 'advisers_who']
 const PREVIEW_FIELDS = ['note', 'preview', 'source']
+// 0.5.0 additive read disclosure (metadata only; audited:false on the DSH surface).
+const DISCLOSURE_FIELDS = ['disclosure']
 // 0.2.2 payload keys, i.e. everything except the additive preview fields.
 const LEGACY_DATA_FIELDS = {
   advisers_today: ['counts', 'localDay', 'noDue', 'now', 'overdue', 'timezone', 'today', 'truncated', 'waiting', 'week'],
@@ -144,7 +146,7 @@ test('preview marker is additive: 0.2.x fields and values do not regress', async
     if (name === 'advisers_today' && value.data.next !== undefined) legacy.push('next')
     assert.deepEqual(
       Object.keys(value.data).sort(),
-      [...legacy, ...PREVIEW_FIELDS].sort(),
+      [...legacy, ...PREVIEW_FIELDS, ...DISCLOSURE_FIELDS].sort(),
       name + ' payload keys must be the 0.2.x keys plus the three preview fields',
     )
   }

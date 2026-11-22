@@ -21,6 +21,7 @@
 // A missing ledger is NOT an error (first-run preview is kept); every other
 // gate failure is, so 'no data' can never masquerade as 'not allowed'.
 // ---------------------------------------------------------------------------
+import { createHash } from 'node:crypto'
 import { isAbsolute } from 'node:path'
 
 /** Error codes visible to the DSH host (additive; 0.x only grows this set). */
@@ -67,6 +68,203 @@ export const JSON_CUSTOMER_NOTE = 'Read-only snapshot of the JSON ledger; it has
 /** Client-list page default/cap of the DSH adapter. */
 const CLIENT_LIST_DEFAULT = 20
 const CLIENT_LIST_MAX = 50
+
+/* -------------------------------------------------------------------------- */
+/* read disclosure (0.5.0 M1)                                                 */
+/* -------------------------------------------------------------------------- */
+// The DSH adapter is a read-only projection and never writes the advisers
+// tamper-evident audit chain, so every disclosure is audited:false. Row views
+// are derived from the local read model only: the adapter has no turn store and
+// therefore never claims `verified` (that word would mean a local evidence
+// pointer resolved, which only the CLI/MCP ledgers can check).
+function canonicalJson(value) {
+  if (value === null || typeof value !== 'object') return JSON.stringify(value)
+  if (Array.isArray(value)) return '[' + value.map((item) => canonicalJson(item)).join(',') + ']'
+  const keys = Object.keys(value).sort()
+  return '{' + keys.map((key) => JSON.stringify(key) + ':' + canonicalJson(value[key])).join(',') + '}'
+}
+
+function sha256Hex(text) {
+  return createHash('sha256').update(String(text), 'utf8').digest('hex')
+}
+
+function disclosureFieldsOf(rows) {
+  const fields = new Set()
+  for (const row of Array.isArray(rows) ? rows : []) {
+    if (!row || typeof row !== 'object' || Array.isArray(row)) continue
+    for (const key of Object.keys(row)) if (key !== 'view') fields.add(key)
+  }
+  return [...fields].sort()
+}
+
+function disclosureViewCounts(views) {
+  const counts = { verified: 0, pending: 0, historical: 0, derived: 0 }
+  for (const view of Array.isArray(views) ? views : []) if (Object.prototype.hasOwnProperty.call(counts, view)) counts[view] += 1
+  return counts
+}
+
+/** preview and the legacy JSON store never resolve evidence: basis=preview. */
+function dshBasis(marker) {
+  return marker && (marker.preview === true || marker.backend === 'json') ? 'preview' : 'local-resolution'
+}
+
+function dshCount(value) {
+  const number = Number(value)
+  return Number.isFinite(number) && number >= 0 ? Math.floor(number) : 0
+}
+
+/**
+ * Row view from the local read model only. `preview` never claims more than
+ * pending; a real ledger read can report historical for closed rows, but the
+ * adapter has no turn store, so it never reports verified.
+ */
+function dshStatusView(kind, row, basis) {
+  if (kind === 'client') return basis === 'preview' ? 'pending' : 'derived'
+  if (basis === 'preview') return 'pending'
+  const status = typeof row?.status === 'string' ? row.status : ''
+  if (kind === 'commitment') return status === 'done' || status === 'dropped' ? 'historical' : 'pending'
+  if (kind === 'fact') return status === 'superseded' || status === 'deleted' || row?.expiredAt ? 'historical' : 'pending'
+  if (kind === 'preference') return status === 'deprecated' ? 'historical' : 'pending'
+  return 'pending'
+}
+
+function buildDshDisclosure({ tool, basis, fields, views, clearance, protectedExcluded, truncated }) {
+  const disclosure = {
+    surface: 'dsh',
+    tool,
+    basis: basis === 'preview' ? 'preview' : 'local-resolution',
+    callId: '',
+    fields: (() => { const set = new Set(); for (const field of Array.isArray(fields) ? fields : []) if (typeof field === 'string' && field && field !== 'view') set.add(field); return [...set].sort() })(),
+    view: disclosureViewCounts(views),
+    clearance: dshCount(clearance),
+    protectedExcluded: dshCount(protectedExcluded),
+    truncated: truncated === true,
+    audited: false,
+    digest: '',
+  }
+  const digest = 'sha256:' + sha256Hex(canonicalJson({
+    surface: disclosure.surface,
+    tool: disclosure.tool,
+    basis: disclosure.basis,
+    fields: disclosure.fields,
+    view: disclosure.view,
+    clearance: disclosure.clearance,
+    protectedExcluded: disclosure.protectedExcluded,
+    truncated: disclosure.truncated,
+  }))
+  disclosure.callId = 'dc_' + digest.slice('sha256:'.length, 'sha256:'.length + 16)
+  disclosure.digest = digest
+  return disclosure
+}
+
+function annotateCommitmentLists(data, tool, lists) {
+  const basis = dshBasis(data)
+  const views = []
+  const payload = { ...data }
+  for (const key of lists) {
+    if (!Array.isArray(data[key])) continue
+    payload[key] = data[key].map((row) => {
+      const view = dshStatusView('commitment', row, basis)
+      views.push(view)
+      return row && typeof row === 'object' ? { ...row, view } : row
+    })
+  }
+  if (payload.next && typeof payload.next === 'object') payload.next = { ...payload.next, view: dshStatusView('commitment', payload.next, basis) }
+  return {
+    ...payload,
+    disclosure: buildDshDisclosure({
+      tool,
+      basis,
+      fields: disclosureFieldsOf(lists.flatMap((key) => (Array.isArray(data[key]) ? data[key] : []))),
+      views,
+      clearance: data.clearance,
+      protectedExcluded: data.protectedExcluded,
+      truncated: data.truncated === true,
+    }),
+  }
+}
+
+function annotateWhoPayload(data, tool) {
+  const basis = dshBasis(data)
+  const views = []
+  const payload = { ...data }
+  for (const key of ['mine', 'waiting']) {
+    if (!Array.isArray(data[key])) continue
+    payload[key] = data[key].map((row) => {
+      const view = dshStatusView('commitment', row, basis)
+      views.push(view)
+      return row && typeof row === 'object' ? { ...row, view } : row
+    })
+  }
+  return {
+    ...payload,
+    disclosure: buildDshDisclosure({
+      tool,
+      basis,
+      fields: disclosureFieldsOf([...(Array.isArray(data.mine) ? data.mine : []), ...(Array.isArray(data.waiting) ? data.waiting : [])]),
+      views,
+      clearance: data.clearance,
+      protectedExcluded: data.protectedExcluded,
+      truncated: data.truncated === true,
+    }),
+  }
+}
+
+function annotateEvidencePayload(data, tool) {
+  const basis = dshBasis(data)
+  const record = data.record
+  const view = dshStatusView(data.kind, record, basis)
+  return {
+    ...data,
+    record: record && typeof record === 'object' ? { ...record, view } : record,
+    disclosure: buildDshDisclosure({
+      tool,
+      basis,
+      fields: disclosureFieldsOf([record]),
+      views: [view],
+      clearance: data.clearance,
+      protectedExcluded: data.protectedExcluded,
+      truncated: data.truncated === true,
+    }),
+  }
+}
+
+function annotateClientsPayload(data, tool) {
+  const basis = dshBasis(data)
+  if (data.action === 'list') {
+    const rows = Array.isArray(data.clients) ? data.clients : []
+    const views = rows.map(() => dshStatusView('client', null, basis))
+    return {
+      ...data,
+      clients: rows.map((row, index) => (row && typeof row === 'object' ? { ...row, view: views[index] } : row)),
+      disclosure: buildDshDisclosure({
+        tool,
+        basis,
+        fields: disclosureFieldsOf(rows),
+        views,
+        clearance: data.clearance,
+        protectedExcluded: data.protectedExcluded,
+        truncated: data.truncated === true,
+      }),
+    }
+  }
+  const client = data.client
+  const hasClient = Boolean(client && typeof client === 'object' && !Array.isArray(client))
+  const view = dshStatusView('client', client, basis)
+  return {
+    ...data,
+    ...(hasClient ? { client: { ...client, view } } : {}),
+    disclosure: buildDshDisclosure({
+      tool,
+      basis,
+      fields: hasClient ? disclosureFieldsOf([client]) : [],
+      views: hasClient ? [view] : [],
+      clearance: data.clearance,
+      protectedExcluded: data.protectedExcluded,
+      truncated: data.timelineTruncated === true,
+    }),
+  }
+}
 
 /** The 0.2.x preview marker; exactly the fields the 0.2.3 contract required. */
 export function previewMarker() {
@@ -414,20 +612,18 @@ function normalizeClientLimit(value) {
 
 /** The no-ledger customer preview: an empty, marked list — never fake data. */
 function previewClientsList(limit) {
-  return {
-    data: {
-      action: 'list',
-      clients: [],
-      total: 0,
-      truncated: false,
-      limit,
-      customerEntities: false,
-      clearance: 0,
-      protectedExcluded: 0,
-      ...previewMarker(),
-    },
-    audit: 'preview clients=0',
-  }
+  const data = annotateClientsPayload({
+    action: 'list',
+    clients: [],
+    total: 0,
+    truncated: false,
+    limit,
+    customerEntities: false,
+    clearance: 0,
+    protectedExcluded: 0,
+    ...previewMarker(),
+  }, 'advisers_clients')
+  return { data, audit: 'preview clients=0' }
 }
 
 /** A preview ledger cannot contain a real client: not-found, never an empty fake. */
@@ -442,18 +638,19 @@ function previewClientMissing(id) {
 
 function evidencePayload(id, kind, record, traced, marker, { auditExtra }) {
   const counts = { sources: traced.sources.length, missing: traced.missing.length }
+  const data = annotateEvidencePayload({
+    id,
+    kind,
+    record,
+    sources: traced.sources.slice(0, EVIDENCE_LIST_CAP),
+    missing: traced.missing.slice(0, EVIDENCE_LIST_CAP),
+    counts,
+    verified: false,
+    truncated: counts.sources > EVIDENCE_LIST_CAP || counts.missing > EVIDENCE_LIST_CAP,
+    ...marker,
+  }, 'advisers_evidence')
   return {
-    data: {
-      id,
-      kind,
-      record,
-      sources: traced.sources.slice(0, EVIDENCE_LIST_CAP),
-      missing: traced.missing.slice(0, EVIDENCE_LIST_CAP),
-      counts,
-      verified: false,
-      truncated: counts.sources > EVIDENCE_LIST_CAP || counts.missing > EVIDENCE_LIST_CAP,
-      ...marker,
-    },
+    data,
     audit: `${kind} ${id} sources=${counts.sources} missing=${counts.missing}${auditExtra}`,
   }
 }
@@ -557,18 +754,34 @@ export function createLedgerReader(config = {}, options = {}) {
     clearance,
     loadFacade,
     async todayView() {
-      if (mode === 'preview') return previewToday(runtime)
-      const index = await realIndex()
-      if (!index) return previewToday(runtime)
-      const { data, audit } = buildToday(index.rows)
-      return { data: withLedgerMarker(data, index), audit }
+      let result
+      if (mode === 'preview') {
+        result = previewToday(runtime)
+      } else {
+        const index = await realIndex()
+        if (!index) {
+          result = previewToday(runtime)
+        } else {
+          const { data, audit } = buildToday(index.rows)
+          result = { data: withLedgerMarker(data, index), audit }
+        }
+      }
+      return { ...result, data: annotateCommitmentLists(result.data, 'advisers_today', ['overdue', 'today', 'week', 'waiting', 'noDue']) }
     },
     async whoView() {
-      if (mode === 'preview') return previewWho(runtime)
-      const index = await realIndex()
-      if (!index) return previewWho(runtime)
-      const { data, audit } = buildWho(index.rows)
-      return { data: withLedgerMarker(data, index), audit }
+      let result
+      if (mode === 'preview') {
+        result = previewWho(runtime)
+      } else {
+        const index = await realIndex()
+        if (!index) {
+          result = previewWho(runtime)
+        } else {
+          const { data, audit } = buildWho(index.rows)
+          result = { data: withLedgerMarker(data, index), audit }
+        }
+      }
+      return { ...result, data: annotateWhoPayload(result.data, 'advisers_who') }
     },
     async evidenceView(args) {
       if (mode === 'preview') return previewEvidence(runtime, args)
@@ -644,8 +857,9 @@ export function createLedgerReader(config = {}, options = {}) {
           protectedExcluded: view.protectedExcluded,
           warnings: info.warnings,
         })
+        const showData = { action: 'show', ...view, customerEntities: info.customerEntities === true, ...marker }
         return {
-          data: { action: 'show', ...view, customerEntities: info.customerEntities === true, ...marker },
+          data: annotateClientsPayload(showData, 'advisers_clients'),
           audit: `client ${view.client.id} matters=${view.counts.matters} open=${view.counts.openMine}/${view.counts.openWaiting} timeline=${view.timelineTotal}`,
         }
       }
@@ -676,7 +890,7 @@ export function createLedgerReader(config = {}, options = {}) {
       }
       if (info.customerEntities !== true) data.note = JSON_CUSTOMER_NOTE
       return {
-        data,
+        data: annotateClientsPayload(data, 'advisers_clients'),
         audit: `clients=${info.clients.length}/${info.total} customerEntities=${info.customerEntities === true}`,
       }
     },

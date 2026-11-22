@@ -49,6 +49,7 @@ import {
 import { buildReminders } from './remind.js'
 import { inspectCaptureText } from './capture.js'
 import { listClientRows, readClientStatus } from './customer-read.js'
+import { buildDisclosure, disclosureAuditReason, fieldsOf, verificationOf, viewOf, withAudited } from './disclosure.js'
 import { classify, redact, safetyErrorFrom } from './safety/index.js'
 
 /**
@@ -157,6 +158,16 @@ export const MCP_OUTPUT_LIMITS = Object.freeze({
  */
 export const MCP_MAX_RESULT_BYTES = 64 * 1024
 const PAYLOAD_LIST_KEYS = Object.freeze(['commitments', 'mine', 'waiting', 'reminders', 'sources', 'missing', 'clients', 'projects', 'timeline'])
+/**
+ * Read tools whose successful result carries the additive 0.5.0 disclosure
+ * block and row-level `view` labels. The two write tools (pending capture and
+ * read-only pack verification) and `advisers_remind` keep their exact 0.4.x
+ * payload bytes.
+ */
+const DISCLOSURE_TOOLS = Object.freeze(['advisers_today', 'advisers_commit_ls', 'advisers_who', 'advisers_evidence', 'advisers_clients'])
+const DISCLOSURE_TOOL_SET = new Set(DISCLOSURE_TOOLS)
+/** Warning on disclosure.audited=false when no audit sink is configured. */
+const DISCLOSURE_WARNING = 'audit chain unavailable: this read is not recorded in the local tamper-evident audit log'
 /** Receipt directories are small; refuse to slurp anything huge. */
 export const MAX_PACK_FILE_BYTES = 512 * 1024
 export const MAX_PACK_SUMS_BYTES = 64 * 1024
@@ -565,6 +576,9 @@ export function createMcpServer({ store, ledger, loadLedger, loadStore, loadComm
   // invalid/negative value falls back to the most restrictive level (0).
   const requestedClearance = Number(clearance)
   const clearanceLevel = Number.isFinite(requestedClearance) && requestedClearance >= 0 ? requestedClearance : 0
+  // 0.5.0 disclosure: audited is true only when this process actually has an
+  // audit sink (the shipped bin wires store.appendAudit; embedders may not).
+  const auditConfigured = typeof audit === 'function'
   // 0.2.3 P0-2: the CLI wires lazy loaders instead of a preloaded ledger/store so
   // `initialize` stays protocol-only (200k-row ledgers used to cost ~2s before the
   // first response). Anything that needs data resolves it on first use; an
@@ -662,6 +676,196 @@ export function createMcpServer({ store, ledger, loadLedger, loadStore, loadComm
       else visible.push(row)
     }
     return { visible, protectedExcluded }
+  }
+
+  /* ------------------------- read disclosure (0.5.0) ----------------------- */
+
+  // 0.5.0 M1: the read models above stay value-identical; every successful
+  // result of the five read tools and the five resources is augmented with
+  // per-row `view` labels and one additive `disclosure` block. The disclosure
+  // carries metadata only (fields/counts/clearance/digest), never record
+  // values, quotes or paths; callId/digest are content-addressed so legacy and
+  // modern era bytes stay identical for the same request.
+  function commitmentVerification(id) {
+    if (typeof id !== 'string' || !id) return null
+    try {
+      const ledgerApi = ledgerFor('commitments')
+      if (!ledgerApi) return null
+      return verificationOf(evidenceForCommitment(storeFor(), ledgerApi, id))
+    } catch {
+      // A read that already succeeded must not fail because verification of
+      // one row hit a missing loader/store: the row stays `pending`.
+      return null
+    }
+  }
+
+  function annotateCommitmentRows(rows) {
+    const list = Array.isArray(rows) ? rows : []
+    const fields = fieldsOf(list)
+    const verificationCache = new Map()
+    const views = []
+    const annotated = list.map((row) => {
+      if (!row || typeof row !== 'object' || Array.isArray(row)) return row
+      const id = typeof row.id === 'string' ? row.id : ''
+      let verification = null
+      if (id) {
+        verification = verificationCache.get(id)
+        if (verification === undefined) {
+          verification = commitmentVerification(id)
+          verificationCache.set(id, verification)
+        }
+      }
+      const view = viewOf('commitment', row, verification)
+      views.push(view)
+      return { ...row, view }
+    })
+    return { rows: annotated, fields, views }
+  }
+
+  function annotateCommitmentList(data, tool) {
+    const annotated = annotateCommitmentRows(data?.commitments)
+    return {
+      ...data,
+      commitments: annotated.rows,
+      disclosure: buildDisclosure({
+        tool,
+        fields: annotated.fields,
+        views: annotated.views,
+        clearance: data?.clearance ?? clearanceLevel,
+        protectedExcluded: data?.protectedExcluded,
+        truncated: data?.truncated === true,
+      }),
+    }
+  }
+
+  function annotateWho(data, tool) {
+    const mine = annotateCommitmentRows(data?.mine)
+    const waiting = annotateCommitmentRows(data?.waiting)
+    return {
+      ...data,
+      mine: mine.rows,
+      waiting: waiting.rows,
+      disclosure: buildDisclosure({
+        tool,
+        fields: [...new Set([...mine.fields, ...waiting.fields])].sort(),
+        views: [...mine.views, ...waiting.views],
+        clearance: data?.clearance ?? clearanceLevel,
+        protectedExcluded: data?.protectedExcluded,
+        truncated: data?.truncated === true,
+      }),
+    }
+  }
+
+  function annotateEvidenceTool(data, tool) {
+    // The 0.4.x evidence payload keys the record by kind and carries no explicit
+    // `kind` field, so detect it from the record key (never from the request id).
+    const kind = data?.commitment && typeof data.commitment === 'object'
+      ? 'commitment'
+      : data?.fact && typeof data.fact === 'object'
+        ? 'fact'
+        : data?.preference && typeof data.preference === 'object' ? 'preference' : null
+    const record = kind ? data[kind] : undefined
+    const base = {
+      tool,
+      clearance: data?.clearance ?? clearanceLevel,
+      protectedExcluded: data?.protectedExcluded,
+      truncated: data?.truncated === true,
+    }
+    if (!record || typeof record !== 'object' || Array.isArray(record)) {
+      return { ...data, disclosure: buildDisclosure({ ...base, fields: [], views: [] }) }
+    }
+    const verification = verificationOf(data, {
+      resolved: Number.isInteger(data.sourcesTotal) ? data.sourcesTotal : undefined,
+      missing: Number.isInteger(data.missingTotal) ? data.missingTotal : undefined,
+    })
+    const view = viewOf(kind, record, verification)
+    return {
+      ...data,
+      [kind]: { ...record, view },
+      disclosure: buildDisclosure({ ...base, fields: fieldsOf([record]), views: [view] }),
+    }
+  }
+
+  function annotateClientRows(rows) {
+    const list = Array.isArray(rows) ? rows : []
+    const fields = fieldsOf(list)
+    const views = list.map((row) => viewOf('client', row))
+    const annotated = list.map((row, index) => (row && typeof row === 'object' && !Array.isArray(row) ? { ...row, view: views[index] } : row))
+    return { rows: annotated, fields, views }
+  }
+
+  function annotateClients(data, tool) {
+    const base = {
+      tool,
+      clearance: data?.clearance ?? clearanceLevel,
+      protectedExcluded: data?.protectedExcluded,
+    }
+    // The MCP tool/resource list payload has no `action` field (only the DSH
+    // payload sets it), so a clients array is the list discriminator here.
+    if (data?.action === 'list' || Array.isArray(data?.clients)) {
+      const annotated = annotateClientRows(data.clients)
+      return {
+        ...data,
+        clients: annotated.rows,
+        disclosure: buildDisclosure({ ...base, fields: annotated.fields, views: annotated.views, truncated: data?.truncated === true }),
+      }
+    }
+    const client = data?.client
+    const hasClient = Boolean(client && typeof client === 'object' && !Array.isArray(client))
+    const payload = hasClient ? { ...data, client: { ...client, view: 'derived' } } : { ...data }
+    return {
+      ...payload,
+      disclosure: buildDisclosure({ ...base, fields: hasClient ? fieldsOf([client]) : [], views: hasClient ? ['derived'] : [], truncated: data?.timelineTruncated === true }),
+    }
+  }
+
+  function annotateEvidenceIndexRow(row) {
+    if (!row || typeof row !== 'object' || Array.isArray(row)) return row
+    const found = row.found === true
+    const view = found && Number(row.sources) > 0 ? 'verified' : 'pending'
+    return { ...row, view }
+  }
+
+  function annotateEvidenceIndex(data, tool) {
+    const commitments = Array.isArray(data?.commitments) ? data.commitments : []
+    const facts = Array.isArray(data?.facts) ? data.facts : []
+    const preferences = Array.isArray(data?.preferences) ? data.preferences : []
+    const rows = [...commitments, ...facts, ...preferences]
+    const views = rows.map((row) => annotateEvidenceIndexRow(row)?.view ?? 'pending')
+    return {
+      ...data,
+      commitments: commitments.map(annotateEvidenceIndexRow),
+      facts: facts.map(annotateEvidenceIndexRow),
+      preferences: preferences.map(annotateEvidenceIndexRow),
+      disclosure: buildDisclosure({
+        tool,
+        fields: fieldsOf(rows),
+        views,
+        clearance: data?.clearance ?? clearanceLevel,
+        protectedExcluded: data?.protectedExcluded,
+        truncated: data?.truncated === true,
+      }),
+    }
+  }
+
+  /** Add the additive disclosure/view block to one successful read tool result. */
+  function addToolDisclosure(toolName, data) {
+    if (!data || typeof data !== 'object' || Array.isArray(data)) return data
+    if (toolName === 'advisers_today' || toolName === 'advisers_commit_ls') return annotateCommitmentList(data, toolName)
+    if (toolName === 'advisers_who') return annotateWho(data, toolName)
+    if (toolName === 'advisers_evidence') return annotateEvidenceTool(data, toolName)
+    if (toolName === 'advisers_clients') return annotateClients(data, toolName)
+    return data
+  }
+
+  /** Add the additive disclosure/view block to one successful resource read. */
+  function addResourceDisclosure(uri, data) {
+    if (!data || typeof data !== 'object' || Array.isArray(data)) return data
+    if (uri === 'advisers://today' || uri === 'advisers://commitments') return annotateCommitmentList(data, uri)
+    if (uri === 'advisers://who') return annotateWho(data, uri)
+    if (uri === 'advisers://clients') return annotateClients(data, uri)
+    if (uri === 'advisers://evidence') return annotateEvidenceIndex(data, uri)
+    return data
   }
 
   /* ------------------------------ read models ------------------------------ */
@@ -1144,7 +1348,15 @@ export function createMcpServer({ store, ledger, loadLedger, loadStore, loadComm
         reason: data ? data.fileCount + ' files, ' + data.errors.length + ' errors' : 'error',
       }
     }
-    return { actor: 'mcp', action: 'mcp.call', allowed: outcome.ok, reason: tool.name }
+    const disclosure = outcome.ok ? outcome.data?.disclosure : undefined
+    return {
+      actor: 'mcp',
+      action: 'mcp.call',
+      allowed: outcome.ok,
+      // 0.5.0: the single mcp.call row carries the disclosure ids/counts/digest
+      // (metadata only; no record values). A failed read keeps the old reason.
+      reason: disclosure && typeof disclosure === 'object' ? disclosureAuditReason(tool.name, disclosure) : tool.name,
+    }
   }
 
   async function recordAudit(entry) {
@@ -1325,6 +1537,9 @@ export function createMcpServer({ store, ledger, loadLedger, loadStore, loadComm
     }
     // 0.3.0 P0-T3: cap the payload BEFORE the egress classifier scans it.
     if (outcome.ok) outcome.data = boundPayload(outcome.data)
+    // 0.5.0 disclosure: additive view labels + disclosure block on the five
+    // read tools only (after the cap, so the labels describe the returned rows).
+    if (outcome.ok && DISCLOSURE_TOOL_SET.has(tool.name)) outcome.data = addToolDisclosure(tool.name, outcome.data)
 
     // Gate 2: a tool must not relay block-level text (ledger data, receipt
     // metadata, ...). The returned payload is classified before it is sent.
@@ -1337,6 +1552,9 @@ export function createMcpServer({ store, ledger, loadLedger, loadStore, loadComm
       }
     }
     const audited = await recordAudit(auditEntry(tool, outcome))
+    // Reads never fail on an audit-chain problem (0.4.x behaviour); the
+    // disclosure says so honestly instead: audited=false + a fixed warning.
+    if (outcome.ok && outcome.data?.disclosure) withAudited(outcome.data.disclosure, auditConfigured && audited, DISCLOSURE_WARNING)
 
     if (!outcome.ok) {
       if (outcome.error instanceof RpcError) {
@@ -1369,9 +1587,18 @@ export function createMcpServer({ store, ledger, loadLedger, loadStore, loadComm
     else if (uri === 'advisers://who') data = whoData()
     else if (uri === 'advisers://clients') data = clientsListData(false)
     else data = evidenceIndex()
-    await recordAudit({ actor: 'mcp', action: 'mcp.call', allowed: true, reason: 'resource:' + uri })
     const bounded = boundPayload(data)
-    return reply(id, { contents: [{ uri, mimeType: 'application/json', text: JSON.stringify(bounded, null, 2) }] })
+    // 0.5.0 disclosure: same additive view/disclosure block as the tools.
+    const payload = addResourceDisclosure(uri, bounded)
+    const disclosure = payload && typeof payload === 'object' ? payload.disclosure : undefined
+    const audited = await recordAudit({
+      actor: 'mcp',
+      action: 'mcp.call',
+      allowed: true,
+      reason: disclosure ? disclosureAuditReason('resource:' + uri, disclosure) : 'resource:' + uri,
+    })
+    if (disclosure) withAudited(disclosure, auditConfigured && audited, DISCLOSURE_WARNING)
+    return reply(id, { contents: [{ uri, mimeType: 'application/json', text: JSON.stringify(payload, null, 2) }] })
   }
 
   /**

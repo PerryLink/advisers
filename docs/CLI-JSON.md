@@ -1,21 +1,25 @@
-# CLI JSON contract v1 (E6-T1 + 0.2.0 data plane; 0.4.0 additive surfaces)
+# CLI JSON contract v1 (E6-T1 + 0.2.0 data plane; 0.4.0/0.5.0 additive surfaces)
 
 Advisers is CLI-first. Scripts should be able to consume every read-only view without
 parsing human text. JSON mode never mixes human prose into stdout; diagnostics go to
 stderr and `--json` must not require a TTY. Shapes are additive: new optional keys may
 appear, existing keys keep their meaning.
 
-> Status: **0.4.3 (schema v22)**. Every 0.4.x change in this document is additive
-> inside the v1 contract: new commands, new optional fields and new `--scope` values.
-> Existing commands, keys, ordering and exit codes are unchanged, so a 0.3.2 consumer
-> keeps working without modification — with two deliberate 0.4.3 exceptions that scripts
-> must handle: keyless `capture` now succeeds as a local-rule run instead of exiting 1
-> (`capture --model` keeps the missing-key exit 1), and `--help`/`-h` is a global exit-0
-> short-circuit. The 0.4.0-only additions are marked **(0.4.0)**; the 0.4.1 follow-ups
+> Status: **0.5.0 (schema v22)**, published 2026-11-22 (npm `latest` = `0.5.0`;
+> `next` is also `0.5.0`; the repository is lockstep at package version `0.5.0`).
+> Every 0.4.x and 0.5.0 change in this document is additive inside the v1 contract: new
+> commands, new optional fields and new `--scope` values. Existing commands, keys,
+> ordering and exit codes are unchanged, so a 0.3.2 consumer keeps working without
+> modification — with the deliberate exceptions scripts must handle: keyless
+> `capture` now succeeds as a local-rule run instead of exiting 1 (`capture --model`
+> keeps the missing-key exit 1), `--help`/`-h` is a global exit-0 short-circuit, and
+> `sync push --dry-run` is now truly read-only (0.4.3 only advertised it in help and
+> still wrote). The 0.4.0-only additions are marked **(0.4.0)**; the 0.4.1 follow-ups
 > (KB/mail review links, reminder delivery policy) and the 0.4.2 follow-ups (manual fact
 > entry, mail probe/watch, `sync pull --dry-run`, the backup-age hint and subcommand
 > `--help`) are called out inline; the 0.4.3 additions are collected in §0.4.3 additive
-> surfaces; anything not marked is 0.3.2/earlier behaviour.
+> surfaces and the 0.5.0 additions in §0.5.0 additive surfaces; anything not marked is
+> 0.3.2/earlier behaviour.
 
 ## Current JSON surfaces (2026-11; 0.2.3 additions marked)
 
@@ -54,6 +58,13 @@ appear, existing keys keep their meaning.
 | `advisers consent status\|grant\|revoke --json` | consent file status/entry (below) | v1 (0.4.0 additive) |
 | `advisers privacy --matrix --json` | policy surface matrix (below) | v1 (0.4.0 additive) |
 | `advisers client export --pack --json` | client status pack v2 summary (below, [CLIENTS.md](CLIENTS.md)) | v1 (0.4.0 additive) |
+| `advisers export --bundle <dir> [--force] --json` | bundle v1 summary: `{ok,command:"export",mode:"bundle",out,format,version,scope,generatedAt,schemaVersion,counts,tables,dataDigest,manifestDigest,fileCount,checksumCount,bytes,verificationBasis,verification,warnings}` (§0.5.0; [PORTABILITY.md](PORTABILITY.md)) | v1 (0.5.0 additive) |
+| `advisers import --bundle <dir> [--verify] [--dry-run] [--replace] --json` | bundle import/dry-run summary: `{ok,command:"import",mode:"bundle",dryRun,verify,bundleDir,bootstrap,replaced,backup,dataDigest,counts,tables,restored,pagesRebuilt,ftsRebuilt,syncStateCleared,verificationBasis,verification,warnings}` (§0.5.0) | v1 (0.5.0 additive) |
+| `advisers context-pack create ... --json` | candidate mode (`mode:"candidates"`, nothing written) or pack summary with `manifestDigest`/`disclosure` (§0.5.0; [CONTEXT-PACK.md](CONTEXT-PACK.md)) | v1 (0.5.0 additive) |
+| `advisers context-pack verify <dir> [--expect-manifest-sha256 <hex>] --json` | offline verify report (`ok`, `errors`, `manifestDigest`, `verificationBasis`, ...); exit 0/1 | v1 (0.5.0 additive) |
+| `advisers sync push --json` / `sync pull --dry-run --json` / `sync status [--check] --json` | snapshot plan/result and precheck payloads (§0.5.0; [SYNC.md](SYNC.md)); a successful real `sync pull` still prints the human summary | v1 (0.5.0 additive) |
+| `advisers setup [--dry-run] --json` / `advisers demo --json` | setup plan/apply and isolated demo payloads (§0.5.0) | v1 (0.5.0 additive) |
+| `advisers help <topic>` / `help --list` | plain text only (no `--json`); 10 topics with Chinese aliases (§0.5.0) | 0.5.0 additive |
 
 ### `today --json`
 
@@ -689,6 +700,82 @@ third-party attestation (`verificationBasis: "local-checksums-only"`).
 - `status --json`: additive 0.4.0 counts `receivables` and `payments` (row counts,
   never amounts); existing v1 keys keep their meaning. Treat any further new key as
   additive.
+
+## 0.5.0 additive surfaces (2026-11-22)
+
+No frozen v1 shape is removed; all new commands are documented-additive and the
+database schema stays v22. The new evidence chains are:
+
+- `export --bundle <dir> [--force] [--json]` writes the portable bundle
+  `manifest.json / ledger.json / facts.md / kb/<id>.md / pages/<id>.md / IMPORT.md /
+  SHA256SUMS`; `import --bundle <dir> --verify [--dry-run] [--replace] [--json]`
+  verifies offline, refuses tampered/unsafe/non-empty targets, writes a pre-import
+  backup and rebuilds compiled KB pages. `dataDigest` covers
+  `DATA_TABLES − audit − kb_pages`; audit is represented by
+  `sourceAudit{count,headHash}`. Old `export --all`/`import <file>` are unchanged.
+- `context-pack create [--subject client:<id>|matter:<id>] [--ids ...] [--yes]
+  --recipient <name> --purpose client-delivery|external-review|handoff [--expires 24h|7d|<ISO>]
+  [--include-quotes] [--out <dir>] [--force]` builds a disclosure pack: ≤16 items,
+  item ≤8 KiB, items ≤32 KiB, manifest ≤64 KiB, total ≤256 KiB; the manifest
+  records recipient/purpose/expiry, the disclosure block and excluded counts, and
+  `confersReadAuthority/confersExecutionAuthority=false`. Without `--ids`/`--yes`
+  it only lists auto-assembled candidates (read-only, nothing written);
+  `--ids` and `--yes` are mutually exclusive; `--out` defaults under
+  `$ADVISERS_HOME/exports/`; `--force` renames a non-empty old tree aside instead
+  of deleting it. `context-pack verify <dir> [--expect-manifest-sha256 <hex>]
+  [--json]` is offline (0/1) and `evidence verify` dispatches context-pack →
+  client-pack → receipt. Context packs cannot be imported back.
+- `sync push --dry-run` is truly read-only (no snapshot/audit/checkpoint/state);
+  `sync pull --dry-run` stays read-only as in 0.4.2. `sync status --check` reports
+  `conflict/localChanged/remoteAdvanced` from `sync.state.json`; push/pull refuse
+  a proven stale overwrite with `E_SYNC_CONFLICT` unless `--force` (a
+  `.before-sync-*` backup is kept and printed). Snapshot v2 records
+  `dbMtimeMs/dbSha256/sourceSchemaVersion`; v1 snapshots remain readable. The
+  transfer semantics stay whole-database last-writer-wins (no merge).
+- `doctor --check-db --json` adds `backup{status,managedCount,newestManaged,...}`
+  without changing the exit code.
+- `setup [--dry-run] [--json] [--yes] [--accept-tos] [--no-demo]` and
+  `demo [--json] [--clean]` provide first-run orchestration and an isolated
+  synthetic "one consulting delivery"; `help <topic>` / `help --list` exposes
+  10 task topics with Chinese aliases. `--help`/server-side reads remain
+  side-effect free.
+- MCP read payloads gain additive `disclosure{surface,tool,basis,callId,fields,
+  view,clearance,protectedExcluded,truncated,audited,digest}` and per-row `view`
+  (`verified|pending|historical|derived`) on the five read tools
+  (`advisers_today`, `advisers_commit_ls`, `advisers_who`, `advisers_evidence`,
+  `advisers_clients`) and the five resources. `advisers_remind`,
+  `advisers_capture_candidate` and `advisers_pack_verify` keep their exact 0.4.3
+  payload. `audited` is true only when the process has an audit sink; the DSH
+  adapter never writes the local audit chain and is always `audited:false` (with a
+  fixed warning). The legacy 8-tool/5-resource and DSH 6-tool catalogues are
+  unchanged; stripping the new fields reproduces the 0.4.3 payload byte-for-byte.
+
+New 0.5.0 error codes: `E_BUNDLE_IMPORT_BACKUP`, `E_BUNDLE_INVALID`,
+`E_BUNDLE_LIMIT`, `E_BUNDLE_PASSPHRASE`, `E_BUNDLE_SQLITE_REQUIRED`,
+`E_BUNDLE_TAMPERED`, `E_BUNDLE_TARGET`, `E_CONTEXT_PACK_DIGEST_MISMATCH`,
+`E_CONTEXT_PACK_ENTRY_NOT_FOUND`, `E_CONTEXT_PACK_ENTRY_STALE`,
+`E_CONTEXT_PACK_IMPORT_UNSUPPORTED`, `E_CONTEXT_PACK_INVALID`,
+`E_CONTEXT_PACK_LIMIT`, `E_CONTEXT_PACK_SECRECY_BLOCKED`,
+`E_CONTEXT_PACK_UNSUPPORTED_KIND`, `E_SYNC_CONFLICT`, `E_SYNC_STATE_INVALID`,
+`E_DEMO_STEP`. All exit 1 (usage/verify/state/policy as appropriate).
+
+0.5.0 behaviour changes that a script may notice (beyond additive fields):
+
+- `sync push --dry-run` is now genuinely read-only. 0.4.3 only advertised it in
+  help but still wrote; on 0.5.0 it writes no snapshot, no audit row, no checkpoint
+  and no `sync.state.json`. A script that relied on the old side effect is broken
+  by design.
+- The new command names are `context-pack create|verify`; there is no
+  `pack context`/`pack verify` alias.
+- A bundle is **plaintext**: `export --bundle --encrypted` is refused and
+  `import --bundle` needs an explicit `--replace` for a populated target.
+- `demo` is a real workflow demo (about ten child commands), not a five-second
+  preview: its runtime is not a contract. Its steps run against an isolated temp
+  demo home; the CLI's TOS gate still applies (accept once or pass `--accept-tos`).
+- A successful real `sync pull` still prints the 0.4.x human summary even with
+  `--json`; `sync pull --dry-run --json` is the machine-readable pull plan.
+- `setup`/`demo`/`context-pack verify`/`import --bundle --verify --dry-run` are
+  TOS-exempt read/orchestration paths; real writes stay gated.
 
 ## 0.4.3 additive surfaces (2026-11-22)
 

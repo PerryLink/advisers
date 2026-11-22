@@ -2,7 +2,7 @@
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "$id": "https://github.com/PerryLink/advisers/contracts/mcp/responses-v1.schema.json",
   "title": "Advisers MCP stdio responses (contract v1)",
-  "description": "Frozen shapes for the JSON-RPC responses of `advisers mcp --stdio`: initialize, tools/list, resources/list, resources/read, tools/call and errors. Every result is one JSON object per stdout line; stderr carries process diagnostics only. The catalogue itself is frozen in tools-v1.json / resources-v1.json. 0.3.0 additive fields: list payloads may carry total/truncated/limit/totals (caps applied after clearance, before the egress classifier).",
+  "description": "Frozen shapes for the JSON-RPC responses of `advisers mcp --stdio`: initialize, tools/list, resources/list, resources/read, tools/call and errors. Every result is one JSON object per stdout line; stderr carries process diagnostics only. The catalogue itself is frozen in tools-v1.json / resources-v1.json. 0.3.0 additive fields: list payloads may carry total/truncated/limit/totals (caps applied after clearance, before the egress classifier). 0.5.0 additive fields: every successful read-tool/read-resource payload may carry a row-level `view` label and one top-level `disclosure` block (documented-additive; older payloads stay valid).",
   "version": 1,
   "x-license": "CC-BY-NC-SA-4.0",
   "x-contract-status": "frozen",
@@ -483,6 +483,9 @@
         },
         "action": {
           "type": "string"
+        },
+        "view": {
+          "$ref": "#/$defs/ReadView"
         }
       },
       "required": [
@@ -507,6 +510,9 @@
         },
         "creditor": {
           "type": "string"
+        },
+        "view": {
+          "$ref": "#/$defs/ReadView"
         }
       },
       "required": [
@@ -542,6 +548,9 @@
         },
         "truncated": {
           "type": "boolean"
+        },
+        "disclosure": {
+          "$ref": "#/$defs/Disclosure"
         }
       },
       "required": [
@@ -578,6 +587,9 @@
           "type": "integer",
           "minimum": 1,
           "maximum": 200
+        },
+        "disclosure": {
+          "$ref": "#/$defs/Disclosure"
         }
       },
       "required": [
@@ -622,6 +634,9 @@
         },
         "truncated": {
           "type": "boolean"
+        },
+        "disclosure": {
+          "$ref": "#/$defs/Disclosure"
         }
       },
       "required": [
@@ -649,6 +664,9 @@
         },
         "missing": {
           "type": "integer"
+        },
+        "view": {
+          "$ref": "#/$defs/ReadView"
         }
       },
       "required": [
@@ -696,6 +714,9 @@
           "items": {
             "$ref": "#/$defs/EvidenceIndexRow"
           }
+        },
+        "disclosure": {
+          "$ref": "#/$defs/Disclosure"
         }
       },
       "required": [
@@ -807,6 +828,9 @@
         },
         "truncated": {
           "type": "boolean"
+        },
+        "disclosure": {
+          "$ref": "#/$defs/Disclosure"
         }
       },
       "additionalProperties": true,
@@ -1001,6 +1025,9 @@
         "protectedExcluded": {
           "type": "integer",
           "minimum": 0
+        },
+        "view": {
+          "$ref": "#/$defs/ReadView"
         }
       },
       "required": [
@@ -1044,6 +1071,9 @@
         "protectedExcluded": {
           "type": "integer",
           "minimum": 0
+        },
+        "disclosure": {
+          "$ref": "#/$defs/Disclosure"
         }
       },
       "required": [
@@ -1083,6 +1113,9 @@
         "secrecyDefault": {
           "type": "integer",
           "minimum": 0
+        },
+        "view": {
+          "$ref": "#/$defs/ReadView"
         }
       },
       "required": [
@@ -1289,6 +1322,9 @@
         "protectedExcluded": {
           "type": "integer",
           "minimum": 0
+        },
+        "disclosure": {
+          "$ref": "#/$defs/Disclosure"
         }
       },
       "required": [
@@ -1315,6 +1351,125 @@
           "$ref": "#/$defs/ClientStatusResource"
         }
       ]
+    },
+    "ReadView": {
+      "type": "string",
+      "description": "Row-level read view: 'verified' = a local evidence pointer resolved, 'pending' = current record without a resolved local pointer, 'historical' = no longer current (done/dropped/superseded/deprecated), 'derived' = computed projection (clients). 'verified' never means the record is true.",
+      "enum": [
+        "verified",
+        "pending",
+        "historical",
+        "derived"
+      ]
+    },
+    "DisclosureViewCounts": {
+      "type": "object",
+      "description": "Counts of the returned rows per view label (rows withheld by clearance or truncation are not counted here; see protectedExcluded/truncated).",
+      "properties": {
+        "verified": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "pending": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "historical": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "derived": {
+          "type": "integer",
+          "minimum": 0
+        }
+      },
+      "required": [
+        "verified",
+        "pending",
+        "historical",
+        "derived"
+      ],
+      "additionalProperties": false
+    },
+    "Disclosure": {
+      "type": "object",
+      "description": "Additive 0.5.0 read disclosure: metadata only (field names, view counts, clearance, disclosure digest). It never embeds record values, quotes, paths or timestamps. callId/digest are content-addressed over this metadata, so the same read shape yields the same ids in both eras.",
+      "properties": {
+        "surface": {
+          "type": "string",
+          "description": "Disclosure surface; this contract covers the MCP surface (the DSH adapter emits the same shape with surface 'dsh' and audited=false).",
+          "enum": [
+            "mcp"
+          ]
+        },
+        "tool": {
+          "type": "string",
+          "minLength": 1,
+          "description": "Tool name, or advisers:// resource URI for a resource read."
+        },
+        "basis": {
+          "type": "string",
+          "enum": [
+            "local-resolution",
+            "preview"
+          ],
+          "description": "Verification basis: 'local-resolution' reads the local ledger; 'preview' is the marked no-ledger fallback."
+        },
+        "callId": {
+          "type": "string",
+          "pattern": "^dc_[0-9a-f]{16}$",
+          "description": "Content-addressed disclosure id (sha256 of the disclosure metadata, first 16 hex)."
+        },
+        "fields": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          },
+          "description": "Sorted names of the record fields that were returned (no values)."
+        },
+        "view": {
+          "$ref": "#/$defs/DisclosureViewCounts"
+        },
+        "clearance": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "protectedExcluded": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "truncated": {
+          "type": "boolean"
+        },
+        "audited": {
+          "type": "boolean",
+          "description": "True when the single mcp.call audit row for this read was written; false (with warning) when no local audit sink is available."
+        },
+        "digest": {
+          "type": "string",
+          "pattern": "^sha256:[0-9a-f]{64}$",
+          "description": "sha256 over the canonical disclosure metadata (not over record values)."
+        },
+        "warning": {
+          "type": "string",
+          "minLength": 1,
+          "description": "Present only when audited=false (e.g. no audit sink configured)."
+        }
+      },
+      "required": [
+        "surface",
+        "tool",
+        "basis",
+        "callId",
+        "fields",
+        "view",
+        "clearance",
+        "protectedExcluded",
+        "truncated",
+        "audited",
+        "digest"
+      ],
+      "additionalProperties": false
     }
   }
 }

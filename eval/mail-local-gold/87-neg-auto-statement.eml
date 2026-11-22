@@ -1,0 +1,13 @@
+From: 对账系统 <system@bank.example>
+To: me@example.com
+Subject: 对账单发送通知
+Date: Wed, 25 Nov 2026 23:30:00 +0800
+Message-ID: <mail-gold-87-neg-auto-statement.eml@gold.example>
+MIME-Version: 1.0
+Content-Type: text/plain; charset=UTF-8
+
+您好：
+
+系统将于 11月30日 23:00 自动发送对账单。
+
+对账系统

@@ -14,9 +14,10 @@ for the 0.4 line (see §13). **0.4.1 (published 2026-11-21)** is the same-day
 follow-up patch and followed the identical order; its §13 record is complete.
 **0.4.2 (published 2026-11-22)** is the patch-release follow-up; it followed the same
 order and its §13 record is complete. **0.4.3 (published 2026-11-22)** is the follow-up patch
-and follows the identical order; its §13 record starts with `TBD` placeholders for the
-tag object, publish run, verification and asset hashes, filled in once the publish
-completes. One runbook
+and follows the identical order; its §13 record is complete. **0.5.0 (published
+2026-11-22)** is a feature release that follows the identical order; its §13 record
+starts with `TBD` placeholders for the tag object, publish run, verification and asset
+hashes, filled in once the owner completes the publish. One runbook
 detail is easy to get wrong: the portable ZIP is assembled **after** the npm publish
 from the published tarballs, because
 `pack-portable.mjs` installs `advisers@<version>` and `advisers-office@<version>`
@@ -368,6 +369,38 @@ body or a log. CI publishing uses GitHub OIDC only.
 
 A short factual record per release; keep it terse and do not turn it into a
 changelog copy.
+
+### 0.5.0 (2026-11-22)
+
+- **Published:** npm `latest` = 0.5.0, `next` = 0.5.0; all eight workspace packages
+  lockstep at 0.5.0 (six published). Tag: `v0.5.0`, annotated object `TBD` (fill after
+  tag creation) -> commit `TBD` (fill after tagging); published from `refs/tags/v0.5.0`
+  (publish run `TBD`, fill after dispatch).
+- **Release shape:** "portable, disclosable, verifiable" feature release — portable
+  home bundle v1 (`export --bundle` / `import --bundle --verify`), context pack v1 +
+  CLI offline verify, additive MCP/DSH read disclosure, sync snapshot v2 with
+  `sync.state.json`/conflict precheck and a real `sync push --dry-run`, setup/demo/
+  help onboarding, fail-closed managed backups before destructive commands, and the
+  report-v2 quality gate. Zero DB schema change (v22), zero new network path, zero
+  new runtime dependency; MCP 8 tools / 5 resources and DSH 6 tools unchanged; legal
+  texts stay v2026.11.4 (no legal revision in 0.5.0).
+- **Contracts:** additive CLI/MCP shapes and vectors plus the 18 additive 0.5.0 error
+  codes (211 registered CLI codes; 193 tracked source literals); `check-contracts`
+  PASS (90 checks) on this release tree. The new commands are documented additively in
+  `docs/CLI-JSON.md`; do not reuse the 0.4.3 count in release notes.
+- **Artifacts:** TBD — CycloneDX SBOM, six-tarball `SHA256SUMS`, Windows portable ZIP
+  and portable checksums. Do not copy hashes from another release.
+- **Verification:** TBD — `verify-release --version 0.5.0 --tag latest --sbom
+  artifacts/sbom.cdx.json --require-sbom` -> `TBD` checks PASS (fill after publish); CI
+  on the release commit `TBD` (fill after push; Linux Node 22.16/24, `windows-smoke`
+  and blocking `windows-full`). Local pre-tag evidence on this release tree:
+  `check-docs`/`check-release`/`check-licenses` pass and `check-contracts` 90 checks
+  PASS (211 registered CLI codes); the targeted 0.5.0 test files and quality gates are
+  recorded by the release operator on the release commit.
+- **Release notes / assets:** <https://github.com/PerryLink/advisers/releases/tag/v0.5.0>
+  (created `TBD` with the SBOM, six-tarball `SHA256SUMS`, portable ZIP and its
+  checksums). The `TBD` placeholders are filled by the release operator after the
+  publish completes.
 
 ### 0.4.3 (2026-11-22)
 

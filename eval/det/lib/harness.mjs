@@ -16,12 +16,16 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { fileURLToPath, pathToFileURL } from 'node:url'
 
+import { collectCliInfo } from '../../lib/quality-report.mjs'
+
 export const REPO_ROOT = fileURLToPath(new URL('../../..', import.meta.url))
 export const BIN = join(REPO_ROOT, 'packages/advisers/bin/advisers.js')
 export const NETWORK_BLOCK_URL = pathToFileURL(join(REPO_ROOT, 'eval/det/lib/network-block.mjs')).href
 export const CORE_DIST = join(REPO_ROOT, 'packages/core/dist/index.js')
 export const BASELINE_PATH = join(REPO_ROOT, 'eval/det/baseline.json')
-export const RESULTS_DIR = join(REPO_ROOT, 'eval/det/results')
+// 0.5.0 WF4 Q1: every quality report lives under the shared eval/results/<suite>/
+// tree (gitignored); historical eval/det/results/ files are not migrated.
+export const RESULTS_DIR = join(REPO_ROOT, 'eval/results/det')
 export const TIMEZONE = 'Asia/Shanghai'
 export const CLI_VERSION = JSON.parse(readFileSync(join(REPO_ROOT, 'packages/advisers/package.json'), 'utf8')).version
 export const NODE_VERSION = process.version
@@ -251,12 +255,9 @@ export function stableStringify(value, space = 0) {
   return JSON.stringify(normalize(value), null, space)
 }
 
-/** CLI metadata recorded in every result file. */
+/** CLI metadata recorded in every result file (v2 adds the dirty flag). */
 export function cliInfo() {
-  let commit = null
-  const git = spawnSync('git', ['rev-parse', '--short', 'HEAD'], { cwd: REPO_ROOT, encoding: 'utf8' })
-  if (git.status === 0) commit = git.stdout.trim() || null
-  return { version: CLI_VERSION, commit, node: NODE_VERSION, os: OS_NAME }
+  return collectCliInfo()
 }
 
 /** Fail early with an actionable message when the workspace is not built. */

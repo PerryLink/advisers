@@ -24,6 +24,9 @@
     "test:fault": "node scripts/fault-injection.mjs",
     "eval:det": "node scripts/eval-det.mjs",
     "eval:mail-local": "node eval/run-mail-local-gold.mjs",
+    "eval:kb-retrieval": "node eval/kb-retrieval/run.mjs",
+    "eval:model-contract": "node eval/model-contract/run.mjs",
+    "eval:check-report": "node scripts/check-eval-report.mjs",
     "check:contracts": "node scripts/check-contracts.mjs",
     "sbom": "node scripts/sbom.mjs",
     "check:sbom": "node scripts/check-sbom.mjs"

@@ -386,4 +386,130 @@ export default [
       })
     },
   },
+  /* ----------------------------------------------------------------------- */
+  /* 0.5.0 WF4 Q4b: two more fail-closed policy cases                        */
+  /* ----------------------------------------------------------------------- */
+  {
+    id: 'det.policy.consent-binding-invalidated',
+    group: 'policy',
+    title: 'a consent record bound to another provider/base URL fails closed before any egress',
+    async run() {
+      return withFreshHome('policy-consent-binding', async (workdir) => {
+        const checks = []
+        const runs = []
+        writeWorkFile(workdir, 'sample.eml', EML_SAMPLE)
+        const imported = runJsonCli(workdir, ['mail', 'import', 'sample.eml', '--json'], { index: 'policy-binding-import' })
+        runs.push(imported.run)
+        check(checks, 'import.exit-0', () => {
+          if (imported.run.status !== 0) throw new Error('exit ' + imported.run.status + ': ' + imported.run.stderr.slice(0, 200))
+          if (jsonValue(imported, 'mail import').inserted !== 1) throw new Error('inserted=' + jsonValue(imported, 'mail import').inserted)
+        })
+        // Consent is bound to the provider + base URL it was granted under.
+        const grant = runJsonCli(workdir, ['consent', 'grant', 'mail.extract', '--yes', '--json'], { index: 'policy-binding-grant' })
+        runs.push(grant.run)
+        check(checks, 'consent-granted-under-default-provider', () => {
+          if (grant.run.status !== 0) throw new Error('exit ' + grant.run.status + ': ' + grant.run.stderr.slice(0, 200))
+          const entry = jsonValue(grant, 'consent grant').entry ?? {}
+          if (entry.provider !== 'deepseek') throw new Error('provider=' + entry.provider)
+          if (entry.baseUrl !== 'https://api.deepseek.com') throw new Error('baseUrl=' + entry.baseUrl)
+        })
+        const fakeKey = { ADVISERS_API_KEY: 'sk-eval-consent-binding-unit-test' }
+        const changedBaseUrl = runJsonCli(workdir, ['mail', 'extract', '--all-new', '--model', '--yes', '--json'], {
+          index: 'policy-binding-base-url',
+          extra: { ...fakeKey, ADVISERS_BASE_URL: 'https://api.openai.com/v1' },
+        })
+        const changedProvider = runJsonCli(workdir, ['mail', 'extract', '--all-new', '--model', '--yes', '--json'], {
+          index: 'policy-binding-provider',
+          extra: { ...fakeKey, ADVISERS_PROVIDER: 'openai' },
+        })
+        runs.push(changedBaseUrl.run, changedProvider.run)
+        check(checks, 'changed-base-url-invalidates-consent', () => {
+          if (changedBaseUrl.run.status !== 1) throw new Error('exit ' + changedBaseUrl.run.status)
+          const code = envelopeCode(changedBaseUrl, 'mail extract --model (changed base URL)')
+          if (code !== 'E_POLICY_CONSENT_REQUIRED') throw new Error('code=' + code)
+        })
+        check(checks, 'changed-provider-invalidates-consent', () => {
+          if (changedProvider.run.status !== 1) throw new Error('exit ' + changedProvider.run.status)
+          const code = envelopeCode(changedProvider, 'mail extract --model (changed provider)')
+          if (code !== 'E_POLICY_CONSENT_REQUIRED') throw new Error('code=' + code)
+        })
+        check(checks, 'no-request-before-denial', () => {
+          for (const run of [changedBaseUrl.run, changedProvider.run]) {
+            if (run.network.length) throw new Error('network attempted before the consent gate: ' + JSON.stringify(run.network.slice(0, 5)))
+          }
+        })
+        const lsAfter = runJsonCli(workdir, ['mail', 'ls', '--json'], { index: 'policy-binding-ls' })
+        runs.push(lsAfter.run)
+        check(checks, 'mail-untouched', () => {
+          if (lsAfter.run.status !== 0) throw new Error('exit ' + lsAfter.run.status)
+          const message = jsonValue(lsAfter, 'mail ls').messages?.[0] ?? {}
+          if (message.status !== 'new') throw new Error('status=' + message.status)
+          if ((message.candidateIds ?? []).length !== 0) throw new Error('candidateIds=' + JSON.stringify(message.candidateIds))
+        })
+        checkNoNetwork(checks, 'no-network', runs)
+        return { checks }
+      })
+    },
+  },
+  {
+    id: 'det.policy.protected-model-fail-closed',
+    group: 'policy',
+    title: 'model extraction is refused for a secrecy>0 matter before consent or any model call',
+    async run() {
+      return withFreshHome('policy-protected-model', async (workdir) => {
+        const checks = []
+        const runs = []
+        const store = await openStateStore(workdir.home)
+        try {
+          store.mutate(() => {
+            store.insertMatter({
+              id: 'm_protected', title: '保密事项', status: 'active', domain: 'work', secrecy: 2,
+              participants: [], deadlines: [], openQuestions: [],
+              createdAt: '2026-01-01T00:00:00.000Z', updatedAt: '2026-01-01T00:00:00.000Z',
+            })
+          })
+        } finally {
+          store.close()
+        }
+        writeWorkFile(workdir, 'sample.eml', EML_SAMPLE)
+        const imported = runJsonCli(workdir, ['mail', 'import', 'sample.eml', '--json'], { index: 'policy-protected-import' })
+        runs.push(imported.run)
+        check(checks, 'import.exit-0', () => {
+          if (imported.run.status !== 0) throw new Error('exit ' + imported.run.status + ': ' + imported.run.stderr.slice(0, 200))
+        })
+        // Grant consent first: the protected-matter refusal must still win (it is
+        // a property of the record, not of the consent state).
+        const grant = runJsonCli(workdir, ['consent', 'grant', 'mail.extract', '--yes', '--json'], { index: 'policy-protected-grant' })
+        runs.push(grant.run)
+        check(checks, 'consent-granted', () => {
+          if (grant.run.status !== 0) throw new Error('exit ' + grant.run.status + ': ' + grant.run.stderr.slice(0, 200))
+        })
+        const protectedRun = runJsonCli(workdir, ['mail', 'extract', '--all-new', '--model', '--yes', '--matter', 'm_protected', '--json'], {
+          index: 'policy-protected-extract',
+          extra: { ADVISERS_API_KEY: 'sk-eval-protected-unit-test' },
+        })
+        runs.push(protectedRun.run)
+        check(checks, 'protected-matter-fails-closed', () => {
+          if (protectedRun.run.status !== 1) throw new Error('exit ' + protectedRun.run.status)
+          if (protectedRun.run.stdout !== '') throw new Error('stdout not empty: ' + JSON.stringify(protectedRun.run.stdout.slice(0, 120)))
+          const code = envelopeCode(protectedRun, 'mail extract --model (protected matter)')
+          if (code !== 'E_MAIL_MODEL_DISABLED') throw new Error('code=' + code)
+          if (!/protected matters/.test(protectedRun.run.stderr)) throw new Error('stderr does not name the protection rule')
+        })
+        check(checks, 'no-request-before-denial', () => {
+          if (protectedRun.run.network.length) throw new Error('network attempted before the protection gate: ' + JSON.stringify(protectedRun.run.network.slice(0, 5)))
+        })
+        const lsAfter = runJsonCli(workdir, ['mail', 'ls', '--json'], { index: 'policy-protected-ls' })
+        runs.push(lsAfter.run)
+        check(checks, 'message-untouched-and-no-candidates', () => {
+          if (lsAfter.run.status !== 0) throw new Error('exit ' + lsAfter.run.status)
+          const message = jsonValue(lsAfter, 'mail ls').messages?.[0] ?? {}
+          if (message.status !== 'new') throw new Error('status=' + message.status)
+          if ((message.candidateIds ?? []).length !== 0) throw new Error('candidateIds=' + JSON.stringify(message.candidateIds))
+        })
+        checkNoNetwork(checks, 'no-network', runs)
+        return { checks }
+      })
+    },
+  },
 ]

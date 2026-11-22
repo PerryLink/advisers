@@ -1,0 +1,13 @@
+From: 订单系统 <orders@shop.example>
+To: me@example.com
+Subject: 订单发货通知
+Date: Wed, 25 Nov 2026 00:00:00 +0800
+Message-ID: <mail-gold-86-neg-auto-shipping.eml@gold.example>
+MIME-Version: 1.0
+Content-Type: text/plain; charset=UTF-8
+
+您好：
+
+您的订单已发货，预计明天下午送达。
+
+订单系统

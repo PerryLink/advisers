@@ -1,7 +1,12 @@
 # Performance
 
-> Status: `0.4.3` (published 2026-11-22) is the current npm `latest` (`next` is also
-> `0.4.3`) and the repository is at package version `0.4.3`. `0.4.3` is a patch on the
+> Status: `0.5.0` (published 2026-11-22) is the current npm `latest` (`next` is also
+> `0.5.0`) and the repository is at package version `0.5.0`. `0.5.0` is a feature release
+> on the 0.4.3 tree with **no hot-path change** for the default read/write commands: its
+> new commands are explicit one-shot filesystem operations (bundle export/import,
+> context-pack create/verify, `sync status --check`, setup/demo/help), and the additive
+> MCP/DSH `disclosure`/`view` metadata only adds bounded work to the read payloads. `0.4.3`
+> was a patch on the
 > 0.4.2 tree with **no hot-path change** (Chinese relative dates, local capture/inbox,
 > the trust outputs and profile, the ICS/cooldown reminder work, payment channels and the
 > receivable CSV export, the restore drill, the help short-circuit and the mail-watch

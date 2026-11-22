@@ -310,7 +310,7 @@ test('config.mode preview is the kill switch and keeps the 0.2.x payload', async
   assert.equal(today.value.data.source, 'preview-no-ledger')
   assert.deepEqual(today.value.data.counts, { open: 0, overdue: 0, today: 0, week: 0, waiting: 0, noDue: 0 })
   assert.match(today.text, /^\[preview: no ledger\] /)
-  assert.deepEqual(Object.keys(today.value.data).sort(), ['counts', 'localDay', 'noDue', 'note', 'now', 'overdue', 'preview', 'source', 'today', 'truncated', 'timezone', 'waiting', 'week'].sort())
+  assert.deepEqual(Object.keys(today.value.data).sort(), ['counts', 'disclosure', 'localDay', 'noDue', 'note', 'now', 'overdue', 'preview', 'source', 'today', 'truncated', 'timezone', 'waiting', 'week'].sort())
   assert.throws(() => mount({ mode: 'sometimes' }), /config\.mode/)
   assert.throws(() => mount({ home: 'relative/dir' }), /config\.home must be an absolute path/)
 })

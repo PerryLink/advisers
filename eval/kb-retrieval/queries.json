@@ -1,0 +1,483 @@
+{
+  "schema": "advisers.kb-retrieval/v1",
+  "description": "Synthetic lexical-retrieval gold set for 'advisers kb search --scope kb': 25 markdown documents and 50 Chinese/mixed queries. Metrics are a synthetic regression gate, not a general accuracy claim.",
+  "provenance": "synthetic",
+  "license": "CC-BY-NC-SA-4.0",
+  "reviewMode": "implementer-labeled-synthetic",
+  "timeZone": "Asia/Shanghai",
+  "categories": {
+    "zh-2char": 12,
+    "zh-3plus": 18,
+    "mixed": 8,
+    "title-hit": 6,
+    "no-hit": 6
+  },
+  "documents": [
+    "01-客户甲官网改版周会纪要.md",
+    "02-报价单与折扣审批记录.md",
+    "03-合同条款复核清单.md",
+    "04-发票开具与回款跟踪.md",
+    "05-交付验收记录.md",
+    "06-需求变更记录.md",
+    "07-技术架构说明.md",
+    "08-接口文档说明.md",
+    "09-测试计划与缺陷管理.md",
+    "10-上线发布与回滚记录.md",
+    "11-项目风险登记表.md",
+    "12-供应商评估表.md",
+    "13-采购申请流程.md",
+    "14-差旅报销说明.md",
+    "15-客户拜访记录.md",
+    "16-销售漏斗复盘.md",
+    "17-年度预算说明.md",
+    "18-团队分工表.md",
+    "19-培训材料大纲.md",
+    "20-数据备份与恢复.md",
+    "21-权限与保密规定.md",
+    "22-会议纪要模板.md",
+    "23-邮件沟通规范.md",
+    "24-知识库维护指南.md",
+    "25-季度复盘报告.md"
+  ],
+  "queries": [
+    {
+      "id": "q01",
+      "query": "尾款",
+      "category": "zh-2char",
+      "relevant": [
+        "04-发票开具与回款跟踪.md"
+      ],
+      "note": "2 字：应命中回款文档正文。"
+    },
+    {
+      "id": "q02",
+      "query": "质保",
+      "category": "zh-2char",
+      "relevant": [
+        "05-交付验收记录.md"
+      ],
+      "note": "2 字：质保金/质保期。"
+    },
+    {
+      "id": "q03",
+      "query": "埋点",
+      "category": "zh-2char",
+      "relevant": [
+        "07-技术架构说明.md"
+      ],
+      "note": "2 字：数据埋点方案。"
+    },
+    {
+      "id": "q04",
+      "query": "排期",
+      "category": "zh-2char",
+      "relevant": [
+        "01-客户甲官网改版周会纪要.md"
+      ],
+      "note": "2 字：开发排期。"
+    },
+    {
+      "id": "q05",
+      "query": "对账",
+      "category": "zh-2char",
+      "relevant": [
+        "04-发票开具与回款跟踪.md"
+      ],
+      "note": "2 字：月末对账。"
+    },
+    {
+      "id": "q06",
+      "query": "验收",
+      "category": "zh-2char",
+      "relevant": [
+        "05-交付验收记录.md"
+      ],
+      "note": "2 字：标题与正文均命中。"
+    },
+    {
+      "id": "q07",
+      "query": "折扣",
+      "category": "zh-2char",
+      "relevant": [
+        "02-报价单与折扣审批记录.md"
+      ],
+      "note": "2 字：折扣审批。"
+    },
+    {
+      "id": "q08",
+      "query": "违约",
+      "category": "zh-2char",
+      "relevant": [
+        "03-合同条款复核清单.md"
+      ],
+      "note": "2 字：违约责任条款。"
+    },
+    {
+      "id": "q09",
+      "query": "报销",
+      "category": "zh-2char",
+      "relevant": [
+        "14-差旅报销说明.md"
+      ],
+      "note": "2 字：差旅报销。"
+    },
+    {
+      "id": "q10",
+      "query": "漏斗",
+      "category": "zh-2char",
+      "relevant": [
+        "16-销售漏斗复盘.md"
+      ],
+      "note": "2 字：销售漏斗。"
+    },
+    {
+      "id": "q11",
+      "query": "备份",
+      "category": "zh-2char",
+      "relevant": [
+        "20-数据备份与恢复.md"
+      ],
+      "note": "2 字：数据备份。"
+    },
+    {
+      "id": "q12",
+      "query": "评审",
+      "category": "zh-2char",
+      "relevant": [
+        "07-技术架构说明.md"
+      ],
+      "note": "2 字高频词：相关文档多于 5 篇，用于测量 2 字查询 hit@5 的真实上限（目标文档排第 7）。"
+    },
+    {
+      "id": "q13",
+      "query": "官网改版",
+      "category": "zh-3plus",
+      "relevant": [
+        "01-客户甲官网改版周会纪要.md",
+        "06-需求变更记录.md"
+      ],
+      "note": "3+ 字：跨两篇文档的同一个词。"
+    },
+    {
+      "id": "q14",
+      "query": "报价单审批",
+      "category": "zh-3plus",
+      "relevant": [
+        "02-报价单与折扣审批记录.md"
+      ],
+      "note": "3+ 字：审批流程。"
+    },
+    {
+      "id": "q15",
+      "query": "合同条款",
+      "category": "zh-3plus",
+      "relevant": [
+        "03-合同条款复核清单.md"
+      ],
+      "note": "3+ 字：法务条款。"
+    },
+    {
+      "id": "q16",
+      "query": "发票开具",
+      "category": "zh-3plus",
+      "relevant": [
+        "04-发票开具与回款跟踪.md"
+      ],
+      "note": "3+ 字：开票。"
+    },
+    {
+      "id": "q17",
+      "query": "交付验收",
+      "category": "zh-3plus",
+      "relevant": [
+        "05-交付验收记录.md"
+      ],
+      "note": "3+ 字：验收。"
+    },
+    {
+      "id": "q18",
+      "query": "需求变更",
+      "category": "zh-3plus",
+      "relevant": [
+        "06-需求变更记录.md"
+      ],
+      "note": "3+ 字：变更流程。"
+    },
+    {
+      "id": "q19",
+      "query": "技术架构",
+      "category": "zh-3plus",
+      "relevant": [
+        "07-技术架构说明.md"
+      ],
+      "note": "3+ 字：架构方案。"
+    },
+    {
+      "id": "q20",
+      "query": "接口文档",
+      "category": "zh-3plus",
+      "relevant": [
+        "08-接口文档说明.md"
+      ],
+      "note": "3+ 字：接口约定。"
+    },
+    {
+      "id": "q21",
+      "query": "测试计划",
+      "category": "zh-3plus",
+      "relevant": [
+        "09-测试计划与缺陷管理.md"
+      ],
+      "note": "3+ 字：测试安排。"
+    },
+    {
+      "id": "q22",
+      "query": "发布回滚",
+      "category": "zh-3plus",
+      "relevant": [
+        "10-上线发布与回滚记录.md"
+      ],
+      "note": "3+ 字：回滚方案。"
+    },
+    {
+      "id": "q23",
+      "query": "风险登记",
+      "category": "zh-3plus",
+      "relevant": [
+        "11-项目风险登记表.md"
+      ],
+      "note": "3+ 字：风险台账。"
+    },
+    {
+      "id": "q24",
+      "query": "供应商评估",
+      "category": "zh-3plus",
+      "relevant": [
+        "12-供应商评估表.md"
+      ],
+      "note": "3+ 字：供应商。"
+    },
+    {
+      "id": "q25",
+      "query": "采购申请",
+      "category": "zh-3plus",
+      "relevant": [
+        "13-采购申请流程.md"
+      ],
+      "note": "3+ 字：采购。"
+    },
+    {
+      "id": "q26",
+      "query": "差旅报销",
+      "category": "zh-3plus",
+      "relevant": [
+        "14-差旅报销说明.md"
+      ],
+      "note": "3+ 字：报销。"
+    },
+    {
+      "id": "q27",
+      "query": "客户拜访",
+      "category": "zh-3plus",
+      "relevant": [
+        "15-客户拜访记录.md"
+      ],
+      "note": "3+ 字：拜访。"
+    },
+    {
+      "id": "q28",
+      "query": "销售漏斗",
+      "category": "zh-3plus",
+      "relevant": [
+        "16-销售漏斗复盘.md"
+      ],
+      "note": "3+ 字：漏斗复盘。"
+    },
+    {
+      "id": "q29",
+      "query": "年度预算",
+      "category": "zh-3plus",
+      "relevant": [
+        "17-年度预算说明.md"
+      ],
+      "note": "3+ 字：预算口径。"
+    },
+    {
+      "id": "q30",
+      "query": "数据备份",
+      "category": "zh-3plus",
+      "relevant": [
+        "20-数据备份与恢复.md"
+      ],
+      "note": "3+ 字：备份策略。"
+    },
+    {
+      "id": "q31",
+      "query": "sprint 复盘",
+      "category": "mixed",
+      "relevant": [
+        "25-季度复盘报告.md"
+      ],
+      "note": "中英混：sprint 与复盘同时出现。"
+    },
+    {
+      "id": "q32",
+      "query": "API 限流",
+      "category": "mixed",
+      "relevant": [
+        "07-技术架构说明.md"
+      ],
+      "note": "中英混：API 限流。"
+    },
+    {
+      "id": "q33",
+      "query": "release 清单",
+      "category": "mixed",
+      "relevant": [
+        "10-上线发布与回滚记录.md"
+      ],
+      "note": "中英混：release 清单。"
+    },
+    {
+      "id": "q34",
+      "query": "P0 缺陷",
+      "category": "mixed",
+      "relevant": [
+        "09-测试计划与缺陷管理.md"
+      ],
+      "note": "中英混：P0 缺陷。"
+    },
+    {
+      "id": "q35",
+      "query": "CRM 导入",
+      "category": "mixed",
+      "relevant": [
+        "15-客户拜访记录.md"
+      ],
+      "note": "中英混：CRM 导入。"
+    },
+    {
+      "id": "q36",
+      "query": "Q4 预算",
+      "category": "mixed",
+      "relevant": [
+        "17-年度预算说明.md"
+      ],
+      "note": "中英混：Q4 预算。"
+    },
+    {
+      "id": "q37",
+      "query": "SLA 违约",
+      "category": "mixed",
+      "relevant": [
+        "03-合同条款复核清单.md"
+      ],
+      "note": "中英混：SLA 违约。"
+    },
+    {
+      "id": "q38",
+      "query": "onboarding 培训",
+      "category": "mixed",
+      "relevant": [
+        "19-培训材料大纲.md"
+      ],
+      "note": "中英混：onboarding 培训。"
+    },
+    {
+      "id": "q39",
+      "query": "周会纪要",
+      "category": "title-hit",
+      "relevant": [
+        "01-客户甲官网改版周会纪要.md"
+      ],
+      "note": "标题命中：文档标题含该词。"
+    },
+    {
+      "id": "q40",
+      "query": "折扣审批",
+      "category": "title-hit",
+      "relevant": [
+        "02-报价单与折扣审批记录.md"
+      ],
+      "note": "标题命中：标题含折扣审批。"
+    },
+    {
+      "id": "q41",
+      "query": "条款复核",
+      "category": "title-hit",
+      "relevant": [
+        "03-合同条款复核清单.md"
+      ],
+      "note": "标题命中：标题含条款复核。"
+    },
+    {
+      "id": "q42",
+      "query": "回款跟踪",
+      "category": "title-hit",
+      "relevant": [
+        "04-发票开具与回款跟踪.md"
+      ],
+      "note": "标题命中：标题含回款跟踪。"
+    },
+    {
+      "id": "q43",
+      "query": "缺陷管理",
+      "category": "title-hit",
+      "relevant": [
+        "09-测试计划与缺陷管理.md"
+      ],
+      "note": "标题命中：标题含缺陷管理。"
+    },
+    {
+      "id": "q44",
+      "query": "知识库维护",
+      "category": "title-hit",
+      "relevant": [
+        "24-知识库维护指南.md"
+      ],
+      "note": "标题命中：标题含知识库维护。"
+    },
+    {
+      "id": "q45",
+      "query": "量子计算",
+      "category": "no-hit",
+      "relevant": [],
+      "note": "无命中：语料中不存在的主题。"
+    },
+    {
+      "id": "q46",
+      "query": "区块链",
+      "category": "no-hit",
+      "relevant": [],
+      "note": "无命中：语料中不存在。"
+    },
+    {
+      "id": "q47",
+      "query": "碳中和",
+      "category": "no-hit",
+      "relevant": [],
+      "note": "无命中：语料中不存在。"
+    },
+    {
+      "id": "q48",
+      "query": "元宇宙",
+      "category": "no-hit",
+      "relevant": [],
+      "note": "无命中：语料中不存在。"
+    },
+    {
+      "id": "q49",
+      "query": "加密货币",
+      "category": "no-hit",
+      "relevant": [],
+      "note": "无命中：语料中不存在。"
+    },
+    {
+      "id": "q50",
+      "query": "IPO 招股书",
+      "category": "no-hit",
+      "relevant": [],
+      "note": "无命中：中英混且均不存在。"
+    }
+  ]
+}

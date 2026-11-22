@@ -1,0 +1,102 @@
+{
+  "schemaVersion": 1,
+  "recordedAt": "2026-11-22T14:00:00.000Z",
+  "recordedFrom": {
+    "cliVersion": "0.4.3",
+    "commit": "f29d268",
+    "node": "v24.22.3"
+  },
+  "description": "Frozen zero-model quality-gate baselines (0.5.0 WF4 Q1). Every schema-v2 report cites this file via baseline{file,sha256,recordedAt} and scripts/check-eval-report.mjs verifies that sha against these bytes. A threshold or corpus change must update this file and eval/quality/CHANGELOG.md in the same review; re-recording a red gate to green is a contract change, not a fix.",
+  "suites": {
+    "det": {
+      "suiteVersion": 1,
+      "mode": "det",
+      "baselineFile": "eval/det/baseline.json",
+      "baselineSha256": "d7047e91781fbcd0aa17e08b279f93897be403168c1bc000b9d6e362fbfe7a2f",
+      "thresholds": {
+        "cases.failed": 0,
+        "checks.failed": 0,
+        "network.attempts": 0
+      },
+      "corpus": null,
+      "notes": "Golden morning hash / markdown / MCP surface live in eval/det/baseline.json; mode det carries no model-quality metric. 49 cases / 367 checks in the 0.5.0 tree (run pnpm eval:det --json for the live count)."
+    },
+    "model-contract": {
+      "suiteVersion": 1,
+      "mode": "model-contract",
+      "thresholds": {
+        "cases": 12,
+        "passed": 12,
+        "sockets": 0,
+        "autoConfirmed": 0
+      },
+      "corpus": null,
+      "notes": "In-process fake transport only: 12 cases, no key, no socket, no model. Stub call counts/order are asserted by eval/model-contract/run.mjs."
+    },
+    "kb-retrieval": {
+      "suiteVersion": 1,
+      "mode": "local-gold",
+      "corpus": {
+        "id": "kb-retrieval",
+        "sha256": "fd27ab639f59ffc822bb139011f259face94bed5644b9ff705d100b62cc35998",
+        "rows": 75,
+        "documents": 25,
+        "queries": 50,
+        "split": "dev",
+        "provenance": "synthetic",
+        "license": "CC-BY-NC-SA-4.0"
+      },
+      "fixtures": {
+        "sha256": "1e2b5f94d2f566d78b1a7c830a0cbe7026fd0c1e95d25093755b0e20e9f16191",
+        "count": 25
+      },
+      "thresholds": {
+        "precisionAt5": 0.8,
+        "mrrAt10": 0.65,
+        "shortQueryHitAt5": 0.75,
+        "noHitFalsePositiveRate": 0.1
+      },
+      "notes": "25 synthetic Markdown documents + 50 hand-labelled queries; lexical regression gate only (no semantic/vector claim). corpus.sha256 is the fixture-list hash (relpath\\0sha256 lines)."
+    },
+    "mail-local-gold": {
+      "suiteVersion": 2,
+      "mode": "local-gold",
+      "corpus": {
+        "id": "mail-local-gold",
+        "sha256": "4acae148ccd50376a07d1b64f17f822dc1543a43dc9f91b1e13426b37f6723e4",
+        "rows": 120,
+        "splitSizes": {
+          "dev": 90,
+          "heldout": 30
+        },
+        "provenance": "synthetic",
+        "license": "CC-BY-NC-SA-4.0",
+        "reviewMode": "implementer-labeled-synthetic"
+      },
+      "fixtures": {
+        "dev": {
+          "sha256": "fae5db2a1fd3f6d580ec58bc4d4dd9db35f9da90ef829b02b626b16b98ff9079",
+          "count": 90
+        },
+        "heldoutCount": 30
+      },
+      "thresholds": {
+        "split": "dev",
+        "precision": 0.9,
+        "recall": 0.85,
+        "f1": 0.85,
+        "dueAccuracy": 0.85,
+        "authorAccuracy": 0.9,
+        "negativeFalsePositiveRate": 0.1
+      },
+      "heldoutThresholds": {
+        "precision": 0.85,
+        "recall": 0.8,
+        "f1": 0.82,
+        "dueAccuracy": 0.85,
+        "negativeFalsePositiveRate": 0.1
+      },
+      "notes": "dev 90 is the L0 gate; held-out 30 is release-gate only and frozen by corpusSha256. Labels are implementer-authored synthetic, not independent human gold (unknowns.humanGold stays null)."
+    }
+  }
+}

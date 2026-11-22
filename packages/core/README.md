@@ -12,14 +12,14 @@ SQLite/FTS persistence lives in the `advisers` distribution; this package has no
 
 ## Status
 
-`0.4.3` was published on 2026-11-22 (npm `latest` = `0.4.3`; `next` is also `0.4.3`).
-0.4.3 is the current release (lockstep version): a patch on the 0.4.2 tree whose additions
-(Chinese relative `--due`, local-rule capture and the read-only inbox, the explicit-null
-trust outputs and profile, the enhanced `remind --ics` plus a notification cooldown,
-payment channels and the receivable CSV export, the restore drill, the global help
-short-circuit and the mail-watch JSON/exit contract) live in `advisers`. This package's public surface
-is unchanged from 0.3.2 — the 0.4 work (knowledge base, mail entry, interactive shell,
-receivables, policy/evidence subset) lives in `advisers` and `dsh-advisers`. 0.3.1 was a
+`0.5.0` was published on 2026-11-22 (npm `latest` = `0.5.0`; `next` is also `0.5.0`).
+0.5.0 is the current release (lockstep version): a feature release on the 0.4.3 tree whose
+additions (portable home bundle v1, context pack v1 + offline verify, additive MCP/DSH
+read disclosure, sync snapshot v2 with `sync.state.json` and conflict precheck, the
+setup/demo/help onboarding, fail-closed managed backups and the report-v2 quality gate)
+live in `advisers` and `dsh-advisers`. This package's public surface
+is unchanged from 0.3.2 — the 0.4/0.5 work (knowledge base, mail entry, interactive shell,
+receivables, policy/evidence subset, portable/disclosure formats) lives in `advisers` and `dsh-advisers`. 0.3.1 was a
 release-metadata patch for 0.3.0, and the 0.2.4 candidate superseded by the 0.3.0 line was
 never published. The 0.2.3 baseline added pure ledger operations (`ops.ts`: commit
 add/edit/done/snooze, correct, decay, forget, memory accept/reject) and a partial-snapshot

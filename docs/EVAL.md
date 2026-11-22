@@ -1,18 +1,19 @@
 # Deterministic eval suite (`pnpm eval:det`)
 
-> Status: introduced in the 0.3.0 line (published 2026-11-20); this tree is
-> `advisers@0.4.3` (the 0.4.0 feature release plus the 0.4.1/0.4.2/0.4.3 follow-up patches).
-> The published 0.4.0 adds one deterministic case — `det.mcp.modern-dual-era` (MCP
-> `2026-07-28` modern envelopes behind the legacy surface); 0.4.1 adds the `kb`, `mail`
-> and `policy` groups (10 cases / 95 checks), for 30 cases / 277 checks in the default
-> run; 0.4.2 adds the separate local mail-extraction gold gate (30 synthetic fixtures,
-> not counted in the eval:det cases). 0.4.3 adds **no new det case**: the `exit` group's
-> missing-key probe now runs `capture --model` (keyless `capture` succeeds locally with
-> the 0.4.3 default), and the new restore drill is a separate end-to-end script/test
-> (`scripts/restore-drill.mjs`, `test/restore-drill-e2e.test.js`) wired into Linux CI.
-> The suite is a release gate for the deterministic contract, not a claim about
-> model quality; the remaining KB/mail/policy/consent/receivable behaviour is also
-> covered by deterministic package tests.
+> Status: introduced in the 0.3.0 line; this tree is the **published 0.5.0** release
+> (2026-11-22) on top of `advisers@0.4.3`. 0.4.3 added no det case (the `exit` group's missing-key
+> probe now runs `capture --model`, and the restore drill is a separate
+> `scripts/restore-drill.mjs` end-to-end test). **0.5.0 WF4 adds the quality-evidence
+> layer**: the shared schema-v2 quality report (all zero-model gates write it),
+> `scripts/check-eval-report.mjs`, the `memory` group (12 `fact as-of` cases) and the
+> `projection` group (5 CLI/MCP/DSH parity cases), plus two new fail-closed `policy`
+> cases and the separate `eval/model-contract` gate (12 fake-transport cases). The
+> current default run is 49 cases / 367 checks (run `pnpm eval:det --json` for the
+> live count; the number is evidence, not a promise). The suite is a release gate
+> for the deterministic contract, not a claim about model quality; see
+> [Quality gates (0.5.0 WF4)](#quality-gates-050-wf4) for the report contract and
+> the other zero-model gates (`eval:kb-retrieval`, `eval:mail-local`,
+> `eval:model-contract`).
 
 `eval/` also contains the older **manual, real-model** runners
 (`eval/run-*.mjs`, see [eval/README.md](../eval/README.md)). Those need a
@@ -44,10 +45,12 @@ pnpm eval:det --update-baseline           # re-record golden values (review diff
 Runner exit codes: `0` every gate passed, `1` at least one gate failed,
 `2` bad flags / missing build / unreadable baseline.
 
-Every run writes `eval/det/results/det-<UTC-stamp>.json` plus
-`eval/det/results/latest.json`. The directory is gitignored: results are
-evidence for a specific run, not source. A failed run still writes its result
-(that is the point).
+Every run writes `eval/results/det/det-<UTC-stamp>.json` plus
+`eval/results/det/latest.json` (the shared `eval/results/<suite>/` tree is
+gitignored: results are evidence for a specific run, not source). Historical
+`eval/det/results/` files are not migrated. A failed run still writes its result
+(that is the point), and every result is a schema-v2 quality report — see
+[Result file (schema v2)](#result-file-schema-v2).
 
 ## What it gates
 
@@ -58,6 +61,8 @@ evidence for a specific run, not source. A failed run still writes its result
 | `json` | Each `--json` command writes exactly one JSON document to stdout and nothing to stderr; usage failures keep stdout empty and put a JSON error envelope (`E_USAGE`) on stderr; `evidence verify` keeps its JSON shape offline; `status`/`privacy` stay TOS-exempt | human text mixed into `--json` stdout, missing/renamed envelope, JSON written to stderr |
 | `exit` | `0` success, `1` user/config error (bad flag, missing key), `3` TOS consent required on a fresh non-TTY home; `status`/`privacy` remain exempt (0); gated commands fail fast instead of prompting | exit-code drift, a command that prompts in CI, a key-less command that hangs |
 | `tty` | Non-TTY output for human commands and `tui --once` contains no ANSI/CSI, no `\r`, no C0 controls, no U+FFFD; help output is plain; no command waits for stdin | clear-screen/cursor sequences in piped logs, encoding damage, interactive prompts on a pipe |
+| `memory` (0.5.0) | `fact as-of` time travel: [validFrom, validTo) boundaries, supersede-chain selection with `status` kept, overlapping-interval warning + deterministic resolution, tombstones excluded by default / `--include-deleted` window, missing-validFrom degradation, bad timestamps and broken supersede links warned (exit 0), matter/client/subject/predicate filters that never cross clients, byte-identical repeat runs, structured empty results | fabricated facts, silently resolved conflicts, a tombstone leaking into the default view, a warning-less skip, cross-client data after a filter, non-deterministic output |
+| `projection` (0.5.0) | CLI (owner) / MCP (clearance 0) / DSH (clearance 0) project the same ledger: unprotected `today`/`who`/`clients` counts, ids, ordering and show rows agree; caps (`MCP todayCommitments`, DSH per-bucket cap) never hide the true post-clearance count; `secrecy>0` rows are counted in `protectedExcluded` and never echoed; a missing ledger / JSON store gives a structured MCP error and the marked DSH preview without creating a HOME | a reader leaking a protected id/action, a cap being mistaken for the whole ledger, MCP/DSH inventing data without a ledger, a preview read writing to HOME |
 
 A run also asserts, once per suite, that **every child process saw zero network
 attempts**. The check is enforced by a preload
@@ -123,26 +128,168 @@ fail-closed policy gates, no network) rather than a golden model answer. They do
 need a provider key and never read the real `~/.advisers`. Do not present them as a
 model-quality evaluation.
 
+## Quality gates (0.5.0 WF4)
+
+0.5.0 adds a shared **quality-result schema v2** and four zero-model gates. All of
+them are offline, need no API key and never read the real `~/.advisers`. A run
+writes `eval/results/<suite>/<suite>-<UTC-stamp>.json` + `latest.json` (gitignored).
+
+| Gate | Command | What it proves |
+|---|---|---|
+| `det` | `pnpm eval:det` | deterministic contract + the `memory`/`projection` groups above |
+| `model-contract` | `node eval/model-contract/run.mjs --json` | model boundary: 12 fake-transport cases, 0 sockets, `autoConfirmed=0` |
+| `kb-retrieval` | `pnpm eval:kb-retrieval --json` (or `node eval/kb-retrieval/run.mjs --json`) | synthetic lexical retrieval gold set (25 docs / 50 queries; 12 two-char, 18 three-plus, 8 mixed, 6 title-hit, 6 no-hit): P@5 ≥ .80, MRR@10 ≥ .65, 2-char hit@5 ≥ .75, no-hit FPR ≤ .10 |
+| `mail-local` | `node eval/run-mail-local-gold.mjs --json --split dev` | synthetic local mail extraction (90 dev; 30 held-out is release-gate only): P ≥ .90 / R ≥ .85 / F1 ≥ .85 / due ≥ .85 / author ≥ .90 / negative FP ≤ .10 |
+
+### Shared result schema v2
+
+`eval/lib/quality-report.mjs` is the single writer/validator; the committed JSON
+Schema twin is `eval/schema/quality-result-v2.schema.json`. Every report carries:
+
+- `schemaVersion: 2`, `suite`/`suiteVersion`/`mode`, timestamps, `command`, `filters`;
+- `corpus {id, sha256, rows, provenance, reviewMode, license, split} | null` and
+  `fixtures {sha256, count}` — the data the numbers came from;
+- `cli {version, commit, node, os, dirty}` and `baseline {file, sha256, recordedAt}`;
+- `metrics` (mode-specific; `null` for `det`), `gates[]`, `totals`, `network`;
+- `unknowns[]` — every dimension this run did NOT measure as `{id, value:null,
+  reason}`. `modelQuality`/`humanGold`/`liveModelQuality`/`semanticCorrectness`/
+  `cost`/`realMailAccount`/`win11RealMachine` are explicit `null` until a matching
+  mode actually measures them — never `0`/`false`/`PASS`;
+- `failures[]` — only `{caseId, checkId?, code, detailSha256}`, never raw detail;
+- `redaction {version:2, rules, piiScan}` and `reproduce {command, env, fixedNow, seed}`.
+
+Validate one or more reports (default: every `eval/results/*/latest.json`):
+
+```sh
+node scripts/check-eval-report.mjs                                  # all latest reports
+node scripts/check-eval-report.mjs eval/results/det/latest.json --json
+node scripts/check-eval-report.mjs --release                        # release evidence
+node scripts/check-eval-report.mjs --self-test                      # validator fixtures
+```
+
+Default mode accepts `cli.dirty:true` (a local worktree run is still a valid
+report). `--release` additionally requires a recorded `cli.commit` and
+`cli.dirty:false`, and is what release evidence may cite. A report with a failed
+gate, a non-zero `network.attempts`, an absolute path/PII/prompt text, or an
+unmeasured dimension not listed as explicit `null` exits `1`.
+
+`pnpm eval:det --json` therefore emits `"schemaVersion": 2`; `mode:"det"` may only
+contain structural results (the mode/metrics rule is enforced by the checker, so a
+`modelQuality:0` value in a det report is rejected). Historical v1 result files are
+archived only and must not be cited as release evidence.
+
+### `memory` group (12 cases)
+
+`fact as-of` is the read side of the memory promise: it must answer "what was true
+at instant t" without inventing, silently resolving or leaking. The cases pin the
+boundaries (`validFrom` inclusive / `validTo` exclusive), supersede-chain selection
+with `status:"superseded"` kept, the fixed overlap warning plus deterministic
+resolution, tombstone exclusion and the `--include-deleted` window, the
+`validFrom`→`recordedAt` fallback markers (`degraded:["valid_from_fallback_recorded_at"]`),
+warning-not-crash behaviour for bad timestamps and broken supersede links,
+matter/client/subject/predicate filters, sanitized evidence quotes, and
+byte-identical repeat runs. There is no product change: the suite only asserts the
+0.4.3 read contract.
+
+### `projection` group (5 cases)
+
+The same seeded ledger is read through the three real surfaces: CLI `today|who|client
+list --json` (owner, clearance 3), the shipped `advisers mcp --stdio` tools
+(`advisers_today|who|clients`, clearance 0) and the DSH adapter
+`createLedgerReader({home})` (`todayView|whoView|clientsView`, clearance 0). For
+unprotected rows the counts, ids, ordering and client show rows agree. Caps are
+truthful: MCP's `total`/`open` and DSH's bucket counts keep the post-clearance
+count while the row list is truncated. Rows of a `secrecy>0` matter are counted in
+`protectedExcluded` and their ids/actions never reach MCP/DSH; with no real ledger
+(JSON store / missing home) MCP returns a structured tool error and DSH returns its
+marked `preview:true` / `customerEntities:false` payload without creating a HOME.
+
+### `policy` fail-closed additions (2 cases)
+
+- `det.policy.consent-binding-invalidated`: a consent record granted for
+  `deepseek`/`https://api.deepseek.com` is invalidated when `ADVISERS_BASE_URL` or
+  `ADVISERS_PROVIDER` changes — `mail extract --model --yes` exits 1 with
+  `E_POLICY_CONSENT_REQUIRED` before any request.
+- `det.policy.protected-model-fail-closed`: a `secrecy>0` matter exits 1 with
+  `E_MAIL_MODEL_DISABLED` even after consent, before any request; the message stays
+  `new` with no candidates.
+
+### `model-contract` gate (12 cases)
+
+`eval/model-contract/run.mjs` drives `lib/model.js`, `lib/capture.js` and
+`lib/mail-extract.js` in-process through their `fetchImpl` seam with a recording
+fake transport, and installs a socket guard over `net`/`tls`/`http(s)`/`dns`/`fetch`.
+It pins: a legal completion and its DeepSeek request fields; invalid JSON drops to
+zero candidates; forged quotes are dropped; >5 candidates truncate to 5;
+model-provided `confirmed`/`accepted`/`status`/`id` are never propagated
+(`autoConfirmed=0`); missing quotes are rejected; a provider `content_filter` is
+terminal (1 call); 429 retries to `UPSTREAM` (4 calls with `retries=3`); a timeout is
+a typed `TIMEOUT`; no key and a protected matter make **0** calls; PII is redacted
+from the egress body and deepseek/openai-compatible request shapes stay portable.
+The v2 report (`mode:"model-contract"`) records `sockets:0` and `autoConfirmed:0`.
+
+**What these gates are not:** none of them is a model-quality or accuracy claim.
+KB retrieval and mail extraction are **synthetic regression gates** (hand-authored
+labels, documented known limitations); live-model quality and independent human
+gold remain unmeasured (`unknowns` stays explicit `null` until owner decision D2
+freezes an independent gold set). See [eval/README.md](../eval/README.md) for the
+manual, real-model runners.
 ## Local mail extraction gold set (`pnpm eval:mail-local`)
 
 A second, zero-model gate measures the deterministic local commitment extractor
-(`mail extract --local`): 30 fixed synthetic `.eml` fixtures (Chinese/English,
-absolute and relative dates, third-party promises, requests/reschedules/noise,
-HTML-only) with hand labels under `eval/mail-local-gold/`. The runner parses each
-message with the same parser as `mail import`, calls the same local extraction
-branch, and reports candidate precision/recall/F1, due-date accuracy and author
-accuracy; it exits non-zero when a threshold regresses (currently precision 90%,
-recall/F1 85%, due 85%, author 90%). It never calls a model, never opens a
-network socket, never creates an `ADVISERS_HOME` and never reads credentials, so
-it runs in the Linux CI job right after `eval:det`.
+(`mail extract --local`). 0.5.0 grows the set from 30 to **120 fixed synthetic
+`.eml` fixtures, split 90 dev + 30 held-out**, with hand labels under
+`eval/mail-local-gold/` in the `advisers.mail-local-gold/v2` format (each case
+carries `split`/`provenance`/`reviewStatus`; the top level records `corpusSha256`
+and `splitSizes`). The runner parses each message with the same parser as
+`mail import`, calls the same local extraction branch, and reports candidate
+precision/recall/F1, due-date accuracy, author accuracy and the negative
+false-positive rate as a shared schema-v2 report:
+
+- `dev` (90, default): P ≥ .90 / R ≥ .85 / F1 ≥ .85 / due ≥ .85 / author ≥ .90 /
+  negative FP ≤ .10 — this is the L0/PR gate;
+- `heldout` (30): P ≥ .85 / R ≥ .80 / F1 ≥ .82 / due ≥ .85 / negative FP ≤ .10 —
+  **release-gate only**, never run in L0 and never used to tune the extractor.
+  `--list` reports the 120-case metadata/frozen shas without running extraction,
+  so it is safe to use in L0 without touching the held-out split.
+
+```sh
+pnpm eval:mail-local --json --split dev       # default split, PR gate
+pnpm eval:mail-local --json --split heldout   # release gate only
+```
+
+It never calls a model, never opens a network socket, never creates an
+`ADVISERS_HOME` and never reads credentials, so it runs in the Linux CI job right
+after `eval:det`.
 
 This is a **synthetic regression gate, not a general accuracy claim**: the
 labels are hand-written by the implementer, not independently reviewed, and the
 set deliberately includes known-limitation cases (English relative due dates,
-an implicit subject, one marketing false positive) so the gate measures them
-instead of hiding them. The four known misses and the extension process are
+an implicit subject, marketing/notification false positives) so the gate measures
+them instead of hiding them. The known misses and the extension process are
 documented in `eval/mail-local-gold/README.md`; an independent human gold set
-remains future work.
+remains future work (`unknowns.humanGold` stays explicit `null`).
+
+## KB retrieval gold set (`pnpm eval:kb-retrieval`)
+
+A third zero-model synthetic gate for the lexical KB retrieval path (`kb add` +
+`search --scope kb`): 25 hand-authored Markdown documents under
+`eval/kb-retrieval/corpus/` and 50 queries in `eval/kb-retrieval/queries.json`
+(Chinese 2-char / Chinese 3+ char / mixed zh-en / title-hit / no-hit), with the
+relevant source names hand-labelled per query. The runner imports the corpus into
+a temp HOME through the real CLI, maps `kb ls --json` doc ids to source names, then
+runs every query with `search <q> --scope kb --limit 20 --json` (hit order is the
+rank; `matchPath`/`degraded` are reported as-is). Thresholds: P@5 ≥ .80,
+MRR@10 ≥ .65, 2-char hit@5 ≥ .75, no-hit false-positive rate ≤ .10.
+
+```sh
+node eval/kb-retrieval/run.mjs --json   # alias: pnpm eval:kb-retrieval
+```
+
+Like the mail gate this is a **synthetic regression gate**: it proves the
+deterministic lexical path (FTS5 trigram + 2-char LIKE fallback) did not regress,
+not that retrieval is "accurate" in general. Semantic/vector retrieval is not
+measured (0.6+ eval prerequisite).
 
 ## Environment (why the numbers are stable)
 
@@ -189,44 +336,71 @@ Bump `FIXTURE_ID` and re-record when the fixture data changes; the fixture id in
 the baseline and in `eval/det/fixtures/morning-ledger.mjs` must agree (a case
 checks this).
 
-## Result file (schema v1)
+0.5.0 adds a **suite-level** baseline next to the golden one:
+`eval/quality/baselines-v1.json` freezes each zero-model gate's thresholds, mode,
+corpus sha and `recordedFrom {cliVersion, commit, node}`. The non-det gates cite it
+via `baseline {file, sha256, recordedAt}`; the `det` report keeps citing the golden
+`eval/det/baseline.json` (the morning-hash contract), and the checker verifies the
+cited baseline sha against the file bytes either way. Threshold/corpus changes must update the baseline **and**
+`eval/quality/CHANGELOG.md` in the same review — re-recording a red gate to green is
+the same contract violation as
+`eval/det/baseline.json --update-baseline`, not a fix.
 
-`eval/det/results/latest.json` (and each per-run file) is the machine evidence. The
-example below is illustrative; the `cli` block records the build that actually ran it
-(the commit hash changes per run and is not a release claim):
+## Result file (schema v2)
+
+`eval/results/det/latest.json` (and each per-run file) is the machine evidence.
+The example below is illustrative; the `cli` block records the build that actually
+ran it (the commit hash changes per run and is not a release claim):
 
 ```json
 {
-  "schemaVersion": 1,
+  "schemaVersion": 2,
   "suite": "det",
   "suiteVersion": 1,
   "mode": "det",
-  "startedAt": "2026-11-20T01:00:00.000Z",
-  "durationMs": 20123,
-  "filters": ["determinism", "mcp", "json", "exit", "tty"],
-  "baseline": { "file": "eval/det/baseline.json", "fixture": "morning-ledger-v1", "recordedAt": "2026-11-19T15:58:00.000Z" },
-  "cli": { "version": "0.4.0", "commit": "<commit-of-the-run>", "node": "v24.22.1", "os": "linux" },
-  "environment": { "timezone": "Asia/Shanghai", "home": "<TMP>/home", "noModel": true, "apiKeys": "stripped", "networkBlock": "preload" },
-  "totals": { "cases": 19, "passed": 19, "failed": 0, "checks": 166, "checksFailed": 0 },
-  "network": { "attempts": 0, "kinds": {} },
-  "cases": [ { "id": "det.morning.golden-hash", "group": "determinism", "pass": true, "durationMs": 610, "checks": [ { "id": "dataSha256-matches-baseline", "pass": true } ] } ],
+  "startedAt": "2026-11-22T10:00:00.000Z",
+  "durationMs": 63028,
+  "command": ["node", "scripts/eval-det.mjs"],
+  "filters": ["determinism", "mcp", "json", "exit", "tty", "kb", "mail", "policy", "memory", "projection"],
+  "corpus": null,
+  "fixtures": { "sha256": "<fixture-file-sha256>", "count": 1 },
+  "cli": { "version": "0.5.0", "commit": "<commit-of-the-run>", "node": "v24.22.3", "os": "linux", "dirty": false },
+  "model": null,
+  "baseline": { "file": "eval/det/baseline.json", "sha256": "<baseline-file-sha256>", "recordedAt": "2026-11-21T04:35:27.000Z" },
+  "metrics": null,
+  "gates": [ { "id": "cases.failed", "actual": 0, "threshold": 0, "operator": "=", "pass": true } ],
+  "totals": { "cases": 49, "passed": 49, "failed": 0, "checks": 367, "checksFailed": 0 },
+  "network": { "guarded": true, "attempts": 0, "kinds": {} },
+  "unknowns": [ { "id": "modelQuality", "value": null, "reason": "not-measured-by-this-suite" }, { "id": "humanGold", "value": null, "reason": "pending-independent-review" } ],
   "failures": [],
-  "redaction": { "version": 1, "rules": ["abs-path", "temp-home", "repo-root"] }
+  "redaction": { "version": 2, "rules": ["abs-path", "temp-home", "repo-root", "pii", "prompt-answer"], "piiScan": "pass" },
+  "reproduce": { "command": "pnpm eval:det", "env": { "TZ": "Asia/Shanghai", "noModel": true, "network": "blocked" }, "fixedNow": "2026-11-20T01:00:00.000Z", "seed": 0 },
+  "environment": { "timezone": "Asia/Shanghai", "home": "<TMP>/home", "noModel": true, "apiKeys": "stripped", "networkBlock": "preload" },
+  "cases": [ { "id": "det.morning.golden-hash", "group": "determinism", "pass": true, "durationMs": 610, "checks": [ { "id": "dataSha256-matches-baseline", "pass": true } ] } ]
 }
 ```
 
-Hard rules for the result file:
+Hard rules for the result file (enforced by `scripts/check-eval-report.mjs`):
 
-- **No quality metrics.** `mode:"det"` may only contain structural results.
-  Model-quality numbers belong to the manual `eval/` runners and must never be
-  mixed into a det result or quoted as accuracy.
-- **No absolute paths / no temp dirs.** Output is normalized to
-  `<TMP>`, `<HOME>`, `<WORK>`, `<REPO>`; the writer re-scans the serialized
-  result and adds a `RESULT_LEAK` failure if a path survives.
-- **No prompt/answer text.** Only case ids, check ids and bounded diagnostic
-  strings are recorded (500 chars per check, 50 failures max).
-- `network.attempts` must be `0`. A non-zero value fails the run and lists the
-  attempted entry points.
+- **Explicit null.** Unmeasured dimensions must appear in `unknowns` with
+  `value:null` and a reason; `0`/`false`/`PASS` is a validation error. Modes may
+  only measure their own dimensions (`det`/`model-contract` cannot carry model
+  quality; `local-gold` cannot carry kappa/live quality; only `live` carries live
+  model quality; only `human-gold` carries `kappa`).
+- **`mode:"det"` is structural only.** `metrics` must be `null`; model-quality
+  numbers belong to the manual `eval/` runners and must never be mixed into a det
+  result or quoted as accuracy.
+- **No absolute paths / no PII / no prompt-answer text.** Output is normalized to
+  `<TMP>`, `<HOME>`, `<WORK>`, `<REPO>`; the writer re-scans the serialized result
+  and adds a `RESULT_LEAK` failure if a path survives. Email/phone/ID patterns and
+  prompt/answer/customer-text keys are rejected by the checker.
+- **Failures keep only `detailSha256`** (`{caseId, checkId?, code, detailSha256}`),
+  never raw detail text; details stay in `cases[].checks[]` for the local run.
+- **Gates must pass** and `network.attempts` must be `0` for a report to validate;
+  a non-zero network count fails the run and lists the attempted entry points.
+- **Release evidence** additionally requires `cli.commit` to be recorded and
+  `cli.dirty:false` (`check-eval-report --release`); default mode accepts a dirty
+  local worktree report as structurally valid.
 
 ## What this suite does not cover
 
@@ -263,19 +437,33 @@ Hard rules for the result file:
 1. Add the case to `eval/det/cases/<group>.mjs` with a `det.<group>.<what>` id.
    Reuse `withSeededHome`/`withFreshHome` from `cases/_fixture.mjs` and the
    helpers in `eval/det/lib/harness.mjs`; return `{ checks }` built with
-   `check(checks, id, fn)`.
+   `check(checks, id, fn)`. New groups must also be added to `DEFAULT_SUITES`,
+   `ALL_CASES` and `--list` wiring in `scripts/eval-det.mjs` (see `memory` and
+   `projection` for the 0.5.0 pattern).
 2. Assert the contract, not a snapshot of one implementation: check shapes,
    codes, stability and invariants (a one-off `JSON.stringify` comparison is a
-   golden and belongs in the baseline instead).
+   golden and belongs in the baseline instead). Never assert an absolute path or
+   fixture PII in a check detail — it would be rejected by the report validator.
 3. Keep it under `<120s` total and offline. If it needs new fixture data, extend
    the deterministic fixture, bump `FIXTURE_ID`, and re-record the baseline.
-4. Run `pnpm eval:det` (and `pnpm eval:det --suite tui` if relevant), then
-   include the result path and totals in the evidence note.
+   Prefer seeded per-case fixtures (`seedMemoryFacts`, `seedProjectionLedger`) over
+   extending the golden morning fixture.
+4. Run `pnpm eval:det` (and `pnpm eval:det --suite tui` if relevant), validate the
+   written report with `node scripts/check-eval-report.mjs eval/results/det/latest.json`,
+   then include the result path and totals in the evidence note.
+5. Anything outside `mode:"det"` (local-gold, model-contract) writes its report
+   through `eval/lib/quality-report.mjs` (`buildQualityReport` +
+   `writeQualityReport` + `validateQualityReport`) — do not hand-roll a second
+   result schema.
 
 ## Related documents
 
 - [docs/CLI-JSON.md](CLI-JSON.md) — CLI JSON contract and the 0/1/3 exit-code map.
 - [docs/MCP.md](MCP.md) — MCP stdio surface (8 tools, 5 resources).
+- [eval/schema/quality-result-v2.schema.json](../eval/schema/quality-result-v2.schema.json) — committed schema-v2 report contract.
+- [eval/quality/baselines-v1.json](../eval/quality/baselines-v1.json) and [eval/quality/CHANGELOG.md](../eval/quality/CHANGELOG.md) — suite thresholds/corpus baselines and their change log.
+- [eval/model-contract/run.mjs](../eval/model-contract/run.mjs) — the fake-transport model boundary gate.
+- [eval/kb-retrieval/README.md](../eval/kb-retrieval/README.md) — the synthetic KB retrieval gold set.
 - [docs/PERFORMANCE.md](PERFORMANCE.md) — performance baselines (separate from
   this determinism gate).
 - [docs/SECURITY.md](SECURITY.md) — security suites and supply-chain gates.

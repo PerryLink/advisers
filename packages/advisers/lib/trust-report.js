@@ -87,11 +87,11 @@ export const PRIVACY_BRIEF_LINES = Object.freeze([
   Object.freeze({
     key: 'sync',
     label: 'sync',
-    claim: '可选：整库加密快照（AES-256-GCM + scrypt）写入你指定的目录；没有同步服务器，没有自动合并（last-snapshot-wins）',
+    claim: '可选：整库加密快照（AES-256-GCM + scrypt）写入你指定的目录；没有同步服务器，没有自动合并（last-writer-wins）',
     state: 'opt-in-encrypted-snapshots',
     command: 'advisers sync status --dir <dir>',
     docs: 'docs/SYNC.md',
-    docsClaims: Object.freeze(['AES-256-GCM', 'Last-snapshot-wins']),
+    docsClaims: Object.freeze(['AES-256-GCM', 'last-writer-wins']),
   }),
   Object.freeze({
     key: 'export',

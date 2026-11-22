@@ -38,6 +38,8 @@ jobs:
       #   - eval:det is the deterministic eval contract (docs/EVAL.md);
       #   - eval:mail-local is the zero-model local mail-extraction quality
       #     gold set (synthetic, threshold-gated; docs/EVAL.md);
+      #   - eval:kb-retrieval / eval:model-contract / eval:check-report are the
+      #     0.5.0 deterministic quality gates (synthetic/fake transport, no net);
       #   - check-contracts validates the machine-readable contracts under
       #     contracts/ against the real CLI/MCP (docs/CONTRACTS.md);
       #   - sbom regenerates the lockfile-derived CycloneDX artifact and
@@ -46,8 +48,14 @@ jobs:
       #     script of the same name.
       - name: Deterministic eval suite
         run: pnpm eval:det
-      - name: Local mail extraction quality gate
-        run: pnpm eval:mail-local
+      - name: Local mail extraction quality gate (dev split)
+        run: node eval/run-mail-local-gold.mjs --split dev
+      - name: KB retrieval quality gate
+        run: pnpm eval:kb-retrieval
+      - name: Model contract gate (fake transport, 0 sockets)
+        run: pnpm eval:model-contract
+      - name: Quality report schema gate
+        run: pnpm eval:check-report
       - name: Interface contracts gate
         run: node scripts/check-contracts.mjs
       - name: SBOM generate and check

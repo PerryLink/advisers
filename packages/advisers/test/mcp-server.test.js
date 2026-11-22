@@ -403,8 +403,28 @@ test('mcp: scripts/mcp-dev.mjs serves the library over real stdio', () => {
     assert.equal(JSON.parse(capture.result.content[0].text).candidate.status, 'pending')
     // 0.3.0 P0-T3: list results also carry total/truncated (+ the commit_ls
     // limit), so a capped result can never look like the whole ledger.
+    // 0.5.0: the read payload adds the additive disclosure block (old fields
+    // keep their values/order); callId/digest are content-addressed metadata.
     assert.deepEqual(JSON.parse(byId.get(6).result.content[0].text), {
-      commitments: [], clearance: 0, protectedExcluded: 0, total: 0, truncated: false, limit: 50,
+      commitments: [],
+      clearance: 0,
+      protectedExcluded: 0,
+      total: 0,
+      truncated: false,
+      limit: 50,
+      disclosure: {
+        surface: 'mcp',
+        tool: 'advisers_commit_ls',
+        basis: 'local-resolution',
+        callId: 'dc_82dcbf62461a1903',
+        fields: [],
+        view: { verified: 0, pending: 0, historical: 0, derived: 0 },
+        clearance: 0,
+        protectedExcluded: 0,
+        truncated: false,
+        audited: true,
+        digest: 'sha256:82dcbf62461a1903f448c028143fa3a9701db1ab3e3f0772a5de3381015a902b',
+      },
     })
 
     const store = new SqliteStore(join(home, 'state.db'))

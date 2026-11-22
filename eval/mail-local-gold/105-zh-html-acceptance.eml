@@ -1,0 +1,9 @@
+From: 刘工 <liu@vendor.example>
+To: me@example.com
+Subject: 验收报告
+Date: Mon, 14 Dec 2026 03:00:00 +0800
+Message-ID: <mail-gold-105-zh-html-acceptance.eml@gold.example>
+MIME-Version: 1.0
+Content-Type: text/html; charset=UTF-8
+
+<p>王经理：</p><p>我会在 <b>12月24日</b> 前提交验收报告。</p><p>刘工</p>

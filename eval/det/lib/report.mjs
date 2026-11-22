@@ -1,17 +1,29 @@
 /**
- * Result schema v1 for the deterministic eval suite.
+ * Result schema v2 for the deterministic eval suite (0.5.0 WF4 Q1).
  *
- * One file per run under eval/det/results/ (gitignored) plus latest.json. The
- * shape follows the 0.3 eval design (04-0.3-research/15-eval-contracts.md §3.3)
- * with `mode:"det"` and structural metrics only: no model quality numbers can
- * appear here. Absolute paths are replaced with <TMP>/<HOME>/<WORK>/<REPO> and
- * the result is scanned again before it is written.
+ * One file per run under `eval/results/det/` (gitignored) plus latest.json. The
+ * shape is the shared quality-result v2 contract (`eval/lib/quality-report.mjs`,
+ * `eval/schema/quality-result-v2.schema.json`) with `mode:"det"`: structural
+ * results only — no model-quality numbers may appear here. Absolute paths are
+ * replaced with <TMP>/<HOME>/<WORK>/<REPO>, PII is scanned, failures only keep a
+ * `detailSha256`, and every unmeasured quality dimension is an explicit null in
+ * `unknowns`.
  */
 import { mkdirSync, writeFileSync } from 'node:fs'
-import { dirname, join } from 'node:path'
-import { RESULTS_DIR, REPO_ROOT, cliInfo, normalizeText } from './harness.mjs'
+import { dirname, isAbsolute, join } from 'node:path'
 
-export const RESULT_SCHEMA_VERSION = 1
+import {
+  buildQualityReport,
+  gate,
+  sha256File,
+  sha256Hex,
+  sanitizeQualityReport,
+} from '../../lib/quality-report.mjs'
+import { BASELINE_PATH, RESULTS_DIR, REPO_ROOT, cliInfo, normalizeText } from './harness.mjs'
+
+export const RESULT_SCHEMA_VERSION = 2
+const FIXTURE_FILE = join(REPO_ROOT, 'eval/det/fixtures/morning-ledger.mjs')
+const DET_COMMAND = ['node', 'scripts/eval-det.mjs']
 
 function walk(value, fn) {
   if (typeof value === 'string') return fn(value)
@@ -32,46 +44,49 @@ export function sanitizeDeep(value, { workdirs = [] } = {}) {
   })
 }
 
-/** Convert per-case checks into a stable, sanitized result object. */
-export function buildResult({ cases, startedAt, durationMs, baseline, filters, workdirs = [], network = { attempts: 0, kinds: {} } }) {
-  const failures = []
-  for (const testCase of cases) {
-    for (const check of testCase.checks) {
-      if (!check.pass) failures.push({ caseId: testCase.id, checkId: check.id, code: 'CHECK_FAILED', detail: check.detail ?? '' })
-    }
+function fixtureBlock() {
+  try {
+    return { sha256: sha256File(FIXTURE_FILE), count: 1 }
+  } catch {
+    return { sha256: sha256Hex('morning-ledger-v1'), count: 1 }
   }
+}
+
+function baselineBlock(baseline) {
+  let sha = null
+  try { sha = sha256File(BASELINE_PATH) } catch { sha = null }
+  return { file: 'eval/det/baseline.json', sha256: sha, recordedAt: baseline?.recordedAt ?? null }
+}
+
+/** Convert per-case checks into a stable, sanitized schema-v2 result object. */
+export function buildResult({ cases, startedAt, durationMs, baseline, filters, workdirs = [], network = { attempts: 0, kinds: {} }, command = [] }) {
   const checksTotal = cases.reduce((sum, testCase) => sum + testCase.checks.length, 0)
-  const checksFailed = failures.length
-  const result = {
-    schemaVersion: RESULT_SCHEMA_VERSION,
+  const failedCases = cases.filter((testCase) => !testCase.checks.every((check) => check.pass)).length
+  const result = buildQualityReport({
     suite: 'det',
     suiteVersion: baseline?.suiteVersion ?? 1,
     mode: 'det',
     startedAt,
     durationMs,
+    // The command line is evidence, but an --out absolute path must not leak
+    // into the result file; replace any absolute argument with a placeholder.
+    command: (command.length ? command : [...DET_COMMAND]).map((part) => (isAbsolute(String(part)) ? '<ABS>' : String(part))),
     filters: filters ?? ['all'],
-    baseline: {
-      file: 'eval/det/baseline.json',
-      fixture: baseline?.fixture ?? null,
-      recordedAt: baseline?.recordedAt ?? null,
-    },
+    corpus: null,
+    fixtures: fixtureBlock(),
     cli: cliInfo(),
-    environment: {
-      timezone: 'Asia/Shanghai',
-      home: '<TMP>/home',
-      noModel: true,
-      apiKeys: 'stripped',
-      networkBlock: 'preload',
-      nodeOptions: '--import=eval/det/lib/network-block.mjs',
-    },
+    model: null,
+    baseline: baselineBlock(baseline),
+    metrics: null,
+    gates: [],
     totals: {
       cases: cases.length,
       passed: cases.filter((testCase) => testCase.checks.every((check) => check.pass)).length,
-      failed: cases.filter((testCase) => !testCase.checks.every((check) => check.pass)).length,
+      failed: failedCases,
       checks: checksTotal,
-      checksFailed,
+      checksFailed: cases.reduce((sum, testCase) => sum + testCase.checks.filter((check) => !check.pass).length, 0),
     },
-    network,
+    network: { guarded: true, attempts: Number(network?.attempts ?? 0), kinds: network?.kinds ?? {} },
     cases: cases.map((testCase) => ({
       id: testCase.id,
       group: testCase.group,
@@ -80,21 +95,46 @@ export function buildResult({ cases, startedAt, durationMs, baseline, filters, w
       durationMs: testCase.durationMs,
       checks: testCase.checks,
     })),
-    failures: failures.slice(0, 50),
-    errors: failures.length > 50 ? [{ code: 'FAILURES_TRUNCATED', count: failures.length - 50 }] : [],
-    redaction: { version: 1, rules: ['abs-path', 'temp-home', 'repo-root'] },
-  }
-  const sanitized = sanitizeDeep(result, { workdirs })
+    environment: {
+      timezone: 'Asia/Shanghai',
+      home: '<TMP>/home',
+      noModel: true,
+      apiKeys: 'stripped',
+      networkBlock: 'preload',
+      nodeOptions: '--import=eval/det/lib/network-block.mjs',
+    },
+    reproduce: {
+      command: 'pnpm eval:det',
+      env: { TZ: 'Asia/Shanghai', noModel: true, network: 'blocked', acceptTos: true },
+      fixedNow: '2026-11-20T01:00:00.000Z',
+      seed: 0,
+    },
+  })
+  const sanitized = sanitizeQualityReport(result, { roots: workdirs })
   // Defense in depth: the gate must not ship a result that leaks a local path.
+  let leak = null
   for (const root of [...workdirs.map((workdir) => workdir.root), REPO_ROOT]) {
-    if (root && JSON.stringify(sanitized).includes(root)) {
-      sanitized.leak = true
-      sanitized.failures.push({ caseId: 'det.harness.result-redaction', checkId: 'no-absolute-paths', code: 'RESULT_LEAK', detail: 'result still contains an absolute path' })
-      sanitized.totals.failed += 1
-      sanitized.totals.checksFailed += 1
-      break
+    if (root && JSON.stringify(sanitized).includes(root)) { leak = root; break }
+  }
+  const failures = []
+  for (const testCase of sanitized.cases) {
+    for (const check of testCase.checks) {
+      if (!check.pass) failures.push({ caseId: testCase.id, checkId: check.id, code: 'CHECK_FAILED', detailSha256: sha256Hex(String(check.detail ?? 'no detail')) })
     }
   }
+  if (leak) {
+    failures.push({ caseId: 'det.harness.result-redaction', checkId: 'no-absolute-paths', code: 'RESULT_LEAK', detailSha256: sha256Hex(String(leak)) })
+    sanitized.leak = true
+    sanitized.totals.failed += 1
+    sanitized.totals.checksFailed += 1
+  }
+  sanitized.failures = failures.slice(0, 50)
+  if (failures.length > 50) sanitized.errors = [{ code: 'FAILURES_TRUNCATED', count: failures.length - 50 }]
+  sanitized.gates = [
+    gate('cases.failed', sanitized.totals.failed, 0, '='),
+    gate('checks.failed', sanitized.totals.checksFailed, 0, '='),
+    gate('network.attempts', sanitized.network.attempts, 0, '='),
+  ]
   return sanitized
 }
 
@@ -130,8 +170,8 @@ export function printReport(result, { verbose = false } = {}) {
     for (const check of failedChecks) lines.push('  × ' + check.id + (check.detail ? ': ' + check.detail : ''))
   }
   for (const failure of result.failures) {
-    if (result.cases.some((testCase) => testCase.id === failure.caseId && testCase.checks.some((check) => !check.pass))) continue
-    lines.push('FAIL ' + failure.caseId + ' × ' + failure.checkId + ': ' + failure.detail)
+    if (failure.code !== 'RESULT_LEAK') continue
+    lines.push('FAIL ' + failure.caseId + ' × ' + failure.checkId)
   }
   const totals = result.totals
   const summary = 'advisers eval:det — ' + totals.passed + '/' + totals.cases + ' cases, ' + totals.checksFailed + '/' + totals.checks + ' checks failed, ' + Math.round(result.durationMs / 100) / 10 + 's'

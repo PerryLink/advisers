@@ -1,6 +1,6 @@
 # Advisers
 
-**A staff of AI advisers — a local-first, auditable workbench for commitments, Office deliverables and reminders.**
+**A verifiable delivery & commitment layer for independent consultants — local ledgers, offline-verifiable receipts, portable by design.**
 
 > **AI & compliance notice** — Advisers is a local-first work assistant, not a companion,
 > lawyer, doctor, or financial adviser. AI output can be wrong; verify before use.
@@ -18,9 +18,9 @@
 > database is **not encrypted by default**; see the [Privacy notice](docs/PRIVACY.md) for the
 > full egress list (DeepSeek is the default model provider) and deletion limits.
 
-Advisers is not another chat window. It is a small staff of specialist advisers
-(memory, commitments, routines) that share one continuous conversation and keep
-three ledgers:
+Advisers is not another chat window. It is a local-first ledger for independent
+consultants: deterministic Office deliverables, evidence traceback and
+offline-verifiable receipts over three ledgers:
 
 - **user ledger** — who you are, preferences, boundaries, evidence;
 - **commitment ledger** — who owes whom, due dates, external proof;
@@ -43,59 +43,67 @@ packages into an end-to-end inbox yet (0.4.0's `mail sync` is a separate built-i
 read-only IMAP entry). Other gateways are not bundled. The core does not depend
 on any link package; adapters load one only when configured.
 
-**Scope: a local workbench, not an always-on secretary.** "Secretary" here means
-the local ledger/Office/reminder loop above, not always-on recording or meeting
-transcription, not a companion mobile app, and not automatic sending or
-rescheduling — those are explicit product non-goals, not missing buttons (see
-[docs/POSITIONING.md](docs/POSITIONING.md)). In 0.4.3 there is no background
-daemon and no inbox IDLE watch; `mail sync --watch` is an explicit foreground poll you
-start and stop, mail is read-only IMAP, and IM is reachable only through the optional,
-externally installed Hermes bridge.
+**Scope: a local ledger and verification layer, not an always-on assistant.**
+"Secretary" in older text means the local ledger/Office/reminder loop, not
+always-on recording or meeting transcription, not a companion mobile app, and not
+automatic sending or rescheduling — those are explicit product non-goals, not
+missing buttons (see [docs/POSITIONING.md](docs/POSITIONING.md)). In the 0.4.3/0.5.0
+line there is no background daemon and no inbox IDLE watch; `mail sync --watch` is an
+explicit foreground poll you start and stop, mail is read-only IMAP, and IM is
+reachable only through the optional, externally installed Hermes bridge. 0.5.0 adds
+**no new network path**, no new runtime dependency and no schema migration; its new
+artifacts are local files (bundle, context pack, sync baseline).
 
 ## Status
 
-**`0.4.3` was published on 2026-11-22** and is the current npm **`latest`**; npm
-**`next`** is also `0.4.3` after this release advanced it. The repository is lockstep at
-package version `0.4.3`. `0.4.3` is a patch on `0.4.2` (itself the patch on the 0.4.1
-same-day follow-up), not a new feature line: it adds Chinese relative dates for `--due`,
-local-rule `capture` from stdin plus the read-only `inbox`, explicit-null
-`doctor --report` / `privacy --prove --brief` / `profile` trust outputs, the enhanced
-`remind --ics` export with a per-commitment 24h notification cooldown, quote/proposal
-schema v2 payment channels and a receivable CSV export, an end-to-end restore drill
-(wired into Linux CI), a global `--help` short-circuit and the `mail sync --watch`
-JSON/exit-code contract. The `0.4.0` feature surface is unchanged: local knowledge base (schema v22),
-TLS-only IMAP mail entry, the interactive shell, proactive urgent-first briefs, the
+**`0.5.0` was published on 2026-11-22** and is the current npm **`latest`**; npm
+**`next`** is also `0.5.0` after this release advanced it. The repository is lockstep at
+package version `0.5.0`. `0.5.0` is a "portable, disclosable, verifiable" release, not a
+new AI capability line: it adds portable home **bundle v1** (`export --bundle` /
+`import --bundle --verify`, plaintext and checksum-only), offline-verifiable **context
+pack v1** (`context-pack create|verify`, human-selected, no import path, no
+read/execution authority), additive **MCP/DSH disclosure** (`disclosure` + per-row
+`view`; tool counts unchanged), **sync snapshot v2** with `sync.state.json`, real
+`sync push --dry-run`, conflict precheck and `sync status --check` (last-writer-wins
+is still the transfer semantics), `setup`/`demo`/`help <topic>` onboarding,
+fail-closed managed backups before destructive commands, and a report-v2 quality gate.
+The `0.4.0` feature surface is unchanged: local knowledge base (schema v22), TLS-only
+IMAP mail entry, the interactive shell, proactive urgent-first briefs, the
 policy/evidence 2.0 subset, receivables/payments with client pack v2, MCP modern
 dual-era, Windows CI plus a portable ZIP, and the v2026.11.4 legal revision. Defaults
 stay local: no new command requires a model call, there is no background daemon, and
-`mail sync` is the one new explicit network path (TLS-only, read-only, user-invoked).
+`mail sync` remains the one explicit network path (TLS-only, read-only, user-invoked).
+Zero schema change (still v22), zero new network path, zero new runtime dependency. Read
+[PORTABILITY.md](docs/PORTABILITY.md), [CONTEXT-PACK.md](docs/CONTEXT-PACK.md),
+[AGENT-INTEROP.md](docs/AGENT-INTEROP.md), [SYNC.md](docs/SYNC.md) and
+[POSITIONING.md](docs/POSITIONING.md).
 **Schema v22 is a one-way migration**: the CLI writes
 `state.db.before-migrate-v*` before upgrading, a 0.3.2 binary opening a v22 database
-fails with `E_SCHEMA_NEWER`, and downgrading means restoring that backup. `0.4.2`,
-`0.4.1`, `0.4.0`, `0.3.2`, `0.3.1` and `0.3.0` remain installable by pinning but are
-superseded — use `0.4.3`. The earlier `0.2.4` was an **unpublished release candidate** superseded by
+fails with `E_SCHEMA_NEWER`, and downgrading means restoring that backup. `0.4.3`,
+`0.4.2`, `0.4.1`, `0.4.0`, `0.3.2`, `0.3.1` and `0.3.0` remain installable by pinning
+but are superseded — use `0.5.0`. The earlier `0.2.4` was an **unpublished release candidate** superseded by
 the 0.3.0 line (its `v0.2.4` tag points at an older commit and there is no 0.2.4 tarball
 on npm; do not try to install it). The six published packages are `advisers`,
 `advisers-core`, `advisers-office`, `advisers-policy-strict`, `advisers-bridge-hermes`
 and `dsh-advisers`; the two private `advisers-link-*` packages are held at the same
-version but are not published. The `0.4.3` tarballs are published from GitHub Actions
+version but are not published. The `0.5.0` tarballs are published from GitHub Actions
 OIDC/Trusted Publishing (no long-lived npm token) with SLSA provenance
 (`https://slsa.dev/provenance/v1`), and the attestation names the release tag ref rather
 than a branch. Release notes (with the CycloneDX SBOM and `SHA256SUMS` attached):
-<https://github.com/PerryLink/advisers/releases/tag/v0.4.3>. Verify the published release
+<https://github.com/PerryLink/advisers/releases/tag/v0.5.0>. Verify the published release
 yourself:
 
 ```sh
-npm view advisers@0.4.3 dist.attestations --json --registry=https://registry.npmjs.org/
+npm view advisers@0.5.0 dist.attestations --json --registry=https://registry.npmjs.org/
 corepack pnpm install && corepack pnpm run sbom   # writes artifacts/sbom.cdx.json (gitignored)
-node scripts/verify-release.mjs --version 0.4.3 --tag latest \
+node scripts/verify-release.mjs --version 0.5.0 --tag latest \
   --sbom artifacts/sbom.cdx.json --require-sbom
 ```
 
-0.4.3 builds on the **"trustworthy delivery"** line (0.3.0: evidence that resolves or is
+0.5.0 builds on the **"trustworthy delivery"** line (0.3.0: evidence that resolves or is
 honestly marked missing/unverifiable, recoverable data, 200k-row ledgers, verifiable
-provenance) and the 0.3.2 customer/performance closeout. The 0.4 additions are documented
-per topic: [Windows support matrix](docs/WINDOWS.md), [MCP output caps + protocol
+provenance) and the 0.3.2 customer/performance closeout. The 0.4/0.5 additions are
+documented per topic: [Windows support matrix](docs/WINDOWS.md), [MCP output caps + protocol
 negotiation](docs/MCP.md), [200k read A/B and the write-amplification
 fix](docs/PERFORMANCE.md), [read-only ledger facade](docs/LEDGER-READ-API.md),
 [interface contracts](docs/CONTRACTS.md), [TUI output kernel](docs/TUI.md) and the
@@ -153,16 +161,48 @@ check count rather than inheriting an older figure.
   short-circuit; `mail sync --watch` has `--json`/`--json-lines` and the 0/1/130/143 exit
   set. Additive: no schema migration, no new runtime dependency, no frozen-shape change
   (five new codes in the additive error registry).
+- **0.5.0** — portable, disclosable, verifiable:
+  - **portable bundle v1**: `export --bundle <dir>` writes a plaintext directory
+    (`manifest.json` + `ledger.json` + `facts.md` + `kb/` + `pages/` + `IMPORT.md` +
+    `SHA256SUMS`); `import --bundle <dir> --verify` bootstraps a clean home or
+    replaces a populated one with a pre-import managed backup; the acceptance metric
+    is `dataDigest`/counts parity. No credentials, `audit.key`, scheduler, logs,
+    soul or workspace travel; **bundle v1 is plaintext** (encryption is a later
+    opt-in). See [docs/PORTABILITY.md](docs/PORTABILITY.md).
+  - **context pack v1**: `context-pack create --subject client:<id>|matter:<id>`
+    lists read-only candidates (secrecy filtered before counting, exclusion counts
+    by reason); the write path needs explicit `--ids` or `--yes` plus
+    recipient/purpose/expiry. `context-pack verify` is offline (exit 0/1), there is
+    no import path, and `confersReadAuthority/confersExecutionAuthority` are always
+    false. Amounts, mail bodies, KB full text and file paths never enter a pack.
+    See [docs/CONTEXT-PACK.md](docs/CONTEXT-PACK.md).
+  - **disclosure**: the five MCP read tools and five resources gain an additive
+    `disclosure` block and per-row `view`; tool/resource counts stay 8/5 (DSH
+    6) and stripping the new fields reproduces the 0.4.3 payload. DSH is always
+    `audited:false` because it does not write the local audit chain.
+  - **sync v2**: snapshots record `dbMtimeMs/dbSha256/sourceSchemaVersion` (v1 still
+    readable); `sync.state.json` records the last push/pull; `sync push --dry-run`
+    is now genuinely write-free; push/pull refuse a proven stale overwrite
+    (`E_SYNC_CONFLICT`) unless `--force`; `sync status --check` reports
+    conflict/localChanged/remoteAdvanced. Last-writer-wins on the whole database is
+    **still** the transfer semantics (no merge).
+  - **onboarding and safety**: `setup` (7-step, idempotent, non-TTY matrix, TOS gate
+    leaves HOME byte-empty on refusal), `demo` (isolated synthetic "one consulting
+    delivery", zero model/network; demo steps use an isolated temp home, while
+    the CLI's TOS gate still applies), `help <topic>` (10
+    topics + Chinese aliases, byte-identical alias pages), fail-closed managed
+    backups before purge/merge/import, and `doctor --check-db --json` backup
+    freshness. No background daemon, no new network path.
 
 ```sh
-# 0.4.3 was published on 2026-11-22 (npm `latest` = 0.4.3; `next` also points at 0.4.3).
-# Run from the checkout (development; the same 0.4.3 version):
+# 0.5.0 was published on 2026-11-22 (npm `latest` = 0.5.0; `next` also points at 0.5.0).
+# Run from the checkout (development; the same 0.5.0 version):
 git clone https://github.com/PerryLink/advisers.git
 cd advisers && corepack pnpm install && corepack pnpm -r build
 ADVISERS_OFFICE_LOCAL=1 node packages/advisers/bin/advisers.js status
-# From npm (stable channel = default `latest`, now 0.4.3):
+# From npm (stable channel = default `latest`, now 0.5.0):
 #   npm i -g --registry=https://registry.npmjs.org advisers@latest advisers-office@latest
-# The `next` channel also points at 0.4.3:
+# The `next` channel also points at 0.5.0:
 #   npm i -g --registry=https://registry.npmjs.org advisers@next advisers-office@next
 advisers
 # or one-shot:
@@ -171,17 +211,22 @@ advisers brief "做一份 Q4 预算 Excel，周五前给老板"
 advisers template weekly data.json weekly.docx
 advisers office docx spec.json out.docx
 advisers bridge --dir "$BRIDGE_DIR"   # Hermes gateway bridge
+# 0.5.0 evidence chains (run from the checkout with a temp HOME):
+#   ADVISERS_HOME=$(mktemp -d) ADVISERS_ACCEPT_TOS=1 \
+#     node packages/advisers/bin/advisers.js export --bundle /tmp/bundle --json
+#   node packages/advisers/bin/advisers.js import --bundle /tmp/bundle --verify --dry-run --json
+#   node packages/advisers/bin/advisers.js context-pack create --subject client:<id> --json
 ```
 
 Local interaction: `advisers` starts an interactive shell (REPL); `/help` lists the commands, and the shell keeps confirmations, a bounded queue and paste protection. With an API key the model can call local Office/file tools and report the generated paths. File writes are confined to the working directory, overwrites require confirmation unless `ADVISERS_FORCE=1`, and local tools do not send file contents to the model unless you attach/read them.
 
-npm tags: **`latest`** is the stable channel (**`0.4.3`**, published 2026-11-22),
-**`next`** is the pre-release channel (also `0.4.3`). `0.2.4` was a
+npm tags: **`latest`** is the stable channel (**`0.5.0`**, published 2026-11-22),
+**`next`** is the pre-release channel (also `0.5.0`). `0.2.4` was a
 never-published candidate superseded by the 0.3.0 line — it is not installable from npm.
-`0.4.3` supersedes `0.4.2`/`0.4.1`/`0.4.0`/`0.3.2`/`0.3.1`/`0.3.0`: earlier tarballs stay
+`0.5.0` supersedes `0.4.3`/`0.4.2`/`0.4.1`/`0.4.0`/`0.3.2`/`0.3.1`/`0.3.0`: earlier tarballs stay
 installable by pinning but ship stale docs and cannot be repaired in place (npm unpublish
-needs the owner's 2FA). `0.4.3` is the current patch on the 0.4.0 feature release.
-Pin an exact version (`advisers@0.4.3` today) when you need a reproducible install, and
+needs the owner's 2FA). `0.5.0` is the current feature release.
+Pin an exact version (`advisers@0.5.0` today) when you need a reproducible install, and
 query the official registry directly
 (`npm view advisers dist-tags --registry=https://registry.npmjs.org/`) — mirrors can lag
 behind.
@@ -193,6 +238,15 @@ behind.
 - When `ADVISERS_API_KEY` is set, model-backed commands (`chat`, `capture`, `review`, `brief --deep`, `learn review`) send their inputs to the configured model API; local-only commands (`status`, `office`, `template`, `verify`, `commit add`, `tick`) do not.
 - Audit is a **local hash chain plus, since 0.3.0, an optional local tail anchor** (`audit-anchor.json` + `audit --expect-head`), not a third-party attestation or timestamp: it detects edits to its own rows and (with an anchor) tail deletion, not a compromised host.
 - Office verification checks structure and deterministic content signals; it does not prove factual correctness.
+- Portable bundles are **plaintext** (checksum-only, `verificationBasis: local-checksums-only`)
+  and contain customer/mail/money PII from the source home; store them on an encrypted
+  disk and do not share them. Encryption is not part of bundle v1 in 0.5.0.
+- Snapshot sync is different: snapshots are AES-256-GCM encrypted with a passphrase you
+  supply (`ADVISERS_SYNC_PASSPHRASE`); the sync directory itself is whatever storage you
+  already replicate, and the whole database transfers (last-writer-wins).
+- Bundle/context-pack checksums prove internal consistency only — not a signature, a
+  trusted timestamp, proof of authorship or compliance certification. Treat
+  `verified` as "the local evidence pointer resolved", never as "the record is true".
 
 ## License
 

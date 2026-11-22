@@ -10,34 +10,38 @@ versions, how a release is built and published, what provenance exists today,
 and how to verify what you install. It describes the current state; "not yet
 implemented" is written as such.
 
-Status: 2026-11-22, covering the **0.4.x line** (the repository is lockstep at package
-version `0.4.3`). **0.4.3 was published on 2026-11-22**: npm `latest` = `0.4.3` and
-`next` is also `0.4.3`. 0.4.3 is a patch on the 0.4.2 tree (Chinese relative `--due`,
-local-rule capture plus the read-only inbox, explicit-null `doctor --report` /
-`privacy --prove --brief` / `profile`, the enhanced `remind --ics` export with a
-per-commitment notification cooldown, quote/proposal schema v2 payment channels,
-receivable CSV export, the restore drill, the global `--help` short-circuit and the
-`mail sync --watch` JSON/exit contract) with **no schema change and no new runtime
-dependency**; 0.4.2 added manual fact entry, the read-only IMAP probe, foreground mail
-watch, the `sync pull --dry-run` preview, the backup-age hint, subcommand `--help`
-consistency and the local mail-extraction gold gate, also without a schema change; the
-0.4.1 additions (KB/mail review links, reminder quiet hours/dedupe/`--force-notify`,
-expanded deterministic eval groups, documented-additive CLI contracts) also shipped
-without a schema change; the 0.4.0 feature surface is unchanged: the local knowledge
-base with **schema v22**, IMAP mail entry, interactive shell, policy/evidence 2.0 subset,
-receivables/payments, MCP modern dual-era, Windows CI + portable ZIP. 0.4.0 was published
-from `refs/tags/v0.4.0`, 0.4.1 from `refs/tags/v0.4.1`, 0.4.2 from `refs/tags/v0.4.2` and
-0.4.3 from `refs/tags/v0.4.3`, all through CI Trusted Publishing with SLSA provenance.
+Status: 2026-11-22, covering the **0.5.0 line** (the repository is lockstep at package
+version `0.5.0`). **0.5.0 was published on 2026-11-22**: npm `latest` = `0.5.0` and
+`next` is also `0.5.0`. 0.5.0 is a "portable, disclosable, verifiable" feature release
+(portable home bundle v1, context pack v1 + offline verify, additive MCP/DSH read
+disclosure, sync snapshot v2 with `sync.state.json`/conflict precheck, setup/demo/help
+onboarding, fail-closed managed backups and the report-v2 quality gate) with **no schema
+change, no new network path and no new runtime dependency**; 0.4.3 was a patch on the 0.4.2
+tree (Chinese relative `--due`, local-rule capture plus the read-only inbox,
+explicit-null `doctor --report` / `privacy --prove --brief` / `profile`, the enhanced
+`remind --ics` export with a per-commitment notification cooldown, quote/proposal
+schema v2 payment channels, receivable CSV export, the restore drill, the global
+`--help` short-circuit and the `mail sync --watch` JSON/exit contract); 0.4.2 added
+manual fact entry, the read-only IMAP probe, foreground mail watch, the
+`sync pull --dry-run` preview, the backup-age hint, subcommand `--help` consistency and
+the local mail-extraction gold gate; 0.4.1 added the KB/mail review links, reminder quiet
+hours/dedupe/`--force-notify`, the expanded deterministic eval groups and the
+documented-additive CLI contracts; the 0.4.0 feature surface is unchanged: the local
+knowledge base with **schema v22**, IMAP mail entry, interactive shell, policy/evidence 2.0
+subset, receivables/payments, MCP modern dual-era, Windows CI + portable ZIP. 0.4.0 was
+published from `refs/tags/v0.4.0`, 0.4.1 from `refs/tags/v0.4.1`, 0.4.2 from
+`refs/tags/v0.4.2`, 0.4.3 from `refs/tags/v0.4.3` and 0.5.0 from `refs/tags/v0.5.0`, all
+through CI Trusted Publishing with SLSA provenance.
 **Schema v22 is a one-way migration**: a 0.3.2 binary opening a v22 database fails with
 `E_SCHEMA_NEWER` and going back means restoring the pre-migration copy.
-`0.4.2`/`0.4.1`/`0.4.0`/`0.3.2`/`0.3.1`/`0.3.0` are superseded and remain installable
-by pinning; 0.3.0's published tarballs shipped release-candidate READMEs and its release
-surface could not be repaired in place (an npm tarball cannot be replaced, and
+`0.4.3`/`0.4.2`/`0.4.1`/`0.4.0`/`0.3.2`/`0.3.1`/`0.3.0` are superseded and remain
+installable by pinning; 0.3.0's published tarballs shipped release-candidate READMEs and
+its release surface could not be repaired in place (an npm tarball cannot be replaced, and
 `npm unpublish` requires the account owner's 2FA).
 0.2.4 was tagged but never published and the 0.3.0 line supersedes it (see sections 3–4).
 The legal texts are **TOS/PRIVACY/DISCLAIMER/SAFETY v2026.11.4 (2026-11-21)**, which
-cover the new 0.4 data planes (mail bodies/credentials, KB text, receivables, shell,
-model-egress consent) — v2026.11.3 consent is not valid for v2026.11.4. 0.4.3 does
+cover the 0.4 data planes (mail bodies/credentials, KB text, receivables, shell,
+model-egress consent) — v2026.11.3 consent is not valid for v2026.11.4. 0.5.0 does
 not revise the legal texts.
 
 ## 1. Reporting a vulnerability
@@ -58,8 +62,9 @@ reporter unless anonymity is requested. There is no bug bounty program.
 
 | Version line | Support |
 |---|---|
-| 0.4.x (latest stable) | supported; security fixes ship in a new patch or minor release |
-| 0.3.x | superseded on 2026-11-21; not supported for new fixes. A 0.3.x binary cannot open a v22 database (`E_SCHEMA_NEWER`); upgrade to 0.4.3. |
+| 0.5.x (latest stable) | supported; security fixes ship in a new patch or minor release |
+| 0.4.x | superseded on 2026-11-22; not supported for new fixes. Upgrade to 0.5.0 (or restore the pre-v22 backup for a 0.3.x binary). |
+| 0.3.x | superseded on 2026-11-21; not supported for new fixes. A 0.3.x binary cannot open a v22 database (`E_SCHEMA_NEWER`); upgrade to 0.5.0. |
 | 0.2.x and earlier (including 0.2.0-preview.*) | not supported |
 
 Track the npm dist-tag "latest" for supported releases. A pre-release tag does
@@ -86,7 +91,7 @@ advisers-bridge-hermes, and dsh-advisers.
   Trusted Publishing** (GitHub Actions OIDC) with provenance attestations; **0.3.1
   (release-metadata patch, 2026-11-20) supersedes it** and was published the same way,
   from the release tag. The 0.3.0 final publish used the owner-authorized direct OIDC
-  path (no long-lived token, no npm stage/OTP step); the 0.3.1, 0.4.0, 0.4.1, 0.4.2 and **0.4.3**
+  path (no long-lived token, no npm stage/OTP step); the 0.3.1, 0.4.0, 0.4.1, 0.4.2, 0.4.3 and **0.5.0**
   publishes reuse that path from their respective tag refs. The
   release tooling fails closed outside `refs/tags/v<version>` and never publishes
   automatically.
@@ -101,23 +106,24 @@ advisers-bridge-hermes, and dsh-advisers.
   Office verification, the security suite, the fault-injection suite, release
   lockstep, and the dependency audit described below.
 
-## 4. Provenance and trusted publishing (0.4.3 published)
+## 4. Provenance and trusted publishing (0.5.0 published)
 
-Status as of 2026-11-22: **0.4.3 is published**; npm `latest` = `0.4.3` and `next` =
-`0.4.3`; `advisers@0.2.4` is not on the registry. 0.4.3 is a patch on the 0.4.2 tree,
-published from `refs/tags/v0.4.3` through CI Trusted
-Publishing with SLSA provenance (no long-lived npm token); 0.4.2, 0.4.1 and 0.4.0 keep
-their own `refs/tags/v0.4.2`/`refs/tags/v0.4.1`/`refs/tags/v0.4.0` records. The release gate rejects a provenance build ref
+Status as of 2026-11-22: **0.5.0 is published**; npm `latest` = `0.5.0` and `next` =
+`0.5.0`; `advisers@0.2.4` is not on the registry. 0.5.0 is a feature release on the
+0.4.3 tree, published from `refs/tags/v0.5.0` through CI Trusted
+Publishing with SLSA provenance (no long-lived npm token); 0.4.3, 0.4.2, 0.4.1 and 0.4.0
+keep their own `refs/tags/v0.4.3`/`refs/tags/v0.4.2`/`refs/tags/v0.4.1`/`refs/tags/v0.4.0`
+records. The release gate rejects a provenance build ref
 that is not `refs/tags/vX.Y.Z`; the GitHub Release carries the CycloneDX SBOM and a
 `SHA256SUMS` file for the six tarballs. The Windows portable ZIP is the separate
 offline channel and is published by the release operator with its own
-`SHA256SUMS-0.4.3-portable.txt` (not covered by npm provenance) — see §4.1 and
+`SHA256SUMS-0.5.0-portable.txt` (not covered by npm provenance) — see §4.1 and
 [docs/WINDOWS.md](WINDOWS.md) §3.4. Verify the registry release with the post-publish
 check below. Release notes:
-<https://github.com/PerryLink/advisers/releases/tag/v0.4.3>.
+<https://github.com/PerryLink/advisers/releases/tag/v0.5.0>.
 
 0.3.2 (customer loop + performance closeout) was published on 2026-11-21 from
-`refs/tags/v0.3.2` and is now superseded by 0.4.0/0.4.1/0.4.2/0.4.3; its tarballs and release assets
+`refs/tags/v0.3.2` and is now superseded by 0.4.0/0.4.1/0.4.2/0.4.3/0.5.0; its tarballs and release assets
 remain in place. `advisers@0.2.4` is not on the registry.
 
 0.3.1 corrected 0.3.0's release surface with the same runtime: 0.3.1 changed no runtime,
@@ -174,20 +180,20 @@ from commit `1199fbf`. The configuration checklist:
   owner's explicit OTP approval before it becomes installable.
 - **Post-approval gate (0.3.x and later).** Do not announce provenance from the
   workflow output; verify the registry:
-  `node scripts/verify-release.mjs --version 0.4.3 --tag latest --sbom <file> --require-sbom`
+  `node scripts/verify-release.mjs --version 0.5.0 --tag latest --sbom <file> --require-sbom`
   (plus the existing tarball/install/import checks). It requires non-empty
   `dist.attestations` on all six packages, fetches each attestation bundle,
-  checks the SLSA provenance source repository and commit against the `v0.4.3`
+  checks the SLSA provenance source repository and commit against the `v0.5.0`
   tag, checks that each attestation subject sha512 equals the registry tarball
   integrity, and requires the SLSA build ref to be `refs/tags/vX.Y.Z` rather
-  than a branch. `node scripts/check-provenance.mjs --version 0.4.3
-  --expected-ref refs/tags/v0.4.3` runs the same provenance checks standalone
+  than a branch. `node scripts/check-provenance.mjs --version 0.5.0
+  --expected-ref refs/tags/v0.5.0` runs the same provenance checks standalone
   (pass `--allow-non-tag-provenance` only to audit a known historical release
   such as 0.3.0, whose provenance named `refs/heads/main`); `--allow-unpublished`
   prints a clear SKIP instead of a failure while the version is still unpublished.
   Each release records its own `verify-release` count and must not reuse an
   older figure (the 0.3.0 run passed **222 checks** with
-  `--sbom artifacts/sbom.cdx.json`; that is a 0.3.0 record, not a 0.4.3 claim).
+  `--sbom artifacts/sbom.cdx.json`; that is a 0.3.0 record, not a 0.5.0 claim).
 - These checks verify npm's metadata linkage (attestation subject to tarball
   digest, source repository/commit to release tag). They do **not**
   cryptographically verify the Sigstore bundle or transparency log; consumers
@@ -198,16 +204,16 @@ from commit `1199fbf`. The configuration checklist:
   (`artifacts/sbom.cdx.json`, generated from the lockfile) as a release-gate
   artifact; `verify-release --sbom <file> --require-sbom` fails if it is
   missing, malformed, has no components, or contains absolute build-machine
-  paths. The 0.4.3 GitHub Release attaches the generated SBOM and `SHA256SUMS`
-  (0.4.3 adds no runtime dependency, so the component set has the same shape as
-  0.4.1/0.4.0); the SBOM is not a build graph, vulnerability scan or
+  paths. The 0.5.0 GitHub Release attaches the generated SBOM and `SHA256SUMS`
+  (0.5.0 adds no runtime dependency, so the component set has the same shape as
+  0.4.3/0.4.2/0.4.1/0.4.0); the SBOM is not a build graph, vulnerability scan or
   reproducible-build proof.
 - The release-trust tooling does not change the legal texts; the packaged and public legal
   texts are **v2026.11.4 (2026-11-21)** for the mail/KB/receivables/shell/model-egress
   consent revision — see [TOS.md](TOS.md) §9.3 and [PRIVACY.md](PRIVACY.md) §4. A
   v2026.11.3 consent record is not valid for v2026.11.4 and triggers re-acceptance.
 
-### 4.1 Honest boundaries of the 0.4.x security surfaces
+### 4.1 Honest boundaries of the 0.5.0 security surfaces
 
 These are mitigations, not sandboxes, signatures or certifications. Do not describe any
 of them as unbypassable, unforgeable, "certified" or "zero-knowledge".
@@ -260,6 +266,21 @@ of them as unbypassable, unforgeable, "certified" or "zero-knowledge".
   image still cannot replace the real-client IME/Terminal/OneDrive/Office checks, and
   remaining product-side limits (adapter argv, recalc quoting, hard-kill lock reclaim)
   are documented skips, so "Windows support" remains scoped (docs/WINDOWS.md).
+- **Portable bundle v1 (0.5.0).** A bundle is a **plaintext** directory (manifest +
+  ledger + facts/KB markdown + `SHA256SUMS`) that carries one whole local home. Its
+  checksums prove internal consistency only — not authorship, encryption, a trusted
+  timestamp or compliance. Credentials, `audit.key`, the audit anchor, scheduler, logs,
+  briefs, soul, workspace, mail cursors, undo, exports and receipts never travel, but
+  customer/mail/money data does: store and transfer a bundle accordingly.
+  `verificationBasis` is `local-checksums-only`; `--encrypted` is refused in 0.5.0.
+- **Context pack v1 (0.5.0).** A bounded one-way disclosure directory. It confers no
+  read or execution authority (`confersReadAuthority`/`confersExecutionAuthority` are
+  always false), has no import path, and is not verified by MCP `advisers_pack_verify`
+  (which stays evidence-pack v1). Offline verification proves internal consistency only.
+- **Read disclosure (0.5.0).** The additive `disclosure`/per-row `view` metadata is
+  descriptive: it names fields, counts and a digest and never contains record values. It
+  does not itself write an audit row, and the DSH adapter is always `audited:false`
+  because it never writes the local audit chain.
 
 ## 5. Automated gates in CI
 
@@ -390,9 +411,9 @@ and check-js gates are blocking.
 
        npm view advisers dist.integrity dist.signatures dist.attestations --json
 
-   dist.integrity should match the lockfile entry. **0.4.3 (published
-   2026-11-22) has non-empty `dist.attestations` on all six packages**; 0.4.2, 0.4.1,
-   0.4.0 and 0.3.0 also do (historical), while 0.2.3 and earlier have none and cannot be
+   dist.integrity should match the lockfile entry. **0.5.0 (published
+   2026-11-22) has non-empty `dist.attestations` on all six packages**; 0.4.3, 0.4.2,
+   0.4.1, 0.4.0 and 0.3.0 also do (historical), while 0.2.3 and earlier have none and cannot be
    retro-signed. 0.2.4 was never published and has nothing to verify (see
    section 4).
 3. Verify registry signatures for the installed dependency tree:
@@ -549,3 +570,10 @@ and check-js gates are blocking.
   tag-ref SLSA provenance. No schema migration, no new runtime dependency and no
   frozen-contract change (five additive error codes); the security surface recorded
   above is unchanged, and the legal texts stay v2026.11.4.
+- 2026-11-22 (0.5.0 published): "portable, disclosable, verifiable" feature release on
+  0.4.3 (portable home bundle v1, context pack v1 + offline verify, additive MCP/DSH read
+  disclosure, sync snapshot v2 with `sync.state.json`/conflict precheck, setup/demo/help
+  onboarding, fail-closed managed backups and the report-v2 quality gate) published from
+  `refs/tags/v0.5.0` with tag-ref SLSA provenance. No schema migration, no new network
+  path, no new runtime dependency and no frozen-shape change (eighteen additive error
+  codes; additive MCP `disclosure`/`view` fields); the legal texts stay v2026.11.4.

@@ -1,0 +1,469 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/PerryLink/advisers/eval/schema/quality-result-v2.schema.json",
+  "title": "Advisers quality result (schemaVersion 2)",
+  "description": "One zero-model quality-gate report. Shared by eval:det (mode det), local-gold gates (mode local-gold), model-contract (mode model-contract), live model runs (mode live) and human gold (mode human-gold). Hard rules beyond pure JSON Schema are enforced by scripts/check-eval-report.mjs and documented in docs/EVAL.md: explicit nulls in unknowns, detailSha256-only failures, no prompt/answer/customer text or absolute paths, 0 network attempts, and (release mode) cli.commit present with dirty:false.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schemaVersion",
+    "suite",
+    "suiteVersion",
+    "mode",
+    "startedAt",
+    "durationMs",
+    "command",
+    "filters",
+    "corpus",
+    "fixtures",
+    "cli",
+    "model",
+    "baseline",
+    "metrics",
+    "gates",
+    "totals",
+    "network",
+    "unknowns",
+    "failures",
+    "redaction",
+    "reproduce"
+  ],
+  "properties": {
+    "schemaVersion": {
+      "const": 2
+    },
+    "suite": {
+      "type": "string",
+      "minLength": 1
+    },
+    "suiteVersion": {
+      "type": "integer",
+      "minimum": 1
+    },
+    "mode": {
+      "enum": [
+        "det",
+        "local-gold",
+        "model-contract",
+        "live",
+        "human-gold",
+        "index"
+      ]
+    },
+    "startedAt": {
+      "type": "string",
+      "format": "date-time"
+    },
+    "durationMs": {
+      "type": "integer",
+      "minimum": 0
+    },
+    "command": {
+      "type": "array",
+      "minItems": 1,
+      "items": {
+        "type": "string"
+      }
+    },
+    "filters": {
+      "type": "array",
+      "items": {
+        "type": "string"
+      }
+    },
+    "corpus": {
+      "oneOf": [
+        {
+          "type": "null"
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "id",
+            "sha256",
+            "rows",
+            "provenance",
+            "reviewMode",
+            "license",
+            "split"
+          ],
+          "properties": {
+            "id": {
+              "type": "string",
+              "minLength": 1
+            },
+            "sha256": {
+              "type": "string",
+              "pattern": "^[0-9a-f]{64}$"
+            },
+            "rows": {
+              "type": "integer",
+              "minimum": 0
+            },
+            "provenance": {
+              "enum": [
+                "synthetic",
+                "anonymized",
+                "dogfood"
+              ]
+            },
+            "reviewMode": {
+              "type": "string",
+              "minLength": 1
+            },
+            "license": {
+              "type": "string",
+              "minLength": 1
+            },
+            "split": {
+              "type": "string",
+              "minLength": 1
+            },
+            "note": {
+              "type": "string"
+            }
+          }
+        }
+      ]
+    },
+    "fixtures": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "sha256",
+        "count"
+      ],
+      "properties": {
+        "sha256": {
+          "type": "string",
+          "pattern": "^[0-9a-f]{64}$"
+        },
+        "count": {
+          "type": "integer",
+          "minimum": 0
+        }
+      }
+    },
+    "cli": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "version",
+        "commit",
+        "node",
+        "os",
+        "dirty"
+      ],
+      "properties": {
+        "version": {
+          "type": "string",
+          "minLength": 1
+        },
+        "commit": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "node": {
+          "type": "string",
+          "minLength": 1
+        },
+        "os": {
+          "type": "string",
+          "minLength": 1
+        },
+        "dirty": {
+          "type": "boolean"
+        }
+      }
+    },
+    "model": {
+      "type": [
+        "object",
+        "null"
+      ]
+    },
+    "baseline": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "file",
+        "sha256",
+        "recordedAt"
+      ],
+      "properties": {
+        "file": {
+          "type": "string",
+          "minLength": 1
+        },
+        "sha256": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "pattern": "^[0-9a-f]{64}$"
+        },
+        "recordedAt": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "format": "date-time"
+        }
+      }
+    },
+    "metrics": {
+      "type": [
+        "object",
+        "null"
+      ]
+    },
+    "gates": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "id",
+          "actual",
+          "threshold",
+          "operator",
+          "pass"
+        ],
+        "properties": {
+          "id": {
+            "type": "string",
+            "minLength": 1
+          },
+          "actual": {
+            "type": [
+              "number",
+              "string",
+              "boolean",
+              "null"
+            ]
+          },
+          "threshold": {
+            "type": [
+              "number",
+              "string",
+              "boolean",
+              "null"
+            ]
+          },
+          "operator": {
+            "enum": [
+              ">=",
+              ">",
+              "<=",
+              "<",
+              "=",
+              "==",
+              "!="
+            ]
+          },
+          "pass": {
+            "type": "boolean"
+          },
+          "note": {
+            "type": "string"
+          }
+        }
+      }
+    },
+    "totals": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "cases",
+        "passed",
+        "failed",
+        "checks",
+        "checksFailed"
+      ],
+      "properties": {
+        "cases": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "passed": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "failed": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "checks": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "checksFailed": {
+          "type": "integer",
+          "minimum": 0
+        }
+      }
+    },
+    "network": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "guarded",
+        "attempts"
+      ],
+      "properties": {
+        "guarded": {
+          "type": "boolean"
+        },
+        "attempts": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "kinds": {
+          "type": "object"
+        }
+      }
+    },
+    "unknowns": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "id",
+          "value",
+          "reason"
+        ],
+        "properties": {
+          "id": {
+            "type": "string",
+            "minLength": 1
+          },
+          "value": {
+            "type": "null"
+          },
+          "reason": {
+            "type": "string",
+            "minLength": 1
+          }
+        }
+      }
+    },
+    "failures": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "caseId",
+          "code",
+          "detailSha256"
+        ],
+        "properties": {
+          "caseId": {
+            "type": "string",
+            "minLength": 1
+          },
+          "checkId": {
+            "type": "string"
+          },
+          "code": {
+            "type": "string",
+            "minLength": 1
+          },
+          "detailSha256": {
+            "type": "string",
+            "pattern": "^[0-9a-f]{64}$"
+          }
+        }
+      }
+    },
+    "redaction": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "version",
+        "rules",
+        "piiScan"
+      ],
+      "properties": {
+        "version": {
+          "const": 2
+        },
+        "rules": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "piiScan": {
+          "const": "pass"
+        }
+      }
+    },
+    "reproduce": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "command",
+        "env",
+        "fixedNow",
+        "seed"
+      ],
+      "properties": {
+        "command": {
+          "type": "string",
+          "minLength": 1
+        },
+        "env": {
+          "type": "object"
+        },
+        "fixedNow": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "format": "date-time"
+        },
+        "seed": {
+          "type": [
+            "integer",
+            "null"
+          ]
+        }
+      }
+    },
+    "cases": {
+      "type": "array",
+      "items": {
+        "type": "object"
+      }
+    },
+    "environment": {
+      "type": "object"
+    },
+    "references": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "path",
+          "sha256"
+        ],
+        "properties": {
+          "path": {
+            "type": "string",
+            "minLength": 1
+          },
+          "sha256": {
+            "type": "string",
+            "pattern": "^[0-9a-f]{64}$"
+          }
+        }
+      }
+    }
+  }
+}
