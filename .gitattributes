@@ -9,3 +9,4 @@
 *.pptx binary
 *.pdf binary
 *.zip binary
+eval/mail-local-gold/*.eml -text
