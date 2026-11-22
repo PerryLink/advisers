@@ -13,6 +13,7 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import test from 'node:test'
+import { assertPrivateMode } from './win-compat.mjs'
 
 const bin = fileURLToPath(new URL('../bin/advisers.js', import.meta.url))
 const BASE_ENV = { ADVISERS_ACCEPT_TOS: '1', ADVISERS_NO_MODEL: '1', ADVISERS_CORE_LOCAL: '1' }
@@ -147,7 +148,7 @@ test('profile show human output and export --out write a 0600 markdown file', ()
     const exported = run(home, ['profile', 'export', '--out', out])
     assert.equal(exported.status, 0, exported.stderr)
     assert.match(exported.stdout, /profile exported: .*0 preferences/)
-    assert.equal(statSync(out).mode & 0o777, 0o600)
+    assertPrivateMode(out, 0o600, 'profile markdown')
     const markdown = readFileSync(out, 'utf8')
     assert.match(markdown, /^# 个人模型 · profile v1/)
     const jsonOut = join(home, 'profile.json')

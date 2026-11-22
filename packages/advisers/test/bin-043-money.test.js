@@ -16,6 +16,7 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import test from 'node:test'
+import { assertPrivateMode } from './win-compat.mjs'
 
 const bin = fileURLToPath(new URL('../bin/advisers.js', import.meta.url))
 const BASE_ENV = { ADVISERS_ACCEPT_TOS: '1', ADVISERS_NO_MODEL: '1', ADVISERS_CORE_LOCAL: '1', ADVISERS_OFFICE_LOCAL: '1' }
@@ -148,7 +149,7 @@ test('receivable export writes an explicit 0600 RFC4180 CSV with deterministic r
     const first = run(home, ['receivable', 'export', '--out', out])
     assert.equal(first.status, 0, first.stderr)
     assert.match(first.stdout, /csv written: .*3 rows/)
-    assert.equal(statSync(out).mode & 0o777, 0o600)
+    assertPrivateMode(out, 0o600, 'receivable CSV')
     const csv = readFileSync(out, 'utf8')
     assert.ok(csv.startsWith(CSV_HEADER + '\r\n'), 'header is the documented 16 columns')
     assert.ok(csv.endsWith('\r\n'))

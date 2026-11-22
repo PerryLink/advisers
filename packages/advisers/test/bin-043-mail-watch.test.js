@@ -129,7 +129,7 @@ test('invalid loop/output combinations are E_USAGE before any round', () => {
   } finally { rmSync(home, { recursive: true, force: true }) }
 })
 
-test('SIGINT exits 130 and reports interruptedBy=SIGINT in the JSON summary', async () => {
+test('SIGINT exits 130 and reports interruptedBy=SIGINT in the JSON summary', { skip: process.platform === 'win32' ? 'Windows does not deliver POSIX SIGINT to a child the same way; the Linux CI covers it' : false }, async () => {
   const home = makeHome()
   try {
     addRefusedAccount(home)
@@ -145,7 +145,7 @@ test('SIGINT exits 130 and reports interruptedBy=SIGINT in the JSON summary', as
   } finally { rmSync(home, { recursive: true, force: true }) }
 })
 
-test('SIGTERM exits 143 (not 130) and reports interruptedBy=SIGTERM', async () => {
+test('SIGTERM exits 143 (not 130) and reports interruptedBy=SIGTERM', { skip: process.platform === 'win32' ? 'Windows has no POSIX SIGTERM child semantics; the Linux CI covers it' : false }, async () => {
   const home = makeHome()
   try {
     addRefusedAccount(home)
