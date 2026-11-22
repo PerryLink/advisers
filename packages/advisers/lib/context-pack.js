@@ -728,7 +728,7 @@ export function writeContextPackDir(outDir, built, options = {}) {
     const entries = readdirSync(target)
     if (entries.length && !overwrite) throw invalid('context pack output directory is not empty', 'choose a fresh directory or pass --force')
     if (entries.length) {
-      replaced = target + '.replaced-' + new Date().toISOString().replace(/[:.]/g, '-')
+      replaced = target + '.replaced-' + new Date().toISOString().replace(/[:.]/g, '-') + '-' + sha256Hex(String(Math.random())).slice(0, 8)
       renameSync(target, replaced)
     } else {
       rmdirSync(target)

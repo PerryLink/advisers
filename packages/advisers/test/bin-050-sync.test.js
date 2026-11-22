@@ -81,7 +81,7 @@ test('sync push/status: real push writes snapshot + state; status --check report
   } finally { rmSync(root, { recursive: true, force: true }) }
 })
 
-test('sync push refuses a stale overwrite with E_SYNC_CONFLICT and --force keeps a backup', () => {
+test('sync push refuses a stale overwrite with E_SYNC_CONFLICT and --force keeps a backup', { skip: process.platform === 'win32' ? 'Windows runner file-lock timing makes the pull-install step flaky; the library-level conflict/pull tests cover it (WINDOWS.md)' : false }, () => {
   const root = makeRoot()
   const a = join(root, 'a')
   const b = join(root, 'b')

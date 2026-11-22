@@ -130,7 +130,7 @@ test('fake end-to-end: isolated payload, 8 steps, artifacts and confirmed --clea
     assert.equal(payload.receipt.out, join(home, 'out', 'receipt'))
     assert.equal(payload.next.length, 3)
     assert.deepEqual(payload.warnings, [])
-    const paths = payload.artifacts.map((artifact) => artifact.path)
+    const paths = payload.artifacts.map((artifact) => artifact.path.replace(/\\/g, '/'))
     for (const expected of ['quote.docx', 'proposal.docx', 'notice.docx', 'demo.ics', 'receipt/manifest.json']) {
       assert.ok(paths.some((path) => path.endsWith(expected)), 'artifact missing: ' + expected)
     }
@@ -224,7 +224,7 @@ test('integration: the real CLI children produce the seven artifacts inside an i
     assert.ok(byId.receipt.checks.some((check) => /^manifestDigest=[a-f0-9]{64}$/.test(check)))
     assert.equal(payload.receipt.scope, 'subject')
     assert.match(payload.receipt.manifestDigest, /^[a-f0-9]{64}$/)
-    const paths = payload.artifacts.map((artifact) => artifact.path)
+    const paths = payload.artifacts.map((artifact) => artifact.path.replace(/\\/g, '/'))
     for (const expected of ['quote.docx', 'proposal.docx', 'notice.docx', 'demo.ics', 'receipt/manifest.json']) {
       assert.ok(paths.some((path) => path.endsWith(expected)), 'artifact missing: ' + expected + ' in ' + paths.join(', '))
     }
