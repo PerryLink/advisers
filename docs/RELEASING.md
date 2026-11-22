@@ -373,9 +373,10 @@ changelog copy.
 ### 0.5.0 (2026-11-22)
 
 - **Published:** npm `latest` = 0.5.0, `next` = 0.5.0; all eight workspace packages
-  lockstep at 0.5.0 (six published). Tag: `v0.5.0`, annotated object `TBD` (fill after
-  tag creation) -> commit `TBD` (fill after tagging); published from `refs/tags/v0.5.0`
-  (publish run `TBD`, fill after dispatch).
+  lockstep at 0.5.0 (six published). Tag: `v0.5.0`, annotated object
+  `89c04ad03f7b94d7acfb8a1fc966cab8231e12d1` -> commit
+  `a73c380b97451d67ba6079aedf88e0ce778da27a`; published from `refs/tags/v0.5.0`
+  (publish run 45037693746).
 - **Release shape:** "portable, disclosable, verifiable" feature release — portable
   home bundle v1 (`export --bundle` / `import --bundle --verify`), context pack v1 +
   CLI offline verify, additive MCP/DSH read disclosure, sync snapshot v2 with
@@ -388,19 +389,27 @@ changelog copy.
   codes (211 registered CLI codes; 193 tracked source literals); `check-contracts`
   PASS (90 checks) on this release tree. The new commands are documented additively in
   `docs/CLI-JSON.md`; do not reuse the 0.4.3 count in release notes.
-- **Artifacts:** TBD — CycloneDX SBOM, six-tarball `SHA256SUMS`, Windows portable ZIP
-  and portable checksums. Do not copy hashes from another release.
-- **Verification:** TBD — `verify-release --version 0.5.0 --tag latest --sbom
-  artifacts/sbom.cdx.json --require-sbom` -> `TBD` checks PASS (fill after publish); CI
-  on the release commit `TBD` (fill after push; Linux Node 22.16/24, `windows-smoke`
-  and blocking `windows-full`). Local pre-tag evidence on this release tree:
+- **Artifacts:** CycloneDX SBOM `sbom-0.5.0.cdx.json`
+  (`2d14f7efc35386f5929444d7c619e48f8b5cda724cdd9765220c9ea3c1ddca1a`, 248,793 B);
+  six-tarball `SHA256SUMS-0.5.0.txt`
+  (`fa9c22510acbdbdc4e67796c028f9bff3c99825c1ea40df29b7f8924bbbf3cb0`, 554 B);
+  Windows portable ZIP `advisers-0.5.0-win-x64.zip`
+  (`b50865568459b4ab6039eb99ba889bb66138a0a234556046743ba79372f37734`, 51,931,738 B)
+  and `SHA256SUMS-0.5.0-portable.txt`
+  (`808cc4020ac7e0f8b0191781ab08e88248f7f1292711d1a463787a38ec0da470`, 93 B).
+- **Verification:** `verify-release --version 0.5.0 --tag latest --sbom
+  artifacts/sbom.cdx.json --require-sbom` -> **228 checks PASS**; CI on the release
+  commit 45037168095 (success; Linux Node 22.16/24, `windows-smoke` and blocking
+  `windows-full`). Local pre-tag evidence on this release tree:
   `check-docs`/`check-release`/`check-licenses` pass and `check-contracts` 90 checks
-  PASS (211 registered CLI codes); the targeted 0.5.0 test files and quality gates are
-  recorded by the release operator on the release commit.
+  PASS (211 registered CLI codes); full `pnpm -r test` exit 0, `eval:det` 49/49
+  (367 checks), `eval:kb-retrieval` PASS (25 docs/50 queries: P@5 .9773, MRR .9682),
+  `eval:mail-local` dev 90 fixtures PASS, `eval:model-contract` 12/12 (0 sockets),
+  `check-eval-report` 4/4, `fault-injection` 9 PASS, `restore-drill` PASS, and
+  `pack-smoke` PASS on the release commit.
 - **Release notes / assets:** <https://github.com/PerryLink/advisers/releases/tag/v0.5.0>
-  (created `TBD` with the SBOM, six-tarball `SHA256SUMS`, portable ZIP and its
-  checksums). The `TBD` placeholders are filled by the release operator after the
-  publish completes.
+  (created 2026-11-22T15:44:48Z with the SBOM, six-tarball `SHA256SUMS`, portable ZIP
+  and its checksums). 0.4.3 is deprecated on npm with a pointer to 0.5.0.
 
 ### 0.4.3 (2026-11-22)
 
