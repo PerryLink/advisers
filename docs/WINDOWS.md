@@ -3,11 +3,14 @@
 > Status: **0.4.1, 2026-11-21.** Windows is the primary target platform (the product
 > and its docs are Windows-first), but "supported" is a claim this page scopes
 > precisely: Windows 11 25H2/26H2 x64 only, npm as the official channel, and the
-> portable ZIP as the offline channel. The 0.4 line has real-machine evidence: the
-> 0.4.0 full-suite triage and the 0.4.1 CLI smoke (Windows 11 25H2, Windows Node
-> 24.22.1: 25 commands / 29 assertions, 29/29 PASS) are recorded in §8, and the full
-> Windows test suite is green in CI. Remaining manual items (IME, Office/OneDrive,
-> Windows Terminal, >260-character paths) stay scoped in §8.
+> portable ZIP as the offline channel. The 0.4 line has two kinds of evidence: a
+> real Windows 11 client record (the 0.4.0 full-suite triage and the 0.4.1 CLI
+> smoke: 25 commands / 29 assertions, 29/29 PASS) and the blocking Windows CI jobs,
+> which run the full test suite on a **Windows Server 2025** image. The CI image is
+> not a Windows 11 client: IME, Windows Terminal, Office/WPS, OneDrive and Defender
+> are absent there and stay manual, unverified items (§8), and the real-client
+> record still lists 36 known failures/skips at first run. Do not read green CI as
+> "a Windows 11 client is verified" or as a release gate that runs on Windows.
 >
 > This page is the operator/consumer reference for installing, upgrading and
 > troubleshooting Advisers on Windows. It does not replace the
@@ -18,7 +21,7 @@
 
 | Platform | Status | Notes |
 |---|---|---|
-| Windows 11 25H2 x64 (build 26200+) | **Supported** | Primary target; the 2026-11-21 real-machine full-suite triage and the 0.4.1 CLI smoke (29/29) ran here, and the Windows full test suite runs here. |
+| Windows 11 25H2 x64 (build 26200+) | **Supported** | Primary target; the 2026-11-21 real-machine triage and the 0.4.1 CLI smoke (29/29) ran on this client. The full test suite runs in CI on Windows Server 2025 (§8), not on this client. |
 | Windows 11 26H2 x64 (build 26300+) | **Supported** | Same client API surface as 25H2; covered by the same release verification. |
 | Windows 11 24H2 x64 | Not supported | End of support 2026-10-13 (outside the 0.4 support window). May work but is not tested. |
 | Windows 11 23H2 x64 | Not supported | End of support 2026-11-10. |
@@ -276,21 +279,24 @@ send context to the configured API endpoint only when you run them.
 
 ## 8. Verification and known limitations
 
-CI runs two Windows jobs on GitHub's windows-latest image:
+CI runs two Windows jobs on GitHub's windows-latest image, which is currently a
+**Windows Server 2025** image:
 
 - **windows-smoke** (blocking): frozen install, build, packaging smoke,
   docs/release gates and a minimal CLI plus durable-write flow on a fresh
   temporary ADVISERS_HOME. It does not run the full test suite.
-- **windows-full** (0.4.0: blocking): frozen install, build, typecheck, every
+- **windows-full** (blocking since 0.4.0): frozen install, build, typecheck, every
   package's test files on Node 22.16 and 24, pack-smoke and the portable-bundle
   self-tests. It was green on `main` for the 0.4.0 release after the POSIX
   fixture fixes; product-side argv/instance-lock limits are explicit, documented
-  skips (see §8).
+  skips (see below).
 
-The CI image is a **Windows Server 2025** image: it has no IME, Windows
-Terminal, OneDrive, Office/WPS or Defender client, so it cannot replace the
-real-client checks. The supported-client evidence is the manual real-machine
-record:
+Neither job is a Windows 11 client, and neither is the release gate: the release
+gate (`publish.yml` / `verify-release`) runs on ubuntu-latest. The CI image has
+no IME, Windows Terminal, OneDrive, Office/WPS or Defender client, so green CI
+does not verify those. Do **not** describe the CI result as equivalent to a
+Windows 11 client or as "Windows fully verified". The supported-client evidence is
+the manual real-machine record:
 
 - 2026-11-21, Windows 11 25H2 x64 (build 26200.9974), Windows Node 24.22.1,
   PowerShell 5.1 (0.4-line CLI smoke, run against the published 0.4.0 tag-identical
@@ -303,18 +309,25 @@ record:
   rows keep basenames only, and the real user home was untouched. A WSL-mounted
   checkout cannot drive the Windows Node build (pnpm symlinks resolve to EACCES);
   that is a checkout-assembly limitation, not a product defect.
-- 2026-11-21, Windows 11 25H2 x64, Node 24.22.1: 1011 tests, 36 known
-  Windows-only failures at first run (30 fixture/POSIX-assumption failures and
-  6 product/local-semantics items). A clean re-run reproduced 34 (including all
-  fixture classes); 2 eval-suite failures did not reproduce and are treated as
-  environment-sensitive until CI confirms them. The full Windows suite must be
-  green (or every skip justified) before the README claims full Windows
-  verification.
+- 2026-11-21, Windows 11 25H2 x64, Node 24.22.1: 1011 tests, **36 known
+  Windows-only failures/skips at first run** (30 fixture/POSIX-assumption
+  failures and 6 product/local-semantics items). A clean re-run reproduced 34
+  (including all fixture classes); 2 eval-suite failures did not reproduce and
+  are treated as environment-sensitive until CI confirms them. This is why the
+  real-client record, not the Server 2025 CI image, is the evidence for client
+  behaviour: green CI changes the test-surface result, not the 36-item real
+  client list. The full Windows suite must be green (or every skip justified) on
+  a real Windows 11 client before the README claims full Windows verification;
+  that claim is not made in 0.4.1.
 
 Known limitations in 0.4.x:
 
 - IME composition in the interactive raw-mode shell is not verified; use the
   one-shot commands (advisers chat ...) or a non-raw shell if input breaks.
+- Office/WPS application-layer rendering, OneDrive handle/rename races and
+  Defender/AV scanning are not verified on a real Windows 11 client; the
+  Server 2025 CI image has none of those clients. Treat them as untested, not as
+  guarantees.
 - External adapter commands (ADVISERS_OCR_CMD, ADVISERS_TIMESTAMP_CMD,
   ADVISERS_NOTIFY_CMD, ADVISERS_VERIFY_RECALC_CMD) are currently a single
   executable path (plus a shell string only for the recalc check); a quoted

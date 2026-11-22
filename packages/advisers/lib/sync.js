@@ -28,6 +28,14 @@
  *   loop, fsync, rename retry) and the staging file plus its -wal/-shm siblings
  *   are always removed; `cleanupStalePullTemps()` (bin/doctor hook) sweeps
  *   leftovers from a crashed pull.
+ * - `pullSnapshot({ dryRun: true })` makes the same decision — snapshot
+ *   selection, decryption + SHA-256, the local-empty/older/same-device checks —
+ *   and predicts whether a real pull would replace the database, but writes
+ *   nothing: no database replace, no backup, no staging temp, no stale-temp
+ *   sweep and no audit row. It returns `status: 'dry-run'` (or `'unchanged'`
+ *   when the local bytes already match and `force` is not set) plus
+ *   `wouldChange` / `wouldStatus` / `wouldBackup`; warnings are returned for
+ *   the caller to print, because a dry run never prints or writes.
  */
 import { chmodSync, existsSync, mkdirSync, readFileSync, readdirSync, statSync } from 'node:fs'
 import { createHash } from 'node:crypto'
@@ -433,8 +441,21 @@ function emitWarnings(warnings) {
  * - --force never changes WHICH snapshot is selected (selection is always the
  *   newest readable one unless --file names one), and replacing the local
  *   ledger with an older snapshot is warned about loudly.
+ * - dryRun:true stops after the read-only decision phase. It reports the same
+ *   file/sha256/device/createdAt/localEmpty/snapshotOlder/sameDevice/warnings a
+ *   real pull would report, plus `wouldChange`, `wouldStatus` (the status a
+ *   real pull would return: pulled | bootstrapped | forced | unchanged) and
+ *   `wouldBackup`, while `changed` stays false and `backup` stays null. A
+ *   caller can therefore explain what WOULD happen, and bin/ keeps its
+ *   sync.pull audit off because it only audits `changed` pulls. The snapshot's
+ *   PRAGMA quick_check is intentionally NOT run: it needs the decrypted bytes
+ *   staged next to the database, which a dry run must not do, so a snapshot
+ *   whose SHA-256 is self-consistent but whose bytes are not a SQLite database
+ *   is predicted as a change and then refused by the real pull (the live
+ *   database stays intact; see test/sync-pull-integrity.test.js).
  */
-export function pullSnapshot({ dir, dbPath, passphrase, file, force = false, localMtimeMs, localDevice, now = Date.now() }) {
+export function pullSnapshot({ dir, dbPath, passphrase, file, force = false, dryRun = false, localMtimeMs, localDevice, now = Date.now() }) {
+  const isDryRun = Boolean(dryRun)
   const { chosen, warnings: selectionWarnings } = selectSnapshot({ dir, passphrase, file, now })
   const envelope = JSON.parse(readFileSync(chosen.file, 'utf8'))
   if (!isVaultEnvelope(envelope)) throw new Error('snapshot is not an Advisers encrypted envelope')
@@ -460,7 +481,10 @@ export function pullSnapshot({ dir, dbPath, passphrase, file, force = false, loc
     let localBytes = null
     try { localBytes = readFileSync(dbPath) } catch {}
     if (localBytes && localBytes.equals(bytes)) {
-      return { ...base, changed: false, status: 'unchanged' }
+      const unchanged = { ...base, changed: false, status: 'unchanged' }
+      // A dry run reports the same no-op verdict without touching anything.
+      if (!isDryRun) return unchanged
+      return { ...unchanged, dryRun: true, wouldChange: false, wouldStatus: 'unchanged', wouldBackup: false }
     }
   }
 
@@ -476,6 +500,17 @@ export function pullSnapshot({ dir, dbPath, passphrase, file, force = false, loc
     const reason = force ? '--force was given' : 'the snapshot was pushed from this device'
     warnings.push(`replacing a newer local database (${new Date(localAt).toISOString()}) with older snapshot ${chosen.name} (${new Date(snapshotAt).toISOString()}) because ${reason}; a backup is kept`)
   }
+
+  // Dry run: everything above (selection, decryption, SHA-256, refusal rules,
+  // local state) is the same decision a real pull makes; everything below
+  // (temp staging, backup, rename, stale-temp sweep) is a write. Stop here and
+  // predict instead. `changed` stays false so a caller cannot mistake this for
+  // an applied pull (bin/ only audits changed pulls and keeps its backup note
+  // from `backup`, which stays null). Warnings are returned, not printed.
+  if (isDryRun) {
+    return { ...base, changed: false, status: 'dry-run', dryRun: true, wouldChange: true, wouldStatus: status, wouldBackup: local.exists }
+  }
+
   emitWarnings(warnings)
 
   const parent = dirname(dbPath)

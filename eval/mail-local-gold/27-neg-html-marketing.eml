@@ -1,0 +1,9 @@
+From: 云端服务 <promo@cloud.example>
+To: me@example.com
+Subject: 年末优惠
+Date: Fri, 20 Nov 2026 06:00:00 +0800
+Message-ID: <mail-gold-27@gold.example>
+MIME-Version: 1.0
+Content-Type: text/html; charset=UTF-8
+
+<html><body><h1>年末优惠</h1><p>云服务器 5 折起，活动截止 2026-12-31。</p></body></html>

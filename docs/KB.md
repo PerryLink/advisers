@@ -43,6 +43,19 @@ Explicit non-goals for 0.4.0: no chat/`kb ask`, no model-generated pages, no
 embeddings or vector index, no automatic fact extraction from documents, no
 automatic OCR, no MCP/DSH exposure, no remote/cloud KB, no multi-user sharing.
 
+**Independently audited (2026-11-22).** A cross-check of the "use it as a
+secretary" critique confirmed this shape and the usual mis-reading of it: compiled
+pages are a **deterministic derived layer** (ledger rows in, manual `kb page
+rebuild`, no model), not a model-written wiki and not automatic capture; the
+ledger rows and evidence stay authoritative. The same audit confirmed that KB
+documents do not extract facts automatically, a `mail sync` message does not enter
+the KB automatically (KB ingestion is only an explicit `kb add` of a file), the
+KB is not exposed over MCP/DSH in 0.4.1, and 1–2 character CJK queries are a
+**performance** fallback (`LIKE`, `degraded:["short_query_like"]`) with correct
+results, not a correctness gap. `sync`/`backup`/`vault` are whole-database
+operations and therefore include the KB; see
+[AUDIT-2026-11-22.md](AUDIT-2026-11-22.md).
+
 ## 2. Data model (schema v22)
 
 | Table / index | Contents | Exported by `export --all` |

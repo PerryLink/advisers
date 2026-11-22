@@ -1,6 +1,6 @@
 # Advisers
 
-**A staff of AI advisers — a local-first, auditable personal secretary runtime.**
+**A staff of AI advisers — a local-first, auditable workbench for commitments, Office deliverables and reminders.**
 
 > **AI & compliance notice** — Advisers is a local-first work assistant, not a companion,
 > lawyer, doctor, or financial adviser. AI output can be wrong; verify before use.
@@ -42,6 +42,14 @@ message provider/source), plus `bridge-hermes`; the CLI does not wire these link
 packages into an end-to-end inbox yet (0.4.0's `mail sync` is a separate built-in
 read-only IMAP entry). Other gateways are not bundled. The core does not depend
 on any link package; adapters load one only when configured.
+
+**Scope: a local workbench, not an always-on secretary.** "Secretary" here means
+the local ledger/Office/reminder loop above, not always-on recording or meeting
+transcription, not a companion mobile app, and not automatic sending or
+rescheduling — those are explicit product non-goals, not missing buttons (see
+[docs/POSITIONING.md](docs/POSITIONING.md)). In 0.4.1 there is no background
+daemon and no inbox watch; mail is read-only IMAP, and IM is reachable only
+through the optional, externally installed Hermes bridge.
 
 ## Status
 
@@ -96,7 +104,7 @@ check count rather than inheriting an older figure.
 - `advisers` CLI: local REPL, `chat`, `office`, `template`, `routine`, `link`, `bridge`, `soul`, `ls`, `why`, `forget`, `export`;
 - SQLite at `~/.advisers/state.db` (JSON fallback with `ADVISERS_STORE=json`);
 - `IntentBrief` + clarification policy + readback;
-- `advisers-office`: DOCX/XLSX/PPTX/Mermaid/draw.io/XMind + 7 templates; read/edit/verify;
+- `advisers-office`: DOCX/XLSX/PPTX/Mermaid/draw.io/XMind builders + 7 generic templates + deterministic `template quote|proposal`; read/edit/verify;
 - routine v0 (draft/approve/archive + patch/diff/apply);
 - local agent loop with tools (`office_build`, `office_template`, `file_read/write/list`, `commitment_add`, `routine_view`, `search_turns`); attachments (txt/md/docx/xlsx/pptx/pdf); optional model with `ADVISERS_API_KEY`;
 - turns + summaries + CJK-capable FTS search (FTS5 trigram index, schema v22; <3-character queries keep the LIKE fallback), `/memory`, `/week`, `/digest`, `/tick`, `/today`, `/undo`, `/diff`, `/learn review`;
@@ -121,7 +129,7 @@ check count rather than inheriting an older figure.
 - **0.4.0 policy/evidence subset**: pure policy decision engine, one-shot decision tokens with digest-checked execution, an egress registry, a separate TOS/model consent store (`consent.json`, 0600 atomic), and an evidence resolver with four honest states plus `mail`/`kb_chunk`/`kb_page` sources, so mail/KB references are no longer `missing`; receipt pack v2 records `verificationBasis`;
 - **0.4.0 receivables**: `receivable add|ls|show|edit|void` + `payment add|ls|void` (integer minor units; CNY/USD/EUR/HKD; partial/multiple/over/void; auto-completes the linked commitment in the same transaction), per-currency totals (open/overdue/paid) and aging buckets; `client export --pack` writes a manifest + `SHA256SUMS` status pack with an offline verifier. Amounts stay out of receipt packs, the client status pack, MCP, DSH and Pet Brief;
 - **0.4.0 MCP modern dual-era**: `server/discover`, an explicit modern-method allowlist and `resultType`/`ttlMs`/`cacheScope` envelopes for 2026-07-28 clients, while legacy responses stay byte-identical and `ADVISERS_MCP_MODERN=off` is a one-restart rollback; the tool surface remains 8 tools / 5 resources and DSH 6 tools;
-- **0.4.0 Windows**: `windows-full` CI (Node 24/22.16 matrix) and a portable-ZIP builder/verifier; npm remains the official channel, `docs/WINDOWS.md` scopes support to Windows 11 25H2/26H2 x64, and the real-machine full-suite record stays a release-checklist item;
+- **0.4.0 Windows**: blocking `windows-full` CI (Node 24/22.16 matrix) and a portable-ZIP builder/verifier; npm remains the official channel, `docs/WINDOWS.md` scopes support to Windows 11 25H2/26H2 x64, and the real-machine record (36 known failures/skips at first run; CI runs on Windows Server 2025, not a Windows 11 client) stays a release-checklist item;
 - **0.4.0 legal**: TOS/PRIVACY/SAFETY/DISCLAIMER are **v2026.11.4**; the new data planes (mail bodies/credentials, KB text and pages, receivables/payments, shell and brief archive) and the separate model-egress consent are disclosed, and gated commands re-confirm the revised terms;
 - **0.4.1 follow-ups**: `kb link/unlink` and `mail link/dismiss` turn KB/mail references into explicit, audited review decisions (fail-closed on unknown ids); `remind --deliver --notify` gains runtime `--quiet-hours HH:MM-HH:MM` (cross-midnight; notification channel only — the local log line is always written), per-local-day notification dedupe (30-day local metadata retention) and `--force-notify`; the deterministic eval suite adds the `kb`/`mail`/`policy` groups (30 cases / 277 checks) and the CLI contracts add 38 documented-additive commands / 76 vectors behind a 90-check gate.
 

@@ -1,0 +1,296 @@
+{
+  "schema": "advisers.mail-local-gold/v1",
+  "description": "Hand-labeled synthetic gold set for the zero-model, zero-network local commitment extractor (packages/advisers/lib/mail-extract.js).",
+  "timeZone": "Asia/Shanghai",
+  "dueDateSemantics": "dueAt is a calendar date (YYYY-MM-DD) in Asia/Shanghai. The local extractor resolves relative dates to 18:00 Asia/Shanghai by default, so this eval compares only the local calendar date, never the instant.",
+  "matching": "A predicted candidate matches a labeled commitment when its action matches after normalization (verb/object inclusion, ignoring whitespace, case and a leading verb) and both commitments are in the same message.",
+  "reviewStatus": "Hand-labeled by the implementing agent from the .eml text. Synthetic fixtures, not real client mail. Independent human review is recommended before any external quality claim.",
+  "cases": [
+    {
+      "file": "01-zh-absolute-quote.eml",
+      "author": "王工",
+      "expect": [
+        {
+          "action": "发出报价单",
+          "dueAt": "2026-11-25"
+        }
+      ],
+      "note": "Absolute-date Chinese promise (will + 前); send date resolved to the local calendar day."
+    },
+    {
+      "file": "02-zh-relative-friday.eml",
+      "author": "张会计",
+      "expect": [
+        {
+          "action": "发对账单",
+          "dueAt": "2026-11-20"
+        }
+      ],
+      "note": "Relative weekday (周五前) resolved from the message date in Asia/Shanghai."
+    },
+    {
+      "file": "03-zh-next-week-submit.eml",
+      "author": "陈工",
+      "expect": [
+        {
+          "action": "提交测试报告",
+          "dueAt": "2026-11-23"
+        }
+      ],
+      "note": "Next-week relative date (下周一前)."
+    },
+    {
+      "file": "04-zh-tomorrow-contract.eml",
+      "author": "刘律师",
+      "expect": [
+        {
+          "action": "寄合同",
+          "dueAt": "2026-11-20"
+        }
+      ],
+      "note": "Tomorrow + 下班前 (time-of-day 18:00 is ignored; only the local date is compared)."
+    },
+    {
+      "file": "05-zh-month-end-reconcile.eml",
+      "author": "赵财务",
+      "expect": [
+        {
+          "action": "完成对账",
+          "dueAt": "2026-11-30"
+        }
+      ],
+      "note": "Month-end relative date."
+    },
+    {
+      "file": "06-zh-money-payment.eml",
+      "author": "孙经理",
+      "expect": [
+        {
+          "action": "支付货款",
+          "dueAt": "2026-11-20",
+          "amountMinor": 3500000,
+          "currency": "CNY"
+        }
+      ],
+      "note": "Money amount (3.5 万元 -> 3500000 minor CNY) is part of the labeled expectation."
+    },
+    {
+      "file": "07-zh-third-party-pay.eml",
+      "author": "周经理",
+      "expect": [
+        {
+          "action": "付款",
+          "dueAt": "2026-11-23"
+        }
+      ],
+      "note": "Third-party promise ('客户答应…'); the local rules report debtor 'third'."
+    },
+    {
+      "file": "08-en-absolute-deliver.eml",
+      "author": "Alice Chen",
+      "expect": [
+        {
+          "action": "deliver final report",
+          "dueAt": "2026-11-30"
+        }
+      ],
+      "note": "English promise with an explicit ISO date."
+    },
+    {
+      "file": "09-en-relative-friday.eml",
+      "author": "Bob Smith",
+      "expect": [
+        {
+          "action": "send updated quote",
+          "dueAt": "2026-11-20"
+        }
+      ],
+      "note": "Known limitation: the local rules do not resolve English relative dates ('by Friday'); the human-correct due date is labeled so the miss is measured."
+    },
+    {
+      "file": "10-en-html-deck.eml",
+      "author": "Carol Wu",
+      "expect": [
+        {
+          "action": "send pitch deck",
+          "dueAt": "2026-12-02"
+        }
+      ],
+      "note": "HTML-only message: exercises the text/html fallback in parseMailMessage."
+    },
+    {
+      "file": "11-zh-two-commitments.eml",
+      "author": "吴工",
+      "expect": [
+        {
+          "action": "发设计稿",
+          "dueAt": "2026-11-17"
+        },
+        {
+          "action": "提交测试报告",
+          "dueAt": "2026-11-23"
+        }
+      ],
+      "note": "Two commitments in one message (multi-candidate extraction)."
+    },
+    {
+      "file": "12-zh-quarter-end.eml",
+      "author": "郑经理",
+      "expect": [
+        {
+          "action": "完成迁移",
+          "dueAt": "2027-03-31"
+        }
+      ],
+      "note": "Next-quarter-end relative date crossing the year boundary."
+    },
+    {
+      "file": "13-zh-explicit-year.eml",
+      "author": "钱总",
+      "expect": [
+        {
+          "action": "发最终方案",
+          "dueAt": "2026-12-10"
+        }
+      ],
+      "note": "Explicit year + month + day in Chinese."
+    },
+    {
+      "file": "14-en-promise-pay.eml",
+      "author": "Carol Wu",
+      "expect": [
+        {
+          "action": "pay invoice",
+          "dueAt": "2026-12-01"
+        }
+      ],
+      "note": "English promise verb (promise to) with an explicit ISO date."
+    },
+    {
+      "file": "15-zh-tentative.eml",
+      "author": "何工",
+      "expect": [
+        {
+          "action": "发报价",
+          "dueAt": "2026-11-20"
+        }
+      ],
+      "note": "Tentative ('尽量') promise: still a real commitment; the extractor lowers confidence but keeps the candidate."
+    },
+    {
+      "file": "16-zh-month-day-payment.eml",
+      "author": "许会计",
+      "expect": [
+        {
+          "action": "打款",
+          "dueAt": "2026-12-15"
+        }
+      ],
+      "note": "Month/day without a year; the resolver rolls forward to the future occurrence."
+    },
+    {
+      "file": "17-zh-no-date-minutes.eml",
+      "author": "唐助理",
+      "expect": [
+        {
+          "action": "整理会议纪要",
+          "dueAt": null
+        }
+      ],
+      "note": "Commitment without a date: dueAt is deliberately null and excluded from due accuracy."
+    },
+    {
+      "file": "18-zh-reply.eml",
+      "author": "韩工",
+      "expect": [
+        {
+          "action": "回复确认",
+          "dueAt": "2026-11-27"
+        }
+      ],
+      "note": "Short reply commitment; gold action adds the object of the reply."
+    },
+    {
+      "file": "19-zh-implied-subject.eml",
+      "author": "陈工",
+      "expect": [
+        {
+          "action": "答复",
+          "dueAt": "2026-11-20"
+        }
+      ],
+      "note": "Known limitation: an implied-subject reply has no first-person marker, so the local rules emit no candidate. It is labeled as a real commitment so the recall miss is measured."
+    },
+    {
+      "file": "20-en-month-date.eml",
+      "author": "Alice Chen",
+      "expect": [
+        {
+          "action": "deliver report",
+          "dueAt": "2026-11-30"
+        }
+      ],
+      "note": "Known limitation: the local rules do not resolve English month names ('Nov 30'); the human-correct due date is labeled so the miss is measured."
+    },
+    {
+      "file": "21-neg-request.eml",
+      "author": "王工",
+      "expect": [],
+      "note": "Pure request (请…) is not a commitment by the recipient of this mailbox."
+    },
+    {
+      "file": "22-neg-reschedule.eml",
+      "author": "陈工",
+      "expect": [],
+      "note": "Meeting reschedule is a known non-commitment class."
+    },
+    {
+      "file": "23-neg-vague.eml",
+      "author": "何工",
+      "expect": [],
+      "note": "Vague deferral (回头) is not a commitment."
+    },
+    {
+      "file": "24-neg-newsletter.eml",
+      "author": "办公优选",
+      "expect": [],
+      "note": "Marketing newsletter noise."
+    },
+    {
+      "file": "25-neg-auto-notification.eml",
+      "author": "发票系统",
+      "expect": [],
+      "note": "Automated notification noise."
+    },
+    {
+      "file": "26-neg-forwarded-request.eml",
+      "author": "李经理",
+      "expect": [],
+      "note": "Forwarded request; every request sentence stays a non-commitment."
+    },
+    {
+      "file": "27-neg-html-marketing.eml",
+      "author": "云端服务",
+      "expect": [],
+      "note": "HTML marketing noise (no personal commitment)."
+    },
+    {
+      "file": "28-neg-receipt.eml",
+      "author": "吴工",
+      "expect": [],
+      "note": "Acknowledgement, not a commitment."
+    },
+    {
+      "file": "29-neg-en-request.eml",
+      "author": "Bob Smith",
+      "expect": [],
+      "note": "English request (Could you…) is not a commitment by the mailbox owner."
+    },
+    {
+      "file": "30-neg-marketing-we.eml",
+      "author": "云端服务",
+      "expect": [],
+      "note": "Known false-positive class: first-person boilerplate in a marketing blast ('我们会发送…') is read as a user commitment; labeled negative so the precision miss is measured."
+    }
+  ]
+}

@@ -475,13 +475,21 @@ are `client`, `project`, `timeline`, `facts`. Full semantics: [KB.md](KB.md) §5
   one `kb.page.rebuild` audit row. `--dry-run` reports the plan without writing.
 - `kb page diff <id>` → `{ok, command:"kb page diff", pageId, stale, diff}`.
 
-### `fact show|history|as-of --json` (0.4.0)
+### `fact add|show|history|as-of --json` (0.4.0; add = 0.4.x follow-up)
 
 Read-only fact views over the existing facts table (no migration). A fact row is
 `{id,subject,predicate,object,matterId?,clientId?,authority,confidence,status,recordedAt,`
 `validFrom?,validTo?,expiredAt?,supersedes?,supersededBy?,shadowedBy?,lastSeenAt?,`
 `deletedAt?,deletedReason?,evidence[],fallback:{validFromFromRecordedAt}}`.
 
+- `fact add <subject> <predicate> <object> --quote "evidence"` (main after 0.4.1) →
+  `{ok, command:"fact add", fact, deduped, audit}`. This is the manual write side of
+  the facts table: `authority="user"`, `status="confirmed"`, `confidence=1`,
+  `evidence:[{quote, source?}]`; repeat entry of the same active identity returns
+  the existing row with `deduped:true` and writes nothing. `--matter`, `--valid-from`,
+  `--supersedes <fact-id>`, `--doc <kb-doc-id>` and `--relation source|mentions` are
+  optional; a supersede marks the old row `superseded` in the same transaction, and
+  the audit row contains ids only (never the quote/subject/object).
 - `fact show <id>` → `{ok, command:"fact show", fact, kbSources[], warnings[], includeDeleted}`.
   `kbSources` is additive and lists explicit KB links (`kb_fact_links`); manual
   `kb link` / `kb unlink` are wired in 0.4.1 (the 0.4.0 tarball exposed the library
@@ -502,13 +510,23 @@ password is read from a TTY prompt or `--pass-stdin` (`--pass` is refused).
 - `mail account ls` → `{ok, command:"mail account ls", accounts:[{...,hasCredential}], total}`.
 - `mail account show <ref>` → `{ok, command:"mail account show", account:{...,hasCredential}}`.
 - `mail account rm <ref>` → `{ok, command:"mail account rm", accountId, removed:true, credentialRemoved, messagesDeleted}`.
+- `mail account test <ref>` (main after 0.4.1) → `{ok, command:"mail account test", accountId, host, port, tls, mailbox, latencyMs, uidValidity, messages, capabilities:{count,list,flags:{starttls,uidplus,idle,move},auth}}`.
+  Read-only probe: TLS/STARTTLS + LOGIN + CAPABILITY + EXAMINE, then LOGOUT; it never
+  fetches bodies, writes no mail rows and uses the existing 30s bound. The built-in
+  local `.eml` account has no server and fails with `E_MAIL_CONFIG` without network.
 
-`mail account test` remains unwired. `mail link` and `mail dismiss` are wired in
-**0.4.1**; they were **not wired in the 0.4.0 tarball**.
+`mail link` and `mail dismiss` are wired in **0.4.1**; they were **not wired in the 0.4.0 tarball**.
 
 ### `mail sync|ls|show|extract|import|purge --json` (0.4.0)
 
-- `mail sync [account]` → `{ok, command:"mail sync", accountId, mailbox, uidValidity?, fetched, inserted, skipped, failed, duplicates, needsResync, dryRun, full, durationMs}`.
+- `mail sync [account]` → `{ok, command:"mail sync", accountId, mailbox, uidValidity?, fetched, inserted, skipped, failed, duplicates, needsResync, dryRun, full, durationMs}`; multiple accounts return `{ok, command:"mail sync", results:[...]}`.
+  `--watch [--interval 300s] [--max-runs n]` (main after 0.4.1) keeps the foreground
+  command alive: each round opens the ledger, syncs and closes it again (so an idle
+  watch does not hold the writer lock), a failed round backs off from 5s up to 5min,
+  Ctrl+C stops after the in-flight round. `--json` prints the final
+  `{runs, success, errors, consecutiveErrors, stopped, last, history, intervalMs,
+  maxRuns, startedAt, finishedAt, durationMs}` summary. This is still an explicitly
+  started foreground process, not an installed daemon.
   The only IMAP network path: read-only `EXAMINE`/`UID FETCH`, TLS only (implicit 993
   or opt-in STARTTLS; never a cleartext fallback). Messages + cursor + run row commit
   in one transaction after the network fetch. A UIDVALIDITY change is
@@ -528,6 +546,17 @@ password is read from a TTY prompt or `--pass-stdin` (`--pass` is refused).
 - `mail purge [--older-than 30d]` → `{ok, command:"mail purge", dryRun, messagesPurged|wouldPurge, bytesFreed|bytesWouldFree, skippedPending}`.
   Default retention is 30 days per account; metadata/`bodySha256` stay and messages
   with pending candidates are skipped.
+
+### `sync pull --dry-run` (main after 0.4.1)
+
+`advisers sync pull --dir <dir> --dry-run [--file name] [--force] [--json]` runs the
+same snapshot selection/decryption/SHA-256/local-state checks as a real pull and
+returns `{...pullBase, changed:false, dryRun:true, wouldChange, wouldStatus,
+wouldBackup}`; it writes no database, backup, staging temp or audit row. The
+passphrase is still required (the snapshot must be decrypted to decide), and the
+snapshot's `quick_check` is intentionally deferred to the real pull. Human output
+starts with `dry-run:`. This is the safe preview for the manual file-based E2EE
+sync; it is not a discovery mechanism for snapshots.
 
 ### `receivable|payment --json` (0.4.0)
 

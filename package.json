@@ -23,6 +23,7 @@
     "test:security": "node scripts/security-suite.mjs",
     "test:fault": "node scripts/fault-injection.mjs",
     "eval:det": "node scripts/eval-det.mjs",
+    "eval:mail-local": "node eval/run-mail-local-gold.mjs",
     "check:contracts": "node scripts/check-contracts.mjs",
     "sbom": "node scripts/sbom.mjs",
     "check:sbom": "node scripts/check-sbom.mjs"

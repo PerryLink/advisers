@@ -110,6 +110,27 @@ fail-closed policy gates, no network) rather than a golden model answer. They do
 need a provider key and never read the real `~/.advisers`. Do not present them as a
 model-quality evaluation.
 
+## Local mail extraction gold set (`pnpm eval:mail-local`)
+
+A second, zero-model gate measures the deterministic local commitment extractor
+(`mail extract --local`): 30 fixed synthetic `.eml` fixtures (Chinese/English,
+absolute and relative dates, third-party promises, requests/reschedules/noise,
+HTML-only) with hand labels under `eval/mail-local-gold/`. The runner parses each
+message with the same parser as `mail import`, calls the same local extraction
+branch, and reports candidate precision/recall/F1, due-date accuracy and author
+accuracy; it exits non-zero when a threshold regresses (currently precision 90%,
+recall/F1 85%, due 85%, author 90%). It never calls a model, never opens a
+network socket, never creates an `ADVISERS_HOME` and never reads credentials, so
+it runs in the Linux CI job right after `eval:det`.
+
+This is a **synthetic regression gate, not a general accuracy claim**: the
+labels are hand-written by the implementer, not independently reviewed, and the
+set deliberately includes known-limitation cases (English relative due dates,
+an implicit subject, one marketing false positive) so the gate measures them
+instead of hiding them. The four known misses and the extension process are
+documented in `eval/mail-local-gold/README.md`; an independent human gold set
+remains future work.
+
 ## Environment (why the numbers are stable)
 
 Each case gets a fresh `ADVISERS_HOME` under the OS temp dir and a fixed
@@ -210,13 +231,19 @@ Hard rules for the result file:
   package tests, not det groups — see "0.4.0 coverage" above. A failure there is
   caught by `pnpm -r test`, not by `eval:det`.
 - **Fault injection / security suites**: `pnpm test:security`, `pnpm test:fault`.
-- **Windows-specific filesystem behaviour**: covered by the blocking Windows
-  `windows-smoke` job (minimal CLI + durable-write commands) and the **report-only**
-  `windows-full` job (which also runs the portable-bundle self-tests); `eval:det`
-  itself is platform-neutral (temp HOME, TZ, no shell) and CI runs it on Linux.
-  The real-machine Windows record still lists known fixture/POSIX failures, and
-  the portable ZIP is verified by `scripts/pack-portable.mjs --verify`, not by
-  this suite — do not describe 0.4.0 as fully Windows-verified.
+- **Windows-specific filesystem behaviour**: `eval:det` itself is platform-neutral
+  (temp HOME, TZ, no shell) and CI runs it on Linux. The Windows test surface is
+  covered by two **blocking** jobs: `windows-smoke` (minimal CLI + durable-write
+  commands) and `windows-full` (the full workspace suite plus the portable-bundle
+  self-tests). Both run on GitHub's `windows-latest` image, which is currently a
+  **Windows Server 2025** image: they are not a Windows 11 client certification,
+  and they are not the release gate — the release gate (`publish.yml` /
+  `verify-release`) runs on ubuntu-latest. The 2026-11-21 real-client record still
+  lists 36 known Windows-only failures/skips at first run (30 fixture/POSIX
+  assumptions + 6 product/local-semantics items; 34 reproduced on a clean re-run —
+  see [WINDOWS.md](WINDOWS.md) §8), and the portable ZIP is verified by
+  `scripts/pack-portable.mjs --verify`, not by this suite — do not describe 0.4.0
+  as fully Windows-verified.
 
 ## Adding or changing a case
 

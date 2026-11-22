@@ -53,6 +53,16 @@ never bound automatically (§12).
    No full-table read followed by an in-memory filter: client A's SQL can never
    return client B's rows.
 
+> **Audited boundary (2026-11-22).** An independent cross-check confirmed the
+> timeline is **derived, never captured automatically**: mail, IM and calendar do
+> not create a timeline row; only commitments, deliveries and manual notes do. It
+> also confirmed the delivery surface is wider than "a few templates": 6 builders
+> (DOCX/XLSX/PPTX/XMind/Mermaid/draw.io), 7 generic templates plus deterministic
+> `template quote|proposal`, `office-read`/`office-edit`/`verify` and delivery
+> receipt packs. The real limitation is no Office/WPS application-layer rendering
+> fidelity and no automatic sending — not the generation surface. See
+> [AUDIT-2026-11-22.md](AUDIT-2026-11-22.md).
+
 ## 2. Commands
 
 ```sh

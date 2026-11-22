@@ -11,6 +11,20 @@
   不是“能生成文件”而已。
 - CLI 是产品本体；DSH 是薄适配器。
 
+## Narrative alignment (2026-11-22)
+
+"Secretary" in this document and in the README means the local workbench above —
+an auditable commitment ledger, deterministic Office deliverables and reminders —
+not an always-on assistant. Three things a "secretary" may imply are explicit
+non-goals and product decisions: always-on recording/meeting transcription, a
+mobile app or companion push service, and automatic sending/rescheduling. They are
+not missing features and not roadmap promises. Likewise, 0.4.1 has no background
+daemon and no inbox watch; mail is read-only IMAP (no OAuth, no SMTP send), and IM
+reachability requires an externally installed Hermes bridge. The verified boundary
+(what is implemented vs what is not) is recorded in
+[AUDIT-2026-11-22.md](AUDIT-2026-11-22.md); keep the README tagline as a
+workbench, not as an all-purpose secretary.
+
 ## What the 2026 market already commoditized (do not claim as moat)
 
 - 邮件/日历/AI 行动项：Gemini in Gmail、Copilot in Outlook、Fyxer Spaces、Superhuman.
@@ -47,7 +61,9 @@
 
 完整 CLM/e-sign/CA 牌照；AI 硬件/常驻录音/屏幕全量记忆；插件市场军备；团队/SSO/
 私有化；全功能 GUI/移动 App；自动代发/自动改期；通用聊天/情感陪伴；coding-agent
-全能竞赛。依据为内部竞品研究，不随本仓库发布。
+全能竞赛。依据为内部竞品研究，不随本仓库发布。这些是产品边界而非实现缺口：不要把
+"没有常驻录音/移动 App/自动代发"当作待办，也不要用"全能秘书"来宣传本产品（见上节
+Narrative alignment）。
 
 ## Pricing / channel (research recommendation, not a commitment)
 

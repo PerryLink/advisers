@@ -1,6 +1,6 @@
 # Advisers（幕僚）
 
-**一个本地优先、可审计、中文 Office 优先的单窗口工作秘书 runtime。**
+**一个本地优先、可审计、中文 Office 优先的顾问工作台（承诺账 + Office 交付 + 提醒）。**
 
 > **AI 与合规提示** —— Advisers 是本地优先的工作助手，不是情感陪伴，也不提供法律、医疗、
 > 金融等专业意见；AI 输出可能出错，使用前请自行核验。禁止用于违法、侵权、欺诈、骚扰、
@@ -24,6 +24,8 @@ Advisers 不是聊天框，也不是情感陪伴。它维护三本账：
 
 核心独立运行（不依赖 cordis）；DSH 是薄的 cordis 兼容宿主适配器，提供六个工具（`advisers_brief`、`advisers_office`、`advisers_today`、`advisers_who`、`advisers_evidence`、`advisers_clients`），不是功能完整的第二产品。
 
+**边界：本地工作台，不是常驻秘书。** 这里的「秘书」指上面的账本/Office/提醒闭环，不代表常驻录音或会议转写，不代表移动 App 或伴侣端，也不代表自动代发或自动改期——这些是明确的产品非目标，不是待补的按钮（见 [docs/POSITIONING.md](docs/POSITIONING.md)）。0.4.1 没有后台常驻 daemon、没有收件箱监听；邮件是只读 IMAP，IM 只能经另装 Hermes 的 bridge 间接可达。
+
 ## 状态
 
 **`0.4.1` 已于 2026-11-21 发布**，当前 npm **`latest`** 为 `0.4.1`，**`next`** 也随本次发布推进到 `0.4.1`。仓库版本锁步在 `0.4.1`。`0.4.1` 是紧随 0.4.0 的当日补丁（不是新的功能线）：新增 KB/邮件审查链接（`kb link/unlink`、`mail link/dismiss`）、`remind --deliver --notify` 的运行时安静时段 + 按本地日去重 + `--force-notify`、`kb`/`mail`/`policy` 三组确定性评测（30 cases / 277 checks）、38 个 documented-additive CLI 命令（90 checks 契约门禁），以及真实 Windows 11 25H2 手工 smoke（29/29 断言）。0.4.0 的功能面不变：本地知识库（schema v22）、TLS-only IMAP 邮件入口、交互式壳、可解释的主动式晨报、Policy/Evidence 2.0 子集、回款/对账与客户状态包 v2、MCP modern dual-era、Windows CI 与便携 ZIP，以及 v2026.11.4 法务修订。默认仍然本地：所有新命令都不需要模型调用，也没有后台常驻进程，`mail sync` 是唯一新增的显式网络路径（TLS-only、只读、用户主动触发）。**schema v22 是单向迁移**：升级前 CLI 会写 `state.db.before-migrate-v*` 备份，0.3.2 打开 v22 数据库会报 `E_SCHEMA_NEWER`，降级需要恢复该备份。`0.4.0`/`0.3.2`/`0.3.1`/`0.3.0` 仍可按版本号安装但已被取代，请使用 `0.4.1`。更早的 `0.2.4` 是**未发布的 release candidate**，已被 0.3.0 线取代（`v0.2.4` tag 指向更早的 commit，npm 上没有 0.2.4 tarball，不要尝试安装它）。6 个发布包为 `advisers`、`advisers-core`、`advisers-office`、`advisers-policy-strict`、`advisers-bridge-hermes`、`dsh-advisers`；两个私有 `advisers-link-*` 包保持同版本但不发布。`0.4.1` tarball 由 GitHub Actions OIDC/Trusted Publishing 发布（不依赖长期 npm token），带 SLSA provenance（`https://slsa.dev/provenance/v1`），且 provenance 记录的是发布 tag ref 而不是分支。Release notes：<https://github.com/PerryLink/advisers/releases/tag/v0.4.1>（该 Release 同时附 CycloneDX SBOM 与 6 个 tarball 的 `SHA256SUMS`）。可自行验证：
@@ -45,7 +47,7 @@ node scripts/verify-release.mjs --version 0.4.1 --tag latest \
 - 承诺账 + `commit add/ls/done`、`tick`、`snooze`、nudge outcome；
 - `/memory`、`/week`、`/digest`、`/diff`、`/undo`、`/learn review`；
 - routine draft/approve/patch/curator + active routine index；
-- DOCX/XLSX/PPTX/Mermaid/draw.io/XMind builder + 7 模板 + `office-read`/`office-edit`/`verify`；
+- DOCX/XLSX/PPTX/Mermaid/draw.io/XMind builder + 7 个通用模板 + 确定性 `template quote|proposal` + `office-read`/`office-edit`/`verify`；
 - 附件 txt/md/docx/xlsx/pptx/pdf；图片/扫描件暂不支持；
 - DSH bundle（6 工具，含 `advisers_clients`）在 0.3.0 中让三个账本读工具读取**真实本地账本（只读、TOS 门禁、clearance 0、不取 HOME 锁、不迁移、不写库）**，仅在无账本或门面不可用时回退到带标记的 preview（见 [docs/LEDGER-READ-API.md](docs/LEDGER-READ-API.md)）。Email IMAP/draft、Feishu webhook、Hermes bridge 为可选适配器（目前 CLI 尚未把 email/Feishu 接成端到端入口；0.4.0 的内置 `mail sync` 是独立的只读邮件入口，不依赖该 link 包）；
 - 真实 IM/Windows Office 打开验证仍未完成。
@@ -56,7 +58,7 @@ node scripts/verify-release.mjs --version 0.4.1 --tag latest \
 - **0.4.0 Policy/Evidence 子集**：纯策略决策引擎、一次性 decision token（digest 校验执行）、egress 注册表、独立的 TOS/模型出网同意存储（`consent.json`，0600 原子写），以及四态 evidence resolver + `mail`/`kb_chunk`/`kb_page` 来源（邮件/KB 引用不再误报 missing）；回执包 v2 记录 `verificationBasis`；
 - **0.4.0 回款**：`receivable add|ls|show|edit|void` + `payment add|ls|void`（整数分、CNY/USD/EUR/HKD、部分/多笔/超额/void、同事务自动完成承诺）、逐币种合计（open/overdue/paid）与账龄桶；`client export --pack` 输出 manifest + `SHA256SUMS` 客户状态包并附离线校验器。金额不进回执包、客户状态包、MCP、DSH 与 Pet Brief；
 - **0.4.0 MCP modern dual-era**：`server/discover`、显式 modern 方法 allowlist、`resultType`/`ttlMs`/`cacheScope` envelope；legacy 响应逐字节不变，`ADVISERS_MCP_MODERN=off` 可一键回退；工具面仍 8 tools / 5 resources，DSH 仍 6 tools；
-- **0.4.0 Windows**：`windows-full` CI（Node 24/22.16 矩阵）与便携 ZIP 构建/校验脚本；npm 仍是正式渠道，`docs/WINDOWS.md` 把支持范围限定为 Win11 25H2/26H2 x64，真机全量记录仍属发布清单项；
+- **0.4.0 Windows**：blocking 的 `windows-full` CI（Node 24/22.16 矩阵）与便携 ZIP 构建/校验脚本；npm 仍是正式渠道，`docs/WINDOWS.md` 把支持范围限定为 Win11 25H2/26H2 x64；真机记录（首跑 36 个已知失败/跳过）仍属发布清单项，CI 运行在 Windows Server 2025 而非 Win11 客户端；
 - **0.4.0 法务**：TOS/PRIVACY/SAFETY/DISCLAIMER 升级到 **v2026.11.4**，新增数据面（邮件正文/凭据、KB 文本与页、回款记录、壳与晨报归档）与独立的模型出网同意均已披露，门控命令会重新确认修订后的条款；
 - **0.4.1 收尾**：`kb link/unlink` 与 `mail link/dismiss` 把 KB/邮件引用变成显式、可审计的审查决定（未知 id 失败关闭）；`remind --deliver --notify` 增加运行时 `--quiet-hours HH:MM-HH:MM`（跨午夜；只抑制通知通道，本地日志行始终写入）、按本地日去重（通知去重元数据本地保留 30 天）与 `--force-notify`；确定性评测新增 `kb`/`mail`/`policy` 三组（30 cases / 277 checks），CLI 契约新增 38 个 documented-additive 命令 / 76 个向量（90 checks 门禁）。
 - `research --web/--url` 是唯一内置的**网页**出网路径；设置 key 后 `chat`/`capture`/`review`/`brief --deep`/`learn review` 会把输入发给配置的模型 API；`status`/`office`/`template`/`verify`/`commit` 等纯本地命令不联网。research 对 `secrecy > 0` 的 matter 拒绝（fail closed）。

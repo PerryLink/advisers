@@ -130,6 +130,9 @@ const loadKb = lazyModule(() => import('../lib/kb.js'))
 const loadKbPages = lazyModule(() => import('../lib/kb-pages.js'))
 const loadKbFacts = lazyModule(() => import('../lib/kb-facts.js'))
 const loadMail = lazyModule(() => import('../lib/mail.js'))
+const loadMailProbe = lazyModule(() => import('../lib/mail-probe.js'))
+const loadFactEntry = lazyModule(() => import('../lib/fact-entry.js'))
+const loadMailWatch = lazyModule(() => import('../lib/mail-watch.js'))
 const loadCredentials = lazyModule(() => import('../lib/credentials.js'))
 const loadConsent = lazyModule(() => import('../lib/consent.js'))
 const loadPolicy = lazyModule(() => import('../lib/policy/index.js'))
@@ -3358,6 +3361,12 @@ async function clientCommand(rawArgs) {
   const sub = rawArgs[0]
   const rest = rawArgs.slice(1)
   if (!sub || sub === 'help' || sub === '--help') { clientUsage(); return }
+  if (rest.includes('--help') || rest.includes('-h')) {
+    const usage = CUSTOMER_USAGE[sub]
+    if (usage) console.log(usage)
+    else clientUsage()
+    return
+  }
   if (sub === 'add') return clientAdd(rest)
   if (sub === 'list' || sub === 'ls') return clientList(rest)
   if (sub === 'show') return clientShow(rest)
@@ -3533,6 +3542,12 @@ function projectCommand(rawArgs) {
   const sub = rawArgs[0]
   const rest = rawArgs.slice(1)
   if (!sub || sub === 'help' || sub === '--help') { projectUsage(); return }
+  if (rest.includes('--help') || rest.includes('-h')) {
+    const usage = CUSTOMER_USAGE['project' + sub.charAt(0).toUpperCase() + sub.slice(1)]
+    if (usage) console.log(usage)
+    else projectUsage()
+    return
+  }
   if (sub === 'add') return projectAdd(rest)
   if (sub === 'list' || sub === 'ls') return projectList(rest)
   if (sub === 'show') return projectShow(rest)
@@ -5053,6 +5068,7 @@ function printPreferences() {
  * and unknown flags fail closed with E_USAGE instead of being ignored.
  */
 async function doctor(args = []) {
+  if (args.includes('--help') || args.includes('-h')) { console.log(DOCTOR_USAGE); return }
   const parsed = parseStrictFlags(args, {
     booleans: ['check-db', 'json', 'repair', 'dry-run', 'yes'],
     values: ['only'],
@@ -6776,6 +6792,14 @@ function familyStore({ write = false } = {}) {
 
 /** Shared strict flag parse that reports E_USAGE for the family commands. */
 function familyFlags(args, spec, usage) {
+  // Subcommand --help is a help request, not an unknown option. Before 0.4.2
+  // `kb add --help`/`mail account add --help` failed with E_USAGE because the
+  // strict flag parser only knew the documented values. Print the command's own
+  // usage block (no store/TOS/key needed) and let the caller return.
+  if (Array.isArray(args) && (args.includes('--help') || args.includes('-h'))) {
+    console.log(usage)
+    return null
+  }
   const parsed = parseStrictFlags(args, spec)
   if (!parsed.ok) { usageFail(parsed.error, usage); return null }
   return parsed
@@ -7047,7 +7071,9 @@ async function kbLinkCommand(rawArgs, unlink = false) {
 }
 
 const FACT_USAGE = [
-  'usage: advisers fact show <id> [--include-deleted] [--json]',
+  'usage: advisers fact add <subject> <predicate> <object> --quote "evidence" [--matter id] [--valid-from ISO] [--source ref]',
+  '                            [--doc <kb-doc-id>] [--relation source|mentions] [--supersedes <fact-id>] [--json]',
+  '       advisers fact show <id> [--include-deleted] [--json]',
   '       advisers fact history <id> [--json]',
   '       advisers fact as-of <YYYY-MM-DD|ISO> [--matter id] [--client id] [--subject s] [--predicate s] [--limit n] [--include-deleted] [--json]',
 ].join('\n')
@@ -7060,10 +7086,37 @@ async function factCommand(rawArgs) {
   const sub = rawArgs[0]
   try {
     if (!sub || sub === 'help' || sub === '--help') { console.log(FACT_USAGE); return }
-    const parsed = familyFlags(rawArgs.slice(1), { booleans: ['json', 'include-deleted'], values: ['matter', 'client', 'subject', 'predicate', 'limit', 'at'] }, FACT_USAGE)
+    const parsed = familyFlags(rawArgs.slice(1), { booleans: ['json', 'include-deleted'], values: ['matter', 'client', 'subject', 'predicate', 'limit', 'at', 'quote', 'valid-from', 'source', 'doc', 'relation', 'supersedes'] }, FACT_USAGE)
     if (!parsed) return
     const flags = parsed.flags
     const facts = await loadKbFacts()
+    if (sub === 'add') {
+      const usage = FACT_USAGE
+      const parsedAdd = familyFlags(rawArgs.slice(1), { booleans: ['json'], values: ['quote', 'matter', 'valid-from', 'source', 'doc', 'relation', 'supersedes'] }, usage)
+      if (!parsedAdd) return
+      const [subject, predicate, object] = parsedAdd.positional
+      if (!subject || !predicate || !object) { usageFail('fact add needs <subject> <predicate> <object>', usage); return }
+      if (typeof parsedAdd.flags.quote !== 'string' || !parsedAdd.flags.quote.trim()) { usageFail('--quote is required (the evidence for a manually entered fact)', usage); return }
+      if (parsedAdd.flags.doc !== undefined && parsedAdd.flags.relation === undefined) parsedAdd.flags.relation = 'source'
+      if (parsedAdd.flags.relation !== undefined && parsedAdd.flags.doc === undefined) { usageFail('--relation requires --doc', usage); return }
+      if (parsedAdd.flags.relation !== undefined && !['source', 'mentions'].includes(parsedAdd.flags.relation)) { usageFail('--relation must be source or mentions', usage); return }
+      const entry = await loadFactEntry()
+      const result = entry.factAdd(familyStore({ write: true }), {
+        subject,
+        predicate,
+        object,
+        quote: parsedAdd.flags.quote,
+        matterId: parsedAdd.flags.matter,
+        validFrom: parsedAdd.flags['valid-from'],
+        source: parsedAdd.flags.source,
+        docId: parsedAdd.flags.doc,
+        relation: parsedAdd.flags.relation,
+        supersedes: parsedAdd.flags.supersedes,
+      })
+      if (parsedAdd.flags.json) { console.log(JSON.stringify(result, null, 2)); return }
+      console.log((result.deduped ? 'existing ' : 'added ') + factLine(result.fact))
+      return
+    }
     if (sub === 'show') {
       const id = parsed.positional[0]
       if (!id) { usageFail('missing fact id', FACT_USAGE); return }
@@ -7230,6 +7283,7 @@ const MAIL_USAGE = [
   'usage: advisers mail account add --name n --host h [--port 993] [--tls tls|starttls] --user u [--pass-stdin]',
   '                                [--mailbox INBOX] [--retention-days 30] [--client id] [--matter id] [--json]',
   '       advisers mail account ls|show <account>|rm <account> [--json]',
+  '       advisers mail account test <account> [--mailbox INBOX] [--timeout 30s] [--json]  (read-only IMAP probe)',
   '       advisers mail sync [<account>] [--full] [--dry-run] [--since-days 30] [--limit 50] [--mailbox INBOX] [--json]',
   '       advisers mail ls [--account a] [--client id] [--status s] [--since 30d] [--limit n] [--json]',
   '       advisers mail show <id> [--body] [--json]',
@@ -7249,7 +7303,7 @@ function mailHumanRow(message) {
 async function mailAccountCommand(args) {
   const sub = args[0]
   const rest = args.slice(1)
-  const usage = 'usage: advisers mail account add|ls|show|rm ...'
+  const usage = 'usage: advisers mail account add|ls|show|test|rm ...'
   if (!sub || sub === 'help' || sub === '--help') { console.log(MAIL_USAGE); return }
   const mail = await loadMail()
   if (sub === 'add') {
@@ -7304,6 +7358,19 @@ async function mailAccountCommand(args) {
     console.log('mailbox=' + account.mailbox + ' retentionDays=' + account.retentionDays + ' credential=' + (account.hasCredential ? 'stored' : 'missing') + (account.lastSyncAt ? ' lastSyncAt=' + account.lastSyncAt : ''))
     return
   }
+  if (sub === 'test') {
+    const parsed = familyFlags(rest, { booleans: ['json'], values: ['mailbox', 'timeout'] }, usage)
+    if (!parsed) return
+    const ref = parsed.positional[0]
+    if (!ref) { usageFail('missing account id or name', usage); return }
+    const timeoutMs = parsed.flags.timeout === undefined ? undefined : familyInteger(parsed.flags.timeout, '--timeout', 1, 120) * 1000
+    const probe = await loadMailProbe()
+    const result = await probe.mailAccountTest(familyStore(), ref, { home: HOME, mailbox: parsed.flags.mailbox, timeoutMs })
+    if (parsed.flags.json) { console.log(JSON.stringify(result, null, 2)); return }
+    console.log('IMAP ok  ' + result.accountId + '  ' + result.host + ':' + result.port + ' (' + result.tls + ')  mailbox=' + result.mailbox + '  latency=' + result.latencyMs + 'ms')
+    console.log('uidValidity=' + String(result.uidValidity ?? '-') + ' messages=' + String(result.messages ?? '-') + ' capabilities=' + result.capabilities.count + (result.capabilities.flags.idle ? ' idle' : '') + (result.capabilities.flags.starttls ? ' starttls' : ''))
+    return
+  }
   if (sub === 'rm' || sub === 'remove') {
     const parsed = familyFlags(rest, { booleans: ['json', 'purge-messages'], values: [] }, usage)
     if (!parsed) return
@@ -7317,34 +7384,108 @@ async function mailAccountCommand(args) {
   usageFail('unknown mail account subcommand: ' + sub, MAIL_USAGE)
 }
 
+function mailWatchInterval(value) {
+  if (value === undefined) return undefined
+  const text = String(value).trim().toLowerCase()
+  const match = /^(\d+)(ms|s|m|h)?$/.exec(text)
+  if (!match) return null
+  const amount = Number(match[1])
+  const unit = match[2] ?? 's'
+  const ms = unit === 'ms' ? amount : unit === 's' ? amount * 1000 : unit === 'm' ? amount * 60_000 : amount * 3_600_000
+  if (ms < 1000 || ms > 24 * 3_600_000) return null
+  return ms
+}
+
 async function mailSyncCommand(args) {
-  const usage = 'usage: advisers mail sync [<account>] [--full] [--dry-run] [--since-days n] [--limit n] [--mailbox INBOX] [--json]'
-  const parsed = familyFlags(args, { booleans: ['json', 'full', 'dry-run'], values: ['account', 'since-days', 'limit', 'mailbox'] }, usage)
+  const usage = 'usage: advisers mail sync [<account>] [--full] [--dry-run] [--since-days n] [--limit n] [--mailbox INBOX] [--json] [--watch [--interval 300s] [--max-runs n]]'
+  const parsed = familyFlags(args, { booleans: ['json', 'full', 'dry-run', 'watch'], values: ['account', 'since-days', 'limit', 'mailbox', 'interval', 'max-runs'] }, usage)
   if (!parsed) return
   const flags = parsed.flags
+  const intervalMs = mailWatchInterval(flags.interval)
+  if (flags.interval !== undefined && intervalMs === null) { usageFail('--interval must be 1s..24h (for example 300s or 5m)', usage); return }
+  const maxRuns = flags['max-runs'] === undefined ? Infinity : familyInteger(flags['max-runs'], '--max-runs', 1, 100000)
+  if (flags.watch !== true && (flags.interval !== undefined || flags['max-runs'] !== undefined)) { usageFail('--interval/--max-runs are only valid with --watch', usage); return }
   const mail = await loadMail()
-  const store = familyStore({ write: true })
   const requested = parsed.positional[0] ?? flags.account
-  let accounts
-  if (requested) accounts = [String(requested)]
-  else {
-    const listed = mail.mailAccountList(store, { home: HOME })
-    accounts = listed.accounts.filter((account) => account.status === 'active' && (account.tls === 'tls' || account.tls === 'starttls')).map((account) => account.id)
-    if (!accounts.length) throw familyError('E_MAIL_CONFIG', 'no IMAP account is configured', 'add one with advisers mail account add')
+  const sinceDays = flags['since-days'] === undefined ? undefined : familyInteger(flags['since-days'], '--since-days', 1, 3650)
+  const limit = flags.limit === undefined ? undefined : familyInteger(flags.limit, '--limit', 1, 200)
+
+  // One round opens the ledger, syncs every selected account and (in watch mode)
+  // closes it again before sleeping: a foreground watch must not hold the writer
+  // lock for hours while the operator works in another terminal.
+  const round = async ({ closeStore = false } = {}) => {
+    const store = familyStore({ write: true })
+    try {
+      let accounts
+      if (requested) accounts = [String(requested)]
+      else {
+        const listed = mail.mailAccountList(store, { home: HOME })
+        accounts = listed.accounts.filter((account) => account.status === 'active' && (account.tls === 'tls' || account.tls === 'starttls')).map((account) => account.id)
+        if (!accounts.length) throw familyError('E_MAIL_CONFIG', 'no IMAP account is configured', 'add one with advisers mail account add')
+      }
+      const results = []
+      for (const account of accounts) {
+        results.push(await mail.mailSync(store, account, {
+          full: flags.full === true,
+          dryRun: flags['dry-run'] === true,
+          sinceDays,
+          limit,
+          mailbox: flags.mailbox,
+          home: HOME,
+        }))
+      }
+      return requested ? results[0] : { ok: true, command: 'mail sync', results }
+    } finally {
+      if (closeStore) { try { store.close?.() } catch {} }
+    }
   }
-  const results = []
-  for (const account of accounts) {
-    results.push(await mail.mailSync(store, account, {
-      full: flags.full === true,
-      dryRun: flags['dry-run'] === true,
-      sinceDays: flags['since-days'] === undefined ? undefined : familyInteger(flags['since-days'], '--since-days', 1, 3650),
-      limit: flags.limit === undefined ? undefined : familyInteger(flags.limit, '--limit', 1, 200),
-      mailbox: flags.mailbox,
-      home: HOME,
-    }))
+
+  if (flags.watch === true) {
+    const { runMailWatch } = await loadMailWatch()
+    const controller = new AbortController()
+    let interrupted = false
+    const onSignal = () => {
+      if (controller.signal.aborted) process.exit(130)
+      interrupted = true
+      controller.abort()
+    }
+    process.on('SIGINT', onSignal)
+    process.on('SIGTERM', onSignal)
+    try {
+      const summary = await runMailWatch({
+        syncOnce: () => round({ closeStore: true }),
+        intervalMs,
+        maxRuns,
+        signal: controller.signal,
+        onResult: (record) => {
+          if (record.ok) {
+            const payload = record.result
+            const results = Array.isArray(payload?.results) ? payload.results : (payload ? [payload] : [])
+            const totals = results.reduce((acc, result) => ({
+              fetched: acc.fetched + Number(result.fetched ?? 0),
+              inserted: acc.inserted + Number(result.inserted ?? 0),
+              skipped: acc.skipped + Number(result.skipped ?? 0),
+              failed: acc.failed + Number(result.failed ?? 0),
+            }), { fetched: 0, inserted: 0, skipped: 0, failed: 0 })
+            console.log('watch round ' + record.run + ': fetched=' + totals.fetched + ' inserted=' + totals.inserted + ' skipped=' + totals.skipped + ' failed=' + totals.failed + ' next=' + Math.round(record.nextDelayMs / 1000) + 's')
+          } else {
+            console.error('watch round ' + record.run + ' failed: ' + (record.error?.message ?? 'unknown') + '; next=' + Math.round(record.nextDelayMs / 1000) + 's')
+          }
+        },
+      })
+      if (flags.json) { console.log(JSON.stringify(summary, null, 2)); return }
+      console.log('mail watch stopped: ' + summary.stopped + ' runs=' + summary.runs + ' success=' + summary.success + ' errors=' + summary.errors)
+      if (summary.stopped === 'aborted' && interrupted) process.exitCode = 130
+    } finally {
+      process.removeListener('SIGINT', onSignal)
+      process.removeListener('SIGTERM', onSignal)
+    }
+    return
   }
-  const payload = requested ? results[0] : { ok: true, command: 'mail sync', results }
+
+  const payload = await round()
   if (flags.json) { console.log(JSON.stringify(payload, null, 2)); return }
+  const results = Array.isArray(payload.results) ? payload.results : [payload]
   for (const result of results) console.log('sync ' + result.accountId + ' ' + result.mailbox + ': fetched=' + result.fetched + ' inserted=' + result.inserted + ' skipped=' + result.skipped + ' failed=' + result.failed + ' duplicates=' + result.duplicates + (result.dryRun ? ' (dry-run)' : '') + (result.needsResync ? ' NEEDS-RESYNC(--full)' : ''))
 }
 
@@ -10805,7 +10946,14 @@ function checkBackupReadable(check) {
   let store = null
   try {
     store = new SqliteStore(backup, { readOnly: true, checkIntegrity: true })
-    check('db-backup', true, `${basename(backup)} (readable, quick_check ok)`)
+    // Age is informational: a readable old backup is still a PASS, but the
+    // operator should know that the newest managed copy is stale.
+    let age = ''
+    try {
+      const days = (Date.now() - statSync(backup).mtimeMs) / 86_400_000
+      age = `; age ${days.toFixed(1)}d${days > 7 ? ' (older than 7 days; run `advisers backup`)' : ''}`
+    } catch {}
+    check('db-backup', true, `${basename(backup)} (readable, quick_check ok)${age}`)
   } catch (error) {
     check('db-backup', false, `${basename(backup)}: ${String(error?.message ?? error).slice(0, 200)}`)
   } finally {
@@ -11238,10 +11386,11 @@ function reportSyncPullResult(result) {
 }
 
 async function syncCommand(args) {
+  if (args.includes('--help') || args.includes('-h')) { console.log('usage: advisers sync push|pull|status --dir <sync-dir> [--force] [--file name] [--device name] [--dry-run] [--json]'); return }
   const { flags, positional } = parseFlags(args)
   const sub = positional[0]
   const dir = typeof flags.dir === 'string' ? flags.dir : undefined
-  if (!dir) { console.error('usage: advisers sync push|pull|status --dir <sync-dir>'); process.exitCode = 1; return }
+  if (!dir) { console.error('usage: advisers sync push|pull|status --dir <sync-dir> [--dry-run]'); process.exitCode = 1; return }
   if (sub === 'status') {
     const { listSnapshots } = await loadSync()
     const snaps = listSnapshots(dir)
@@ -11279,6 +11428,7 @@ async function syncCommand(args) {
     } catch (error) { console.error(`sync push failed: ${error.message}`); process.exitCode = 1 }
   } else if (sub === 'pull') {
     const force = Boolean(flags.force)
+    const dryRun = flags['dry-run'] === true
     const { pullSnapshot, cleanupStalePullTemps } = await loadSync()
     try {
       // Capture the local write time before checkpointing (checkpoint touches mtime).
@@ -11296,7 +11446,16 @@ async function syncCommand(args) {
         force,
         localMtimeMs,
         localDevice: await readSyncDevice(),
+        dryRun,
       })
+      if (dryRun) {
+        if (flags.json) { console.log(JSON.stringify(result, null, 2)); return }
+        const snapshotLabel = `${result.file} (${result.device ?? 'unknown device'}, ${result.createdAt ?? 'unknown time'})`
+        for (const warning of result.warnings ?? []) console.error('warning: ' + warning)
+        if (!result.wouldChange) console.log(`dry-run: no change; the local database already matches ${snapshotLabel}`)
+        else console.log(`dry-run: would ${result.wouldStatus === 'bootstrapped' ? 'bootstrap from' : result.wouldStatus === 'forced' ? 'force-replace with' : 'pull'} ${snapshotLabel}${result.wouldBackup ? '; a backup of the current database would be written first' : ''}; local database unchanged`)
+        return
+      }
       // 0.2.3 Wave 1: distinguish bootstrapped / forced / plain pull / unchanged.
       reportSyncPullResult(result)
       if (result.changed) {
@@ -12695,6 +12854,9 @@ async function tosGate() {
   // Offline receipt verification must work on a clean machine without a
   // ~/.advisers consent record (docs/DELIVERY-RECEIPT.md); it reads only <dir>.
   else if (command === 'evidence' && args[0] === 'verify') return
+  // `--help`/`-h` anywhere is a pure help request: it must work before TOS
+  // acceptance (and before HOME/database setup), like the top-level help.
+  else if (args.includes('--help') || args.includes('-h')) return
   else if (TOS_EXEMPT_COMMANDS.has(command) || !KNOWN_COMMANDS.has(command)) return
   const tos = await loadTos()
   const { info } = resolveTosFacts(tos)

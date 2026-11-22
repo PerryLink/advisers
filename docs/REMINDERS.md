@@ -392,6 +392,25 @@ source data). 0.4.0 adds two additive views and one explicit write path:
   if the machine is off at 08:30, that day has no archive; `status` only shows the
   last recorded run.
 
+## Reachability and data-safety boundary (audited 2026-11-22)
+
+- **No cloud push, no companion app, no retry/outbox.** Reachability is the local
+  notification adapter plus the opt-in webhook; a missed scheduled run (machine
+  off, cron/Task Scheduler skipped) is not replayed.
+- **IM/phone reachability is not built in.** The only IM path is the optional,
+  externally installed Hermes gateway via `advisers bridge --dir`: a foreground
+  long-running process that exchanges plaintext JSON files with a local directory.
+  Delivery is at-least-once by design; pairing, platform auth and approval UX stay
+  on the Hermes side (Advisers has no approval-card UI). Without Hermes there is
+  no IM or phone channel.
+- **Backup/sync are manual whole-database operations.** `backup`/`restore` and the
+  E2EE `sync push/pull` snapshots cover `state.db` (last-snapshot-wins, no merge,
+  not continuous). They do **not** cover the plaintext files this page creates —
+  `scheduler/status.json`, `reminders.log`, `morning.log`, archived briefs under
+  `briefs/` — or the OS cron/Task Scheduler registration. A restored database does
+  not restore the schedule or the brief archive. See [SYNC.md](SYNC.md).
+- See [AUDIT-2026-11-22.md](AUDIT-2026-11-22.md) for the verified list.
+
 ## Design constraints
 
 - **No background daemon by default.** `remind install` writes user-level
