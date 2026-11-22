@@ -372,9 +372,10 @@ changelog copy.
 ### 0.4.3 (2026-11-22)
 
 - **Published:** npm `latest` = 0.4.3, `next` = 0.4.3; all eight workspace packages
-  lockstep at 0.4.3 (six published). Tag: `v0.4.3`, annotated object `TBD` (fill after
-  tag creation) -> commit `TBD` (fill after tagging); published from `refs/tags/v0.4.3`
-  (publish run `TBD`, fill after dispatch).
+  lockstep at 0.4.3 (six published). Tag: `v0.4.3`, annotated object
+  `24174b0ce156ae431db95dd6453d40590fd50143` -> commit
+  `6c4efbc64001b694c62c62c587d4761ead2c5525`; published from `refs/tags/v0.4.3`
+  (publish run 45019145773).
 - **Release shape:** patch on 0.4.2 — Chinese relative dates for `--due`, local-rule
   `capture` from stdin plus the read-only `inbox`, explicit-null `doctor --report` /
   `privacy --prove --brief` / `profile`, the enhanced `remind --ics` export with a
@@ -390,19 +391,24 @@ changelog copy.
 - **Artifacts:** CycloneDX SBOM and `SHA256SUMS` attached to the GitHub Release; the
   Windows portable ZIP `advisers-0.4.3-win-x64.zip` is assembled after the npm publish
   from the published tarballs (offline channel; verify its hash and attestation, it is
-  not npm-provenance-covered). Hashes: portable ZIP `TBD` and size `TBD`; SBOM asset
-  `TBD`; `SHA256SUMS-0.4.3.txt` asset `TBD`; `SHA256SUMS-0.4.3-portable.txt` asset `TBD`.
+  not npm-provenance-covered). Hashes: portable ZIP
+  `2ea8b9db44f7d93373820384487a64a771561003835207782701f446d1837cc2`
+  (51,810,311 B); SBOM asset
+  `2ced0c88d9e59a7ade77c93df21eb4d93a378795995ca72f6290d1668c832d8a`
+  (248,918 B); `SHA256SUMS-0.4.3.txt` asset
+  `1d68067c9e7e75da8e47a48282c4bd1effca25b7a30c6a3ab6e18d8413251ae1`;
+  `SHA256SUMS-0.4.3-portable.txt` asset
+  `802efe857d7c38e52df55982b3faebef66adee0e4a52d95a4e6b51d778770f15`.
 - **Verification:** `verify-release --version 0.4.3 --tag latest --sbom
-  artifacts/sbom.cdx.json --require-sbom` -> `TBD` checks PASS (fill after publish); CI
-  on the release commit `TBD` (fill after push; Linux Node 22.16/24, `windows-smoke` and
-  blocking `windows-full`). Local pre-tag evidence on this release tree:
+  artifacts/sbom.cdx.json --require-sbom` -> **228 checks PASS**; CI on the release
+  commit 45018727017 (success; Linux Node 22.16/24, `windows-smoke` and blocking
+  `windows-full`). Local pre-tag evidence on this release tree:
   `check-docs`/`check-release`/`check-licenses` pass, `check-contracts` 90 checks PASS
   (193 registered CLI codes), the 14 targeted 0.4.3 test files pass (129 tests) and
   `node scripts/restore-drill.mjs` PASS on Linux (Node 24.22.1).
 - **Release notes / assets:** <https://github.com/PerryLink/advisers/releases/tag/v0.4.3>
-  (created `TBD` with the SBOM, six-tarball `SHA256SUMS`, portable ZIP and its
-  checksums). After the publish, 0.4.2 is deprecated on npm with a pointer to 0.4.3.
-  The `TBD` placeholders are filled by the release operator after the publish.
+  (created 2026-11-22T12:09:08Z with the SBOM, six-tarball `SHA256SUMS`, portable ZIP
+  and its checksums). 0.4.2 is deprecated on npm with a pointer to 0.4.3.
 
 ### 0.4.2 (2026-11-22)
 
