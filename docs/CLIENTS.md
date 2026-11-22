@@ -10,7 +10,7 @@ dimension: a **receivables/payments money sidecar** (§11), an offline-verifiabl
 **client status pack v2** (§9.2) and **mail-to-client hints** that are shown but
 never bound automatically (§12).
 
-- Status: **0.4.2, schema v22** (`SCHEMA_VERSION = 22`). The customer tables are
+- Status: **0.4.3, schema v22** (`SCHEMA_VERSION = 22`). The customer tables are
   still the three v21 tables (`clients`/`projects`/`client_notes`); v22 adds the
   money sidecar (`receivables`/`payments`) plus the KB/mail tables.
 - Store: SQLite only. The legacy `ADVISERS_STORE=json` store has no customer
@@ -396,6 +396,21 @@ Invariants:
    money rows in the same transaction; `client archive` fails closed while unsettled
    receivables exist; `purge <matter>` does **not** delete customer/money rows (see
    [PRIVACY.md](PRIVACY.md) §7.3).
+
+### 11.1 CSV export (0.4.3)
+
+`advisers receivable export --out <file> [--bom] [--clearance n] [--json]` writes the
+receivable read model as RFC 4180 CSV for an accountant or spreadsheet: 16 fixed
+columns (`receivable_id,client_name,date,label,currency,amount,paid,outstanding,due_at,state,overdue_days,kind,quote_no,delivery_id,commitment_id,memo`),
+CRLF records, deterministic order (overdue first, then due date, createdAt desc, id),
+no totals row, formula-injection neutralised with a leading apostrophe. The file is
+written atomically with `0600` mode and an explicit `--out` is required (no HOME
+default path); `--out -` streams only the CSV to stdout and `--json` returns metadata
+only (`csvVersion`, `profile`, `rowCount`, `total`, `clearance`, `protectedExcluded`) —
+never client names or amounts. Clearance filters before counting, and more matching
+rows than the cap fails closed. Quote numbers come only from the receivable's
+delivery link, never guessed. The generic profile is the only column profile; Wave/
+Xero/FreshBooks templates are deliberately not implemented yet.
 
 Out of scope by design: invoices, receipts, statements of account, dunning letters,
 bank/payment-channel reconciliation, FX, tax/accounting/legal advice, and any

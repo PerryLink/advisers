@@ -5,14 +5,17 @@ parsing human text. JSON mode never mixes human prose into stdout; diagnostics g
 stderr and `--json` must not require a TTY. Shapes are additive: new optional keys may
 appear, existing keys keep their meaning.
 
-> Status: **0.4.2 (schema v22)**. Every 0.4.x change in this document is additive
+> Status: **0.4.3 (schema v22)**. Every 0.4.x change in this document is additive
 > inside the v1 contract: new commands, new optional fields and new `--scope` values.
 > Existing commands, keys, ordering and exit codes are unchanged, so a 0.3.2 consumer
-> keeps working without modification. The 0.4.0-only additions are marked
-> **(0.4.0)**; the 0.4.1 follow-ups (KB/mail review links, reminder delivery policy) and
-> the 0.4.2 follow-ups (manual fact entry, mail probe/watch, `sync pull --dry-run`, the
-> backup-age hint and subcommand `--help`) are called out inline; anything not marked is
-> 0.3.2/earlier behaviour.
+> keeps working without modification — with two deliberate 0.4.3 exceptions that scripts
+> must handle: keyless `capture` now succeeds as a local-rule run instead of exiting 1
+> (`capture --model` keeps the missing-key exit 1), and `--help`/`-h` is a global exit-0
+> short-circuit. The 0.4.0-only additions are marked **(0.4.0)**; the 0.4.1 follow-ups
+> (KB/mail review links, reminder delivery policy) and the 0.4.2 follow-ups (manual fact
+> entry, mail probe/watch, `sync pull --dry-run`, the backup-age hint and subcommand
+> `--help`) are called out inline; the 0.4.3 additions are collected in §0.4.3 additive
+> surfaces; anything not marked is 0.3.2/earlier behaviour.
 
 ## Current JSON surfaces (2026-11; 0.2.3 additions marked)
 
@@ -686,6 +689,61 @@ third-party attestation (`verificationBasis: "local-checksums-only"`).
 - `status --json`: additive 0.4.0 counts `receivables` and `payments` (row counts,
   never amounts); existing v1 keys keep their meaning. Treat any further new key as
   additive.
+
+## 0.4.3 additive surfaces (2026-11-22)
+
+All new shapes are additive; the 0.4.2 shapes above are unchanged. New commands
+are documented-additive (no frozen v1 entry removed).
+
+- `commit add/edit --due` and `receivable add/edit --due` accept Chinese relative
+  dates (今天/明天/后天/周X/下周X/月底/季度末/N 天后/YYYY-MM-DD/ISO). Human output
+  adds a `due 解析：…` line; JSON adds a `due:{raw,at,calendar,basis,ambiguous}`
+  object. Failures are `E_DUE_UNRESOLVED` (unparseable) and `E_DUE_CONFLICT`
+  (multiple different dates); the raw string is never written to the ledger.
+- `capture --file -` / positional `-` reads stdin; `capture --rules` (or
+  `--local`) forces the zero-model local rules even when a model key is set.
+  With no key, capture now defaults to local rules (pending candidates),
+  prints a `[local]` note on stderr and performs zero network calls;
+  `capture --model` keeps the 0.4.2 key requirement. Empty/oversized input are
+  `E_CAPTURE_EMPTY`/`E_CAPTURE_TOO_LONG`.
+- `inbox ls|show [--json]`: read-only view over pending memory candidates with
+  clearance filtering before counting (`protectedExcluded`), no accept and no
+  writes. Unknown/not-pending ids are `E_CANDIDATE_NOT_FOUND`; above-clearance
+  rows are `E_POLICY_DENIED`.
+- `doctor --report --json`: `{ok,mode:"report",reportVersion:1,generatedAt,
+  advisersVersion,schemaVersion,measured,nulls,notices,limitations}`.
+  `measured` keys (modelQuality, semanticCorrectness, captureQuality,
+  independentGoldStandard, realMailAccount, win11RealMachine, windowsClientIme,
+  officeAppFidelity, externalTimestamp) are explicitly `null` with one reason
+  per `nulls[]` entry; they must never be reported as 0/false/PASS.
+- `privacy --prove --brief [--json]`: a fixed four-line brief
+  (at-rest/sync/export/egress) sourced from PRIVACY/SYNC/AT-REST-VAULT; without
+  `--brief` the 0.4.2 output is unchanged.
+- `profile show|export` (JSON/Markdown): read-only grouping of preferences by
+  scope/kind with authority/lastConfirmed/decay/priority and a deterministic
+  `dataSha256`; `export` requires an explicit `--out` (0600). No writes/model/
+  network.
+- `mail sync --watch`: `--once`, `--json-lines`, `--json`; JSON stdout is a
+  single final summary (round lines go to stderr). Exit codes: 0 = at least one
+  successful round, 1 = all rounds/config failed, 130 = SIGINT, 143 = SIGTERM.
+  An empty account list fails immediately with `E_MAIL_CONFIG` (no empty round).
+- `remind --ics`: emits `VTIMEZONE` (`TZID=Asia/Shanghai`), local-wall
+  `DTSTART;TZID=…` and a VALARM description carrying the commitment id; the
+  default human/JSON reminder output is unchanged. `remind --deliver --notify`
+  adds a per-commitment 24h notification cooldown; the local reminders log is
+  still written on every delivery and `--force-notify` bypasses the cooldown.
+- `template quote`/`template proposal` schema v2 (explicit `schemaVersion:2`)
+  adds `payment.channels[]` (bank/wechat/alipay/stripe_link/wise_link, masked
+  accounts/URLs); v1 documents still reject the field and their output is
+  unchanged. `verify --content --template quote` adds
+  `quote.payment_channels`, `quote.payment_url` and `quote.no_full_account`.
+- `receivable export --csv --out <file>`: RFC 4180 CRLF, 16 fixed columns,
+  deterministic order, no totals, formula-injection prefix, 0600 file; `--out -`
+  writes only the CSV to stdout. `--json` returns metadata only (no customer
+  names/amounts). Requires an explicit `--out` (no HOME default path).
+- `--help` / `-h` is a global short-circuit: no command or subcommand executes
+  side effects, including `init`, `ui`, `purge` and nested subcommands; it does
+  not require TOS acceptance or a HOME.
 
 ## Exit codes
 

@@ -9,6 +9,8 @@
 - 0.4.0 adds an explainable **urgency v1** score (`terms`/`whyNow`, model version 1)
   to remind/agenda/morning output, a deterministic **morning brief archive**, a
   **second scheduler block** for the morning brief and scheduler **status v2**.
+- 0.4.3 adds ICS interop metadata (`VTIMEZONE`/`TZID`/commitment ids) to the CLI
+  export and a per-commitment 24h notification cooldown (see below).
 
 ```sh
 advisers remind                      # human view
@@ -28,7 +30,9 @@ advisers morning [--json] [--now ISO] [--top 1..5]       # deterministic brief +
 advisers morning --archive [--keep 1..365] [--out f]    # archive under ~/.advisers/briefs/
 ```
 
-> Runtime quiet-hours/dedupe below are shipped in **0.4.1**; the 0.4.0 npm tarball only baked `--quiet-hours` into the scheduler script.
+> Runtime quiet-hours/dedupe below are shipped in **0.4.1**; the per-commitment 24h
+> notification cooldown is **0.4.3**; the 0.4.0 npm tarball only baked `--quiet-hours`
+> into the scheduler script.
 
 ## Urgency v1 and `whyNow` (0.4.0, deterministic)
 
@@ -119,6 +123,14 @@ back to `options.reminderOffsets` and then to the legacy alarms. With offsets:
 - the alarm `DESCRIPTION` carries the commitment title plus a human label
   (`提前 1 天`, `当天 09:00`, …) — never the creditor, matter, evidence or
   message body. `SUMMARY`/UID/title behaviour is unchanged.
+
+**0.4.3 CLI export metadata (opt-in in the library).** `advisers remind --ics` now
+emits an explicit `VTIMEZONE` (`TZID=Asia/Shanghai`), a local-wall
+`DTSTART;TZID=Asia/Shanghai:…`, an `X-ADVISERS-COMMITMENT-ID` property per event and
+the opaque commitment id appended to every `VALARM DESCRIPTION` (` · 承诺 <id>`), so a
+TickTick/Feishu/Outlook import keeps a match back to the local row. The library
+`toIcs()` defaults (no `tzid`, no `alarmCommitmentId`) still produce the 0.4.2 bytes;
+the event UID and `SUMMARY` behaviour is unchanged.
 
 `buildReminders` attaches `reminderOffsets` to a reminder only when the
 commitment is customised, so the historical reminder object shape is unchanged
@@ -332,6 +344,13 @@ advisers remind status                  # scripts/logs + last runs (remind + mor
   reminder (30-day pruning). A second `remind --deliver --notify` on the same local
   day is recorded as `deduped` and sends nothing unless `--force-notify` is passed.
   The log line is still written; dedupe state is local metadata only.
+- **Per-commitment 24h cooldown (0.4.3):** `remind --deliver --notify` also skips a
+  commitment whose notification was sent within the previous 24 hours
+  (`notify:cooldown:<commitment>` meta row, 7-day pruning). When the whole batch is
+  cooled the channel is recorded as `cooldown-suppressed`; a partially cooled batch
+  sends the remaining reminders and lists the skipped count on stderr. The local
+  `reminders.log` line is still written for every delivery, and `--force-notify`
+  bypasses both the dedupe and the cooldown for one explicit run.
 - `status` prints the scheduler directory/logs, the `readSchedulerStatusV2()`
   record (both `remind` and `morning` sections), and both OS plans
   (`planCronStatus` with the live crontab text, or the `schtasks /Query` argv on

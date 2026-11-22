@@ -80,14 +80,15 @@ test('mail account test rejects the local .eml account without any network', () 
   } finally { rmSync(root, { recursive: true, force: true }) }
 })
 
-test('mail sync --watch runs bounded rounds and reports errors instead of exiting', () => {
+test('mail sync --watch fails fast on an empty home and validates its interval', () => {
   const { root, home } = setup('mail-watch')
   try {
     ok(home, ['init'])
-    const result = json(home, ['mail', 'sync', '--watch', '--max-runs', '1', '--json'])
-    assert.equal(result.runs, 1)
-    assert.equal(result.errors, 1)
-    assert.equal(result.stopped, 'max-runs')
+    // 0.4.3: an empty account list is a startup configuration error, not an
+    // empty round; the detailed watch summary is covered by bin-043 tests.
+    const result = run(home, ['mail', 'sync', '--watch', '--max-runs', '1', '--json'])
+    assert.equal(result.status, 1)
+    assert.match(result.stderr, /E_MAIL_CONFIG/)
     const bad = run(home, ['mail', 'sync', '--watch', '--interval', 'nope'])
     assert.equal(bad.status, 1)
     assert.match(bad.stderr, /--interval/)

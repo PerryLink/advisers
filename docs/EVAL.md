@@ -1,12 +1,16 @@
 # Deterministic eval suite (`pnpm eval:det`)
 
 > Status: introduced in the 0.3.0 line (published 2026-11-20); this tree is
-> `advisers@0.4.2` (the 0.4.0 feature release plus the 0.4.1/0.4.2 follow-up patches).
+> `advisers@0.4.3` (the 0.4.0 feature release plus the 0.4.1/0.4.2/0.4.3 follow-up patches).
 > The published 0.4.0 adds one deterministic case — `det.mcp.modern-dual-era` (MCP
 > `2026-07-28` modern envelopes behind the legacy surface); 0.4.1 adds the `kb`, `mail`
 > and `policy` groups (10 cases / 95 checks), for 30 cases / 277 checks in the default
 > run; 0.4.2 adds the separate local mail-extraction gold gate (30 synthetic fixtures,
-> not counted in the eval:det cases). The suite is a release gate for the deterministic contract, not a claim about
+> not counted in the eval:det cases). 0.4.3 adds **no new det case**: the `exit` group's
+> missing-key probe now runs `capture --model` (keyless `capture` succeeds locally with
+> the 0.4.3 default), and the new restore drill is a separate end-to-end script/test
+> (`scripts/restore-drill.mjs`, `test/restore-drill-e2e.test.js`) wired into Linux CI.
+> The suite is a release gate for the deterministic contract, not a claim about
 > model quality; the remaining KB/mail/policy/consent/receivable behaviour is also
 > covered by deterministic package tests.
 
@@ -64,7 +68,7 @@ removes `ADVISERS_API_KEY`, `DEEPSEEK_API_KEY`, `OPENAI_API_KEY`,
 `ADVISERS_MODEL` and `ADVISERS_BASE_URL` from every child environment and sets
 `ADVISERS_NO_MODEL=1`.
 
-## 0.4.0/0.4.1/0.4.2 coverage
+## 0.4.0/0.4.1/0.4.2/0.4.3 coverage
 
 The published 0.4.0 adds `det.mcp.modern-dual-era` in the `mcp` group (MCP
 `2026-07-28` dual-era: `server/discover`, per-request `_meta`, result envelopes,
@@ -84,6 +88,14 @@ deterministic groups:
 
 These cases run with a fresh temp `ADVISERS_HOME`, `TZ=Asia/Shanghai`, no model key and
 the network-block preload (0 network attempts).
+
+0.4.3 changes no det case count. The only edited case is the `exit` group's missing-key
+probe: it invokes `capture --model` because keyless `capture` is a successful local-rule
+run since 0.4.3 (pending candidates, `[local]` stderr note, zero network). The restore
+drill is deliberately outside `eval:det`: `scripts/restore-drill.mjs` runs a real CLI
+`init -> backup -> mutate -> restore` round trip on a throwaway `ADVISERS_HOME` and
+`test/restore-drill-e2e.test.js` asserts the PASS/FAIL/usage paths; Linux CI runs the
+script once on Node 22.16.
 
 Run the 0.4.0 deterministic package tests explicitly (no key, no network, temp
 `ADVISERS_HOME`):

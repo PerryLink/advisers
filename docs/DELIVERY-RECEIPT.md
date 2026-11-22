@@ -1,7 +1,8 @@
 # Delivery receipt pack and evidence pack v2 (verifier accepts v1)
 
-> Status: format + library implementation for **Advisers 0.4.2** (2026-11-22; the
-> formats are those shipped in 0.4.0 and are unchanged by the 0.4.1/0.4.2 patch releases).
+> Status: format + library implementation for **Advisers 0.4.3** (2026-11-22; the
+> formats are those shipped in 0.4.0 and are unchanged by the 0.4.1/0.4.2/0.4.3 patch
+> releases).
 > This document defines two on-disk formats — the **delivery receipt pack**
 > (manifest v2) and the **evidence pack** (manifest v2 since 0.4.0) — the offline
 > verifier contract, and the legal wording boundary. The delivery receipt pack

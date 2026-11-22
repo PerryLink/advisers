@@ -1,4 +1,4 @@
-# Interface contracts (0.3.0 minimal set; 0.4.0 adds the additive MCP modern era v2 and additive CLI read-model `$defs`; 0.4.1 extends the documented-additive CLI command/read-model set; 0.4.2 adds no contract entry; interface shapes frozen by 0.3.x stay unchanged)
+# Interface contracts (0.3.0 minimal set; 0.4.0 adds the additive MCP modern era v2 and additive CLI read-model `$defs`; 0.4.1 extends the documented-additive CLI command/read-model set; 0.4.2 adds no contract entry; 0.4.3 adds five additive error codes and no frozen-shape change; interface shapes frozen by 0.3.x stay unchanged)
 
 Advisers is CLI-first and its consumers (scripts, CI, MCP clients, the DSH host,
 Famling) need a machine-readable, versioned interface instead of prose. This
@@ -65,7 +65,11 @@ frozen v1 commands; when a shape stabilises it can be promoted to a frozen
 entry in a future contract revision. 0.4.2 adds **no contract change**: manual fact
 entry, the read-only mail probe, foreground mail watch and the `sync pull --dry-run`
 preview are documented additively in [docs/CLI-JSON.md](CLI-JSON.md), and the frozen v1
-entries keep their meaning.
+entries keep their meaning. 0.4.3 adds **no frozen-shape change** either: its five new
+CLI error codes (`E_CANDIDATE_NOT_FOUND`, `E_CAPTURE_EMPTY`, `E_CAPTURE_TOO_LONG`,
+`E_DUE_CONFLICT`, `E_DUE_UNRESOLVED`) are additive entries in the generated error
+registry (`contracts/errors/codes.v1.json`, `docs/ERROR-CODES.md`), and its new
+commands/flags are documented additively in [docs/CLI-JSON.md](CLI-JSON.md).
 
 ### Status and the discovery field (v1)
 
@@ -180,9 +184,9 @@ The gate runs **in CI on every PR** (the `test` job, after build/typecheck; see
 `.github/workflows/ci.yml`), so a shape change that is not reflected in the frozen
 artifacts fails the PR. It is offline (no credentials, no model, no network), uses a
 temporary `ADVISERS_HOME` under the OS temp directory, and removes it afterwards.
-Current tree: **90 checks PASS** (2026-11-22 0.4.2 tree, including the wired
+Current tree: **90 checks PASS** (2026-11-22 0.4.3 tree, including the wired
 `status.contracts` field, the real stdio MCP **dual-era** catalogue and the
-0.4.0 error-code layers). The eight checks:
+0.4.0/0.4.3 error-code layers — 193 registered CLI codes). The eight checks:
 
 | Check | Enforces |
 |---|---|

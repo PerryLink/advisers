@@ -1,5 +1,221 @@
 # Changelog
 
+## 0.4.3 (2026-11-22)
+
+Patch release on the 0.4.2 tree. **No schema migration, no new runtime
+dependency and no frozen-shape change**: the ledger stays schema v22, the
+packaged and public legal texts stay **v2026.11.4 (2026-11-21)**, and the
+published 0.4.0/0.4.1/0.4.2 CLI JSON, MCP and DSH shapes keep their meaning.
+0.4.3 carries the mainline follow-up work that landed after the `v0.4.2` tag —
+Chinese relative dates for `--due`, local-rule `capture` plus the read-only
+`inbox`, the explicit-null `doctor --report` / `privacy --prove --brief` /
+`profile` trust outputs, the enhanced `remind --ics` export and the
+per-commitment notification cooldown, quote/proposal schema v2 payment
+channels and the receivable CSV export, the end-to-end restore drill, the
+global `--help` short-circuit and the `mail sync --watch` JSON/exit contract —
+plus the documentation restated for this tarball.
+
+Status: **published 2026-11-22.** npm `latest` = `0.4.3`, and `next` also points
+at `0.4.3` after this release advanced it. The eight workspace packages are
+lockstep at `0.4.3`: the six published packages (`advisers`, `advisers-core`,
+`advisers-office`, `advisers-policy-strict`, `advisers-bridge-hermes`,
+`dsh-advisers`) and the two private `advisers-link-*` packages held at the same
+version. The eight internal workspace pins, the three version constants and
+`pnpm-lock.yaml` follow; the six per-package `THIRD-PARTY-NOTICES.md` files were
+regenerated (version line only; the dependency closure is unchanged from 0.4.2).
+The six tarballs are published from GitHub Actions OIDC/Trusted Publishing with
+SLSA provenance naming the release tag ref; verify with
+`node scripts/verify-release.mjs --version 0.4.3 --tag latest --sbom artifacts/sbom.cdx.json --require-sbom`.
+Release notes, the CycloneDX SBOM and `SHA256SUMS` are attached to
+<https://github.com/PerryLink/advisers/releases/tag/v0.4.3>; the tag object,
+publish run, `verify-release` count and asset hashes are recorded in
+[docs/RELEASING.md](docs/RELEASING.md) §13 once the publish completes.
+
+### Chinese relative dates for `--due` (behaviour change)
+
+- `commit add/edit --due` and `receivable add/edit --due` now resolve Chinese
+  relative dates and date-only ISO instead of writing the raw string: 今天 /
+  明天 / 后天 / 大后天, 本周X / 下周X, 月底 / 季度末 / 年底, calendar dates
+  (11月28日 / 2027年1月10日), N 天后 / N 周后 / N 个月后, an explicit time of
+  day (下周三下午3点半前), a bare `YYYY-MM-DD` (that day 18:00 Asia/Shanghai),
+  an ISO timestamp (passed through byte-for-byte) and any other
+  `Date.parse`-able string. Human output adds a
+  `due 解析：…` line and `--json` adds a `due:{raw,at,calendar,basis,ambiguous}`
+  object.
+- **Behaviour change:** 0.4.2 stored a non-ISO `--due` verbatim and silently;
+  it is now parsed to an instant, or fails with `E_DUE_UNRESOLVED` (no
+  date/time found) or `E_DUE_CONFLICT` (several different dates in one
+  expression). The raw string is never written to the ledger. Ambiguous
+  expressions (周五前, 月底前, 半个月后) still resolve and set `ambiguous: true`
+  rather than guessing silently.
+
+### Local capture and the read-only inbox (behaviour change)
+
+- `advisers capture` now reads stdin with `--file -` (or a positional `-`), so a
+  pasted note never has to be written to a temporary file; `--rules` / `--local`
+  force the deterministic local extractor even when a model key is set, and
+  `--source wechat|meeting|email|note|stdin|transcript|contract` records the
+  provenance channel (default `wechat`).
+- The local rules are the same rules as `mail extract --local` (verbatim quote,
+  relative dates, money, client hints) plus a clause-level negation guard
+  (`我不会在周五前交付` is not a promise) and a conversation source pointer
+  `capture:<sha256(text)[0:16]>`; they are zero-model and zero-network, cap
+  input at 20,000 characters and produce pending commitments only — nothing is
+  auto-accepted.
+- **Behaviour change:** with no `ADVISERS_API_KEY`, `capture` no longer fails
+  with a key error: it runs the local rules, prints a `[local]` note on stderr
+  and exits 0. `capture --model` keeps the 0.4.2 key requirement and its
+  missing-key exit 1. Empty and over-long input fail closed with the new
+  `E_CAPTURE_EMPTY` / `E_CAPTURE_TOO_LONG` codes.
+- `advisers inbox ls|show [--json]` is the read-only review surface over those
+  pending candidates: pending only, source filter before counting, matter-secrecy
+  clearance before paging (`protectedExcluded` count; protected ids and quotes
+  are never returned), quotes sanitised to one line capped at 120 code points.
+  Nothing is accepted here — `memory accept`/`memory reject` remain the write
+  path. Missing / non-pending ids are `E_CANDIDATE_NOT_FOUND`; an
+  above-clearance id is `E_POLICY_DENIED`.
+
+### Trust outputs: `doctor --report`, `privacy --prove --brief`, `profile`
+
+- `advisers doctor --report [--json]` emits a `reportVersion: 1` report whose
+  quality/verification dimensions (`modelQuality`, `semanticCorrectness`,
+  `captureQuality`, `independentGoldStandard`, `realMailAccount`,
+  `win11RealMachine`, `windowsClientIme`, `officeAppFidelity`,
+  `externalTimestamp`) are explicitly `null`, each with one reason in
+  `nulls[]`, plus stable notices and limitations. `ok` only mirrors the check
+  table; an unmeasured dimension is never reported as `0`, `false` or `PASS`.
+  `--report` is a read-only mode and cannot be combined with `--repair`.
+- `advisers privacy --prove --brief` prints a fixed four-line card
+  (`at-rest`, `sync`, `export`, `egress`) condensed from PRIVACY/SYNC/
+  AT-REST-VAULT, and `--json` returns the structured brief (`briefVersion: 1`).
+  Without `--brief` the full 0.4.2 facts/self-check output is unchanged.
+- `advisers profile show|export` is a read-only projection of the `preferences`
+  table grouped by scope then kind, carrying `authority`, `lastConfirmed`, the
+  0.8/30-day decay projection and a `dataSha256` over exactly the visible
+  fields; `export` writes Markdown/JSON only with an explicit `--out` (0600).
+  No model, no network, no ledger write, and two runs over the same rows are
+  byte-identical.
+
+### Reminders: enhanced ICS and the 24h notification cooldown (behaviour change)
+
+- `advisers remind --ics [path]` now writes an explicit `VTIMEZONE`
+  (`TZID=Asia/Shanghai`), a local-wall `DTSTART;TZID=…`, an
+  `X-ADVISERS-COMMITMENT-ID` property per event and the commitment id appended
+  to every `VALARM DESCRIPTION`, so a TickTick/Feishu/Outlook import can match
+  an alarm back to the local row. Human and `--json` reminder output is
+  unchanged. **Behaviour change:** the CLI `--ics` bytes differ from 0.4.2; the
+  library `toIcs()` default (no `tzid`, no `alarmCommitmentId`) keeps its 0.4.2
+  bytes for existing callers.
+- `remind --deliver --notify` adds a per-commitment 24-hour notification
+  cooldown: a commitment notified within the window is skipped from the
+  notification batch (channel `cooldown-suppressed`), while the local
+  `reminders.log` line is still written for every delivery and
+  `--force-notify` bypasses the cooldown for one explicit run. Bookkeeping is
+  local metadata only (`notify:cooldown:*`, pruned after 7 days) and adds no
+  egress.
+
+### Money: quote/proposal schema v2 and receivable CSV
+
+- `template quote` / `template proposal` accept an explicit `schemaVersion: 2`
+  document with `payment.channels[]`: `bank`, `wechat`, `alipay`,
+  `stripe_link` and `wise_link`. Bank accounts must be masked
+  (`****1234` / `尾号1234`), full 13–19 digit accounts and full mainland mobile
+  numbers are rejected, payment links must be `https` on `stripe.com` /
+  `wise.com` (or their subdomains), unknown fields fail closed and a document
+  carries at most 8 channels. v1 documents still reject `payment.channels`
+  (no silent v1 behaviour change), and v2 output records `templateVersion: "2"`.
+- `verify --content --template quote` on a v2 document adds the
+  `quote.payment_channels`, `quote.payment_url` and `quote.no_full_account`
+  checks; the existing template checks keep their meaning.
+- `receivable export --out <file> [--bom] [--clearance n] [--json]` writes the
+  RFC 4180 CSV an accountant can import: 16 fixed columns, CRLF, deterministic
+  order (overdue first, due date, createdAt desc, id), no totals row,
+  formula-injection neutralised with a leading apostrophe, 0600 file. `--out -`
+  streams only the CSV to stdout, an explicit `--out` is required (no HOME
+  default path), and `--json` returns metadata only — no client names or
+  amounts, with `protectedExcluded` counting the clearance-filtered rows.
+
+### Mail watch JSON and exit codes (behaviour change)
+
+- `advisers mail sync --watch` gains the machine contract: `--once` bounds a
+  single round, `--json` prints one final summary on stdout (per-round lines
+  go to stderr) and `--json-lines` prints one JSON document per round with the
+  summary last. Exit codes: `0` at least one successful round, `1` every round
+  or the configuration failed, `130` SIGINT, `143` SIGTERM; the summary names
+  `interruptedBy`. An empty account list fails immediately with `E_MAIL_CONFIG`
+  (no empty round), and invalid loop/output combinations are `E_USAGE` before
+  any round runs.
+- **Behaviour change:** 0.4.2 printed human round lines only; the human watch
+  keeps round-by-round lines on stderr and one final line on stdout, and
+  scripts that consumed the old stdout must switch to `--json-lines` for round
+  data. Process exit codes are now the documented 0/1/130/143 set.
+
+### Global `--help` short-circuit (behaviour change)
+
+- `--help` / `-h` anywhere — top level or after any command or nested
+  subcommand — is a pure help request: it prints the usage (specific where the
+  command has one, generic otherwise), exits 0 and executes no side effect.
+  `init --help` writes no `soul.md`, `purge --help` reads no matter id,
+  `ui --help` starts nothing, and help no longer requires TOS acceptance or a
+  home. **Behaviour change:** several 0.4.2 subcommands executed or failed with
+  `E_USAGE` on `--help`; they now short-circuit before any work.
+
+### Restore drill
+
+- `node scripts/restore-drill.mjs` runs an end-to-end round trip on a throwaway
+  `ADVISERS_HOME` created under the OS temp directory (the real home is never
+  read or written): `init` -> seed a commitment and a KB document -> managed
+  `backup` -> mutate the ledger and delete the KB document -> `restore
+  --dry-run` (the audit-anchor gate refuses the time travel without
+  `--allow-anchor-behind`) -> `restore --yes --allow-anchor-behind` -> assert
+  counts, the `export --all` `dataDigest`, the audit head (backup rows plus one
+  `db.restore` row), backup verification and `doctor --check-db`. It prints one
+  PASS/FAIL JSON object and exits 0/1; `test/restore-drill-e2e.test.js` covers
+  the PASS path plus the FAIL/usage paths. Linux CI runs it once on Node 22.16
+  (Windows is not wired yet; the library-level restore matrix stays in
+  `windows-full`).
+
+### Error registry, contracts and eval
+
+- Five error codes are registered and documented: `E_CANDIDATE_NOT_FOUND`,
+  `E_CAPTURE_EMPTY`, `E_CAPTURE_TOO_LONG`, `E_DUE_CONFLICT` and
+  `E_DUE_UNRESOLVED` (all exit 1, `since: 0.4.3`), for **193 CLI codes**;
+  `contracts/errors/codes.v1.json` and `docs/ERROR-CODES.md` are regenerated.
+  `check-contracts` reports **90 checks PASS** with the error layer green, and
+  the frozen v1 CLI/MCP/DSH shapes keep their meaning; the new commands and
+  flags are documented additively in [docs/CLI-JSON.md](docs/CLI-JSON.md)
+  §0.4.3 additive surfaces.
+- `eval:det` keeps its 30 cases / 277 checks default run (0.4.3 adds no new
+  case); the `exit` group's missing-key probe now uses `capture --model`, since
+  keyless `capture` is a successful local run as of this release.
+
+### Docs
+
+- Current-version statements move to 0.4.3 across the READMEs and the status
+  headers (`ARCHITECTURE`, `QUICKSTART`, `PERFORMANCE`, `SECURITY`, `SBOM`,
+  `EVAL`, `CONTRACTS`, `WINDOWS`, `DELIVERY-RECEIPT`, `KB`, `CLI-JSON`,
+  `CLIENTS`, `MCP`, `POSITIONING`, `RELEASING`, `contracts/README`,
+  `eval/det/README`); the 0.4.2/0.4.1/0.4.0 sections, §13 release records and
+  the audit/quality history keep their historical wording. The six
+  per-package `THIRD-PARTY-NOTICES.md` files were regenerated for the new
+  version line.
+
+Release gates on the 0.4.3 tree: `check-docs`, `check-release` and
+`check-licenses` pass after the version/docs bump; `check-contracts` passes with
+**90 checks** and **193 registered error codes**; the 14 targeted 0.4.3 test
+files pass (129 tests) and `node scripts/restore-drill.mjs` passes on Linux
+(Node 24.22.1). The post-publish `verify-release` run and its check count are
+recorded in [docs/RELEASING.md](docs/RELEASING.md) §13 once the publish
+completes.
+
+Still not in 0.4.3: model-backed `kb compile`/`kb ask`, embeddings/vector
+search, model mail extraction, a full PolicyGrant with exit 4-6, DSH ledger
+writes, TUI history persistence, Pet Brief v3, Homebrew/winget/MSI packaging,
+OAuth/CalDAV/SMTP, a resident daemon or inbox IDLE watch, an independent human
+gold set, the Wave/Xero/FreshBooks CSV column profiles and the external legal
+review — plus the Windows IME/Office/OneDrive/Terminal large-path items listed
+in [docs/WINDOWS.md](docs/WINDOWS.md) §8.
+
 ## 0.4.2 (2026-11-22)
 
 Patch release on the 0.4.1 tree. **No schema migration, no new runtime

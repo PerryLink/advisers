@@ -57,6 +57,24 @@ jobs:
       # material). Fast and dependency-free; see scripts/check-js.mjs.
       - run: node scripts/check-js.mjs
       - run: pnpm -r --if-present run test
+      # 0.4.3 restore drill (release item 043-6): a real CLI round trip on a
+      # throwaway ADVISERS_HOME created by the script itself -- init -> commit/kb
+      # seed -> managed backup -> mutate/delete -> restore -> counts/dataDigest/
+      # audit-head checks -> doctor --check-db. The script never reads or writes
+      # the user's home, and it asserts the audit-anchor-behind gate refuses the
+      # time-travel unless --allow-anchor-behind is passed deliberately. Run once,
+      # on the minimum supported Node, like the fault-injection suite, to keep the
+      # matrix fast.
+      #
+      # Windows is intentionally not wired here: the CLI round trip has not been
+      # observed on a real Windows runner yet, so it must not become a blocking
+      # Windows gate before that evidence exists (docs/WINDOWS.md). Windows keeps
+      # the library-level restore failure matrix via windows-full
+      # (packages/advisers/test/restore-drill.test.js); promote this step to the
+      # Windows jobs after the first green native run.
+      - name: Restore drill (temporary ADVISERS_HOME)
+        if: matrix.node == '22.16'
+        run: node scripts/restore-drill.mjs
       # Fault-injection suite: SIGKILL mid-transaction, WAL corruption, FTS
       # desync, migration rollback, ENOSPC. Linux-only cases SKIP cleanly on
       # other platforms (see docs/FAULT-INJECTION.md). Runs once, on the

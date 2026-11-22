@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 import '../lib/node-warning-filter.js'
 import { spawnSync } from 'node:child_process'
-import { chmodSync, existsSync, mkdirSync, readdirSync, readFileSync, renameSync, rmSync, statSync, writeFileSync } from 'node:fs'
+import { chmodSync, existsSync, mkdirSync, readdirSync, readFileSync, renameSync, rmSync, statSync, writeFileSync, writeSync } from 'node:fs'
 import { homedir, hostname } from 'node:os'
 import { createHash, randomBytes, randomUUID } from 'node:crypto'
 import { delimiter as PATH_DELIMITER, basename, dirname, extname, isAbsolute, join } from 'node:path'
@@ -61,6 +61,17 @@ import {
   rmWithRetrySync,
   writeAllToTempSync,
 } from '../lib/fs-safe.js'
+// 0.4.3 (043-5, plan 93 §3): quote/proposal schema v2 payment.channels is a
+// pure, tiny validator and normalizeQuoteData() is synchronous, so it is a
+// static import (the lazy loaders stay for the fs/network-heavy modules).
+import {
+  findFullAccountNumbers,
+  isAllowedPaymentUrl,
+  normalizePaymentChannels,
+  paymentChannelKindLabel,
+  paymentChannelRequiredTexts,
+  paymentChannelSummary,
+} from '../lib/payment-channels.js'
 
 /**
  * P1-1: lazy-load the heavy / rarely used libraries.
@@ -138,6 +149,14 @@ const loadConsent = lazyModule(() => import('../lib/consent.js'))
 const loadPolicy = lazyModule(() => import('../lib/policy/index.js'))
 const loadMailStore = lazyModule(() => import('../lib/mail-store.js'))
 const loadClientPack = lazyModule(() => import('../lib/client-pack.js'))
+// 0.4.3 (043-1): CLI --due boundary resolution (Chinese relative dates).
+const loadRelativeDate = lazyModule(() => import('../lib/relative-date.js'))
+// 0.4.3 (043-2/043-5): local capture rules, inbox projection, payment channels.
+const loadCaptureRules = lazyModule(() => import('../lib/capture-rules.js'))
+const loadReceivableCsv = lazyModule(() => import('../lib/receivable-csv.js'))
+// 0.4.3 (043-3): doctor --report / privacy --prove --brief / profile.
+const loadTrustReport = lazyModule(() => import('../lib/trust-report.js'))
+const loadProfileLib = lazyModule(() => import('../lib/profile.js'))
 // Money sidecar: the library lands with the 0.4.0 receivables wave; the loader
 // fails only when a money command is actually run, never at startup.
 const loadReceivablesLib = lazyModule(() => import('../lib/receivables.js'))
@@ -1227,6 +1246,8 @@ Usage:
                               recovery console: dry-run plan by default; --yes takes the
                               writer lock, writes a safety backup, repairs, re-verifies,
                               records doctor.repair and refreshes the audit anchor
+  advisers doctor --report [--json]   machine report: unmeasured dimensions are explicit
+                              null (never 0/false/PASS), each null has a reason in nulls[]
   advisers status [--json]    home/store/model/counts (+ contracts discovery in --json)
   advisers history            recent conversations
   advisers search <text>       full-text search old turns
@@ -1313,6 +1334,8 @@ Usage:
                       store an IMAP account; password only from the TTY prompt or stdin, never argv
   advisers mail account ls|show <acct>|rm <acct> [--json]
   advisers mail sync [<acct>] [--full] [--dry-run] [--json]   the only IMAP network entry (read-only EXAMINE/FETCH)
+  advisers mail sync --watch [--interval 300s] [--max-runs n] | --once [--json|--json-lines]
+                      foreground polling; --json prints one summary, --json-lines one JSON per round
   advisers mail ls|show <id> [--body]|purge [--older-than 30d] [--dry-run|--yes]|import <file|dir> [--json]
                       local reads; purge clears bodies (metadata/hash stay); import reads .eml/.mbox offline
   advisers mail extract [<id>...] [--all-new] [--local|--model --yes] [--matter id] [--dry-run] [--json]
@@ -1325,7 +1348,9 @@ Usage:
   advisers consent status|grant <surface>|revoke <surface> [--data-class mail|kb] [--yes] [--json]
                       separate model-egress consent (provider/base-URL bound; TTY typed confirmation)
   advisers privacy --matrix [--json]   policy surface/action/gate matrix from the registry
-  advisers privacy [--json] [--prove]  show/verify local data & egress facts
+  advisers privacy [--json] [--prove [--brief]]  show/verify local data & egress facts
+  advisers profile show [--now ISO] [--json]   read-only preference profile (no writes, no network)
+  advisers profile export [--md|--json] [--out <file>]   export the same profile (--out writes 0600)
   advisers why <pref-id>      explain a preference
   advisers forget <pref-id>   forget a preference (tombstone)
   advisers export [--all] [--encrypted] [--out file]  export ledger (AES-256-GCM with passphrase)
@@ -1346,8 +1371,12 @@ Usage:
   advisers review <file> --request "..."  model content review (no edits)
   advisers research --web|--url <url> [--deep] <query>
                               server-side web search/read URL with citations (explicit egress)
-  advisers capture [--file f] [--source s] [--date ISO] [--matter id] [--json] <text>
-                              从中文工作内容抽取候选承诺（不自动入账）
+  advisers capture [--file <f|->] [--source s] [--date ISO] [--matter id] [--local|--rules|--model] [--json] [<text>]
+                              从中文工作内容抽取候选承诺（不自动入账）；--file - 读 stdin，
+                              无 ADVISERS_API_KEY 时用本地规则（零出网、只产 pending）
+  advisers inbox ls [--source capture|mail|all] [--limit n] [--offset n] [--clearance 0-3] [--json]
+  advisers inbox show <candidate-id> [--clearance 0-3] [--json]
+                              只读查看待确认候选（不 accept/reject、不写库）
   advisers capture --from-mail <file|dir> [--limit n]  .eml/.mbox 只读导入→候选
   advisers capture --from-transcript <file>      转写稿导入→候选（不录音/不入会）
   advisers capture --from-imap                   只读 IMAP 导入（EXAMINE/FETCH；env 凭据）
@@ -1603,7 +1632,7 @@ function purgeMatter(id, confirmed) {
 function parseFlags(args) {
   const flags = {}
   const positional = []
-  const booleanFlags = new Set(['web', 'deep', 'all', 'yes', 'json', 'list', 'force', 'apply', 'quiet', 'help', 'content', 'ics', 'deliver', 'install', 'uninstall', 'status', 'calendar', 'sources', 'pack', 'receipt', 'from-imap', 'remove', 'force', 'notify', 'no-remind', 'dry-run', 'unclassified', 'no-calendar', 'include-done', 'record-delivery', 'include-global', 'archive', 'morning', 'include-deleted', 'all-new', 'local', 'model', 'full', 'pass-stdin', 'force-notify'])
+  const booleanFlags = new Set(['web', 'deep', 'all', 'yes', 'json', 'list', 'force', 'apply', 'quiet', 'help', 'content', 'ics', 'deliver', 'install', 'uninstall', 'status', 'calendar', 'sources', 'pack', 'receipt', 'from-imap', 'remove', 'force', 'notify', 'no-remind', 'dry-run', 'unclassified', 'no-calendar', 'include-done', 'record-delivery', 'include-global', 'archive', 'morning', 'include-deleted', 'all-new', 'local', 'rules', 'model', 'full', 'pass-stdin', 'force-notify'])
   for (let i = 0; i < args.length; i++) {
     if (args[i].startsWith('--')) {
       const key = args[i].slice(2)
@@ -1716,6 +1745,56 @@ async function parseReminderOffsetsFlag(flags) {
   const list = String(raw).split(',').map((item) => item.trim()).filter(Boolean)
   const { normalizeReminderOffsets } = await loadRemind()
   return normalizeReminderOffsets(list)
+}
+
+/**
+ * 0.4.3 (043-1, plan 92 §1): resolve a CLI `--due` value at the boundary.
+ *
+ * ISO input passes through byte-identically; `YYYY-MM-DD` becomes 18:00 in
+ * Asia/Shanghai; Chinese relative expressions resolve against the command's
+ * Asia/Shanghai calendar day. Nothing is ever stored unparsed: 0.4.2 silently
+ * wrote the raw string into dueAt, so `commit ls` echoed it, `today` filed it
+ * under noDue and `remind` never fired. Unknown/conflicting values fail closed.
+ *
+ * @returns {Promise<{ok:true, at:string, calendar:string, basis:string,
+ *   matched:string, ambiguous:boolean} | {ok:false, code:string,
+ *   message:string, hint:string}>}
+ */
+async function resolveDueFlag(raw) {
+  const { resolveDueInput } = await loadRelativeDate()
+  const resolved = resolveDueInput(raw)
+  if (resolved.ok) return resolved
+  if (resolved.reason === 'conflict') {
+    return {
+      ok: false,
+      code: 'E_DUE_CONFLICT',
+      message: '--due 命中多个不同日期：' + resolved.detail.found.join(', '),
+      hint: '一次只给一个日期，例如 --due 下周三',
+    }
+  }
+  return {
+    ok: false,
+    code: 'E_DUE_UNRESOLVED',
+    message: '无法解析 --due：' + JSON.stringify(String(raw ?? '')),
+    hint: '支持：今天/明天/后天/周X/下周X/月底/季度末/N天后/N周后/YYYY-MM-DD/ISO',
+  }
+}
+
+/** Print a `--due` resolution refusal (human two-liner or one JSON error envelope). */
+function reportDueFailure(failure, asJson = false) {
+  if (asJson) {
+    console.error(JSON.stringify({ error: { code: failure.code, message: failure.message, hint: failure.hint } }))
+  } else {
+    console.error('advisers: ' + failure.code + ': ' + failure.message)
+    console.error('hint: ' + failure.hint)
+  }
+  process.exitCode = 1
+}
+
+/** Human echo when a relative expression resolved; plain ISO stays quiet. */
+function dueResolutionLine(resolved) {
+  if (!resolved || resolved.basis !== 'rule') return null
+  return 'due 解析：' + resolved.matched + ' → ' + resolved.at + (resolved.ambiguous ? '（歧义：按规则解析）' : '')
 }
 
 function recordManualDelivery(files, tool, title, validation) {
@@ -4660,6 +4739,17 @@ async function printPrivacy(args = []) {
   ensureHome()
   const asJson = args.includes('--json')
   const prove = args.includes('--prove')
+  // 0.4.3 (043-3, plan 91 §5.2): `privacy --prove --brief` is the four-line
+  // data-handling card (one line per at-rest/sync/export/egress). The full
+  // facts/self-check output below stays byte-identical without --brief; --json
+  // returns the structured brief instead of the facts document.
+  if (args.includes('--brief')) {
+    const { buildPrivacyBrief, formatPrivacyBrief } = await loadTrustReport()
+    const brief = buildPrivacyBrief({ vaultSealed: Boolean(vaultSealedPath()) })
+    if (asJson) { console.log(JSON.stringify(brief, null, 2)); return }
+    for (const line of formatPrivacyBrief(brief)) console.log(line)
+    return
+  }
   // 0.4.0: surface x action x gate matrix generated from the policy registry
   // (read-only; no ledger rows). Replaces the hand-maintained coverage narrative.
   if (args.includes('--matrix')) {
@@ -5070,12 +5160,15 @@ function printPreferences() {
 async function doctor(args = []) {
   if (args.includes('--help') || args.includes('-h')) { console.log(DOCTOR_USAGE); return }
   const parsed = parseStrictFlags(args, {
-    booleans: ['check-db', 'json', 'repair', 'dry-run', 'yes'],
+    booleans: ['check-db', 'json', 'repair', 'dry-run', 'yes', 'report'],
     values: ['only'],
     positional: false,
   })
   if (!parsed.ok) return usageFail(parsed.error, DOCTOR_USAGE)
   const flags = parsed.flags
+  // --report/--repair are mutually exclusive: the report is a read-only
+  // statement of what was (not) measured, the repair console mutates files.
+  if (flags.report === true && flags.repair === true) return usageFail('--report cannot be combined with --repair', DOCTOR_USAGE)
   if (flags.repair === true) return doctorRepair(flags)
   if (flags['dry-run'] || flags.yes) return usageFail('--dry-run/--yes are only valid with --repair', DOCTOR_USAGE)
   if (flags.only !== undefined) return usageFail('--only is only valid with --repair', DOCTOR_USAGE)
@@ -5233,6 +5326,32 @@ async function doctor(args = []) {
   check('policy', Boolean(StrictPolicyPack), StrictPolicyPack ? 'strict pack loaded' : 'policy pack missing')
   check('model', true, process.env.ADVISERS_API_KEY ? 'API key present (not tested)' : 'optional; ADVISERS_API_KEY not set')
   const ok = !rows.some((row) => !row.ok)
+  // 0.4.3 (043-3, plan 91 §5.3): `doctor --report` is the machine report whose
+  // unknowns are explicit null — never 0/false/PASS. `ok` reflects only this
+  // check table; the measured dimensions were not measured by this build.
+  if (flags.report === true) {
+    const { buildDoctorReport } = await loadTrustReport()
+    const report = buildDoctorReport({
+      ok,
+      schemaVersion: mode === 'json' || sealed ? null : SCHEMA_VERSION,
+      notices: rows.filter((row) => !row.ok).map((row) => 'check failed: ' + row.name),
+    })
+    if (asJson) {
+      console.log(JSON.stringify(report, null, 2))
+      if (!ok) process.exitCode = 1
+      return
+    }
+    console.log('report v' + report.reportVersion + '  ok=' + report.ok + '  advisers=' + (report.advisersVersion ?? '?') + '  schema=' + (report.schemaVersion === null ? 'null' : 'v' + report.schemaVersion))
+    console.log('generatedAt: ' + report.generatedAt)
+    console.log('measured（未测量一律 null，不用 0/false/PASS 冒充）:')
+    for (const key of Object.keys(report.measured)) console.log('  ' + key + ': ' + String(report.measured[key]))
+    console.log('nulls:')
+    for (const entry of report.nulls) console.log('  ' + entry.key + ': ' + entry.reason)
+    if (report.notices.length) { console.log('notices:'); for (const line of report.notices) console.log('  - ' + line) }
+    if (report.limitations.length) { console.log('limitations:'); for (const line of report.limitations) console.log('  - ' + line) }
+    if (!ok) process.exitCode = 1
+    return
+  }
   if (asJson) {
     console.log(JSON.stringify({ ok, mode: 'diagnose', checks: rows }, null, 2))
     if (!ok) process.exitCode = 1
@@ -7284,7 +7403,7 @@ const MAIL_USAGE = [
   '                                [--mailbox INBOX] [--retention-days 30] [--client id] [--matter id] [--json]',
   '       advisers mail account ls|show <account>|rm <account> [--json]',
   '       advisers mail account test <account> [--mailbox INBOX] [--timeout 1..120] [--json]  (read-only IMAP probe)',
-  '       advisers mail sync [<account>] [--full] [--dry-run] [--since-days 30] [--limit 50] [--mailbox INBOX] [--json]',
+  '       advisers mail sync [<account>] [--full] [--dry-run] [--since-days 30] [--limit 50] [--mailbox INBOX] [--json] [--watch|--once [--json-lines]]',
   '       advisers mail ls [--account a] [--client id] [--status s] [--since 30d] [--limit n] [--json]',
   '       advisers mail show <id> [--body] [--json]',
   '       advisers mail extract [<id>...] [--all-new] [--local|--model] [--yes] [--matter id] [--limit n] [--dry-run] [--json]',
@@ -7397,18 +7516,51 @@ function mailWatchInterval(value) {
 }
 
 async function mailSyncCommand(args) {
-  const usage = 'usage: advisers mail sync [<account>] [--full] [--dry-run] [--since-days n] [--limit n] [--mailbox INBOX] [--json] [--watch [--interval 300s] [--max-runs n]]'
-  const parsed = familyFlags(args, { booleans: ['json', 'full', 'dry-run', 'watch'], values: ['account', 'since-days', 'limit', 'mailbox', 'interval', 'max-runs'] }, usage)
+  const usage = 'usage: advisers mail sync [<account>] [--full] [--dry-run] [--since-days n] [--limit n] [--mailbox INBOX] [--json] [--watch [--interval 300s] [--max-runs n]] [--once] [--json-lines]'
+  const parsed = familyFlags(args, { booleans: ['json', 'full', 'dry-run', 'watch', 'once', 'json-lines'], values: ['account', 'since-days', 'limit', 'mailbox', 'interval', 'max-runs'] }, usage)
   if (!parsed) return
   const flags = parsed.flags
+  // 0.4.3 (043-1, plan 92 §5): --once is the scriptable alias of --max-runs 1 and
+  // --json-lines streams one JSON document per round (summary last). Output modes
+  // and loop modes are mutually exclusive; an invalid combination is E_USAGE here,
+  // not a surprise after the first round.
+  const asJson = flags.json === true
+  const asJsonLines = flags['json-lines'] === true
+  const watchMode = flags.watch === true || flags.once === true
+  if (asJson && asJsonLines) { usageFail('--json and --json-lines are mutually exclusive', usage); return }
+  if (flags.watch === true && flags.once === true) { usageFail('--watch and --once are mutually exclusive', usage); return }
+  if (!watchMode && (flags.interval !== undefined || flags['max-runs'] !== undefined || asJsonLines)) { usageFail('--interval/--max-runs/--json-lines are only valid with --watch or --once', usage); return }
+  if (flags.once === true && (flags.interval !== undefined || flags['max-runs'] !== undefined)) { usageFail('--once does not take --interval/--max-runs', usage); return }
   const intervalMs = mailWatchInterval(flags.interval)
   if (flags.interval !== undefined && intervalMs === null) { usageFail('--interval must be 1s..24h (for example 300s or 5m)', usage); return }
-  const maxRuns = flags['max-runs'] === undefined ? Infinity : familyInteger(flags['max-runs'], '--max-runs', 1, 100000)
-  if (flags.watch !== true && (flags.interval !== undefined || flags['max-runs'] !== undefined)) { usageFail('--interval/--max-runs are only valid with --watch', usage); return }
+  const maxRuns = flags.once === true ? 1 : (flags['max-runs'] === undefined ? Infinity : familyInteger(flags['max-runs'], '--max-runs', 1, 100000))
   const mail = await loadMail()
   const requested = parsed.positional[0] ?? flags.account
   const sinceDays = flags['since-days'] === undefined ? undefined : familyInteger(flags['since-days'], '--since-days', 1, 3650)
   const limit = flags.limit === undefined ? undefined : familyInteger(flags.limit, '--limit', 1, 200)
+
+  // 0.4.3 (043-1, plan 92 §5): a watching sync validates the account list once,
+  // immediately. Before this the empty list only threw inside round(), so
+  // --watch printed its startup line and spun one empty round before failing.
+  // An explicit account id still reaches the round so the error names that id.
+  if (watchMode && !requested) {
+    try {
+      const probe = familyStore({ write: true })
+      try {
+        const listed = mail.mailAccountList(probe, { home: HOME })
+        const usable = listed.accounts.filter((account) => account.status === 'active' && (account.tls === 'tls' || account.tls === 'starttls'))
+        if (!usable.length) throw familyError('E_MAIL_CONFIG', 'no IMAP account is configured', 'add one with advisers mail account add')
+      } finally {
+        try { probe.close?.() } catch {}
+        // openStore() memoizes the singleton; close() without clearing it makes
+        // the first watch round reuse a closed handle (latent 0.4.2 --watch bug).
+        activeStore = undefined
+      }
+    } catch (error) {
+      reportFamilyFailure(error)
+      return
+    }
+  }
 
   // One round opens the ledger, syncs every selected account and (in watch mode)
   // closes it again before sleeping: a foreground watch must not hold the writer
@@ -7436,21 +7588,47 @@ async function mailSyncCommand(args) {
       }
       return requested ? results[0] : { ok: true, command: 'mail sync', results }
     } finally {
-      if (closeStore) { try { store.close?.() } catch {} }
+      if (closeStore) { try { store.close?.() } catch {} ; activeStore = undefined }
     }
   }
 
-  if (flags.watch === true) {
+  if (watchMode) {
     const { runMailWatch } = await loadMailWatch()
     const controller = new AbortController()
-    let interrupted = false
-    const onSignal = () => {
-      if (controller.signal.aborted) process.exit(130)
-      interrupted = true
+    let interruptedBy = null
+    const onSignal = (name) => () => {
+      // A second signal skips the graceful round and exits with the conventional
+      // code; the first one lets the in-flight round finish before the summary.
+      if (controller.signal.aborted) process.exit(name === 'SIGINT' ? 130 : 143)
+      interruptedBy = name
       controller.abort()
     }
-    process.on('SIGINT', onSignal)
-    process.on('SIGTERM', onSignal)
+    const onSigint = onSignal('SIGINT')
+    const onSigterm = onSignal('SIGTERM')
+    process.on('SIGINT', onSigint)
+    process.on('SIGTERM', onSigterm)
+    const perAccountOf = (result) => {
+      const rows = Array.isArray(result?.results) ? result.results : (result ? [result] : [])
+      return rows.map((row) => ({
+        accountId: row?.accountId ?? null,
+        mailbox: row?.mailbox ?? null,
+        fetched: Number(row?.fetched ?? 0),
+        inserted: Number(row?.inserted ?? 0),
+        skipped: Number(row?.skipped ?? 0),
+        failed: Number(row?.failed ?? 0),
+      }))
+    }
+    const totalsOf = (perAccount) => perAccount.reduce((acc, row) => ({
+      fetched: acc.fetched + row.fetched,
+      inserted: acc.inserted + row.inserted,
+      skipped: acc.skipped + row.skipped,
+      failed: acc.failed + row.failed,
+    }), { fetched: 0, inserted: 0, skipped: 0, failed: 0 })
+    // Human mode gets one startup line (stdout); --json keeps stdout a single
+    // JSON document and --json-lines keeps it one JSON document per round.
+    if (!asJson && !asJsonLines) {
+      console.log('watch: interval=' + Math.round((intervalMs ?? 300000) / 1000) + 's mailbox=' + String(flags.mailbox ?? 'INBOX') + (requested ? ' account=' + String(requested) : ' accounts=all-active') + '; Ctrl+C 在本轮结束后停止')
+    }
     try {
       const summary = await runMailWatch({
         syncOnce: () => round({ closeStore: true }),
@@ -7458,27 +7636,49 @@ async function mailSyncCommand(args) {
         maxRuns,
         signal: controller.signal,
         onResult: (record) => {
-          if (record.ok) {
-            const payload = record.result
-            const results = Array.isArray(payload?.results) ? payload.results : (payload ? [payload] : [])
-            const totals = results.reduce((acc, result) => ({
-              fetched: acc.fetched + Number(result.fetched ?? 0),
-              inserted: acc.inserted + Number(result.inserted ?? 0),
-              skipped: acc.skipped + Number(result.skipped ?? 0),
-              failed: acc.failed + Number(result.failed ?? 0),
-            }), { fetched: 0, inserted: 0, skipped: 0, failed: 0 })
-            console.log('watch round ' + record.run + ': fetched=' + totals.fetched + ' inserted=' + totals.inserted + ' skipped=' + totals.skipped + ' failed=' + totals.failed + ' next=' + Math.round(record.nextDelayMs / 1000) + 's')
-          } else {
-            console.error('watch round ' + record.run + ' failed: ' + (record.error?.message ?? 'unknown') + '; next=' + Math.round(record.nextDelayMs / 1000) + 's')
+          const perAccount = record.ok ? perAccountOf(record.result) : []
+          const totals = totalsOf(perAccount)
+          if (asJsonLines) {
+            // plan 92 §5: one JSON document per round, summary last. stdout stays
+            // line-delimited JSON: no human prose, no ANSI.
+            const line = {
+              type: 'round',
+              run: record.run,
+              ok: record.ok,
+              startedAt: record.startedAt,
+              durationMs: record.durationMs,
+              nextDelayMs: record.nextDelayMs,
+              perAccount,
+            }
+            if (!record.ok) line.error = record.error?.message ?? 'unknown'
+            console.log(JSON.stringify(line))
+            return
           }
+          if (asJson) {
+            // stdout must stay JSON-parseable: round lines go to stderr.
+            if (record.ok) console.error('round ' + record.run + ': fetched=' + totals.fetched + ' inserted=' + totals.inserted + ' skipped=' + totals.skipped + ' failed=' + totals.failed + ' next=' + Math.round(record.nextDelayMs / 1000) + 's')
+            else console.error('round ' + record.run + ' failed: ' + (record.error?.message ?? 'unknown') + '; next=' + Math.round(record.nextDelayMs / 1000) + 's')
+            return
+          }
+          if (record.ok) console.error('第 ' + record.run + ' 轮 ' + record.startedAt.slice(11, 19) + ' fetched=' + totals.fetched + ' inserted=' + totals.inserted + ' skipped=' + totals.skipped + ' failed=' + totals.failed + ' 下一轮 ' + Math.round(record.nextDelayMs / 1000) + 's')
+          else console.error('第 ' + record.run + ' 轮失败：' + (record.error?.message ?? 'unknown') + '（' + Math.round(record.nextDelayMs / 1000) + 's 后重试）')
         },
       })
-      if (flags.json) { console.log(JSON.stringify(summary, null, 2)); return }
-      console.log('mail watch stopped: ' + summary.stopped + ' runs=' + summary.runs + ' success=' + summary.success + ' errors=' + summary.errors)
-      if (summary.stopped === 'aborted' && interrupted) process.exitCode = 130
+      // 0.4.3 exit-code contract (plan 92 §5): 0 = the loop ended after at least
+      // one successful round; 1 = runtime error / every round failed; 130 =
+      // SIGINT; 143 = SIGTERM. The summary carries interruptedBy additively and
+      // keeps stopped compatible (aborted|max-runs).
+      let exitCode = 0
+      if (interruptedBy) exitCode = interruptedBy === 'SIGINT' ? 130 : 143
+      else if (summary.runs === 0 || summary.success === 0) exitCode = 1
+      const decorated = { ...summary, interruptedBy }
+      if (asJson) console.log(JSON.stringify(decorated, null, 2))
+      else if (asJsonLines) console.log(JSON.stringify({ type: 'summary', ...decorated }))
+      else console.log('mail watch stopped: ' + summary.stopped + ' runs=' + summary.runs + ' success=' + summary.success + ' errors=' + summary.errors + (interruptedBy ? ' interruptedBy=' + interruptedBy : ''))
+      process.exitCode = exitCode
     } finally {
-      process.removeListener('SIGINT', onSignal)
-      process.removeListener('SIGTERM', onSignal)
+      process.removeListener('SIGINT', onSigint)
+      process.removeListener('SIGTERM', onSigterm)
     }
     return
   }
@@ -7738,13 +7938,16 @@ async function mailLinkCommand(rawArgs, dismiss = false) {
 /* ------------------------- receivable / payment ------------------------- */
 
 const RECEIVABLE_USAGE = [
-  'usage: advisers receivable add <client-id> "<label>" --amount 8000.00 [--currency CNY] [--due YYYY-MM-DD]',
+  'usage: advisers receivable add <client-id> "<label>" --amount 8000.00 [--currency CNY] [--due YYYY-MM-DD|相对日期]',
   '                             [--project id] [--matter id] [--kind quote|milestone|retainer|other] [--memo text]',
   '                             [--remind-offsets "-3d,-1d"] [--no-remind] [--json]',
   '       advisers receivable ls|list [--client id] [--project id] [--status open|partial|overdue|settled|all]',
   '                             [--currency CNY] [--aging] [--due-within 7d|30d] [--clearance 0-3] [--limit n] [--json]',
   '       advisers receivable show <id> [--json]',
-  '       advisers receivable edit <id> [--amount 9000.00|--due DATE|--memo text|--kind k|--label text] [--json]',
+  '       advisers receivable edit <id> [--amount 9000.00|--due DATE|相对日期|--memo text|--kind k|--label text] [--json]',
+  '       advisers receivable export --out <file.csv|-> [--client id] [--project id] [--currency c]',
+  '                             [--status active|unsettled|open|partial|overdue|settled|written_off|all]',
+  '                             [--due-within 7d|30d] [--clearance 0-3] [--bom] [--json]',
   '       advisers receivable void <id> [--reason text] [--json]',
 ].join('\n')
 
@@ -7772,12 +7975,23 @@ async function receivableCommand(rawArgs) {
       const label = parsed.positional.slice(1).join(' ').trim()
       if (!clientId || !label) { usageFail('usage: advisers receivable add <client-id> "<label>" --amount 8000.00', usage); return }
       if (parsed.flags.amount === undefined) { usageFail('--amount is required', usage); return }
+      // 0.4.3 (043-1): resolve --due at the boundary. The library keeps its
+      // date-only = end-of-that-day (+08:00) semantics, so a relative expression
+      // passes the resolved calendar day and a date-time ISO passes through.
+      let dueAt
+      if (parsed.flags.due !== undefined) {
+        const resolved = await resolveDueFlag(parsed.flags.due)
+        if (!resolved.ok) { reportDueFailure(resolved, parsed.flags.json === true); return }
+        dueAt = resolved.basis === 'iso' ? resolved.at : resolved.calendar
+        const resolutionLine = dueResolutionLine(resolved)
+        if (resolutionLine) console.error(sanitizeConsoleText(resolutionLine, { max: 500 }))
+      }
       const result = receivable.receivableAdd(familyStore({ write: true }), {
         clientId,
         label,
         amount: parsed.flags.amount,
         currency: parsed.flags.currency,
-        dueAt: parsed.flags.due,
+        dueAt,
         projectId: parsed.flags.project,
         matterId: parsed.flags.matter,
         kind: parsed.flags.kind,
@@ -7839,7 +8053,13 @@ async function receivableCommand(rawArgs) {
       if (!id) { usageFail('missing receivable id', RECEIVABLE_USAGE); return }
       const patch = {}
       if (parsed.flags.amount !== undefined) patch.amount = parsed.flags.amount
-      if (parsed.flags.due !== undefined) patch.dueAt = parsed.flags.due
+      if (parsed.flags.due !== undefined) {
+        const resolved = await resolveDueFlag(parsed.flags.due)
+        if (!resolved.ok) { reportDueFailure(resolved, parsed.flags.json === true); return }
+        patch.dueAt = resolved.basis === 'iso' ? resolved.at : resolved.calendar
+        const resolutionLine = dueResolutionLine(resolved)
+        if (resolutionLine) console.error(sanitizeConsoleText(resolutionLine, { max: 500 }))
+      }
       if (parsed.flags.memo !== undefined) patch.memo = parsed.flags.memo
       if (parsed.flags.kind !== undefined) patch.kind = parsed.flags.kind
       if (parsed.flags.label !== undefined) patch.label = parsed.flags.label
@@ -7848,6 +8068,58 @@ async function receivableCommand(rawArgs) {
       const result = receivable.receivableEdit(familyStore({ write: true }), id, patch)
       if (parsed.flags.json) { console.log(JSON.stringify(result, null, 2)); return }
       console.log('updated ' + id + (result.receivable ? '  ' + receivableMoney(result.receivable) : ''))
+      return
+    }
+    if (sub === 'export') {
+      const parsed = familyFlags(rawArgs.slice(1), { booleans: ['json', 'csv', 'bom'], values: ['client', 'project', 'currency', 'status', 'due-within', 'clearance', 'out', 'profile'] }, RECEIVABLE_USAGE)
+      if (!parsed) return
+      const flags = parsed.flags
+      // 0.4.3 (043-5, plan 93 §5 + 100 §2): the operator names the target file.
+      // A default under HOME would turn a read-only query into a silent copy of
+      // client names and amounts; --out - writes the CSV to stdout instead.
+      if (typeof flags.out !== 'string' || flags.out === '') { usageFail('receivable export requires --out <file.csv|->', RECEIVABLE_USAGE); return }
+      if (flags.out === '-' && flags.json === true) { usageFail('--out - and --json are mutually exclusive', RECEIVABLE_USAGE); return }
+      const { exportReceivablesCsv } = await loadReceivableCsv()
+      const result = exportReceivablesCsv(familyStore(), {
+        clientId: flags.client,
+        projectId: flags.project,
+        currency: flags.currency,
+        status: flags.status,
+        dueWithin: flags['due-within'],
+        clearance: flags.clearance === undefined ? undefined : familyInteger(flags.clearance, '--clearance', 0, 3),
+        profile: flags.profile,
+        bom: flags.bom === true,
+      })
+      if (flags.out === '-') { process.stdout.write(result.csv); return }
+      const out = isAbsolute(flags.out) ? flags.out : join(process.cwd(), flags.out)
+      try {
+        mkdirSync(dirname(out), { recursive: true, mode: 0o700 })
+        atomicWriteFileSync(out, result.csv, { mode: 0o600 })
+      } catch (error) {
+        console.error('advisers: E_IO: cannot write ' + out + ': ' + (error?.message ?? error))
+        process.exitCode = 1
+        return
+      }
+      if (flags.json) {
+        // Metadata only: no client names, no amounts, no CSV body (plan 93 §5).
+        console.log(JSON.stringify({
+          ok: true,
+          command: 'receivable export',
+          csvVersion: result.csvVersion,
+          profile: result.profile,
+          bom: result.bom,
+          out,
+          bytes: result.bytes,
+          rowCount: result.rowCount,
+          total: result.total,
+          clearance: result.clearance,
+          protectedExcluded: result.protectedExcluded,
+        }, null, 2))
+        return
+      }
+      if (result.protectedExcluded) console.error(sanitizeConsoleText('已按 clearance 过滤 ' + result.protectedExcluded + ' 条受保护记录', { max: 200 }))
+      console.error(sanitizeConsoleText('含客户名与金额，按客户数据保管；本 CSV 不是发票/对账单', { max: 200 }))
+      console.log('csv written: ' + out + ' (' + result.rowCount + ' rows)')
       return
     }
     if (sub === 'void') {
@@ -9371,10 +9643,10 @@ function normalizeQuoteTax(value, path) {
   return { data: { mode: mode, ratePct: raw }, units: units }
 }
 
-function normalizeQuotePayment(value, path) {
-  if (value === undefined || value === null) return { milestones: [], terms: undefined }
+function normalizeQuotePayment(value, path, schemaVersion = 1) {
+  if (value === undefined || value === null) return { milestones: [], terms: undefined, channels: [] }
   if (typeof value !== 'object' || Array.isArray(value)) throw templateDataError(path + ' must be an object', path)
-  templateRejectUnknown(value, ['milestones', 'terms'], path)
+  templateRejectUnknown(value, schemaVersion === 2 ? ['milestones', 'terms', 'channels'] : ['milestones', 'terms'], path)
   const milestones = []
   if (value.milestones !== undefined) {
     if (!Array.isArray(value.milestones) || value.milestones.length > 20) throw templateDataError(path + '.milestones must be an array (max 20)', path + '.milestones')
@@ -9389,7 +9661,10 @@ function normalizeQuotePayment(value, path) {
     if (milestones.reduce((sum, row) => sum + row.pctUnits, 0n) > 10000n) throw templateDataError(path + '.milestones percentages exceed 100', path + '.milestones')
   }
   const terms = templateOptionalText(value.terms, path + '.terms', { max: 2000 })
-  return { milestones: milestones, terms: terms }
+  // 0.4.3 (043-5): schemaVersion 2 opt-in only; v1 inputs keep rejecting
+  // `channels` as an unknown field (byte-identical v1 behaviour).
+  const channels = schemaVersion === 2 ? normalizePaymentChannels(value.channels, { path: path + '.channels' }) : []
+  return { milestones: milestones, terms: terms, channels: channels }
 }
 
 function normalizeQuoteTimeline(value, path) {
@@ -9427,7 +9702,12 @@ function normalizeQuoteSignature(value, path) {
 function normalizeQuoteData(raw, kind) {
   if (!raw || typeof raw !== 'object' || Array.isArray(raw)) throw templateDataError('data must be a JSON object', '$')
   templateRejectUnknown(raw, ['schemaVersion', 'quoteNo', 'issuedAt', 'validUntil', 'currency', 'issuer', 'client', 'project', 'scope', 'items', 'discount', 'tax', 'payment', 'timeline', 'changeProcess', 'disclaimer', 'signature'], '$')
-  if (raw.schemaVersion !== undefined && raw.schemaVersion !== 1) throw templateDataError('schemaVersion must be 1', 'schemaVersion')
+  // 0.4.3 (043-5, plan 93 §3): v2 is explicit opt-in. Missing/1 keeps the 0.4.2
+  // normalisation, template version "1" and normalised data bytes; only v2 adds
+  // payment.channels to the data (and therefore to dataSha256).
+  const schemaVersion = raw.schemaVersion === undefined ? 1 : raw.schemaVersion
+  if (schemaVersion !== 1 && schemaVersion !== 2) throw templateDataError('schemaVersion must be 1 or 2', 'schemaVersion')
+  const templateVersion = schemaVersion === 2 ? '2' : '1'
   const issuedAt = templateDate(raw.issuedAt, 'issuedAt')
   const validUntil = templateDate(raw.validUntil, 'validUntil')
   const issuedMs = Date.parse(issuedAt + 'T00:00:00.000Z')
@@ -9457,14 +9737,14 @@ function normalizeQuoteData(raw, kind) {
   }
   const discount = normalizeQuoteDiscount(raw.discount, 'discount')
   const tax = normalizeQuoteTax(raw.tax, 'tax')
-  const payment = normalizeQuotePayment(raw.payment, 'payment')
+  const payment = normalizeQuotePayment(raw.payment, 'payment', schemaVersion)
   const timeline = normalizeQuoteTimeline(raw.timeline, 'timeline')
   const changeProcess = templateOptionalText(raw.changeProcess, 'changeProcess', { max: 2000 }) ?? QUOTE_DEFAULT_CHANGE_PROCESS
   const disclaimerRaw = templateOptionalText(raw.disclaimer, 'disclaimer', { max: 2000 })
   const disclaimer = disclaimerRaw && disclaimerRaw.length ? disclaimerRaw : QUOTE_DEFAULT_DISCLAIMER
   const signature = normalizeQuoteSignature(raw.signature, 'signature')
   const data = {
-    schemaVersion: 1,
+    schemaVersion: schemaVersion,
     quoteNo: quoteNo,
     issuedAt: issuedAt,
     validUntil: validUntil,
@@ -9476,7 +9756,7 @@ function normalizeQuoteData(raw, kind) {
     items: itemResult.items,
     discount: discount.data,
     tax: tax.data,
-    payment: { milestones: payment.milestones.map((row) => ({ name: row.name, pct: row.pct, ...(row.due ? { due: row.due } : {}) })), ...(payment.terms ? { terms: payment.terms } : {}) },
+    payment: { milestones: payment.milestones.map((row) => ({ name: row.name, pct: row.pct, ...(row.due ? { due: row.due } : {}) })), ...(payment.terms ? { terms: payment.terms } : {}), ...(payment.channels.length ? { channels: payment.channels } : {}) },
     timeline: timeline,
     changeProcess: changeProcess,
     disclaimer: disclaimer,
@@ -9499,7 +9779,7 @@ function normalizeQuoteData(raw, kind) {
     totalCents = netCents
   }
   const totals = { subtotalCents: subtotalCents, discountCents: discountCents, taxCents: taxCents, totalCents: totalCents }
-  return { kind: kind, data: data, lines: itemResult.lines, prices: itemResult.prices, totals: totals }
+  return { kind: kind, data: data, lines: itemResult.lines, prices: itemResult.prices, totals: totals, templateVersion: templateVersion }
 }
 
 function quoteTotalsJson(normalized) {
@@ -9541,6 +9821,9 @@ function quoteDocxSpec(normalized, dataSha256) {
   const milestoneRows = data.timeline.map((row) => [row.name, row.start, row.end])
   const paymentBullets = data.payment.milestones.map((row) => row.name + ' ' + row.pct + '%' + (row.due ? '，' + row.due : ''))
   if (data.payment.terms) paymentBullets.push('付款条件：' + data.payment.terms)
+  // 0.4.3 (043-5): v2 `payment.channels` renders as plain-text 付款方式 rows (a
+  // copied mask / https URL, never a hyperlink and never fetched); v1 has none.
+  const paymentChannels = Array.isArray(data.payment.channels) ? data.payment.channels : []
   const taxLabel = data.tax.mode === 'inclusive' ? '税额（含税价内）' : data.tax.mode === 'exclusive' ? '税额（未税价外加）' : '税额（未计）'
   const totalsRows = [
     ['小计', formatMoney(totals.subtotalCents, currency)],
@@ -9565,10 +9848,11 @@ function quoteDocxSpec(normalized, dataSha256) {
     { heading: '报价明细', table: { headers: ['序号', '项目', '数量', '单位', '单价', '小计'], rows: itemRows.length ? itemRows : [['1', '（见范围）', '1', '项', formatMoney(0, currency), formatMoney(0, currency)]] } },
     { heading: '金额汇总', table: { headers: ['项目', '金额'], rows: totalsRows } },
     { heading: '付款条件', bullets: paymentBullets.length ? paymentBullets : ['以双方书面确认的付款条件为准'] },
+    ...(paymentChannels.length ? [{ heading: '付款方式', table: { headers: ['方式', '收款信息', '备注'], rows: paymentChannels.map((channel) => [paymentChannelKindLabel(channel.kind), paymentChannelSummary(channel), channel.note ?? '']) } }] : []),
     { heading: '变更流程', paragraphs: [data.changeProcess] },
     { heading: '签章', paragraphs: ['报价方（签章）：' + (data.signature.issuerName ? ' ' + data.signature.issuerName : ''), '客户（签章）：' + (data.signature.clientName ? ' ' + data.signature.clientName : '')] },
     { heading: '免责声明', paragraphs: [data.disclaimer] },
-    { heading: '校验', paragraphs: ['模板版本：' + QUOTE_TEMPLATE_VERSION, '数据哈希（SHA-256）：' + dataSha256] },
+    { heading: '校验', paragraphs: ['模板版本：' + (normalized.templateVersion ?? QUOTE_TEMPLATE_VERSION), '数据哈希（SHA-256）：' + dataSha256] },
   ]
   return { title: '报价单', subtitle: data.quoteNo + ' · 日期 ' + data.issuedAt + ' · 有效期至 ' + data.validUntil, sections: sections }
 }
@@ -9576,6 +9860,7 @@ function quoteDocxSpec(normalized, dataSha256) {
 function proposalDocxSpec(normalized, dataSha256) {
   const data = normalized.data
   const currency = data.currency
+  const paymentChannels = Array.isArray(data.payment.channels) ? data.payment.channels : []
   const sections = [
     { heading: '背景与目标', paragraphs: [data.project.summary && data.project.summary.length ? data.project.summary : data.project.name] },
     { heading: '范围（包含）', bullets: data.scope.included.length ? data.scope.included : ['以双方书面确认的范围为准'] },
@@ -9594,10 +9879,11 @@ function proposalDocxSpec(normalized, dataSha256) {
         ? { table: { headers: ['项目', '金额'], rows: [['小计', formatMoney(normalized.totals.subtotalCents, currency)], ['折扣', formatDiscountMoney(normalized.totals.discountCents, currency)], ['税额', formatMoney(normalized.totals.taxCents, currency)], ['合计', formatMoney(normalized.totals.totalCents, currency)]] } }
         : { paragraphs: ['费用另行书面确认（本提案不构成报价）。'] }),
     },
+    ...(paymentChannels.length ? [{ heading: '付款方式', table: { headers: ['方式', '收款信息', '备注'], rows: paymentChannels.map((channel) => [paymentChannelKindLabel(channel.kind), paymentChannelSummary(channel), channel.note ?? '']) } }] : []),
     { heading: '风险与变更', paragraphs: [data.changeProcess] },
     { heading: '有效期与免责声明', paragraphs: ['有效期至 ' + data.validUntil + '。', data.disclaimer] },
     { heading: '签章', paragraphs: ['报价方（签章）：' + (data.signature.issuerName ? ' ' + data.signature.issuerName : ''), '客户（签章）：' + (data.signature.clientName ? ' ' + data.signature.clientName : '')] },
-    { heading: '校验', paragraphs: ['模板版本：' + QUOTE_TEMPLATE_VERSION, '数据哈希（SHA-256）：' + dataSha256] },
+    { heading: '校验', paragraphs: ['模板版本：' + (normalized.templateVersion ?? QUOTE_TEMPLATE_VERSION), '数据哈希（SHA-256）：' + dataSha256] },
   ]
   return { title: '项目提案', subtitle: data.client.name + ' · ' + data.project.name + ' · ' + data.quoteNo + ' · 日期 ' + data.issuedAt + ' · 有效期至 ' + data.validUntil, sections: sections }
 }
@@ -9626,6 +9912,7 @@ function quoteXlsxSpec(normalized, dataSha256) {
   // `verify --content --template quote --data <json>` can re-check identity,
   // totals and data hash on XLSX exactly like on DOCX.
   const metaRow = (label) => ({ index: '', desc: label, qty: '', unit: '', unitPrice: '', subtotal: '' })
+  const paymentChannels = Array.isArray(data.payment.channels) ? data.payment.channels : []
   const meta = [
     metaRow('报价单：' + data.quoteNo),
     metaRow('客户：' + data.client.name + (data.client.company ? '（' + data.client.company + '）' : '')),
@@ -9633,6 +9920,9 @@ function quoteXlsxSpec(normalized, dataSha256) {
     metaRow('日期：' + data.issuedAt),
     metaRow('有效期至：' + data.validUntil),
     metaRow('数据哈希（SHA-256）：' + dataSha256),
+    // 0.4.3 (043-5): v2 metadata only, so v1 XLSX bytes stay unchanged.
+    ...(data.schemaVersion === 2 ? [metaRow('模板版本：' + (normalized.templateVersion ?? QUOTE_TEMPLATE_VERSION))] : []),
+    ...paymentChannels.map((channel) => metaRow('付款方式：' + paymentChannelKindLabel(channel.kind) + ' ' + paymentChannelSummary(channel))),
     metaRow('本文件由本地模板确定性生成，仅供商务沟通参考'),
     metaRow(''),
   ]
@@ -9692,6 +9982,25 @@ function quoteTemplateChecks(kind, normalized, dataSha256, text) {
   if (hasFeeItems) check(prefix + '.totals', [formatMoney(totals.subtotalCents, currency), formatDiscountMoney(totals.discountCents, currency), formatMoney(totals.taxCents, currency), formatMoney(totals.totalCents, currency)].every((value) => text.includes(value)), 'totals in the document do not match the input data')
   else check(prefix + '.totals', true, 'no fee items in this input; totals not applicable')
   check(prefix + '.data_hash', text.includes(dataSha256), 'dataSha256 not found in the document')
+  // 0.4.3 (043-5, plan 93 §3): schemaVersion 2 adds payment.channels blockers.
+  // v1 inputs get no extra checks and therefore keep the 0.4.2 verdicts.
+  if (data.schemaVersion === 2) {
+    const channels = Array.isArray(data.payment.channels) ? data.payment.channels : []
+    const requiredTexts = channels.flatMap((channel) => paymentChannelRequiredTexts(channel))
+    check(prefix + '.payment_channels', requiredTexts.every((value) => text.includes(value)), 'payment channel mask/url missing from the document')
+    const links = channels.filter((channel) => channel.kind === 'stripe_link' || channel.kind === 'wise_link')
+    check(prefix + '.payment_url', links.every((channel) => isAllowedPaymentUrl(channel.kind, channel.url) && text.includes(channel.url)), 'payment link missing or not an allowed https host')
+    // Only the 付款方式 section is scanned; when the section cannot be located
+    // the check degrades honestly to ok+skipped instead of pretending to pass.
+    const anchor = text.indexOf('付款方式')
+    if (anchor === -1) check(prefix + '.no_full_account', true, 'skipped: 付款方式 section not locatable')
+    else {
+      const tail = text.slice(anchor + '付款方式'.length)
+      const nextHeading = tail.search(/变更流程|签章|免责声明|校验|风险与变更|有效期/)
+      const sectionText = nextHeading === -1 ? tail : tail.slice(0, nextHeading)
+      check(prefix + '.no_full_account', findFullAccountNumbers(sectionText).length === 0, 'a full 13-19 digit account number appears in the payment section')
+    }
+  }
   const placeholder = /\{\{|T[O]DO|TBD|F[I]XME|占位|待填写|undefined|NaN/.test(text)
   check(prefix + '.no_placeholders', !placeholder, 'placeholder text found')
   return checks
@@ -9774,7 +10083,7 @@ async function templateQuoteOrProposal(name, dataFile, outFile, flags) {
         // delivery's matter. A receipt generated later reads this row instead of
         // recomputing (or worse, guessing) the lineage.
         templateName: name,
-        templateVersion: QUOTE_TEMPLATE_VERSION,
+        templateVersion: normalized.templateVersion ?? QUOTE_TEMPLATE_VERSION,
         quoteNo: normalized.data.quoteNo,
         dataSha256: dataSha256,
       })
@@ -9788,7 +10097,7 @@ async function templateQuoteOrProposal(name, dataFile, outFile, flags) {
         format: ext,
         out: outFile,
         bytes: buffer.length,
-        templateVersion: QUOTE_TEMPLATE_VERSION,
+        templateVersion: normalized.templateVersion ?? QUOTE_TEMPLATE_VERSION,
         dataSha256: dataSha256,
         quoteNo: normalized.data.quoteNo,
         totals: quoteTotalsJson(normalized),
@@ -9979,13 +10288,59 @@ async function proposeCaptureText({ text, source = 'wechat', date, matterId, met
   return { count: created.length, candidates: created }
 }
 
+/** Read all of stdin for `capture --file -` (bounded before normalisation). */
+async function readCaptureStdin({ maxChars = 1_000_000 } = {}) {
+  let text = ''
+  for await (const chunk of process.stdin) {
+    text += chunk
+    if (text.length > maxChars) break
+  }
+  return text
+}
+
+/** Report a capture input refusal (E_CAPTURE_EMPTY / E_CAPTURE_TOO_LONG). */
+function reportCaptureInputFailure(failure, asJson = false) {
+  if (asJson) console.error(JSON.stringify({ error: { code: failure.code, message: failure.message } }))
+  else console.error('advisers: ' + failure.code + ': ' + failure.message)
+  process.exitCode = 1
+}
+
+/** Best-effort row array for the optional capture hints (never throws). */
+function captureHintRows(value) {
+  if (Array.isArray(value)) return value
+  for (const key of ['rows', 'clients', 'projects', 'items']) {
+    if (Array.isArray(value?.[key])) return value[key]
+  }
+  return []
+}
+
+/**
+ * 0.4.3 (043-2, plan 92 §2): capture without an API key.
+ *
+ * `--file -` / positional `-` read stdin; `--local`/`--rules` force the
+ * deterministic local rules even when a key exists; with neither flag the old
+ * behaviour wins when ADVISERS_API_KEY is set (model path unchanged), while a
+ * keyless machine now succeeds through the local rules instead of erroring.
+ * The local path is zero-network: the only network entry is the model branch.
+ */
 async function capture(args) {
   const { flags, positional } = parseFlags(args)
   if (flags['from-mail']) return captureFromMail(flags)
   if (flags['from-transcript']) return captureFromTranscript(flags)
   if (flags['from-imap']) return captureFromImap(flags)
-  let text = positional.join(' ').trim()
-  if (flags.file) {
+  const asJson = flags.json === true
+  const stdinRequested = flags.file === '-' || positional[0] === '-'
+  const localRequested = flags.local === true || flags.rules === true
+  const modelRequested = flags.model === true
+  if (localRequested && modelRequested) {
+    console.error('advisers: E_USAGE: --local/--rules and --model are mutually exclusive')
+    process.exitCode = 1
+    return
+  }
+  let text = positional[0] === '-' ? positional.slice(1).join(' ').trim() : positional.join(' ').trim()
+  if (stdinRequested) {
+    text = await readCaptureStdin()
+  } else if (flags.file) {
     try {
       const { extractAttachment } = await loadAttachments()
       const extracted = await extractAttachment(flags.file, { cwd: process.cwd() })
@@ -9993,25 +10348,207 @@ async function capture(args) {
       text = extracted.text
     } catch (error) { console.error(`capture --file failed: ${error.message}`); process.exitCode = 1; return }
   }
-  if (!text) { console.error('usage: advisers capture [--file path] [--source wechat|meeting|email|contract] [--date ISO] [--matter id] <text>'); process.exitCode = 1; return }
+  const normalized = await (async () => {
+    const { normalizeCaptureText } = await loadCaptureRules()
+    return normalizeCaptureText(text)
+  })()
+  if (!normalized.ok) { reportCaptureInputFailure(normalized, asJson); return }
+  text = normalized.text
   const apiKey = process.env.ADVISERS_API_KEY
-  if (!apiKey) { console.error('capture requires ADVISERS_API_KEY'); process.exitCode = 1; return }
+  // Mode selection: explicit --model keeps the 0.4.2 path (and its key error);
+  // explicit --local/--rules always stays offline; no flag keeps model when a
+  // key is configured and otherwise falls back to the local rules.
+  const useLocal = localRequested || (!modelRequested && !apiKey)
+  if (!useLocal && !apiKey) { console.error('capture requires ADVISERS_API_KEY'); process.exitCode = 1; return }
+  const source = typeof flags.source === 'string' ? flags.source : (stdinRequested ? 'stdin' : 'wechat')
   ensureHome()
   const store = dbStore()
   if (!store) { console.error('capture requires SQLite store'); process.exitCode = 1; return }
   const ledger = loadLedger()
   let matterId
   try { matterId = resolveMatterForCommand(ledger, flags.matter, 'capture') } catch (error) { console.error(error.message); process.exitCode = 1; return }
+  if (useLocal) {
+    if (!apiKey && !localRequested) console.error('[local] 未配置模型：本地规则生成候选，未出网')
+    // Local capture never egresses, so the model-egress gate does not apply; the
+    // content safety gate still runs before any candidate is stored.
+    const { inspectCaptureText } = await loadCapture()
+    try { inspectCaptureText(text) } catch (error) {
+      if (asJson) console.error(JSON.stringify({ error: { code: error.code ?? 'E_CONTENT_BLOCKED', message: error.message } }))
+      else console.error(error.message)
+      process.exitCode = 1
+      return
+    }
+    saveLedger(ledger)
+    const { localCaptureCandidates, toCaptureMemoryCandidate } = await loadCaptureRules()
+    const local = localCaptureCandidates({
+      text,
+      source,
+      date: typeof flags.date === 'string' ? flags.date : undefined,
+      matterId,
+      clients: captureHintRows(store.listClients({ limit: 100 })),
+      projects: captureHintRows(store.listProjects({ limit: 100 })),
+    })
+    if (!local.ok) { reportCaptureInputFailure(local, asJson); return }
+    if (!local.candidates.length) {
+      if (asJson) console.log(JSON.stringify({ ok: true, command: 'capture', source, count: 0, candidates: [] }, null, 2))
+      else console.log('没有找到可确认的承诺候选。')
+      return
+    }
+    const conversationId = latestConversationId()
+    const turn = store.addTurn({ conversationId, role: 'user', content: text })
+    const created = []
+    for (const candidate of local.candidates) {
+      const mapped = toCaptureMemoryCandidate(candidate, { text, turnId: turn.id, conversationId, matterId })
+      if (!mapped) continue
+      const stored = store.proposeCandidate(mapped)
+      created.push(stored)
+      if (!asJson) console.log(`${stored.id}\t${candidate.modal ?? ''}\t${candidate.action}${candidate.dueAt ? ` · ${candidate.dueAt.slice(0, 10)}` : ''}\t「${candidate.quote.slice(0, 60)}」`)
+    }
+    store.appendAudit({ actor: 'local', action: 'capture.propose.local', allowed: true, reason: created.length + ' candidates' })
+    if (asJson) {
+      console.log(JSON.stringify({ ok: true, command: 'capture', source, count: created.length, candidates: created }, null, 2))
+      return
+    }
+    if (!created.length) console.log('没有找到可确认的承诺候选。')
+    else console.log('确认：advisers memory accept <id>；拒绝：advisers memory reject <id>')
+    return
+  }
   const denied = egressDeniedReason(ledger.getMatter(matterId), 'capture')
   if (denied) { console.error(denied); process.exitCode = 1; return }
   saveLedger(ledger)
-  const result = await proposeCaptureText({ text, source: flags.source, date: flags.date, matterId, store, json: flags.json === true })
-  if (flags.json) {
-    console.log(JSON.stringify({ ok: true, command: 'capture', source: typeof flags.source === 'string' ? flags.source : 'wechat', count: result.count, candidates: result.candidates }, null, 2))
+  const result = await proposeCaptureText({ text, source, date: flags.date, matterId, store, json: asJson })
+  if (asJson) {
+    console.log(JSON.stringify({ ok: true, command: 'capture', source, count: result.count, candidates: result.candidates }, null, 2))
     return
   }
   if (!result.count) console.log('没有找到可确认的承诺候选。')
   else console.log('确认：advisers memory accept <id>；拒绝：advisers memory reject <id>')
+}
+
+const PROFILE_USAGE = [
+  'usage: advisers profile show [--now ISO] [--json]',
+  '       advisers profile export [--md|--json] [--out <file>] [--now ISO]',
+].join('\n')
+
+/**
+ * 0.4.3 (043-3, plan 90: profile show/export): a read-only view over the
+ * preferences table (no writes, no model, no network).
+ *
+ * The payload is deterministic for the same rows + --now (dataSha256), and
+ * unknown/decayed values are shown with their real status, never guessed.
+ * `export --out` writes 0600; `--md` uses the library renderer, `--json` the
+ * payload itself, and no --out prints to stdout.
+ */
+async function profileCommand(args) {
+  const sub = args[0]
+  const usage = PROFILE_USAGE
+  try {
+    if (!sub || sub === 'help' || sub === '--help') { console.log(PROFILE_USAGE); return }
+    if (sub !== 'show' && sub !== 'export') { usageFail('unknown profile subcommand: ' + sub, usage); return }
+    const parsed = familyFlags(args.slice(1), { booleans: ['json', 'md'], values: ['out', 'now'] }, usage)
+    if (!parsed) return
+    const { buildProfile, renderProfileMarkdown } = await loadProfileLib()
+    const preferences = mode === 'json'
+      ? loadJson().listPreferences({ includeCandidates: true })
+      : familyStore().loadPreferences()
+    const profile = buildProfile(preferences, parsed.flags.now === undefined ? {} : { now: parsed.flags.now })
+    const asJson = parsed.flags.json === true
+    if (sub === 'show') {
+      if (asJson) { console.log(JSON.stringify(profile, null, 2)); return }
+      console.log('profile v' + profile.profileVersion + ' · source=' + profile.source + ' · count=' + profile.count + ' · dataSha256=' + profile.dataSha256)
+      if (!profile.count) console.log('（空：还没有偏好记录）')
+      for (const group of profile.groups) {
+        console.log('[' + group.scope.level + (group.scope.value ? '/' + group.scope.value : '') + '] ' + group.kind + ' (' + group.count + ')')
+        for (const entry of group.preferences) {
+          const status = entry.status === 'active' ? '' : ' [' + entry.status + ']'
+          console.log('  ' + entry.id + '  ' + sanitizeConsoleText(String(entry.statement ?? ''), { max: 200 }) + status)
+        }
+      }
+      return
+    }
+    const out = typeof parsed.flags.out === 'string' ? parsed.flags.out : undefined
+    const body = asJson ? JSON.stringify(profile, null, 2) + '\n' : renderProfileMarkdown(profile)
+    if (out === undefined) { process.stdout.write(body); return }
+    const resolved = isAbsolute(out) ? out : join(process.cwd(), out)
+    try {
+      mkdirSync(dirname(resolved), { recursive: true, mode: 0o700 })
+      atomicWriteFileSync(resolved, body, { mode: 0o600 })
+    } catch (error) {
+      console.error('advisers: E_IO: cannot write ' + resolved + ': ' + (error?.message ?? error))
+      process.exitCode = 1
+      return
+    }
+    console.log('profile exported: ' + resolved + ' (' + profile.count + ' preferences)')
+  } catch (error) { reportFamilyFailure(error) }
+}
+
+const INBOX_USAGE = [
+  'usage: advisers inbox ls [--source capture|mail|all] [--limit n] [--offset n] [--clearance 0-3] [--json]',
+  '       advisers inbox show <candidate-id> [--clearance 0-3] [--json]',
+].join('\n')
+
+/**
+ * 0.4.3 (043-2, plan 92 §2): read-only inbox over pending memory candidates.
+ *
+ * The projection is owned by lib/capture-rules.js (clearance filtered before
+ * counting); this command only parses flags and renders. It never accepts,
+ * rejects or otherwise writes: `memory accept/reject` stays the write surface.
+ */
+async function inboxCommand(args) {
+  const sub = args[0]
+  const usage = INBOX_USAGE
+  try {
+    if (!sub || sub === 'help' || sub === '--help') { console.log(INBOX_USAGE); return }
+    const rules = await loadCaptureRules()
+    if (sub === 'ls' || sub === 'list') {
+      const parsed = familyFlags(args.slice(1), { booleans: ['json'], values: ['source', 'limit', 'offset', 'clearance'] }, usage)
+      if (!parsed) return
+      const flags = parsed.flags
+      const result = rules.inboxList(familyStore(), {
+        source: flags.source,
+        limit: flags.limit === undefined ? undefined : familyInteger(flags.limit, '--limit', 1, 200),
+        offset: flags.offset === undefined ? undefined : familyInteger(flags.offset, '--offset', 0, 1000000),
+        clearance: flags.clearance === undefined ? undefined : familyInteger(flags.clearance, '--clearance', 0, 3),
+      })
+      if (flags.json) { console.log(JSON.stringify(result, null, 2)); return }
+      if (!result.items.length) console.log('（没有待处理的候选）')
+      for (const item of result.items) {
+        const due = item.dueAt ? '  due ' + String(item.dueAt).slice(0, 10) : ''
+        const hints = [item.clientHint ? 'client=' + item.clientHint : null, item.projectHint ? 'project=' + item.projectHint : null].filter(Boolean).join(' ')
+        console.log(item.id + '  [' + item.source + '/' + (item.extractor ?? '-') + ']  ' + sanitizeConsoleText(String(item.action ?? '(未命名)'), { max: 200 }) + due + (hints ? '  ' + hints : ''))
+        console.log('   「' + sanitizeConsoleText(String(item.quote ?? ''), { max: 120 }) + '」')
+        console.log('   → advisers memory accept ' + item.id + ' | reject ' + item.id + ' --reason <not-commitment|request-only|reschedule|marketing|vague|date-wrong|other>')
+      }
+      console.log('total=' + result.total + ' limit=' + result.limit + ' offset=' + result.offset + ' clearance=' + result.clearance + (result.protectedExcluded ? ' protectedExcluded=' + result.protectedExcluded : '') + (result.skipped ? ' skipped=' + result.skipped : ''))
+      return
+    }
+    if (sub === 'show') {
+      const parsed = familyFlags(args.slice(1), { booleans: ['json'], values: ['clearance'] }, usage)
+      if (!parsed) return
+      const id = parsed.positional[0]
+      if (!id) { usageFail('missing candidate id', usage); return }
+      const result = rules.inboxShow(familyStore(), id, { clearance: parsed.flags.clearance === undefined ? undefined : familyInteger(parsed.flags.clearance, '--clearance', 0, 3) })
+      if (!result.ok) {
+        const message = result.code === 'E_POLICY_DENIED' ? 'candidate is above the requested clearance' : 'candidate not found: ' + id
+        if (parsed.flags.json) console.error(JSON.stringify({ error: { code: result.code, message, hint: result.hint } }))
+        else { console.error('advisers: ' + result.code + ': ' + message); console.error('hint: ' + result.hint) }
+        process.exitCode = 1
+        return
+      }
+      if (parsed.flags.json) { console.log(JSON.stringify(result, null, 2)); return }
+      const candidate = result.candidate
+      console.log(candidate.id + '  ' + candidate.kind + '  ' + candidate.status + '  [' + candidate.source + '/' + (candidate.extractor ?? '-') + ']')
+      if (candidate.action) console.log('action: ' + sanitizeConsoleText(candidate.action, { max: 2000 }))
+      if (candidate.dueAt) console.log('due: ' + candidate.dueAt + (candidate.dueBasis ? '  (' + candidate.dueBasis + ')' : ''))
+      if (candidate.matterId) console.log('matter: ' + candidate.matterId)
+      if (candidate.quote) console.log('quote: 「' + sanitizeConsoleText(candidate.quote, { max: 500 }) + '」')
+      console.log('payload: ' + JSON.stringify(candidate.payload))
+      console.log('evidence: ' + (Array.isArray(candidate.evidence) ? candidate.evidence.length : 0))
+      console.log('next: advisers memory accept ' + candidate.id + ' | reject ' + candidate.id + ' --reason <code>')
+      return
+    }
+    usageFail('unknown inbox subcommand: ' + sub, usage)
+  } catch (error) { reportFamilyFailure(error) }
 }
 
 function parseEmailDate(value) {
@@ -10338,6 +10875,53 @@ function localDayOfInstant(date) {
   return new Intl.DateTimeFormat('en-CA', { timeZone: AGENDA_TIMEZONE }).format(date)
 }
 
+/** 0.4.3 (043-4, plan 90 NOW-9): notification cooldown window per commitment. */
+const NOTIFY_COOLDOWN_MS = 24 * 3600_000
+
+/** One cooldown key per commitment; no user text in the key. */
+function reminderNotifyCooldownKey(commitmentId) {
+  return 'notify:cooldown:' + String(commitmentId ?? '').replace(/[\r\n|]/g, '')
+}
+
+/**
+ * Apply the per-commitment 24h notification cooldown to one delivery batch.
+ * A commitment notified in the last 24h is skipped, and the batch itself is
+ * deduped by commitment id, so three reminders for the same commitment deliver
+ * once (plan 90 NOW-9 acceptance). --force-notify bypasses the cooldown.
+ */
+function applyNotifyCooldown(store, notifyList, nowDate, { forceNotify = false } = {}) {
+  if (forceNotify || !store || typeof store.listMetaByPrefix !== 'function') return { list: notifyList, suppressed: 0 }
+  const cutoff = nowDate.getTime() - NOTIFY_COOLDOWN_MS
+  const recent = new Map()
+  for (const [key, value] of store.listMetaByPrefix('notify:cooldown:')) {
+    const at = Date.parse(String(value ?? ''))
+    if (Number.isFinite(at)) recent.set(key.slice('notify:cooldown:'.length), at)
+  }
+  const seen = new Set()
+  const list = []
+  let suppressed = 0
+  for (const reminder of notifyList) {
+    const id = String(reminder.commitmentId ?? '')
+    const at = recent.get(id)
+    if ((Number.isFinite(at) && at > cutoff) || seen.has(id)) { suppressed += 1; continue }
+    seen.add(id)
+    list.push(reminder)
+  }
+  return { list, suppressed }
+}
+
+/** Start the cooldown for delivered commitments and drop keys older than 7 days. */
+function recordNotifyCooldown(store, notifyList, nowDate) {
+  if (!store || typeof store.setMeta !== 'function') return
+  for (const reminder of notifyList) store.setMeta(reminderNotifyCooldownKey(reminder.commitmentId), nowDate.toISOString())
+  if (typeof store.listMetaByPrefix !== 'function' || typeof store.deleteMeta !== 'function') return
+  const cutoff = nowDate.getTime() - 7 * 86400_000
+  for (const [key, value] of store.listMetaByPrefix('notify:cooldown:')) {
+    const at = Date.parse(String(value ?? ''))
+    if (Number.isFinite(at) && at < cutoff) store.deleteMeta(key)
+  }
+}
+
 /** Drop dedupe keys older than 30 local days (bounded metadata growth). */
 function pruneNotifyDedupe(store, nowDate) {
   if (!store || typeof store.listMetaByPrefix !== 'function' || typeof store.deleteMeta !== 'function') return
@@ -10556,7 +11140,11 @@ async function remind(args) {
   const reminders = buildReminders(plannerLedger(), { now: nowDate, snoozedUntil: snoozed })
   if (flags.ics) {
     const path = typeof flags.ics === 'string' ? flags.ics : (positional[0] || join(HOME, 'reminders.ics'))
-    writeFileSync(path, toIcs(reminders, { now: nowDate }), { mode: 0o600 })
+    // 0.4.3 (043-4, plan 90 NOW-8): explicit TZID + VALARM DESCRIPTION carrying
+    // the opaque commitment id, so TickTick/Feishu/Outlook can import the file and
+    // still match each alarm to the local row. Default `remind` human/JSON output
+    // and lib toIcs() callers keep their 0.4.2 bytes.
+    writeFileSync(path, toIcs(reminders, { now: nowDate, tzid: 'Asia/Shanghai', alarmCommitmentId: true }), { mode: 0o600 })
     store?.appendAudit({ actor: 'local', action: 'notify.ics', allowed: true, reason: basename(path) })
     console.log('ics written: ' + path + ' (' + reminders.length + ' events)')
     return
@@ -10608,7 +11196,20 @@ async function remind(args) {
             console.log('通知已去重：本批提醒今天已经通知过（本地日志仍记录；--force-notify 可重发）')
           }
         }
+        // 0.4.3 (043-4, plan 90 NOW-9): per-commitment 24h cooldown. The local
+        // reminders.log line above already lists every reminder; the cooldown only
+        // narrows the *notification* batch (webhook/local notifier).
         if (channel !== 'deduped') {
+          const cooled = applyNotifyCooldown(store, notifyList, nowDate, { forceNotify })
+          notifyList = cooled.list
+          if (!notifyList.length) {
+            channel = 'cooldown-suppressed'
+            console.log('通知已冷却：同一承诺 24 小时内已经通知过（本地日志仍记录；--force-notify 可重发）')
+          } else if (cooled.suppressed > 0) {
+            console.error(sanitizeConsoleText('通知冷却：跳过 ' + cooled.suppressed + ' 条 24 小时内已通知的提醒', { max: 500 }))
+          }
+        }
+        if (channel !== 'deduped' && channel !== 'cooldown-suppressed') {
           const local = await notify.sendNotification({ title: 'Advisers · 到期提醒', body: notifyList.length + ' 条承诺到期或即将到期' })
           channel = local.sent ? local.channel : 'log-only'
           const webhook = await notify.sendWebhookNotification(notifyList, { now: nowDate })
@@ -10626,6 +11227,9 @@ async function remind(args) {
           if (store && typeof store.setMeta === 'function') {
             for (const reminder of notifyList) store.setMeta(reminderNotifyDedupeKey(reminder, localDay), nowDate.toISOString())
             pruneNotifyDedupe(store, nowDate)
+            // 0.4.3 (043-4): start the 24h per-commitment cooldown after the
+            // delivery attempt (whether or not a local notifier exists).
+            recordNotifyCooldown(store, notifyList, nowDate)
           }
         }
       }
@@ -12752,7 +13356,7 @@ async function soul(sub, file) {
  */
 const TOS_EXEMPT_COMMANDS = new Set([
   'help', '--help', '-h', 'version', '--version', '-v', 'status', 'doctor', 'init', 'tos',
-  'privacy', 'export', 'audit', 'purge', 'backups',
+  'privacy', 'export', 'audit', 'purge', 'backups', 'profile',
 ])
 /** Known commands. Unknown commands keep the plain "unknown command" error, not the gate. */
 const KNOWN_COMMANDS = new Set([
@@ -12765,7 +13369,7 @@ const KNOWN_COMMANDS = new Set([
   'matter', 'agenda', 'morning',
   // 0.4.0: KB / mail / money / consent commands are gated like every other
   // command (unknown names keep the plain error instead of the gate).
-  'kb', 'fact', 'mail', 'receivable', 'payment', 'consent',
+  'kb', 'fact', 'mail', 'receivable', 'payment', 'consent', 'inbox', 'profile',
   // 0.3.0 customer entities: reads and writes both go through the L1/TOS gate
   // (they touch the local ledger); there is no exempt customer command.
   'client', 'project',
@@ -13080,6 +13684,210 @@ async function tosCommand(argv) {
   process.exitCode = 1
 }
 
+// ---------------------------------------------------------------------------
+// 0.4.3 (043-7, plan 96 §3.1 M0a): `-h`/`--help` anywhere is a pure help
+// request. Before this, `init --help` ran init and wrote soul.md, `ui --help`
+// bound a port, `purge --help` read the flag as a matter id and `office-read
+// --help` blocked for 5s. The short-circuit resolves the request before the TOS
+// gate and before dispatch, so no command can run a side effect and a fresh
+// home stays byte-empty. `advisers help` / `advisers --help` keep the 249-line
+// general help (human-only, no frozen contract).
+// ---------------------------------------------------------------------------
+
+/** Canonical usage line(s) per command path. Human-only; no frozen contract. */
+const HELP_USAGE_LINES = new Map(Object.entries({
+  version: 'usage: advisers version',
+  status: 'usage: advisers status [--json]',
+  doctor: 'usage: advisers doctor [--check-db] [--json] [--report]\n       advisers doctor --repair [--dry-run|--yes] [--only lock,temp,wal,fts] [--json]',
+  init: 'usage: advisers init',
+  chat: 'usage: advisers chat [--file <path>] [--allow-path <dir>]... <text>',
+  history: 'usage: advisers history',
+  mcp: 'usage: advisers mcp --stdio',
+  deliver: 'usage: advisers deliver [--commit id] [--type confirmation|weekly|statement|ledger] [--format docx|xlsx|pdf] [--out f]',
+  timestamp: 'usage: advisers timestamp <file> [--out proof]',
+  tui: 'usage: advisers tui [--once] [--json] [--width <40..200>] [--plain|--accessible] [--color auto|always|never]',
+  ocr: 'usage: advisers ocr <image> [--out text]',
+  evidence: 'usage: advisers evidence show <id> [--json]\n       advisers evidence verify <dir>',
+  'evidence show': 'usage: advisers evidence show <id> [--json]',
+  'evidence verify': 'usage: advisers evidence verify <dir>',
+  receipt: 'usage: advisers receipt',
+  deliveries: 'usage: advisers deliveries [--pack|--receipt] [--out dir] [--ids ...] [--all] [--json]',
+  commit: 'usage: advisers commit add|edit|ls|done|snooze ...',
+  'commit add': 'usage: advisers commit add "<action>" --quote "<原话>" [--due ISO|相对日期] [--debtor user|agent] [--creditor name] [--matter id] [--remind-offsets "-1d,-2h"]',
+  'commit edit': 'usage: advisers commit edit <id> [--action text] [--due ISO|相对日期] [--matter id] [--remind-offsets "<list>" | --no-remind]',
+  'commit ls': 'usage: advisers commit ls [--json]',
+  'commit done': 'usage: advisers commit done <id> --evidence "<证据/原话>"',
+  'commit snooze': 'usage: advisers commit snooze <id> <hours>',
+  help: 'usage: advisers help [<topic>] [--list]',
+  'learn ls': 'usage: advisers learn ls',
+  'learn review': 'usage: advisers learn review <run-id>',
+  diff: 'usage: advisers diff',
+  undo: 'usage: advisers undo [--list] [--force]',
+  compact: 'usage: advisers compact ls|rollback <version>',
+  search: 'usage: advisers search <text> [--scope turns|kb|pages|facts|all] [--json]',
+  nudge: 'usage: advisers nudge list|done|ignore <nudge-id>',
+  risks: 'usage: advisers risks',
+  'pet-brief': 'usage: advisers pet-brief [--json] [--out [path]] [--check [--strict]] [--display-policy public|private|none]',
+  today: 'usage: advisers today [--calendar] [--sources] [--json] [--limit n]',
+  tick: 'usage: advisers tick',
+  week: 'usage: advisers week [--json]',
+  ui: 'usage: advisers ui [--port n]',
+  remind: 'usage: advisers remind [--json] [--now ISO] [--ics [path]] [--deliver [--notify]] [--quiet-hours HH:MM-HH:MM] [--force-notify]\n       advisers remind install|uninstall|status [--apply] [--schedule "0 9 * * *"]',
+  'remind install': 'usage: advisers remind install [--apply] [--schedule "0 9 * * *"] [--morning [--morning-time 08:30] [--morning-days 1-5]]',
+  'remind uninstall': 'usage: advisers remind uninstall [--apply]',
+  'remind status': 'usage: advisers remind status',
+  calendar: 'usage: advisers calendar import --ics <file>',
+  'calendar import': 'usage: advisers calendar import --ics <file>',
+  who: 'usage: advisers who [--json]',
+  memory: 'usage: advisers memory [--all]\n       advisers memory search <q> | candidates [--json] [--all] | accept <id> | reject <id> [--reason <r>]',
+  digest: 'usage: advisers digest day|week|morning',
+  prefs: 'usage: advisers prefs [--all]',
+  privacy: 'usage: advisers privacy [--json] [--prove [--brief]]\n       advisers privacy --matrix [--json]',
+  audit: 'usage: advisers audit [--check-db] [--json]\n       advisers audit --write-anchor [--json] | --expect-count <N> [--expect-head <64 hex>] | --rebuild-fts',
+  purge: 'usage: advisers purge <matter-id> [--yes]',
+  decay: 'usage: advisers decay',
+  correct: 'usage: advisers correct <statement>',
+  ls: 'usage: advisers ls',
+  why: 'usage: advisers why <pref-id|fact-id>',
+  forget: 'usage: advisers forget <pref-id>',
+  sync: 'usage: advisers sync push|pull|status --dir <sync-dir> [--force] [--file name] [--device name] [--dry-run] [--json]',
+  'sync push': 'usage: advisers sync push --dir <sync-dir> [--force] [--file name] [--device name] [--dry-run] [--json]',
+  'sync pull': 'usage: advisers sync pull --dir <sync-dir> [--force] [--file name] [--dry-run] [--json]',
+  'sync status': 'usage: advisers sync status [--dir <sync-dir>] [--json]',
+  vault: 'usage: advisers vault seal [--out file] [--remove] | unseal [file] | status',
+  export: 'usage: advisers export [--all] [--out <file>] [--encrypted]',
+  import: 'usage: advisers import <file> [--replace]',
+  backup: 'usage: advisers backup [--out <file> | <path.db>] [--tag <name>] [--keep daily=7,weekly=4,monthly=3] [--dry-run|--apply] [--json]',
+  backups: 'usage: advisers backups ls|verify [--json] [--limit <n>]',
+  'backups ls': 'usage: advisers backups ls [--json] [--limit <n>]',
+  'backups verify': 'usage: advisers backups verify [--json] [--limit <n>]',
+  restore: 'usage: advisers restore <backup-file> [--dry-run] [--yes] [--allow-anchor-behind] [--allow-broken-audit-chain] [--json]',
+  brief: 'usage: advisers brief [--deep] <text>',
+  review: 'usage: advisers review <file> --request "..."',
+  research: 'usage: advisers research --web|--url <url> [--deep] <query>',
+  capture: 'usage: advisers capture [--file <path|->] [--source wechat|meeting|email|note|stdin] [--date ISO] [--matter id] [--rules|--local|--model] [--json] [<text>]\n       advisers capture --from-mail <file|dir> [--limit n]\n       advisers capture --from-transcript <file>\n       advisers capture --from-imap',
+  policy: 'usage: advisers policy check <text>',
+  'office-read': 'usage: advisers office-read <file>',
+  verify: 'usage: advisers verify <file> [--json] [--content] [--template quote|proposal --data <file>]',
+  'office-edit': 'usage: advisers office-edit <file> <ops.json> [out]',
+  office: 'usage: advisers office <docx|xlsx|pptx|xmind|mermaid|drawio> <spec.json> <out>',
+  routine: 'usage: advisers routine ls|add|approve|archive|patches|patch|diff|apply|reject|revert|check|curate|restore ...',
+  template: 'usage: advisers template quote|proposal <data.json> <out.docx|out.xlsx> [--json] [--record-delivery] [--matter id]\n       advisers template <weekly|budget|presentation|flow|mindmap|minutes|notice> <data.json> <out>',
+  link: 'usage: advisers link ls|add|confirm|suggest|updates|propose-update|apply|diff|reject|rollback ...',
+  bridge: 'usage: advisers bridge --dir <BRIDGE_DIR> [--name advisers]',
+  soul: 'usage: advisers soul show | set <file> | init',
+  'soul show': 'usage: advisers soul show',
+  'soul set': 'usage: advisers soul set <file>',
+  'soul init': 'usage: advisers soul init',
+  tos: 'usage: advisers tos <show|status|accept|revoke>',
+  'tos show': 'usage: advisers tos show [--as-version <version>]',
+  'tos status': 'usage: advisers tos status [--json]',
+  'tos accept': 'usage: advisers tos accept',
+  'tos revoke': 'usage: advisers tos revoke [--yes]',
+  matter: 'usage: advisers matter <add|ls|show|rename|archive|use> ...',
+  agenda: 'usage: advisers agenda [--days 1..31] [--from YYYY-MM-DD] [--matter id] [--no-calendar] [--include-done] [--json] [--now ISO]',
+  morning: 'usage: advisers morning [--days 1..31] [--matter id] [--top 1..5] [--out file] [--archive [--keep 1..365]] [--json] [--now ISO]',
+  fact: 'usage: advisers fact add <subject> <predicate> <object> --quote "..." [--json]\n       advisers fact show <id> | history <id> | as-of <YYYY-MM-DD|ISO> [--json]',
+  consent: 'usage: advisers consent status|grant <surface>|revoke <surface> [--data-class mail|kb] [--yes] [--json]',
+  agent: 'usage: advisers agent ...',
+  // 0.4.0 command families
+  kb: 'usage: advisers kb add <file>... [--title s] [--kind k] [--client id] [--project id] [--matter id] [--secrecy 0-3] [--replace] [--from list.txt] [--json]\n       advisers kb ls|show <id>|rm <id>|purge <id>|reindex [--json] | kb search <q> | kb page ls|show|rebuild|diff',
+  'kb add': 'usage: advisers kb add <file>... [--title s] [--kind quote|contract|receipt|delivery|note|other] [--client id] [--project id] [--matter id] [--secrecy 0-3] [--replace] [--from list.txt] [--json]',
+  'kb ls': 'usage: advisers kb ls [--client id] [--matter id] [--kind k] [--all] [--limit n] [--clearance 0-3] [--json]',
+  'kb show': 'usage: advisers kb show <id> [--chunks 0..20] [--clearance 0-3] [--json]',
+  'kb rm': 'usage: advisers kb rm <id> [--json]',
+  'kb purge': 'usage: advisers kb purge <id> [--dry-run|--yes] [--json]',
+  'kb reindex': 'usage: advisers kb reindex [--rebuild] [--json]',
+  'kb search': 'usage: advisers kb search <query> [--scope kb|pages|all] [--limit n] [--clearance 0-3] [--json]',
+  'kb page': 'usage: advisers kb page ls|show|rebuild|diff ... [--json]',
+  'kb page ls': 'usage: advisers kb page ls [--kind client|project|timeline|facts] [--check] [--limit n] [--json]',
+  'kb link': 'usage: advisers kb link <doc-id> --fact <fact-id> [--relation source|mentions] [--chunk id] [--json]',
+  'kb unlink': 'usage: advisers kb unlink <doc-id> --fact <fact-id> [--relation source|mentions] [--json]',
+  mail: 'usage: advisers mail account add|ls|show|test|rm ...\n       advisers mail sync [<acct>] [--full] [--dry-run] [--json] [--watch [--interval 300s] [--max-runs n]]\n       advisers mail ls|show <id> [--body]|purge|import|extract|link|dismiss ... [--json]',
+  'mail account': 'usage: advisers mail account add|ls|show|test|rm ...',
+  'mail account add': 'usage: advisers mail account add|ls|show|test|rm ...\n  advisers mail account add --name n --host h [--port 993] [--tls tls|starttls] --user u [--pass-stdin]',
+  'mail account ls': 'usage: advisers mail account ls [--json]',
+  'mail account show': 'usage: advisers mail account show <acct> [--json]',
+  'mail account test': 'usage: advisers mail account test <acct> [--json]',
+  'mail account rm': 'usage: advisers mail account rm <acct> [--json]',
+  'mail sync': 'usage: advisers mail sync [<account>] [--full] [--dry-run] [--since-days n] [--limit n] [--mailbox INBOX] [--json] [--watch [--interval 300s] [--max-runs n]]',
+  'mail ls': 'usage: advisers mail ls [--account a] [--client id] [--status s] [--since 30d] [--limit n] [--json]',
+  'mail show': 'usage: advisers mail show <id> [--body] [--json]',
+  'mail purge': 'usage: advisers mail purge [--older-than 30d] [--dry-run|--yes] [--account a] [--json]',
+  'mail import': 'usage: advisers mail import <file|dir> [--limit n] [--dry-run] [--client id] [--project id] [--json]',
+  'mail extract': 'usage: advisers mail extract [<id>...] [--all-new] [--local|--model] [--yes] [--matter id] [--limit n] [--dry-run] [--json]',
+  'mail link': 'usage: advisers mail link <message> [--client id] [--project id] [--json]',
+  'mail dismiss': 'usage: advisers mail dismiss <message> [--json]',
+  receivable: 'usage: advisers receivable add <client-id> "<label>" --amount 8000.00 [--due DATE] [--currency CNY] [--json]\n       advisers receivable ls|show <id>|edit <id>|void <id> [--aging] [--json]\n       advisers receivable export [--out f.csv] [--json]',
+  'receivable add': 'usage: advisers receivable add <client-id> "<label>" --amount 8000.00 [--due DATE|相对日期] [--currency CNY] [--client-matter id] [--json]',
+  'receivable ls': 'usage: advisers receivable ls [--client id] [--status s] [--aging] [--clearance 0-3] [--json]',
+  'receivable show': 'usage: advisers receivable show <id> [--json]',
+  'receivable edit': 'usage: advisers receivable edit <id> [--label s] [--amount n] [--due DATE|相对日期] [--json]',
+  'receivable void': 'usage: advisers receivable void <id> [--reason s] [--json]',
+  'receivable export': 'usage: advisers receivable export [--client id] [--project id] [--currency c] [--status active|all] [--due-within 7d|30d] [--clearance 0-3] [--out f.csv|-] [--bom] [--json]',
+  payment: 'usage: advisers payment add <client-id> --amount 4000.00 [--receivable rcv] [--method bank] [--json]\n       advisers payment ls|void <id> [--json]',
+  'payment add': 'usage: advisers payment add <client-id> --amount 4000.00 [--receivable rcv] [--currency CNY] [--paid-at ISO] [--method bank|wechat|alipay|cash|other] [--json]',
+  'payment ls': 'usage: advisers payment ls [--receivable id] [--json]',
+  'payment void': 'usage: advisers payment void <id> [--json]',
+  client: 'usage: advisers client <add|list|show|timeline|archive|merge|export|note> ...',
+  'client add': 'usage: advisers client add "<name>" [--aliases a,b] [--tags t1,t2] [--secrecy 0-3] [--note text] [--link-matter <id>] [--json]',
+  'client list': 'usage: advisers client list [--all] [--limit n] [--json]',
+  'client show': 'usage: advisers client show <id> [--timeline-limit n] [--clearance 0-3] [--json]',
+  'client timeline': 'usage: advisers client timeline <id> [--since 90d|ISO] [--kind delivery,note,commitment] [--limit n] [--clearance 0-3] [--json]',
+  'client archive': 'usage: advisers client archive <id> [--dry-run] [--json]',
+  'client merge': 'usage: advisers client merge <from-id> <into-id> [--dry-run] [--json]',
+  'client export': 'usage: advisers client export <id> [--format md|docx] [--out <file>] [--redact-names] [--pack] [--json]',
+  'client note': 'usage: advisers client note add|list <id> ...',
+  'client note add': 'usage: advisers client note add <id> "<summary>" [--kind k] [--at ISO] [--project id] [--matter id] [--json]',
+  'client note list': 'usage: advisers client note list <id> [--project <id>] [--limit n] [--json]',
+  project: 'usage: advisers project <add|list|show|archive> ...',
+  'project add': 'usage: advisers project add <client-id> "<name>" [--start YYYY-MM-DD] [--end YYYY-MM-DD] [--default-matter <id>] [--note text] [--json]',
+  'project list': 'usage: advisers project list [--client <id>] [--all] [--limit n] [--json]',
+  'project show': 'usage: advisers project show <id> [--timeline-limit n] [--clearance 0-3] [--json]',
+  'project archive': 'usage: advisers project archive <id> [--dry-run] [--json]',
+  // 0.4.3 additions
+  inbox: 'usage: advisers inbox ls [--source capture|mail|all] [--limit n] [--offset n] [--clearance 0-3] [--json]\n       advisers inbox show <candidate-id> [--clearance 0-3] [--json]',
+  profile: 'usage: advisers profile show [--json]\n       advisers profile export [--out <file>] [--json]',
+}))
+
+/** Leading non-flag tokens before the first `-h/--help`, capped at 4. */
+function helpRequestTokens(argv) {
+  const tokens = []
+  for (const token of argv) {
+    if (token === '--help' || token === '-h') continue
+    if (typeof token !== 'string' || token.startsWith('-')) break
+    tokens.push(token)
+    if (tokens.length >= 4) break
+  }
+  return tokens
+}
+
+/** Longest known command path in argv; null for the top-level help request. */
+function helpRequestUsage(argv) {
+  const tokens = helpRequestTokens(argv)
+  if (!tokens.length) return null
+  if (tokens[0] === 'help') return HELP_USAGE_LINES.get('help') ?? null
+  for (let length = tokens.length; length >= 1; length--) {
+    const line = HELP_USAGE_LINES.get(tokens.slice(0, length).join(' '))
+    if (line) return line
+  }
+  // Unknown path: a generic usage keeps `advisers <cmd> --help` a pure read.
+  return 'usage: advisers ' + tokens.join(' ') + ' [options]'
+}
+
+/** Flush already-queued stdout writes, then exit (process.exit can truncate pipes). */
+async function flushStdoutAndExit(code) {
+  try { await new Promise((resolve) => process.stdout.write('', resolve)) } catch {}
+  process.exit(code)
+}
+
+if (rawArgv.includes('--help') || rawArgv.includes('-h')) {
+  const usage = helpRequestUsage(rawArgv)
+  if (usage === null) { help(); await flushStdoutAndExit(0) }
+  writeSync(1, usage.endsWith('\n') ? usage : usage + '\n')
+  process.exit(0)
+}
+
 // L1 consent gate: runs once before dispatch (exempt commands return immediately).
 await tosGate()
 
@@ -13172,14 +13980,19 @@ if (!command) {
   const sub = args[0]
   const { flags, positional } = parseFlags(args.slice(1))
   if (sub === 'add') {
-    const usage = 'usage: advisers commit add "<action>" --quote "<原话>" [--due ISO] [--debtor user|agent] [--creditor name] [--matter id] [--remind-offsets "-1d,-2h"]'
+    const usage = 'usage: advisers commit add "<action>" --quote "<原话>" [--due ISO|相对日期] [--debtor user|agent] [--creditor name] [--matter id] [--remind-offsets "-1d,-2h"]'
     const action = positional.join(' ').trim()
     if (!action || !flags.quote) { console.error(usage); process.exitCode = 1 }
     else {
       let reminderOffsets
       let offsetsError
       try { reminderOffsets = await parseReminderOffsetsFlag(flags) } catch (error) { offsetsError = error }
-      if (offsetsError) { console.error(offsetsError.message); process.exitCode = 1 }
+      // 0.4.3 (043-1): resolve --due before anything is written. A refusal never
+      // creates a commitment and never stores the raw expression.
+      const dueInfo = typeof flags.due === 'string' ? await resolveDueFlag(flags.due) : undefined
+      if (dueInfo && !dueInfo.ok) reportDueFailure(dueInfo, flags.json === true)
+      if (dueInfo && !dueInfo.ok) { /* refusal already reported; nothing to write */ }
+      else if (offsetsError) { console.error(offsetsError.message); process.exitCode = 1 }
       else if (mode === 'json') {
         try {
           const ledger = loadJson()
@@ -13188,7 +14001,7 @@ if (!command) {
             debtor: flags.debtor ?? 'user',
             creditor: flags.creditor ?? /(?:发给|给|向|对)([\u4e00-\u9fa5A-Za-z0-9_]{1,12})/.exec(action)?.[1] ?? 'someone',
             action,
-            dueAt: flags.due,
+            dueAt: dueInfo?.ok ? dueInfo.at : undefined,
             timezone: flags.tz ?? 'Asia/Shanghai',
             capability: flags.capability ?? 'todo',
             evidence: [manualEvidence(String(flags.quote), 'commit add')],
@@ -13206,7 +14019,7 @@ if (!command) {
               debtor: flags.debtor ?? 'user',
               creditor: flags.creditor ?? /(?:发给|给|向|对)([\u4e00-\u9fa5A-Za-z0-9_]{1,12})/.exec(action)?.[1] ?? 'someone',
               action,
-              dueAt: flags.due,
+              dueAt: dueInfo?.ok ? dueInfo.at : undefined,
               timezone: flags.tz ?? 'Asia/Shanghai',
               capability: flags.capability ?? 'todo',
               evidence: [manualEvidence(String(flags.quote), 'commit add')],
@@ -13219,15 +14032,21 @@ if (!command) {
           printCommitAdded(c, reminderOffsets)
         } catch (error) { reportCommandFailure(error) }
       }
+      const resolutionLine = dueInfo?.ok ? dueResolutionLine(dueInfo) : null
+      if (resolutionLine) console.error(sanitizeConsoleText(resolutionLine, { max: 500 }))
     }
   } else if (sub === 'edit' || sub === 'update') {
     const id = positional[0]
-    const usage = 'usage: advisers commit edit <id> [--action text] [--due ISO] [--matter id] [--remind-offsets "<list>" | --no-remind]'
+    const usage = 'usage: advisers commit edit <id> [--action text] [--due ISO|相对日期] [--matter id] [--remind-offsets "<list>" | --no-remind]'
     if (!id) { console.error(usage); process.exitCode = 1 }
     else {
       const patch = {}
+      // 0.4.3 (043-1): same boundary resolution as commit add; a refusal leaves
+      // the commitment untouched.
+      const dueInfo = typeof flags.due === 'string' ? await resolveDueFlag(flags.due) : undefined
+      if (dueInfo && !dueInfo.ok) reportDueFailure(dueInfo, flags.json === true)
+      if (dueInfo?.ok) patch.dueAt = dueInfo.at
       if (typeof flags.action === 'string') patch.action = flags.action
-      if (typeof flags.due === 'string') patch.dueAt = flags.due
       if (typeof flags.tz === 'string') patch.timezone = flags.tz
       if (typeof flags.capability === 'string') patch.capability = flags.capability
       if (typeof flags.matter === 'string') patch.matterId = flags.matter
@@ -13239,7 +14058,8 @@ if (!command) {
           if (offsets !== undefined) patch.reminderOffsets = offsets
         }
       } catch (error) { offsetsError = error }
-      if (offsetsError) { console.error(offsetsError.message); process.exitCode = 1 }
+      if (dueInfo && !dueInfo.ok) { /* refusal already reported; nothing to update */ }
+      else if (offsetsError) { console.error(offsetsError.message); process.exitCode = 1 }
       else if (!Object.keys(patch).length) { console.error(usage); process.exitCode = 1 }
       else {
         try {
@@ -13274,6 +14094,8 @@ if (!command) {
           }
         } catch (error) { reportCommandFailure(error) }
       }
+      const resolutionLine = dueInfo?.ok ? dueResolutionLine(dueInfo) : null
+      if (resolutionLine) console.error(sanitizeConsoleText(resolutionLine, { max: 500 }))
     }
   } else if (sub === 'ls') {
     if (mode === 'json') printCommitments(loadJson(), flags.json)
@@ -13677,6 +14499,10 @@ if (!command) {
   await research(args)
 } else if (command === 'capture') {
   await capture(args)
+} else if (command === 'inbox') {
+  await inboxCommand(args)
+} else if (command === 'profile') {
+  await profileCommand(args)
 } else if (command === 'policy') {
   const sub = args[0]
   if (sub === 'check') {
@@ -13745,7 +14571,7 @@ if (!command) {
             const text = (await readOfficeText(file, ext)) ?? ''
             const extraChecks = quoteTemplateChecks(templateName, normalized, dataSha256, text)
             content.checks = Array.isArray(content.checks) ? content.checks.concat(extraChecks) : extraChecks
-            content.template = { name: templateName, version: QUOTE_TEMPLATE_VERSION, dataSha256: dataSha256, totals: quoteTotalsJson(normalized) }
+            content.template = { name: templateName, version: normalized.templateVersion ?? QUOTE_TEMPLATE_VERSION, dataSha256: dataSha256, totals: quoteTotalsJson(normalized) }
             if (!extraChecks.every((check) => check.ok)) content.ok = false
           }
           console.log(JSON.stringify({ structure: result, content }, null, 2))

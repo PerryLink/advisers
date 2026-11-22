@@ -33,8 +33,8 @@ const check = await validateOffice(buffer, 'docx')
 ## CLI
 
 ```sh
-# stable channel: advisers@latest / advisers-office@latest (now 0.4.2, published 2026-11-22)
-# pre-release channel: advisers@next / advisers-office@next (also 0.4.2)
+# stable channel: advisers@latest / advisers-office@latest (now 0.4.3, published 2026-11-22)
+# pre-release channel: advisers@next / advisers-office@next (also 0.4.3)
 npm i -g advisers@latest advisers-office@latest
 advisers office docx spec.json out.docx
 advisers office xlsx spec.json out.xlsx
@@ -48,8 +48,8 @@ templates. CJK fonts default to Microsoft YaHei, with a system fallback.
 
 ## Status
 
-`0.4.2` was published on 2026-11-22 (npm `latest` = `0.4.2`; `next` is also `0.4.2`);
-0.4.2 is the current release (lockstep version), a patch on the 0.4.1 same-day follow-up,
+`0.4.3` was published on 2026-11-22 (npm `latest` = `0.4.3`; `next` is also `0.4.3`);
+0.4.3 is the current release (lockstep version), a patch on the 0.4.2 tree,
 and this package's public surface is unchanged from 0.3.2. 0.3.1 was a release-metadata patch over 0.3.0 with no runtime,
 CLI or interface changes; 0.3.2 added the customer/performance closeout in the `advisers`
 and `dsh-advisers` packages. The 0.2.4 candidate superseded by the 0.3.0 line was never published, and

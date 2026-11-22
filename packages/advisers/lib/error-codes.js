@@ -37,7 +37,7 @@ export const ERROR_CODES_SOURCE_VERSION = '0.2.4'
 export const ERROR_CODES_RELEASE = '0.4.0'
 export const ERROR_CODES_BASELINE_COUNT = 50
 /** Additive layers after the frozen baseline, oldest first (a code's `since`). */
-export const ERROR_CODES_ADDITIVE_RELEASES = Object.freeze(['0.3.0', '0.4.0'])
+export const ERROR_CODES_ADDITIVE_RELEASES = Object.freeze(['0.3.0', '0.4.0', '0.4.3'])
 
 /** Category vocabulary used by the registry, docs and contracts. */
 export const ERROR_CATEGORIES = Object.freeze([
@@ -493,6 +493,36 @@ const REGISTRY = [
     remedy: "A calendar entry was skipped (unsupported TZID or invalid time). It is listed in agenda().degraded[]; the rest of the window is still valid.",
   },
   {
+    code: 'E_CANDIDATE_NOT_FOUND',
+    category: 'state',
+    exit: 1,
+    surfaces: Object.freeze(['cli']),
+    since: '0.4.3',
+    stable: true,
+    remedy: "No memory candidate matched the given id; list pending candidates with `advisers inbox ls` (or `advisers memory candidates`).",
+    doc: 'docs/CLI-JSON.md',
+  },
+  {
+    code: 'E_CAPTURE_EMPTY',
+    category: 'usage',
+    exit: 1,
+    surfaces: Object.freeze(['cli']),
+    since: '0.4.3',
+    stable: true,
+    remedy: "capture --rules received no text; pass a non-empty file or stdin.",
+    doc: 'docs/CLI-JSON.md',
+  },
+  {
+    code: 'E_CAPTURE_TOO_LONG',
+    category: 'usage',
+    exit: 1,
+    surfaces: Object.freeze(['cli']),
+    since: '0.4.3',
+    stable: true,
+    remedy: "The capture input exceeds the local-rules limit; split it into smaller messages or raise --max-bytes.",
+    doc: 'docs/CLI-JSON.md',
+  },
+  {
     code: 'E_CONFIDENCE',
     category: 'schema',
     exit: 1,
@@ -539,6 +569,26 @@ const REGISTRY = [
     stable: true,
     remedy: "Pet Brief requires an explicit displayPolicy (public|private|none) when --strict is used.",
     doc: 'docs/PET-BRIEF-PRODUCER.md',
+  },
+  {
+    code: 'E_DUE_CONFLICT',
+    category: 'usage',
+    exit: 1,
+    surfaces: Object.freeze(['cli']),
+    since: '0.4.3',
+    stable: true,
+    remedy: "The --due expression contains conflicting dates; pass one explicit date or ISO timestamp.",
+    doc: 'docs/CLI-JSON.md',
+  },
+  {
+    code: 'E_DUE_UNRESOLVED',
+    category: 'usage',
+    exit: 1,
+    surfaces: Object.freeze(['cli']),
+    since: '0.4.3',
+    stable: true,
+    remedy: "Could not parse --due; use 今天/明天/后天/周X/下周X/月底/YYYY-MM-DD or an ISO timestamp.",
+    doc: 'docs/CLI-JSON.md',
   },
   {
     code: 'E_DUP_ID',

@@ -55,7 +55,10 @@ export default [
         check(checks, 'usage-stderr-non-empty', () => {
           if (!usage.stderr.trim()) throw new Error('stderr is empty')
         })
-        const capture = runCli(workdir, ['capture', '没有 key 的本地模式'], { index: 'exit-capture' })
+        // 0.4.3: default capture is local (no key needed); the model path
+        // (`--model`) still requires the provider key and is the missing-key
+        // exit-1 case now.
+        const capture = runCli(workdir, ['capture', '--model', '没有 key 的模型模式'], { index: 'exit-capture' })
         check(checks, 'missing-key-exit-1', () => {
           if (capture.status !== 1) throw new Error('exit ' + capture.status + ': ' + capture.stderr.slice(0, 200))
         })

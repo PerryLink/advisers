@@ -1,24 +1,29 @@
 # Advisers architecture
 
-> Status: **0.4.2 release tree (schema v22)**. The repository package version is
-> `0.4.2`; `0.4.1` is the previous same-day follow-up patch, `0.4.0` the published
-> feature release and `0.3.2` the baseline before it. 0.4.2 is a patch on 0.4.1
-> (manual fact entry, the read-only IMAP probe, foreground mail watch, the `sync pull
-> --dry-run` preview, the backup-age hint in `doctor --check-db`, subcommand `--help`
-> consistency and the local mail-extraction gold gate) with **no schema change and no
-> frozen-contract change**. 0.4.1 added the KB/mail review links, the reminder delivery
-> policy, the kb/mail/policy deterministic eval groups and the documented-additive CLI
-> contracts. 0.4.0 is the "local knowledge + interaction shell" feature release: it adds
+> Status: **0.4.3 release tree (schema v22)**. The repository package version is
+> `0.4.3`; `0.4.2` is the previous patch, `0.4.1` the earlier same-day follow-up,
+> `0.4.0` the published feature release and `0.3.2` the baseline before it. 0.4.3 is
+> a patch on 0.4.2 (Chinese relative dates for `--due`, local-rule capture plus the
+> read-only inbox, explicit-null `doctor --report` / `privacy --prove --brief` /
+> `profile`, the enhanced `remind --ics` export with a per-commitment notification
+> cooldown, quote/proposal schema v2 payment channels, receivable CSV export, the
+> restore drill, the global `--help` short-circuit and the mail-watch JSON/exit
+> contract) with **no schema change and no frozen-shape change**. 0.4.2 added manual
+> fact entry, the read-only IMAP probe, foreground mail watch, the `sync pull --dry-run`
+> preview, the backup-age hint, subcommand help consistency and the local mail gold
+> gate. 0.4.1 added the KB/mail review links, the reminder delivery policy, the
+> kb/mail/policy deterministic eval groups and the documented-additive CLI contracts.
+> 0.4.0 is the "local knowledge + interaction shell" feature release: it adds
 > the deterministic knowledge base (schema v22, compiled pages, fact time travel), the interactive readline shell,
 > proactive urgency/whyNow + morning archive + scheduler v2, the local mail entry
 > (IMAP read-only + `.eml` import, local extraction by default), the receivables
 > money sidecar, the policy/evidence 0.4 subset (egress registry + consent + four-state
 > resolver + evidence pack v2), MCP dual-era (legacy + modern `2026-07-28`), and the
 > Windows support matrix. **Default remains zero model / zero network**: model egress
-> (chat/research/capture/mail `--model`) is explicit opt-in and mail/KB expose no model
+> (chat/research/capture `--model`/mail `--model`) is explicit opt-in and mail/KB expose no model
 > or network path by default; mail sync is the only new network entry point and is
-> user-initiated. Anything marked *target* below is not shipped; `0.4.1`, `0.4.0`,
-> `0.3.2` and earlier remain installable by pinning but are superseded.
+> user-initiated. Anything marked *target* below is not shipped; `0.4.2`, `0.4.1`,
+> `0.4.0`, `0.3.2` and earlier remain installable by pinning but are superseded.
 > This document fixes the vocabulary and the invariants; the implementation is allowed to
 > be smaller than the document.
 
@@ -71,7 +76,7 @@
 ### 2.1 0.3.0 architecture invariants (reviewed per release)
 
 The 0.3.0 planning froze ten invariants for the read/model/contract surfaces. They are
-recorded here with an honest status on the 0.4.2 tree; "target" means the
+recorded here with an honest status on the 0.4.3 tree; "target" means the
 design is accepted but the code does **not** enforce it yet, and no release note may claim
 it.
 
@@ -166,7 +171,7 @@ adding a `MatterLink` table after the fact is a migration, adding it now is free
 The earlier plan put routines at 1.0; that makes the product a commitment
 tracker for a year. Routines must appear by 0.2 to keep the "intern" promise.
 
-## 9. Current limits (0.4.2 release tree; schema v22; 0.4.1 was the previous same-day follow-up and 0.4.0 the published feature release)
+## 9. Current limits (0.4.3 release tree; schema v22; 0.4.2/0.4.1 were the same-day follow-up patches and 0.4.0 the published feature release)
 
 - Ledger persisted in SQLite (`advisers/lib/sqlite.js`); JSON mode is a fallback but loses turns/search/audit (and has no KB/mail/money tables: those commands answer `E_STORE`/`E_SCHEMA_STALE`). Physical schema is **v22** (`SCHEMA_VERSION = 22`): v21 was the customer-entity step, v22 adds the KB, mail and money tables plus the two KB FTS indexes in one `kb-mail-payment-entities` migration (backup -> migrate -> verify; one-way, 0.3.2 fails with `E_SCHEMA_NEWER`). Date windows still run in JS (no `due_ms` migration).
 - **Default zero model / zero network.** CLI calls a model only for the pre-existing chat/capture/research/capture-imap paths when `ADVISERS_API_KEY` is set, and mail extraction uses local rules unless `mail extract --model` is explicit + consented. KB, the shell, urgency/morning, receivables, MCP/DSH reads and KB page rebuild are local-only; `mail sync` and `mail import` are the only new mail network/local-import entry points and always user-initiated. Without a key, record/search/build still work; natural-language replies that need a model fail honestly.
@@ -176,7 +181,7 @@ tracker for a year. Routines must appear by 0.2 to keep the "intern" promise.
 - Deletion cascade covers sessions/turns/summaries/runs/nudges/deliveries + facts/title and candidate payloads; commitment/link/update/audit content redaction is partial.
 - Office verification is structural (OPC/XML/rels/content types). Open validation is manual: WPS Writer, Spreadsheet and Presentation opened and extracted the generated files (2026-11-14). Microsoft Office is not installed on the test host and Office application-layer validation is still pending.
 - No real IM account and no 5-user dogfood validation yet. Mail is a local v1: IMAP read-only (EXAMINE/FETCH), implicit TLS 993 or opt-in STARTTLS, no OAuth (Gmail Workspace/M365 password IMAP is disabled upstream; `.eml`/`.mbox` import is the fallback), no attachment download, no SMTP/send/write-back, no IDLE daemon. Credentials live in `$ADVISERS_HOME/credentials/imap/<account>.json` (0600 best effort; Windows relies on the user-profile ACL) and never enter the DB, export, backup, argv or logs.
-- **KB (0.4.0)**: deterministic local ingest/search/pages only; no embeddings/vector store, no model compilation or `kb ask` (0.4.x), no automatic OCR (`needs_ocr` is reported), no MCP/DSH exposure. Extracted text is stored plaintext in `state.db` (see PRIVACY); source files are never copied and only basenames are stored. `kb link`/`kb unlink` are wired in the 0.4.1 CLI (the 0.4.0 tarball exposed the library only) and manual `fact add` (required `--quote`, one `fact.add` audit row) in 0.4.2; KB/mail/money export-import parity **is** wired since 0.4.0 (mail cursors and derived FTS excluded; `kb_pages` is cleared and rebuilt on import).
+- **KB (0.4.0)**: deterministic local ingest/search/pages only; no embeddings/vector store, no model compilation or `kb ask` (0.4.x), no automatic OCR (`needs_ocr` is reported), no MCP/DSH exposure. Extracted text is stored plaintext in `state.db` (see PRIVACY); source files are never copied and only basenames are stored. `kb link`/`kb unlink` are wired in the 0.4.1 CLI (the 0.4.0 tarball exposed the library only) and manual `fact add` (required `--quote`, one `fact.add` audit row) in 0.4.2 and the local `capture`/`inbox` review path in 0.4.3; KB/mail/money export-import parity **is** wired since 0.4.0 (mail cursors and derived FTS excluded; `kb_pages` is cleared and rebuilt on import).
 - **Money sidecar (0.4.0)**: `receivables`/`payments` are operator-entered local bookkeeping; no invoices/receipts/statements/dunning, no bank/payment-channel reconciliation, no FX and no money movement. Amounts never enter reminders, ICS/webhook, MCP/DSH, receipts, client status packs (0.4.0 pack has no amounts) or Pet Brief.
 - **Policy/Evidence 0.4 subset**: `lib/policy/` pure engine + decision token + egress registry + `consent.json` cover the new data surfaces; pre-0.4 paths keep legacy gates and **a unified/inescapable policy is not claimed**. Evidence is four-state for the 0.4 resolver and evidence pack v2 (`byKind`/`notCheckedCount`/`verificationBasis`), verifier accepts v1/v2; exit 4/5/6 and errors/exit v2 stay 0.5 (0.4 keeps exit 0/1/3).
 - **Windows (0.4.0)**: the supported matrix is Windows 11 25H2/26H2 x64 (npm is the only official channel; no installer/Homebrew/winget); CI runs the non-TTY smoke suite and `check-js`/docs gates. Interactive IME/old-conhost TTY behaviour remains manual, and file mode bits are best-effort (ACL). See `docs/WINDOWS.md`.
@@ -419,7 +424,7 @@ The 0.4.0 tree adds these surfaces (all additive on the 0.3.x tree):
 | Surface | Where | Contract / status |
 |---|---|---|
 | Knowledge base (schema v22) | `lib/kb.js`, `lib/kb-extract.js`, `lib/kb-pages.js`, `lib/kb-facts.js`; `kb ...`/`search --scope`/`fact ...` commands | Deterministic ingest/search/pages + fact time travel; no model/network/vectors in 0.4.0; MCP/DSH exposure is 0.4.x. See [docs/KB.md](KB.md). `kb link/unlink` are wired since 0.4.1 (the 0.4.0 tarball exposed the library only; export/import parity is). |
-| Mail entry (v22) | `lib/mail.js`, `lib/mail-store.js`, `lib/mail-imap.js`, `lib/mail-import.js`, `lib/mail-extract.js`, `lib/credentials.js`; `mail ...` commands | IMAP read-only sync (TLS only), local-rule extraction by default, model only with explicit `--model` + consent; `.eml`/`.mbox` import fallback; body retention 30 days. Credentials outside the DB (0600 best effort). `mail link`/`dismiss` are wired since 0.4.1 and `mail account test`/`mail sync --watch` since 0.4.2; OAuth is not provided. |
+| Mail entry (v22) | `lib/mail.js`, `lib/mail-store.js`, `lib/mail-imap.js`, `lib/mail-import.js`, `lib/mail-extract.js`, `lib/credentials.js`; `mail ...` commands | IMAP read-only sync (TLS only), local-rule extraction by default, model only with explicit `--model` + consent; `.eml`/`.mbox` import fallback; body retention 30 days. Credentials outside the DB (0600 best effort). `mail link`/`dismiss` are wired since 0.4.1 and `mail account test`/`mail sync --watch` since 0.4.2 (the watch JSON/exit contract is 0.4.3); OAuth is not provided. |
 | Receivables/payments (v22) | `lib/receivables.js`; `receivable ...`/`payment ...` commands | Commitment sidecar, integer minor units, 4 currencies, derived state, audited writes; amounts never enter reminders/MCP/DSH/receipts/packs; exported/imported with the rest of `DATA_TABLES`. See [docs/CLIENTS.md](CLIENTS.md) §11. |
 | Client status pack v2 | `lib/client-pack.js`; `client export --pack`, `evidence verify` dispatch | Directory pack + manifest + SHA256SUMS + independent offline verifier; `evidence verify` dispatches on `manifest.format`; no receivable amounts in 0.4.0. See [docs/CLIENTS.md](CLIENTS.md) §9.2. |
 | Proactive v1 | `lib/urgency.js`, `lib/brief-archive.js`, `lib/scheduler.js`, `lib/notify.js`; `morning --top/--archive`, `remind --now`, `remind install --morning`, scheduler status v2 | Deterministic urgency v1 (`terms`/`whyNow`, model version 1), morning archive under `~/.advisers/briefs/` (14-day default), second cron/Task Scheduler block, Standard Webhooks HMAC headers. Quiet-hours **runtime** suppression and notify dedupe/`--force-notify` are wired since 0.4.1. See [docs/REMINDERS.md](REMINDERS.md). |
@@ -445,6 +450,31 @@ The 0.4.2 tree adds these follow-ups (all additive; no schema or frozen-contract
 - `eval/mail-local-gold/` + `pnpm eval:mail-local` — 30 synthetic fixtures, threshold-gated
   precision/recall/F1/due/author, wired into the Linux CI job; a local-rule regression
   gate, not an independent human gold set.
+
+The 0.4.3 tree adds these follow-ups (all additive; no schema or frozen-shape change):
+
+- `lib/relative-date.js` `resolveDueInput()` + CLI `commit`/`receivable --due` — Chinese
+  relative dates, date-only ISO at 18:00 Asia/Shanghai and ISO pass-through; failures are
+  `E_DUE_UNRESOLVED`/`E_DUE_CONFLICT`, and the raw string is never persisted.
+- `lib/capture-rules.js` + `advisers capture --file -/--rules/--local/--source` and the
+  read-only `inbox ls|show` — zero-model local rules over pasted text, pending candidates
+  only, clearance-filtered read projection.
+- `lib/trust-report.js` + `doctor --report` and `privacy --prove --brief`; `lib/profile.js`
+  + `profile show|export` — explicit-null quality/verification dimensions, a four-line
+  data-flow card and a read-only deterministic preferences projection.
+- `lib/remind.js` opt-in ICS enhancements (`tzid`, `alarmCommitmentId`) wired into
+  `remind --ics` (VTIMEZONE/TZID/commitment ids) plus the per-commitment 24h notification
+  cooldown in `remind --deliver --notify`; the library defaults keep the 0.4.2 bytes.
+- `lib/payment-channels.js` + quote/proposal `schemaVersion: 2` `payment.channels[]`;
+  `lib/receivable-csv.js` + `receivable export --csv` — masked bank/wechat/alipay
+  identities, https provider links only, RFC 4180 export with an explicit `--out`.
+- `scripts/restore-drill.mjs` + `test/restore-drill-e2e.test.js` — backup -> mutate ->
+  restore round trip with the audit-anchor gate, wired into Linux CI (Node 22.16).
+- Global `--help` short-circuit (no side effects, no TOS/home) and the `mail sync --watch`
+  `--json`/`--json-lines` 0/1/130/143 contract.
+- Five additive error codes (`E_CANDIDATE_NOT_FOUND`, `E_CAPTURE_EMPTY`,
+  `E_CAPTURE_TOO_LONG`, `E_DUE_CONFLICT`, `E_DUE_UNRESOLVED`); the generated registry and
+  docs are regenerated at 193 CLI codes.
 
 ## 14. 0.4.0 module map and default posture
 

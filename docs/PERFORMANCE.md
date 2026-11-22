@@ -1,11 +1,14 @@
 # Performance
 
-> Status: `0.4.2` (published 2026-11-22) is the current npm `latest` (`next` is also
-> `0.4.2`) and the repository is at package version `0.4.2`. `0.4.2` is a patch on the
-> 0.4.1 same-day follow-up with **no hot-path change** (manual fact entry, the read-only
-> mail probe, foreground mail watch, the dry-run sync preview, the backup-age hint,
-> subcommand help and the mail gold gate only); 0.4.1 added review-link wiring, the
-> reminder delivery policy and contract/eval growth, also without a hot-path change. So
+> Status: `0.4.3` (published 2026-11-22) is the current npm `latest` (`next` is also
+> `0.4.3`) and the repository is at package version `0.4.3`. `0.4.3` is a patch on the
+> 0.4.2 tree with **no hot-path change** (Chinese relative dates, local capture/inbox,
+> the trust outputs and profile, the ICS/cooldown reminder work, payment channels and the
+> receivable CSV export, the restore drill, the help short-circuit and the mail-watch
+> contract only); 0.4.2 added manual fact entry, the read-only mail probe, foreground
+> mail watch, the dry-run sync preview, the backup-age hint, subcommand help and the mail
+> gold gate, and 0.4.1 added review-link wiring, the reminder delivery policy and
+> contract/eval growth — also without a hot-path change. So
 > the `0.4.0` measurements and limits below still apply. `0.4.0` is the single 0.4 feature release: KB (schema **v22**), mail entry, interactive shell, proactive briefs,
 > policy/evidence 2.0 subset, receivables/payments, MCP modern dual-era and the Windows
 > portable ZIP. It ships **one schema migration** (v21 → v22) and **no hot-path

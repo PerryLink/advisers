@@ -21,7 +21,7 @@ add a case): [docs/EVAL.md](../../docs/EVAL.md).
 | `lib/report.mjs` | result schema v1, path scrubbing, result writer, console report |
 | `lib/runner.mjs` | sequential case runner + harness-wide checks |
 | `lib/baseline.mjs` | reads and re-records `baseline.json` |
-| `cases/*.mjs` | the gates, grouped `determinism` / `mcp` / `json` / `exit` / `tty` / `kb` / `mail` / `policy` (+ opt-in `tui`); 30 cases / 277 checks in the default run (0.4.2; the 0.4.2 local mail gold set is a separate `eval:mail-local` gate) |
+| `cases/*.mjs` | the gates, grouped `determinism` / `mcp` / `json` / `exit` / `tty` / `kb` / `mail` / `policy` (+ opt-in `tui`); 30 cases / 277 checks in the default run (0.4.3; 0.4.3 adds no new case and the local mail gold set is a separate `eval:mail-local` gate) |
 | `fixtures/morning-ledger.mjs` | deterministic ledger fixture (injected clock + ids) |
 | `baseline.json` | committed golden values and contract expectations |
 | `results/` | gitignored run output (`det-<stamp>.json`, `latest.json`) |

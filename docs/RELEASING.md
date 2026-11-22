@@ -12,9 +12,11 @@ push, CI green, annotated `v0.4.0` tag, tag-ref dispatch, then the post-publish
 `verify-release` check and the Windows portable ZIP — and is the reference release
 for the 0.4 line (see §13). **0.4.1 (published 2026-11-21)** is the same-day
 follow-up patch and followed the identical order; its §13 record is complete.
-**0.4.2 (published 2026-11-22)** is the patch-release follow-up and follows the same
-order; its §13 record starts with `TBD` placeholders for the tag object, publish run,
-verification and asset hashes, filled in once the publish completes. One runbook
+**0.4.2 (published 2026-11-22)** is the patch-release follow-up; it followed the same
+order and its §13 record is complete. **0.4.3 (published 2026-11-22)** is the follow-up patch
+and follows the identical order; its §13 record starts with `TBD` placeholders for the
+tag object, publish run, verification and asset hashes, filled in once the publish
+completes. One runbook
 detail is easy to get wrong: the portable ZIP is assembled **after** the npm publish
 from the published tarballs, because
 `pack-portable.mjs` installs `advisers@<version>` and `advisers-office@<version>`
@@ -366,6 +368,41 @@ body or a log. CI publishing uses GitHub OIDC only.
 
 A short factual record per release; keep it terse and do not turn it into a
 changelog copy.
+
+### 0.4.3 (2026-11-22)
+
+- **Published:** npm `latest` = 0.4.3, `next` = 0.4.3; all eight workspace packages
+  lockstep at 0.4.3 (six published). Tag: `v0.4.3`, annotated object `TBD` (fill after
+  tag creation) -> commit `TBD` (fill after tagging); published from `refs/tags/v0.4.3`
+  (publish run `TBD`, fill after dispatch).
+- **Release shape:** patch on 0.4.2 — Chinese relative dates for `--due`, local-rule
+  `capture` from stdin plus the read-only `inbox`, explicit-null `doctor --report` /
+  `privacy --prove --brief` / `profile`, the enhanced `remind --ics` export with a
+  per-commitment 24h notification cooldown, quote/proposal schema v2 payment channels,
+  the receivable CSV export, the end-to-end restore drill (wired into Linux CI), the
+  global `--help` short-circuit and the `mail sync --watch` JSON/exit contract. No schema
+  migration, no new runtime dependency, no frozen-shape change and unchanged legal
+  texts (v2026.11.4).
+- **Contracts:** frozen shapes unchanged (90 checks PASS); five additive error codes
+  (193 CLI codes total) regenerate `contracts/errors/codes.v1.json` and
+  `docs/ERROR-CODES.md`; the new commands/flags are documented additively in
+  `docs/CLI-JSON.md`.
+- **Artifacts:** CycloneDX SBOM and `SHA256SUMS` attached to the GitHub Release; the
+  Windows portable ZIP `advisers-0.4.3-win-x64.zip` is assembled after the npm publish
+  from the published tarballs (offline channel; verify its hash and attestation, it is
+  not npm-provenance-covered). Hashes: portable ZIP `TBD` and size `TBD`; SBOM asset
+  `TBD`; `SHA256SUMS-0.4.3.txt` asset `TBD`; `SHA256SUMS-0.4.3-portable.txt` asset `TBD`.
+- **Verification:** `verify-release --version 0.4.3 --tag latest --sbom
+  artifacts/sbom.cdx.json --require-sbom` -> `TBD` checks PASS (fill after publish); CI
+  on the release commit `TBD` (fill after push; Linux Node 22.16/24, `windows-smoke` and
+  blocking `windows-full`). Local pre-tag evidence on this release tree:
+  `check-docs`/`check-release`/`check-licenses` pass, `check-contracts` 90 checks PASS
+  (193 registered CLI codes), the 14 targeted 0.4.3 test files pass (129 tests) and
+  `node scripts/restore-drill.mjs` PASS on Linux (Node 24.22.1).
+- **Release notes / assets:** <https://github.com/PerryLink/advisers/releases/tag/v0.4.3>
+  (created `TBD` with the SBOM, six-tarball `SHA256SUMS`, portable ZIP and its
+  checksums). After the publish, 0.4.2 is deprecated on npm with a pointer to 0.4.3.
+  The `TBD` placeholders are filled by the release operator after the publish.
 
 ### 0.4.2 (2026-11-22)
 

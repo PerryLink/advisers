@@ -1,16 +1,16 @@
 # Quickstart (Windows + PowerShell)
 
-> Current status: **`0.4.2` was published on 2026-11-22** and is the npm `latest`
-> (`next` is also `0.4.2`). The repository is lockstep at package version `0.4.2`.
-> `0.4.2` is a patch on the 0.4.1 same-day follow-up: it adds manual fact entry
-> (`fact add` with a required evidence quote, idempotent dedupe and one-transaction
-> supersede/KB-link/audit), the read-only IMAP probe (`mail account test`), the
-> explicit foreground `mail sync --watch`, the `sync pull --dry-run` preview, the
-> backup-age hint in `doctor --check-db`, a subcommand `--help` consistency pass
-> (usable before TOS acceptance) and the zero-model/zero-network
-> `pnpm eval:mail-local` quality gate (30 synthetic fixtures, wired into Linux CI),
-> plus the audit-driven documentation corrections; no schema change, no new runtime
-> dependency.
+> Current status: **`0.4.3` was published on 2026-11-22** and is the npm `latest`
+> (`next` is also `0.4.3`). The repository is lockstep at package version `0.4.3`.
+> `0.4.3` is a patch on the 0.4.2 tree: it adds Chinese relative dates for `--due`
+> (`E_DUE_UNRESOLVED`/`E_DUE_CONFLICT` instead of storing raw text), keyless
+> local-rule `capture` from stdin plus the read-only `inbox`, explicit-null
+> `doctor --report` / `privacy --prove --brief` / `profile`, the enhanced
+> `remind --ics` export with a per-commitment 24h notification cooldown,
+> quote/proposal schema v2 payment channels and a receivable CSV export, an
+> end-to-end restore drill wired into Linux CI, the global `--help` short-circuit
+> and the `mail sync --watch` JSON/exit-code contract; no schema change, no new
+> runtime dependency.
 > The 0.4.0 feature surface is unchanged: the local knowledge base (KB) with
 > **schema v22** (one migration), TLS-only read-only IMAP mail entry (`mail ...`),
 > the interactive shell, proactive urgent-first briefs, the policy/evidence 2.0
@@ -22,20 +22,20 @@
 > one-way migration**: the first command that opens an older ledger writes
 > `state.db.before-migrate-v*` and upgrades; a 0.3.2 binary opening a v22 database
 > fails with `E_SCHEMA_NEWER`, so going back means restoring that backup (or
-> `export` + fresh `import`). `0.4.1`, `0.4.0`, `0.3.2`, `0.3.1` and `0.3.0` remain
-> installable by pinning but are superseded. The earlier `0.2.4` was an
+> `export` + fresh `import`). `0.4.2`, `0.4.1`, `0.4.0`, `0.3.2`, `0.3.1` and `0.3.0`
+> remain installable by pinning but are superseded. The earlier `0.2.4` was an
 > **unpublished release candidate** superseded by the 0.3.0 line (its `v0.2.4` tag
 > points at an older commit, there is no 0.2.4 tarball on npm, so do not try to
 > install it). Stable-channel install:
 > `npm i -g --registry=https://registry.npmjs.org advisers@latest advisers-office@latest`.
-> Release notes: <https://github.com/PerryLink/advisers/releases/tag/v0.4.2> (the
+> Release notes: <https://github.com/PerryLink/advisers/releases/tag/v0.4.3> (the
 > release carries the CycloneDX SBOM and `SHA256SUMS`; the Windows portable ZIP and
-> its `SHA256SUMS-0.4.2-portable.txt` are the offline channel and are attached by
+> its `SHA256SUMS-0.4.3-portable.txt` are the offline channel and are attached by
 > the release operator — verify the ZIP hash/attestation before use, see
-> [docs/WINDOWS.md](WINDOWS.md) §3.4). The `0.4.2` tarballs are published from GitHub
+> [docs/WINDOWS.md](WINDOWS.md) §3.4). The `0.4.3` tarballs are published from GitHub
 > Actions OIDC/Trusted Publishing with SLSA provenance; from a checkout (after
 > `corepack pnpm run sbom`),
-> `node scripts/verify-release.mjs --version 0.4.2 --tag latest --sbom artifacts/sbom.cdx.json --require-sbom`
+> `node scripts/verify-release.mjs --version 0.4.3 --tag latest --sbom artifacts/sbom.cdx.json --require-sbom`
 > verifies the registry release (that gate covers the npm tarballs, not the portable
 > ZIP). The checkout sections below remain the development path.
 
@@ -45,7 +45,8 @@
 > infringing, deceptive, or unlabeled synthetic content is prohibited.
 >
 > The first time you use a gated command (anything except the local-only exempt surface:
-> `help`, `--version`, `status`, `doctor`, `init`, `tos ...`, `privacy`, `export`,
+> `help`, `--help`/`-h` (a global no-side-effect short-circuit), `--version`, `status`,
+> `doctor`, `init`, `tos ...`, `privacy`, `export`,
 > `audit`, `purge`, `backups` and the offline `evidence verify <dir>`), Advisers shows a
 > short Terms summary and asks
 > you to accept by typing 同意 (`y`/`yes` is a shortcut; Enter or `n` rejects). Non-interactive
@@ -139,14 +140,14 @@ node $A memory candidates
 node $A chat "做一份 Q4 汇报 PPT，放到 out\q4.pptx"
 ```
 
-## B. Installed CLI (stable channel = 0.4.2, published 2026-11-22)
+## B. Installed CLI (stable channel = 0.4.3, published 2026-11-22)
 
 ```powershell
-# Stable channel: npm @latest resolves to 0.4.2 (published 2026-11-22).
+# Stable channel: npm @latest resolves to 0.4.3 (published 2026-11-22).
 npm i -g --registry=https://registry.npmjs.org advisers@latest advisers-office@latest
-# Pre-release channel: `next` also resolves to 0.4.2.
+# Pre-release channel: `next` also resolves to 0.4.3.
 # npm i -g --registry=https://registry.npmjs.org advisers@next advisers-office@next
-advisers --version    # expect 0.4.2
+advisers --version    # expect 0.4.3
 advisers status
 advisers soul init
 advisers template weekly weekly.json out\weekly.docx
@@ -157,7 +158,7 @@ advisers verify out\weekly.docx
 
 ```powershell
 npm i -g --registry=https://registry.npmjs.org advisers@latest advisers-office@latest
-advisers --version            # expect 0.4.2
+advisers --version            # expect 0.4.3
 advisers doctor               # first ledger open migrates v21 -> v22 after a verified backup
 advisers doctor --check-db    # full DB / FTS / WAL checks on the migrated database
 ```
@@ -171,8 +172,8 @@ fails with `E_SCHEMA_NEWER`. Going back means restoring that pre-migration copy 
 --all` before upgrading and `import` into a fresh 0.3.x home.
 
 > `0.2.4` never reached npm and must not be presented as installable. `0.3.2`/`0.3.1`/
-> `0.3.0` are superseded by `0.4.2` and remain installable by pinning. The 0.4.2 release
-> notes (<https://github.com/PerryLink/advisers/releases/tag/v0.4.2>) and
+> `0.3.0` are superseded by `0.4.3` and remain installable by pinning. The 0.4.3 release
+> notes (<https://github.com/PerryLink/advisers/releases/tag/v0.4.3>) and
 > `scripts/verify-release.mjs` are the provenance record.
 
 If `advisers-office` is missing, install it explicitly (`advisers-office@latest`, or

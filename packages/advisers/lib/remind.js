@@ -143,6 +143,17 @@ export function formatIcsDate(value) {
 }
 
 /**
+ * `YYYYMMDDTHHMMSS` in the fixed Asia/Shanghai wall clock. Used for
+ * `DTSTART;TZID=Asia/Shanghai:<value>` in the 0.4.3 opt-in enhanced export.
+ */
+function formatIcsWallTime(value) {
+  const date = requireDate(value, 'date')
+  const wall = new Date(date.getTime() + SHANGHAI_OFFSET_MS)
+  const pad = (number, width = 2) => String(number).padStart(width, '0')
+  return `${pad(wall.getUTCFullYear(), 4)}${pad(wall.getUTCMonth() + 1)}${pad(wall.getUTCDate())}T${pad(wall.getUTCHours())}${pad(wall.getUTCMinutes())}${pad(wall.getUTCSeconds())}`
+}
+
+/**
  * Parse an ICS date-time value. Both `20261114T103000Z` (UTC) and
  * `20261114T183000` (floating, interpreted as Asia/Shanghai) are accepted, as
  * well as ISO-8601 strings and Date objects for convenience.
@@ -659,18 +670,26 @@ export function buildReminders(ledger, options = {}) {
  * @param {string} [options.uidPrefix='advisers']
  * @param {string[]} [options.reminderOffsets] Fallback custom offsets for
  *   reminders that do not carry their own `reminderOffsets`.
+ * @param {string|null} [options.tzid=null] 0.4.3 opt-in: emit a VTIMEZONE and
+ *   `DTSTART;TZID=<tzid>:<local wall time>` instead of the UTC DTSTART. Only
+ *   `Asia/Shanghai` is supported (fixed +08:00). Default null keeps the
+ *   0.4.2 bytes unchanged.
+ * @param {boolean} [options.alarmCommitmentId=false] 0.4.3 opt-in: append
+ *   ` · 承诺 <commitment-id>` to every VALARM DESCRIPTION and add an
+ *   `X-ADVISERS-COMMITMENT-ID` property per event. Default false keeps the
+ *   0.4.2 bytes unchanged.
  * @returns {string} CRLF-terminated iCalendar text.
  */
-const legacyAlarmLines = (title) => [
+const legacyAlarmLines = (title, suffix = '') => [
   'BEGIN:VALARM',
   'TRIGGER:-P1D',
   'ACTION:DISPLAY',
-  `DESCRIPTION:${escapeIcsText(`提醒：${title}（1 天前）`)}`,
+  `DESCRIPTION:${escapeIcsText(`提醒：${title}（1 天前）${suffix}`)}`,
   'END:VALARM',
   'BEGIN:VALARM',
   'TRIGGER:-PT1H',
   'ACTION:DISPLAY',
-  `DESCRIPTION:${escapeIcsText(`提醒：${title}（1 小时前）`)}`,
+  `DESCRIPTION:${escapeIcsText(`提醒：${title}（1 小时前）${suffix}`)}`,
   'END:VALARM',
 ]
 
@@ -683,12 +702,19 @@ const legacyAlarmLines = (title) => [
 function alarmLines(reminder, due, title, options) {
   const configured = reminder.reminderOffsets ?? options.reminderOffsets
   const alarms = reminderAlarms(due, configured)
-  if (!alarms.length) return legacyAlarmLines(title)
+  // 0.4.3 (043-4, plan 90 NOW-8): opt-in only. When the caller asks for it, the
+  // opaque commitment id is appended to every VALARM DESCRIPTION so a
+  // TickTick/Feishu/Outlook import can match the entry back to the local row.
+  // The default path stays byte-identical to 0.4.2.
+  const suffix = options.alarmCommitmentId === true
+    ? ` · 承诺 ${String(reminder.commitmentId ?? '').replace(/[\r\n]/g, '')}`
+    : ''
+  if (!alarms.length) return legacyAlarmLines(title, suffix)
   return alarms.flatMap((alarm) => [
     'BEGIN:VALARM',
     `TRIGGER;VALUE=DATE-TIME:${formatIcsDate(alarm.at)}`,
     'ACTION:DISPLAY',
-    `DESCRIPTION:${escapeIcsText(`提醒：${title}（${alarm.label}）`)}`,
+    `DESCRIPTION:${escapeIcsText(`提醒：${title}（${alarm.label}）${suffix}`)}`,
     'END:VALARM',
   ])
 }
@@ -699,6 +725,14 @@ export function toIcs(reminders, options = {}) {
   const now = requireNow(opts.now)
   const rawPrefix = opts.uidPrefix == null ? '' : String(opts.uidPrefix)
   const uidPrefix = (rawPrefix || 'advisers').replace(/[\r\n]/g, '')
+  // 0.4.3 (043-4, plan 90 NOW-8): both enhancements are opt-in. The default
+  // (no tzid, no alarmCommitmentId) keeps every 0.4.2 byte exactly.
+  const rawTzid = opts.tzid == null ? '' : String(opts.tzid).replace(/[\r\n]/g, '')
+  if (rawTzid && rawTzid !== TIME_ZONE) {
+    throw new RangeError(`toIcs only supports tzid=${TIME_ZONE} (got ${rawTzid})`)
+  }
+  const tzid = rawTzid || null
+  const alarmCommitmentId = opts.alarmCommitmentId === true
 
   const lines = [
     'BEGIN:VCALENDAR',
@@ -706,6 +740,21 @@ export function toIcs(reminders, options = {}) {
     'PRODID:-//Advisers//E1 Reminders//EN',
     'CALSCALE:GREGORIAN',
   ]
+  if (tzid) {
+    // Asia/Shanghai has had a fixed +08:00 offset since 1991, so one STANDARD
+    // block is correct for every reminder this program can produce.
+    lines.push(
+      'BEGIN:VTIMEZONE',
+      `TZID:${tzid}`,
+      'BEGIN:STANDARD',
+      'DTSTART:19700101T000000',
+      'TZOFFSETFROM:+0800',
+      'TZOFFSETTO:+0800',
+      'TZNAME:CST',
+      'END:STANDARD',
+      'END:VTIMEZONE',
+    )
+  }
   const seenUids = new Set()
 
   for (const reminder of reminders) {
@@ -730,9 +779,10 @@ export function toIcs(reminders, options = {}) {
       'BEGIN:VEVENT',
       `UID:${uid}`,
       `DTSTAMP:${formatIcsDate(now)}`,
-      `DTSTART:${formatIcsDate(due)}`,
+      tzid ? `DTSTART;TZID=${tzid}:${formatIcsWallTime(due)}` : `DTSTART:${formatIcsDate(due)}`,
       `SUMMARY:${escapeIcsText(title)}`,
       `DESCRIPTION:${escapeIcsText(`到期：${localDue}（${TIME_ZONE}）`)}`,
+      ...(alarmCommitmentId ? [`X-ADVISERS-COMMITMENT-ID:${String(reminder.commitmentId ?? '').replace(/[\r\n]/g, '')}`] : []),
       ...alarmLines(reminder, due, title, opts),
       'END:VEVENT',
     )

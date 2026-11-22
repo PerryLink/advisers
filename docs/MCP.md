@@ -1,6 +1,6 @@
 # MCP 接入（stdio；legacy 协商 2024-11-05 / 2025-06-18 / 2025-11-25 + modern 2026-07-28 dual-era）
 
-状态（2026-11-22，包版本 **0.4.2**）：0.4.0 把 MCP 从“仅 legacy”升级为 **dual-era** 服务器（0.4.1/0.4.2 均不改 MCP 协议面）——同一进程既服务 legacy `initialize` 生命周期，也服务无状态的 modern `2026-07-28` 请求（`server/discover` + 每请求 `_meta` + `resultType` envelope）；**工具面不变**（8 工具 / 5 resources），KB 与邮件在 0.4.0 **不暴露**给 MCP/DSH。legacy 面的名字、参数、payload 形状与 0.3.2 逐字节一致；`ADVISERS_MCP_MODERN=off` 可一键退回 0.3.2 行为。
+状态（2026-11-22，包版本 **0.4.3**）：0.4.0 把 MCP 从“仅 legacy”升级为 **dual-era** 服务器（0.4.1/0.4.2/0.4.3 均不改 MCP 协议面）——同一进程既服务 legacy `initialize` 生命周期，也服务无状态的 modern `2026-07-28` 请求（`server/discover` + 每请求 `_meta` + `resultType` envelope）；**工具面不变**（8 工具 / 5 resources），KB 与邮件在 0.4.0 **不暴露**给 MCP/DSH。legacy 面的名字、参数、payload 形状与 0.3.2 逐字节一致；`ADVISERS_MCP_MODERN=off` 可一键退回 0.3.2 行为。
 
 - **0.2.0 库**：MCP server 已从 `bin/advisers.js` 抽成可测试库 `packages/advisers/lib/mcp-server.js`（工厂 `createMcpServer({store, ledger | loadLedger, version, audit, clearance})`）。0.3.2 起库提供 **6 个只读工具 + 2 个白名单工具 + 5 个只读 resources**（客户只读投影见 §3.4）。
 - **CLI 入口（已接线，2026-11-17）**：`advisers mcp --stdio` 与库是同一实现——`bin/advisers.js` 只负责注入 home/store/ledger/version/audit，然后调用 `createMcpServer(...).serve()`；8 工具 + 5 resources 均从 CLI 可用，并自 `0.2.0` 起随 npm 包发布（2026-11-17 已上 `latest`）。仓库内的 `node scripts/mcp-dev.mjs` 保留为开发/双进程冒烟入口，不再是试用新接口的前提。

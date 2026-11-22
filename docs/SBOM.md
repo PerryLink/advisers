@@ -1,17 +1,17 @@
 # Software Bill of Materials (SBOM)
 
-> Status: **0.4.2** was published on 2026-11-22 as the current release (npm `latest`;
-> `next` is also `0.4.2`); it is a patch on the 0.4.1 same-day follow-up, and the
+> Status: **0.4.3** was published on 2026-11-22 as the current release (npm `latest`;
+> `next` is also `0.4.3`); it is a patch on the 0.4.2 tree, and the
 > release tree stays schema **v22** (one
 > `kb-mail-payment-entities` migration). The workspace version is whatever
 > `packages/advisers/package.json` records. This page documents a release-gate artifact,
 > not a claim that the build is reproducible — it describes the dependency set and says
 > nothing about the database schema. Provenance status lives in
-> [SECURITY.md](SECURITY.md). The 0.4.2 GitHub Release carries the generated CycloneDX
+> [SECURITY.md](SECURITY.md). The 0.4.3 GitHub Release carries the generated CycloneDX
 > SBOM (`sbom.cdx.json`) and a `SHA256SUMS` file for the six tarballs; the post-publish
-> `node scripts/verify-release.mjs --version 0.4.2 --tag latest --sbom artifacts/sbom.cdx.json --require-sbom`
-> check verifies the SBOM. 0.4.2 adds no runtime dependency: the lockfile diff from
-> 0.4.1 is the workspace version pins, so the component set has the same shape. Each
+> `node scripts/verify-release.mjs --version 0.4.3 --tag latest --sbom artifacts/sbom.cdx.json --require-sbom`
+> check verifies the SBOM. 0.4.3 adds no runtime dependency: the lockfile diff from
+> 0.4.2 is the workspace version pins, so the component set has the same shape. Each
 > release records its own `verify-release` check count instead of inheriting an older
 > figure; the 0.3.0 run passed 222 checks (historical record:
 > <https://github.com/PerryLink/advisers/releases/tag/v0.3.0>).
