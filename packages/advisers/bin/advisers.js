@@ -4065,7 +4065,7 @@ function morningUpcoming(agenda) {
   const rows = []
   for (const day of agenda.days.slice(1)) {
     for (const item of day.items) {
-      rows.push({ date: day.date, weekday: day.weekday, kind: item.kind, id: item.id, title: item.title, localTime: item.localTime ?? null, ref: item.ref })
+      rows.push({ date: day.date, weekday: day.weekday, kind: item.kind, id: item.id, title: item.title, allDay: item.allDay === true, localTime: item.localTime ?? null, ref: item.ref })
     }
   }
   return rows
