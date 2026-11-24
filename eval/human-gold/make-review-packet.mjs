@@ -45,7 +45,7 @@ function fail(message) { console.error('advisers human-gold packet: ' + message)
 if (!existsSync(corpusPath)) fail('corpus not found: ' + corpusPath)
 if (!reviewers.length) fail('--reviewers needs at least one reviewer id')
 if (limit !== null && (!Number.isInteger(limit) || limit < 1)) fail('--limit must be a positive integer')
-const outRelative = relativePath(REPO_ROOT, out)
+const outRelative = relativePath(REPO_ROOT, out).replaceAll('\\', '/')
 if (outRelative !== '..' && !outRelative.startsWith('../')) fail('--out must be outside the repository (' + REPO_ROOT + '); packets/reviewer labels are not committed')
 
 const corpusBytes = readFileSync(corpusPath)
