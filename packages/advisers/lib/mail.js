@@ -221,6 +221,12 @@ export async function mailSync(store, accountRef, options = {}) {
           messageId: parsed.messageId,
           text: message.oversize ? null : parsed.text,
           attachments: parsed.attachments,
+          // 0.5.1 (plan 92 §4): read-only threading headers + the account
+          // username so mail-store can derive thread_root/direction.
+          inReplyTo: parsed.inReplyTo,
+          references: parsed.references,
+          autoSubmitted: parsed.autoSubmitted,
+          accountUsername: account.username,
           status: message.oversize ? 'oversize' : null,
           now,
         }))

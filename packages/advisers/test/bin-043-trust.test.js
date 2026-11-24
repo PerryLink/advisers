@@ -43,7 +43,7 @@ test('doctor --report --json is an explicit-null report, not fake PASS/0/false',
     assert.equal(report.mode, 'report')
     assert.equal(report.reportVersion, 1)
     assert.equal(typeof report.advisersVersion, 'string')
-    assert.equal(report.schemaVersion, 22, 'SQLite schema v22 is reported')
+    assert.equal(report.schemaVersion, 23, 'SQLite schema v23 is reported')
     assert.deepEqual(Object.keys(report.measured), MEASURED_KEYS)
     for (const key of MEASURED_KEYS) {
       assert.equal(report.measured[key], null, key + ' is null (unknown, not false/0)')

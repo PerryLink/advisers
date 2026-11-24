@@ -1,9 +1,11 @@
 # Delivery receipt pack and evidence pack v2 (verifier accepts v1)
 
-> Status: format + library implementation for **Advisers 0.5.0** (2026-11-22; the
+> Status: format + library implementation for **Advisers 0.5.1** (2026-11-24; the
 > formats are those shipped in 0.4.0 and are unchanged by the 0.4.1/0.4.2/0.4.3 patch
-> releases and the 0.5.0 feature release; `evidence verify` additionally dispatches an
-> existing context pack / client status pack first since 0.5.0).
+> releases and the 0.5.0/0.5.1 feature releases; `evidence verify` additionally
+> dispatches an existing context pack / client status pack first since 0.5.0, and
+> 0.5.1 gives MCP `advisers_pack_verify` the same context-pack format dispatch).
+> 0.5.1 changes no receipt-pack byte: additions are audit/dispatch around it.
 > This document defines two on-disk formats — the **delivery receipt pack**
 > (manifest v2) and the **evidence pack** (manifest v2 since 0.4.0) — the offline
 > verifier contract, and the legal wording boundary. The delivery receipt pack

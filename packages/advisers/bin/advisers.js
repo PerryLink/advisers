@@ -153,6 +153,10 @@ const loadCredentials = lazyModule(() => import('../lib/credentials.js'))
 const loadConsent = lazyModule(() => import('../lib/consent.js'))
 const loadPolicy = lazyModule(() => import('../lib/policy/index.js'))
 const loadMailStore = lazyModule(() => import('../lib/mail-store.js'))
+// 0.5.1 (051-S5): `mail followup` read model lives in its own module so
+// lib/mail.js keeps its 0.4.3 exports; bin is the only wiring point (TOS/usage/
+// JSON/exit) and never re-implements the header-only reply rules.
+const loadMailFollowup = lazyModule(() => import('../lib/mail-followup.js'))
 const loadClientPack = lazyModule(() => import('../lib/client-pack.js'))
 // 0.4.3 (043-1): CLI --due boundary resolution (Chinese relative dates).
 const loadRelativeDate = lazyModule(() => import('../lib/relative-date.js'))
@@ -1359,6 +1363,8 @@ Usage:
                       local reads; purge clears bodies (metadata/hash stay); import reads .eml/.mbox offline
   advisers mail extract [<id>...] [--all-new] [--local|--model --yes] [--matter id] [--dry-run] [--json]
                       default local rules (offline); --model needs --yes + ADVISERS_API_KEY + consent + secrecy 0
+  advisers mail followup add|ls|show|check|dismiss|mark-replied ...  local "no reply seen" tracking (read-only, no send)
+                      header-only "no reply seen locally"; never sends or fetches; a missing Sent sync is warned
   advisers receivable add <client-id> "<label>" --amount 8000.00 [--due DATE] [--currency CNY] [--json]
   advisers receivable ls|show <id>|edit <id>|void <id> [--aging] [--json]
                       money sidecars in integer minor units; amounts never enter MCP/receipt packs
@@ -1375,9 +1381,10 @@ Usage:
   advisers export [--all] [--encrypted] [--out file]  export ledger (AES-256-GCM with passphrase)
   advisers export --bundle <dir> [--force] [--json]  portable bundle v1 (plaintext) for a clean home
   advisers import <file> [--replace]  import an export (encrypted or plain)
-  advisers import --bundle <dir> [--verify] [--dry-run] [--replace] [--json]
+  advisers import --bundle <dir> [--verify] [--dry-run] [--replace] [--expect-dataDigest <64hex>] [--json]
                               verify + import a bundle; --verify --dry-run is a read-only plan
   advisers context-pack create --subject client:<id>|matter:<id> ...  assemble a disclosure pack
+                              (a written pack records one local context_pack.create audit row)
   advisers context-pack verify <dir> [--json]  offline verify a context pack (exit 0/1)
   advisers vault seal [--out f] [--remove] | unseal [f] | status  AES-256-GCM database vault
   advisers sync push|pull|status --dir <dir>  file-based E2EE snapshot sync (user-provided dir)
@@ -1760,7 +1767,7 @@ const RESTORE_USAGE = 'usage: advisers restore <backup-file> [--dry-run] [--yes]
 // `-h/--help` short-circuit reads HELP_USAGE_LINES below; these constants are the
 // single source for per-command usage errors so the two cannot drift.
 const EXPORT_USAGE = 'usage: advisers export [--all] [--out <file>] [--encrypted]\n       advisers export --bundle <dir> [--force] [--json]'
-const IMPORT_USAGE = 'usage: advisers import <file> [--replace]\n       advisers import --bundle <dir> [--verify] [--dry-run] [--replace] [--json]'
+const IMPORT_USAGE = 'usage: advisers import <file> [--replace]\n       advisers import --bundle <dir> [--verify] [--dry-run] [--replace] [--expect-dataDigest <64hex>] [--json]'
 const SYNC_USAGE = 'usage: advisers sync push|pull|status --dir <sync-dir> [--force] [--file name] [--device name] [--dry-run] [--json]\n       advisers sync status [--dir <sync-dir>] [--check] [--json]'
 const CONTEXT_PACK_USAGE = 'usage: advisers context-pack create --subject client:<id>|matter:<id> [--since 180d] [--candidate-limit 50] [--json]\n       advisers context-pack create --subject ... --ids <id,...>|--yes --recipient <name> --purpose client-delivery|external-review|handoff [--expires 24h|<ISO>] [--include-quotes] [--out <dir>] [--force] [--json]\n       advisers context-pack verify <dir> [--expect-manifest-sha256 <64hex>] [--json]'
 const SETUP_USAGE = 'usage: advisers setup [--yes] [--accept-tos [VERSION]] [--dry-run] [--json] [--no-demo] [--mail none|eml:<path|dir>] [--name <称呼>] [--soul-file <file>]'
@@ -7480,7 +7487,37 @@ const MAIL_USAGE = [
   '       advisers mail purge [--older-than 30d] [--dry-run|--yes] [--account a] [--json]',
   '       advisers mail link <message> [--client id] [--project id] [--json]',
   '       advisers mail dismiss <message> [--json]',
+  '       advisers mail followup add|ls|show|check|dismiss|mark-replied ...  local "no reply seen" tracking (read-only, no send)',
 ].join('\n')
+
+// 0.5.1 (051-S5, plan 92 section 4): `mail followup` subcommand family. The lib
+// owns the header-only reply rules, the waiting_replies state machine and the
+// audit rows; bin owns the flags, the due boundary resolution, the human/JSON
+// output split and the failure exit code. Nothing here sends mail or opens a
+// network socket, and a missing Sent mailbox is always surfaced as a warning.
+const MAIL_FOLLOWUP_ADD_USAGE = 'usage: advisers mail followup add (--mail <row-id|message-id> | --thread <message-id>) [--action text] [--counterparty addr] [--due <相对日期|ISO>] [--remind-offsets "-3d,-1d"] [--matter id] [--json]'
+const MAIL_FOLLOWUP_LS_USAGE = 'usage: advisers mail followup ls [--state waiting|replied|unknown|dismissed|all] [--all] [--stale 7d] [--limit n] [--offset n] [--json]'
+const MAIL_FOLLOWUP_SHOW_USAGE = 'usage: advisers mail followup show <id> [--json]'
+const MAIL_FOLLOWUP_CHECK_USAGE = 'usage: advisers mail followup check [--dry-run] [--json]'
+const MAIL_FOLLOWUP_DISMISS_USAGE = 'usage: advisers mail followup dismiss <id> --reason replied-elsewhere|no-follow-up|wrong-thread|other [--note text] [--json]'
+const MAIL_FOLLOWUP_MARK_REPLIED_USAGE = 'usage: advisers mail followup mark-replied <id> [--note text] [--json]'
+const MAIL_FOLLOWUP_USAGE = [
+  MAIL_FOLLOWUP_ADD_USAGE,
+  MAIL_FOLLOWUP_LS_USAGE.replace('usage: ', '       '),
+  MAIL_FOLLOWUP_SHOW_USAGE.replace('usage: ', '       '),
+  MAIL_FOLLOWUP_CHECK_USAGE.replace('usage: ', '       '),
+  MAIL_FOLLOWUP_DISMISS_USAGE.replace('usage: ', '       '),
+  MAIL_FOLLOWUP_MARK_REPLIED_USAGE.replace('usage: ', '       '),
+  '       (本地只读判定：不发信、不联网；未同步 Sent 邮箱时不得把 followup 当作“已发信”证据)',
+].join('\n')
+const MAIL_FOLLOWUP_SUB_USAGE = {
+  add: MAIL_FOLLOWUP_ADD_USAGE,
+  ls: MAIL_FOLLOWUP_LS_USAGE,
+  show: MAIL_FOLLOWUP_SHOW_USAGE,
+  check: MAIL_FOLLOWUP_CHECK_USAGE,
+  dismiss: MAIL_FOLLOWUP_DISMISS_USAGE,
+  'mark-replied': MAIL_FOLLOWUP_MARK_REPLIED_USAGE,
+}
 
 function mailHumanRow(message) {
   const from = sanitizeConsoleText(String(message.from ?? ''), { max: 120 })
@@ -7980,6 +8017,8 @@ async function mailCommand(rawArgs) {
     if (sub === 'purge') return await mailPurgeCommand(rawArgs.slice(1))
     if (sub === 'link') return await mailLinkCommand(rawArgs.slice(1), false)
     if (sub === 'dismiss') return await mailLinkCommand(rawArgs.slice(1), true)
+    // 0.5.1 (051-S5): local, header-only followup tracking; no send, no network.
+    if (sub === 'followup') return await mailFollowupCommand(rawArgs.slice(1))
     usageFail('unknown mail subcommand: ' + sub, MAIL_USAGE)
   } catch (error) { reportFamilyFailure(error) }
 }
@@ -8003,7 +8042,222 @@ async function mailLinkCommand(rawArgs, dismiss = false) {
   console.log((dismiss ? 'dismissed ' : 'linked ') + message.id + '  [' + message.status + ']' + (message.clientId ? '  client=' + message.clientId : '') + (message.projectId ? '  project=' + message.projectId : ''))
 }
 
-/* ------------------------- receivable / payment ------------------------- */
+/* ---------------------- mail followup (0.5.1) --------------------------- */
+
+/**
+ * Human row for one waiting_replies projection. Columns follow plan 92 section 4:
+ * state / days waiting / counterparty / subject (+ due). Never prints body text.
+ */
+function mailFollowupRow(item) {
+  const counterparty = sanitizeConsoleText(String(item.counterparty ?? ''), { max: 120 })
+  const subject = sanitizeConsoleText(String(item.subject ?? ''), { max: 120 })
+  const days = item.daysWaiting === null || item.daysWaiting === undefined ? '-' : String(item.daysWaiting) + 'd'
+  return String(item.id ?? '?') + '  ' + String(item.state ?? '?') + '  ' + days + '  ' + counterparty +
+    (subject ? '  ' + subject : '') +
+    (item.anchorAt ? '  at ' + String(item.anchorAt).slice(0, 10) : '') +
+    (item.dueAt ? '  due ' + String(item.dueAt).slice(0, 10) : '')
+}
+
+/** Coverage is the honesty surface: no Sent sync means no reply seen locally. */
+function printFollowupCoverage(coverage) {
+  if (!coverage || typeof coverage !== 'object') return
+  const warnings = Array.isArray(coverage.warnings) ? coverage.warnings : []
+  console.log('coverage: syncedMailboxes=' + String(coverage.syncedMailboxes ?? '?') +
+    ' sentMailboxSeen=' + (coverage.sentMailboxSeen === true ? 'yes' : 'no') +
+    ' basis=' + String(coverage.basis ?? 'headers') +
+    (warnings.length ? ' warnings=' + warnings.map((row) => sanitizeConsoleText(String(row), { max: 120 })).join(',') : ''))
+}
+
+/** Trailing human note; followup is a local observation, never a send record. */
+function printFollowupBoundary() {
+  console.log('（本地只读判定：不发信、不联网；未同步 Sent 邮箱时不得把 followup 当作“已发信”证据）')
+}
+
+/** --stale 7d -> 7; an invalid value is an E_USAGE refusal, not a silent default. */
+function mailFollowupStaleDays(value) {
+  const text = String(value).trim()
+  const match = /^(\d+)d?$/.exec(text)
+  if (!match) return null
+  const days = Number(match[1])
+  return Number.isInteger(days) && days >= 1 && days <= 3650 ? days : null
+}
+
+async function mailFollowupAddCommand(lib, args) {
+  const usage = MAIL_FOLLOWUP_ADD_USAGE
+  const parsed = familyFlags(args, { booleans: ['json'], values: ['mail', 'thread', 'action', 'counterparty', 'due', 'remind-offsets', 'matter'] }, usage)
+  if (!parsed) return
+  const flags = parsed.flags
+  const mail = typeof flags.mail === 'string' ? flags.mail.trim() : undefined
+  const thread = typeof flags.thread === 'string' ? flags.thread.trim() : undefined
+  if (!mail && !thread) { usageFail('mail followup add requires --mail <row-id|message-id> or --thread <message-id>', usage); return }
+  if (mail && thread) { usageFail('pass either --mail or --thread, not both', usage); return }
+  // The due expression is resolved at the CLI boundary (0.4.3 rule) so the lib
+  // only ever stores an ISO instant; no raw Chinese expression reaches SQLite.
+  let dueAt
+  if (typeof flags.due === 'string') {
+    const resolved = await resolveDueFlag(flags.due)
+    if (!resolved.ok) { reportDueFailure(resolved, flags.json === true); return }
+    dueAt = resolved.at
+    const resolutionLine = dueResolutionLine(resolved)
+    if (resolutionLine) console.error(sanitizeConsoleText(resolutionLine, { max: 500 }))
+  }
+  let reminderOffsets
+  try { reminderOffsets = await parseReminderOffsetsFlag(flags) } catch (error) { usageFail(String(error?.message ?? error), usage); return }
+  const store = familyStore({ write: true })
+  const result = lib.mailFollowupAdd(store, {
+    mail,
+    thread,
+    action: typeof flags.action === 'string' ? flags.action : undefined,
+    counterparty: typeof flags.counterparty === 'string' ? flags.counterparty : undefined,
+    dueAt,
+    reminderOffsets,
+    matterId: typeof flags.matter === 'string' ? flags.matter : undefined,
+  })
+  if (flags.json === true) { console.log(JSON.stringify(result, null, 2)); return }
+  const followup = result.followup ?? {}
+  const commitment = result.commitment ?? {}
+  console.log('followup added ' + String(followup.id ?? '?') + '  commitment=' + String(commitment.id ?? followup.commitmentId ?? '?'))
+  console.log('  anchor=' + String(followup.anchorMessageId ?? '?') +
+    '  counterparty=' + sanitizeConsoleText(String(followup.counterparty ?? '?'), { max: 120 }) +
+    (followup.subject ? '  subject=' + sanitizeConsoleText(String(followup.subject), { max: 160 }) : ''))
+  console.log('  state=' + String(followup.state ?? 'waiting') +
+    (followup.dueAt ? '  due ' + String(followup.dueAt) : '') +
+    (followup.threadRoot ? '  thread=' + String(followup.threadRoot) : ''))
+  for (const warning of followup.warnings ?? []) console.log('  warning: ' + sanitizeConsoleText(String(warning), { max: 300 }))
+  printFollowupBoundary()
+}
+
+async function mailFollowupLsCommand(lib, args) {
+  const usage = MAIL_FOLLOWUP_LS_USAGE
+  const parsed = familyFlags(args, { booleans: ['json', 'all'], values: ['state', 'stale', 'limit', 'offset'] }, usage)
+  if (!parsed) return
+  const flags = parsed.flags
+  let staleDays
+  if (flags.stale !== undefined) {
+    staleDays = mailFollowupStaleDays(flags.stale)
+    if (staleDays === null) { usageFail('--stale must be Nd (1..3650), for example 7d', usage); return }
+  }
+  const options = {
+    state: flags.all === true ? 'all' : (typeof flags.state === 'string' ? flags.state : undefined),
+    staleDays,
+    limit: flags.limit === undefined ? undefined : familyInteger(flags.limit, '--limit', 1, 500),
+    offset: flags.offset === undefined ? undefined : familyInteger(flags.offset, '--offset', 0, 100000),
+  }
+  // Listing is a pure read: use the lock-free reader so a running ui/mcp/bridge
+  // writer does not block `mail followup ls`.
+  const result = lib.mailFollowupLs(familyStore(), options)
+  if (flags.json === true) { console.log(JSON.stringify(result, null, 2)); return }
+  const items = Array.isArray(result.items) ? result.items : []
+  if (!items.length) console.log('（没有 followup 记录）')
+  for (const item of items) console.log(mailFollowupRow(item))
+  console.log('total=' + String(result.total ?? items.length) + (result.truncated ? ' truncated' : '') + (options.state ? ' state=' + options.state : ''))
+  printFollowupCoverage(result.coverage)
+  printFollowupBoundary()
+}
+
+async function mailFollowupShowCommand(lib, args) {
+  const usage = MAIL_FOLLOWUP_SHOW_USAGE
+  const parsed = familyFlags(args, { booleans: ['json'], values: [] }, usage)
+  if (!parsed) return
+  const id = parsed.positional[0]
+  if (!id) { usageFail('missing followup id', usage); return }
+  const result = lib.mailFollowupShow(familyStore(), id)
+  if (parsed.flags.json === true) { console.log(JSON.stringify(result, null, 2)); return }
+  const item = result.followup ?? {}
+  console.log(mailFollowupRow(item))
+  console.log('  commitment=' + String(item.commitmentId ?? '?') +
+    '  anchor=' + String(item.anchorMessageId ?? '?') +
+    (item.threadRoot ? '  thread=' + String(item.threadRoot) : ''))
+  console.log('  anchorAt=' + String(item.anchorAt ?? '?') +
+    '  dueAt=' + String(item.dueAt ?? '-') +
+    '  lastCheckedAt=' + String(item.lastCheckedAt ?? '-'))
+  console.log('  replies=' + (Array.isArray(item.replies) ? item.replies.length : 0) +
+    '  ignoredReplies=' + (Array.isArray(item.ignoredReplies) ? item.ignoredReplies.length : 0) +
+    '  possibleReplies=' + (Array.isArray(item.possibleReplies) ? item.possibleReplies.length : 0))
+  for (const warning of item.warnings ?? []) console.log('  warning: ' + sanitizeConsoleText(String(warning), { max: 300 }))
+  printFollowupCoverage(result.coverage)
+  printFollowupBoundary()
+}
+
+async function mailFollowupCheckCommand(lib, args) {
+  const usage = MAIL_FOLLOWUP_CHECK_USAGE
+  const parsed = familyFlags(args, { booleans: ['json', 'dry-run'], values: [] }, usage)
+  if (!parsed) return
+  const dryRun = parsed.flags['dry-run'] === true
+  // A dry-run never writes, so it uses the lock-free reader; the real run needs
+  // the writable store (state updates + exactly one followup.check audit row).
+  const result = lib.mailFollowupCheck(familyStore({ write: !dryRun }), { dryRun })
+  if (parsed.flags.json === true) { console.log(JSON.stringify(result, null, 2)); return }
+  const changes = dryRun ? (result.wouldChange ?? []) : (result.changed ?? [])
+  // The lib reports a row when its state OR its basis changed; keep the state
+  // transitions visible as a separate count so "updated" is not read as "replied".
+  const stateChanges = changes.filter((change) => String(change.from) !== String(change.to))
+  console.log('followup check' + (dryRun ? ' (dry-run)' : '') + ': checked=' + String(result.checked ?? '?') +
+    (dryRun ? ' wouldChange=' : ' changed=') + String(changes.length) + ' stateChanges=' + String(stateChanges.length))
+  for (const change of changes) {
+    const same = String(change.from) === String(change.to)
+    const detail = same ? '  (basis updated)' : (change.basis === undefined ? '' : '  basis=' + (typeof change.basis === 'string' ? change.basis : JSON.stringify(change.basis)))
+    console.log('  ' + String(change.id ?? '?') + ': ' + String(change.from ?? '?') + ' -> ' + String(change.to ?? '?') + detail)
+  }
+  printFollowupCoverage(result.coverage)
+  printFollowupBoundary()
+}
+
+async function mailFollowupDismissCommand(lib, args) {
+  const usage = MAIL_FOLLOWUP_DISMISS_USAGE
+  const parsed = familyFlags(args, { booleans: ['json'], values: ['reason', 'note'] }, usage)
+  if (!parsed) return
+  const id = parsed.positional[0]
+  if (!id) { usageFail('missing followup id', usage); return }
+  const reason = typeof parsed.flags.reason === 'string' ? parsed.flags.reason.trim() : ''
+  if (!reason) { usageFail('--reason is required (replied-elsewhere|no-follow-up|wrong-thread|other)', usage); return }
+  const allowed = Array.isArray(lib.FOLLOWUP_DISMISS_REASONS) ? lib.FOLLOWUP_DISMISS_REASONS : ['replied-elsewhere', 'no-follow-up', 'wrong-thread', 'other']
+  if (!allowed.includes(reason)) { usageFail('--reason must be one of ' + allowed.join('|'), usage); return }
+  const result = lib.mailFollowupDismiss(familyStore({ write: true }), id, {
+    reason,
+    note: typeof parsed.flags.note === 'string' ? parsed.flags.note : undefined,
+  })
+  if (parsed.flags.json === true) { console.log(JSON.stringify(result, null, 2)); return }
+  const followup = result.followup ?? {}
+  console.log('dismissed ' + String(followup.id ?? id) + '  state=' + String(followup.state ?? 'dismissed') + '  reason=' + reason)
+  printFollowupBoundary()
+}
+
+async function mailFollowupMarkRepliedCommand(lib, args) {
+  const usage = MAIL_FOLLOWUP_MARK_REPLIED_USAGE
+  const parsed = familyFlags(args, { booleans: ['json'], values: ['note'] }, usage)
+  if (!parsed) return
+  const id = parsed.positional[0]
+  if (!id) { usageFail('missing followup id', usage); return }
+  const result = lib.mailFollowupMarkReplied(familyStore({ write: true }), id, {
+    note: typeof parsed.flags.note === 'string' ? parsed.flags.note : undefined,
+  })
+  if (parsed.flags.json === true) { console.log(JSON.stringify(result, null, 2)); return }
+  const followup = result.followup ?? {}
+  console.log('marked replied ' + String(followup.id ?? id) + '  state=' + String(followup.state ?? 'replied'))
+  printFollowupBoundary()
+}
+
+/**
+ * advisers mail followup add|ls|show|check|dismiss|mark-replied (0.5.1).
+ * Reuses lib/mail-followup.js; failures keep the family convention
+ * (stderr {error:{code,message,hint?}}, exit 1) and TOS stays at exit 3.
+ */
+async function mailFollowupCommand(rawArgs) {
+  const sub = rawArgs[0]
+  try {
+    if (!sub || sub === 'help' || sub === '--help') { console.log(MAIL_FOLLOWUP_USAGE); return }
+    const lib = await loadMailFollowup()
+    if (sub === 'add') return await mailFollowupAddCommand(lib, rawArgs.slice(1))
+    if (sub === 'ls' || sub === 'list') return await mailFollowupLsCommand(lib, rawArgs.slice(1))
+    if (sub === 'show') return await mailFollowupShowCommand(lib, rawArgs.slice(1))
+    if (sub === 'check') return await mailFollowupCheckCommand(lib, rawArgs.slice(1))
+    if (sub === 'dismiss') return await mailFollowupDismissCommand(lib, rawArgs.slice(1))
+    if (sub === 'mark-replied') return await mailFollowupMarkRepliedCommand(lib, rawArgs.slice(1))
+    usageFail('unknown mail followup subcommand: ' + sub, MAIL_FOLLOWUP_USAGE)
+  } catch (error) { reportFamilyFailure(error) }
+}
+
 /* ------------------------- receivable / payment ------------------------- */
 
 const RECEIVABLE_USAGE = [
@@ -8568,7 +8822,8 @@ function replaceCustomerTable(store, table, rows) {
       if (!Object.prototype.hasOwnProperty.call(row, name)) throw importDataError('import data.' + table + '[' + index + '] is missing column ' + name)
     }
     if (!names.length) throw importDataError('import data.' + table + '[' + index + '] has no columns')
-    store.db.prepare('INSERT INTO ' + table + ' (' + names.join(',') + ') VALUES (' + names.map(() => '?').join(',') + ')')
+    // Quote every identifier: v23 mail_messages."references" is a SQLite keyword.
+    store.db.prepare('INSERT INTO ' + table + ' (' + names.map((name) => '"' + name + '"').join(',') + ') VALUES (' + names.map(() => '?').join(',') + ')')
       .run(...names.map((name) => row[name] === undefined ? null : row[name]))
   }
   return rows.length
@@ -14021,6 +14276,9 @@ function reportBundleFailure(result, asJson, label) {
       backup: result?.backup ?? null,
       rolledBack: result?.rolledBack === true,
       verification: result?.verification ?? null,
+      // 0.5.1 (051-M7): additive digest-expectation fields (null when unused).
+      expectedDigest: result?.expectedDigest ?? null,
+      dataDigestMatch: result?.dataDigestMatch ?? null,
     }, null, 2))
   } else {
     console.error(`${label}: FAILED${code ? ' (' + code + ')' : ''}`)
@@ -14096,11 +14354,21 @@ async function exportBundleCommand(flags) {
 
 /** `import --bundle <dir> [--verify] [--dry-run] [--replace]` (TOS: dry-run verify exempts). */
 async function importBundleCommand(args) {
-  const parsed = parseStrictFlags(args, { booleans: ['verify', 'dry-run', 'replace', 'json'], values: ['bundle'], positional: false })
+  const parsed = parseStrictFlags(args, { booleans: ['verify', 'dry-run', 'replace', 'json'], values: ['bundle', 'expect-dataDigest'], positional: false })
   if (!parsed.ok) return usageFail(parsed.error, IMPORT_USAGE)
   const flags = parsed.flags
   const bundleDir = typeof flags.bundle === 'string' ? flags.bundle : undefined
   if (!bundleDir) return usageFail('--bundle requires a bundle directory', IMPORT_USAGE)
+  // 0.5.1 (051-M7, plan 201 A5): the source machine prints dataDigest when it
+  // exports; the target machine compares it in one command. A malformed value is
+  // E_USAGE here (never a silent no-op); a mismatch is refused by the lib with
+  // zero writes and E_BUNDLE_TAMPERED (the directive is not a signature).
+  let expectDataDigest
+  if (flags['expect-dataDigest'] !== undefined) {
+    const raw = flags['expect-dataDigest']
+    if (typeof raw !== 'string' || !/^[0-9a-f]{64}$/i.test(raw.trim())) return usageFail('--expect-dataDigest requires 64 hex characters (the dataDigest printed by export --bundle)', IMPORT_USAGE)
+    expectDataDigest = raw.trim().toLowerCase()
+  }
   const asJson = flags.json === true
   const dryRun = flags['dry-run'] === true
   const replaceRequested = flags.replace === true
@@ -14138,6 +14406,7 @@ async function importBundleCommand(args) {
       verify: true,
       replace: replaceRequested,
       backup: true,
+      expectDataDigest,
     })
   } catch (error) {
     if (!(error instanceof Error)) throw error
@@ -14158,6 +14427,8 @@ async function importBundleCommand(args) {
     replaced: result.replaced === true,
     backup: result.backup ?? null,
     dataDigest: result.dataDigest,
+    expectedDigest: result.expectedDigest ?? expectDataDigest ?? null,
+    dataDigestMatch: result.dataDigestMatch ?? null,
     counts: result.counts,
     tables: result.tables,
     restored: result.restored,
@@ -14174,12 +14445,14 @@ async function importBundleCommand(args) {
     if (result.bootstrap) console.log('  would bootstrap a clean local ledger from the bundle')
     else if (result.replaced) console.log('  would replace the local ledger (a pre-import backup would be written first)')
     console.log('  dataDigest=' + result.dataDigest)
+    if (result.expectedDigest) console.log('  expectedDataDigest=' + result.expectedDigest + '  match=' + (result.dataDigestMatch === true ? 'yes' : 'no'))
     for (const warning of result.warnings ?? []) console.log('  warning: ' + warning)
     return
   }
   console.log('imported bundle ' + result.bundleDir + ' into ' + HOME)
   console.log('  ' + (result.bootstrap ? 'bootstrapped a clean local ledger' : 'replaced the local ledger') + (result.backup?.path ? '; pre-import backup: ' + result.backup.path : ''))
   console.log('  dataDigest=' + result.dataDigest)
+  if (result.expectedDigest) console.log('  expectedDataDigest=' + result.expectedDigest + '  match=' + (result.dataDigestMatch === true ? 'yes' : 'no'))
   if (result.pagesRebuilt !== undefined) console.log('  kb pages rebuilt=' + result.pagesRebuilt + ' ftsRebuilt=' + (result.ftsRebuilt === true))
   console.log('  跨机重建：advisers kb page rebuild（Markdown 投影只是人读副本）')
   for (const warning of result.warnings ?? []) console.log('  warning: ' + warning)
@@ -14251,6 +14524,7 @@ async function contextPackVerifyCommand(args) {
     console.log('  dir=' + String(result.dir ?? dir) + ' files=' + String(result.fileCount ?? '?') + ' checksums=' + String(result.checksumCount ?? '?') + ' bytes=' + String(result.bytes ?? '?'))
     console.log('  manifestDigest=' + String(result.manifestDigest ?? '?'))
     console.log('  verificationBasis=' + String(result.verificationBasis ?? 'local-checksums-only') + '（只证包内自洽，不是签名/时间戳/来源真实性）')
+    if (result.expiresAt) console.log('  expiresAt=' + String(result.expiresAt) + (result.expired === true ? '（已过期：expiry 只是披露记录，不改变 verify 的 0/1）' : ''))
     for (const warning of result.warnings ?? []) console.log('  warning: ' + warning)
   } else {
     console.error('context pack: INVALID' + (result?.code ? ' (' + result.code + ')' : ''))
@@ -14301,8 +14575,13 @@ async function contextPackCreateCommand(args) {
   }
   // Write path. The recipient/purpose/expires are the disclosure record; lib
   // validates the closed purpose set and the expires shape (E_CONTEXT_PACK_INVALID).
+  // 0.5.1 (051-M8): a written pack also records one local context_pack.create
+  // audit row, so the write path needs the WRITABLE store (appendAudit on the
+  // lock-free reader would fail closed). The candidate mode above stays read-only.
   ensureHome()
-  const store = openReadStore()
+  let store
+  try { store = familyStore({ write: true }) }
+  catch (error) { return reportFamilyFailure(error) }
   const lib = await loadContextPack()
   const recipient = flags['recipient-email'] !== undefined
     ? { name: String(flags.recipient ?? ''), email: String(flags['recipient-email']) }
@@ -14335,6 +14614,7 @@ async function contextPackCreateCommand(args) {
   console.log('wrote context pack ' + String(result.out ?? defaultOut))
   console.log('  items=' + String(disclosure.itemCount ?? disclosure.selectedCount ?? '?') + ' files=' + String(result.fileCount ?? 3) + ' bytes=' + String(result.bytes ?? '?') + ' manifestDigest=' + String(result.manifestDigest ?? '?'))
   console.log('  recipient=' + String(disclosure.recipientName ?? result.recipient?.name ?? '?') + ' purpose=' + String(result.purpose ?? '?') + ' expiresAt=' + String(result.expiresAt ?? '?'))
+  if (result.audit && result.audit.action) console.log('  audit: ' + String(result.audit.action) + '  ' + sanitizeConsoleText(String(result.audit.reason ?? ''), { max: 400 }))
   console.log('  边界：接收方拿到即可复制；包内无金额/邮件正文/附件/KB 全文；verificationBasis=local-checksums-only。')
   console.log('  verify: advisers context-pack verify ' + String(result.out ?? defaultOut) + ' --json')
 }
@@ -14526,6 +14806,9 @@ async function helpCommand(args) {
 // lib/help-usage.js; this file merges the additive surfaces it wires. Keep this
 // list small: only command lines whose flags are owned by bin 0.5.0 belong here.
 const HELP_USAGE_LINES = new Map(HELP_USAGE_BASE_LINES)
+// 0.5.1 (051-S5): the mail followup paths answer -h/--help as a pure read. The
+// plain `mail` entry keeps its 0.5.0 bytes and gains one additive line.
+HELP_USAGE_LINES.set('mail', String(HELP_USAGE_BASE_LINES.get('mail') ?? '') + '\n       advisers mail followup add|ls|show|check|dismiss|mark-replied ... [--json]')
 for (const [key, line] of Object.entries({
   export: EXPORT_USAGE,
   import: IMPORT_USAGE,
@@ -14535,6 +14818,13 @@ for (const [key, line] of Object.entries({
   'context-pack': 'usage: advisers context-pack create|verify ...',
   'context-pack create': CONTEXT_PACK_USAGE,
   'context-pack verify': 'usage: advisers context-pack verify <dir> [--expect-manifest-sha256 <64hex>] [--json]',
+  'mail followup': MAIL_FOLLOWUP_USAGE,
+  'mail followup add': MAIL_FOLLOWUP_ADD_USAGE,
+  'mail followup ls': MAIL_FOLLOWUP_LS_USAGE,
+  'mail followup show': MAIL_FOLLOWUP_SHOW_USAGE,
+  'mail followup check': MAIL_FOLLOWUP_CHECK_USAGE,
+  'mail followup dismiss': MAIL_FOLLOWUP_DISMISS_USAGE,
+  'mail followup mark-replied': MAIL_FOLLOWUP_MARK_REPLIED_USAGE,
 })) HELP_USAGE_LINES.set(key, line)
 
 /** Longest known command path in argv; null for the top-level help request. */

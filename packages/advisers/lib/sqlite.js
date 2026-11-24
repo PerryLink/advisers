@@ -43,8 +43,26 @@ import { copyFileWithRetrySync, fsyncDirSync, fsyncFileSync, rmWithRetrySync } f
  * (kb_fts over kb_chunks, kb_pages_fts over kb_pages) built by _setupKbFts()
  * because their tokenizer is probed at runtime (the v19 rule). None of the new
  * tables enters the wire format: LedgerSnapshot.version stays 1.
+ *
+ * v23 (0.5.1 memory-trust + mail-threading single hop): one step merges the two
+ * 0.5.1 schema domains that would otherwise collide on the version number
+ * (91 §4.4 and 92 §4 §4 both asked for v23; a release may only jump once):
+ *  - facts claim/quote fields: conditions, polarity, modality, revision_intent,
+ *    valid_time_unknown (default 0), quote_source_kind/quote_source_id,
+ *    quote_char_start/quote_char_end (91 §4.1; all nullable except the flag);
+ *  - mail_messages threading headers: in_reply_to, references (JSON array),
+ *    thread_root, direction (default 'unknown'), auto_submitted (92 §4);
+ *  - the awaiting-reply sidecar waiting_replies (92 §4);
+ *  - the handoff receipt tables handoffs/handoff_claims (91 §2.3); a claim is a
+ *    read receipt, never execution authority, and the claims ride with the
+ *    database so "claim once" survives export/import;
+ *  - the 207 A10 reserved columns (deliveries acceptance evidence and
+ *    payments.proof_sha256) so 0.6 does not need a second migration; DDL only,
+ *    no command surface in 0.5.1.
+ * The two v23 handoff/followup sidecars are not a fourth ledger: only the
+ * seven wire tables (plus customer entities) enter LedgerSnapshot.version 1.
  */
-export const SCHEMA_VERSION = 22
+export const SCHEMA_VERSION = 23
 /** The last schema built by the single-block legacy migration (0.2.2). */
 const LEGACY_SCHEMA_VERSION = 19
 const DEFAULT_BUSY_TIMEOUT_MS = 5000
@@ -541,6 +559,70 @@ CREATE TABLE IF NOT EXISTS payments (
 );
 `
 
+// ---------------------------------------------------------------------------
+// Schema v23 (0.5.1): memory claim fields + mail threading + followup/handoff
+// sidecars, merged into ONE step because 91 §4.4 and 92 §4 both claimed v23
+// (a release may jump the schema version only once). domains do not overlap, so
+// the step can run them in sequence: facts/mail columns first, then the new
+// tables. Like v22, the plain tables live here and are interpolated into SCHEMA
+// so a fresh database and an upgraded one converge on the exact same layout;
+// the columns are added by the step because CREATE TABLE IF NOT EXISTS cannot
+// add them to an existing table.
+//
+//   91 §2.3: handoffs is the handoff object (JSON columns store string arrays),
+//   handoff_claims is the one-shot claim receipt (handoff_id PK is the "claim
+//   once" guarantee; UNIQUE(handoff_id, request_id) is the idempotent retry
+//   key). cancel() tombstones instead of deleting, so deleted_at is a soft
+//   delete column. Claiming is a READ RECEIPT: no authority is stored here.
+//   92 §4: waiting_replies is the mail followup sidecar (one row per awaiting
+//   reply commitment; commitment_id UNIQUE). It IS customer data, so it enters
+//   DATA_TABLES (unlike mail_cursors, which is per-machine sync state).
+// ---------------------------------------------------------------------------
+const V23_DDL = `
+-- Mail followup sidecar (92 §4): state is waiting/replied/unknown/dismissed;
+-- basis is a JSON document (method headers|manual|legacy + replies/ignored);
+-- no backfill: older mail rows keep NULL threading headers (never guessed).
+CREATE TABLE IF NOT EXISTS waiting_replies (
+  id TEXT PRIMARY KEY, commitment_id TEXT NOT NULL UNIQUE, account_id TEXT,
+  anchor_row_id TEXT, anchor_message_id TEXT NOT NULL, thread_root TEXT NOT NULL,
+  counterparty TEXT NOT NULL, anchor_at TEXT NOT NULL, state TEXT NOT NULL,
+  replied_row_id TEXT, replied_at TEXT, basis TEXT NOT NULL, checked_at TEXT,
+  dismiss_reason TEXT, created_at TEXT NOT NULL, updated_at TEXT NOT NULL
+);
+-- Handoff receipts (91 §2.3). The six array columns are JSON text. This table
+-- never stores an execution flag: confersExecutionAuthority is a constant false
+-- and is not persisted (every output re-attaches it).
+CREATE TABLE IF NOT EXISTS handoffs (
+  id TEXT PRIMARY KEY, created_at TEXT NOT NULL, expires_at TEXT NOT NULL,
+  status TEXT NOT NULL, summary TEXT NOT NULL,
+  completed TEXT NOT NULL DEFAULT '[]', open_tasks TEXT NOT NULL DEFAULT '[]',
+  decisions TEXT NOT NULL DEFAULT '[]', failed_attempts TEXT NOT NULL DEFAULT '[]',
+  constraints TEXT NOT NULL DEFAULT '[]', next_steps TEXT NOT NULL DEFAULT '[]',
+  matter_id TEXT, secrecy INTEGER NOT NULL DEFAULT 0,
+  payload_sha256 TEXT NOT NULL, deleted_at TEXT
+);
+-- A handoff can be claimed at most once (handoff_id PRIMARY KEY). The parent
+-- reference is DEFERRABLE INITIALLY DEFERRED because export/bundle restore
+-- replaces the DATA_TABLES in their declared order inside one import
+-- transaction; a deferred check keeps the round-trip independent of table
+-- order while still refusing an orphan claim at COMMIT.
+CREATE TABLE IF NOT EXISTS handoff_claims (
+  handoff_id TEXT PRIMARY KEY REFERENCES handoffs(id) DEFERRABLE INITIALLY DEFERRED,
+  claim_id TEXT NOT NULL UNIQUE, claimed_at TEXT NOT NULL, claimant TEXT,
+  request_id TEXT, receipt_sha256 TEXT NOT NULL,
+  UNIQUE(handoff_id, request_id)
+);
+`
+
+// v23 indexes. The mail thread index is created by the step because the
+// thread_root column only exists after the step adds it; all three are
+// recreated IF NOT EXISTS on every open (layout only, no version bump).
+const V23_INDEXES = `
+CREATE INDEX IF NOT EXISTS idx_mail_thread ON mail_messages(account_id, thread_root);
+CREATE INDEX IF NOT EXISTS idx_handoffs_status_expires ON handoffs(status, expires_at);
+CREATE INDEX IF NOT EXISTS idx_waiting_replies_state ON waiting_replies(state, created_at);
+`
+
 const SCHEMA = `
 CREATE TABLE IF NOT EXISTS matters (
   id TEXT PRIMARY KEY, title TEXT NOT NULL, status TEXT NOT NULL, domain TEXT NOT NULL,
@@ -674,8 +756,9 @@ CREATE TABLE IF NOT EXISTS client_notes (
 );
 -- 0.4.0 (schema v22): KB / mail / money tables. They are defined once in
 -- V22_DDL and interpolated here so a fresh database and an upgraded database
--- converge on the exact same layout.
+-- converge on the exact same layout. v23 follows the same rule (see V23_DDL).
 ${V22_DDL}
+${V23_DDL}
 CREATE TABLE IF NOT EXISTS meta (key TEXT PRIMARY KEY, value TEXT NOT NULL);
 ${SCHEMA_MIGRATIONS_DDL}`
 
@@ -898,7 +981,8 @@ CREATE INDEX IF NOT EXISTS idx_sessions_updated ON sessions(updated_at);
 CREATE INDEX IF NOT EXISTS idx_model_calls_created ON model_calls(created_at);
 ${V20_INDEXES}
 ${V21_INDEXES}
-${V22_INDEXES}`
+${V22_INDEXES}
+${V23_INDEXES}`
 
 
 /**
@@ -914,8 +998,12 @@ ${V22_INDEXES}`
  * crash rolled its transaction back (the column is then absent again).
  */
 function addColumnIfMissing(db, table, column, type) {
+  // A column name may be passed quoted when it is a reserved word (v23's
+  // mail_messages."references"); PRAGMA reports the bare name, so compare the
+  // unquoted form while still emitting the quoted identifier in the ALTER.
+  const bare = /^".*"$/.test(column) ? column.slice(1, -1) : column
   const columns = db.prepare('PRAGMA table_info(' + table + ')').all().map((row) => row.name)
-  if (!columns.includes(column)) db.exec('ALTER TABLE ' + table + ' ADD COLUMN ' + column + ' ' + type)
+  if (!columns.includes(bare)) db.exec('ALTER TABLE ' + table + ' ADD COLUMN ' + column + ' ' + type)
 }
 
 /**
@@ -974,6 +1062,47 @@ const MIGRATIONS = [
       store._setupKbFts()
     },
   },
+  {
+    version: 23,
+    name: 'fact-claim-fields-and-handoffs',
+    up(store) {
+      // One hop merges the two 0.5.1 domains (91 §4.4 + 92 §4): facts claim/
+      // quote metadata, mail threading headers, and the followup/handoff
+      // sidecars. The tables are also part of SCHEMA and were created with IF
+      // NOT EXISTS before this step ran, so a fresh database and an upgraded
+      // one converge on one layout; columns cannot be created that way, so
+      // every ALTER below is guarded and retryable (a crash rolls the whole
+      // transaction back, including the version stamp).
+      for (const [column, type] of [
+        ['conditions', 'TEXT'], ['polarity', 'TEXT'], ['modality', 'TEXT'],
+        ['revision_intent', 'TEXT'],
+        // Unknown valid time is an explicit flag: NULL valid_from/valid_to must
+        // never be read as "valid forever", and 0 keeps old rows non-degraded.
+        ['valid_time_unknown', 'INTEGER NOT NULL DEFAULT 0'],
+        ['quote_source_kind', 'TEXT'], ['quote_source_id', 'TEXT'],
+        ['quote_char_start', 'INTEGER'], ['quote_char_end', 'INTEGER'],
+      ]) addColumnIfMissing(store.db, 'facts', column, type)
+      // 92 §4 mail threading. "references" is a SQLite keyword, so the column
+      // is declared quoted; the INSERT/SELECT path must quote it as well.
+      addColumnIfMissing(store.db, 'mail_messages', 'in_reply_to', 'TEXT')
+      addColumnIfMissing(store.db, 'mail_messages', '"references"', 'TEXT')
+      addColumnIfMissing(store.db, 'mail_messages', 'thread_root', 'TEXT')
+      addColumnIfMissing(store.db, 'mail_messages', 'direction', "TEXT NOT NULL DEFAULT 'unknown'")
+      addColumnIfMissing(store.db, 'mail_messages', 'auto_submitted', 'TEXT')
+      // 207 A10 reserved columns (owner ruling 2026-11-24): DDL only, no command
+      // surface in 0.5.1, so 0.6 acceptance/payment-proof features do not need a
+      // second migration. Nullable with no business default.
+      for (const column of ['accepted_at', 'accepted_by', 'accept_method', 'accept_evidence_ref']) {
+        addColumnIfMissing(store.db, 'deliveries', column, 'TEXT')
+      }
+      addColumnIfMissing(store.db, 'payments', 'proof_sha256', 'TEXT')
+      // Repeating the DDL keeps a direct migrate() caller (tests, future
+      // maintenance commands) convergent with initializeSchema(); both are
+      // IF NOT EXISTS. INDEXES also re-creates the indexes on every open.
+      store.db.exec(V23_DDL)
+      store.db.exec(V23_INDEXES)
+    },
+  },
 ]
 const json = (v) => JSON.stringify(v ?? [])
 const parse = (v, fallback = []) => {
@@ -1007,9 +1136,10 @@ export const CLIENT_NOTE_SOURCE_KINDS = ['delivery', 'matter', 'manual']
 
 /**
  * Tables that a full export --all carries next to the nine-table ledger
- * snapshot. The v21 customer tables and the v22 KB/mail/money tables are
- * appended so an export/import round-trip cannot silently drop them; this
- * constant is the single list the CLI reads instead of hard-coding its own.
+ * snapshot. The v21 customer tables, the v22 KB/mail/money tables and the v23
+ * handoff / followup sidecars are appended so an export/import round-trip
+ * cannot silently drop them; this constant is the single list the CLI reads
+ * instead of hard-coding its own.
  *
  * Deliberately NOT in this list:
  *  - kb_fts / kb_pages_fts (and their shadow tables): derived, rebuildable from
@@ -1027,6 +1157,10 @@ export const DATA_TABLES = Object.freeze([
   'kb_documents', 'kb_chunks', 'kb_fact_links', 'kb_pages',
   'mail_accounts', 'mail_messages', 'mail_sync_runs',
   'receivables', 'payments',
+  // v23 (0.5.1): claims ride with the database so "claim once" survives
+  // export/import (91 §2.3); waiting_replies is user followup data, unlike
+  // mail_cursors (92 §4).
+  'handoffs', 'handoff_claims', 'waiting_replies',
 ])
 
 /** A business error with a stable code (message keeps the code for stderr). */

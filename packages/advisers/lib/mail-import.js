@@ -138,6 +138,13 @@ export async function importMailFiles(store, options = {}, context = {}) {
         messageId: parsed.messageId,
         text,
         attachments: parsed.attachments,
+        // 0.5.1 (plan 92 §4): threading headers are metadata only. The local
+        // .eml account has no usable username, so direction stays 'unknown'
+        // instead of being guessed.
+        inReplyTo: parsed.inReplyTo,
+        references: parsed.references,
+        autoSubmitted: parsed.autoSubmitted,
+        accountUsername: account.username,
         status: 'new',
         clientId: options.clientId ?? null,
         projectId: options.projectId ?? null,

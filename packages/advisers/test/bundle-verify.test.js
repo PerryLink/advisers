@@ -11,6 +11,8 @@ import {
   BUNDLE_DATA_TABLES,
   BUNDLE_MANIFEST_FILE,
   BUNDLE_SHA256SUMS_FILE,
+  bundleDataTablesForSchema,
+  computeBundleDataDigest,
   exportBundle,
   readBundleManifestHeader,
   verifyBundle,
@@ -282,16 +284,27 @@ test('ledger.json stays export --all compatible and never smuggles excluded tabl
     const digest = caseDir(root, pristine, 'digest')
     editLedger(digest, (payload) => { payload.data.clients[0].name = 'edited' })
     assertTampered(verifyBundleDir(digest), 'edited data row')
+    // A bundle written by the previous schema: its own (smaller) dataDigest
+    // domain is legitimate, so it verifies with warnings instead of failing.
     const older = caseDir(root, pristine, 'older-schema')
-    editLedger(older, (payload) => { payload.schemaVersion = SCHEMA_VERSION - 1 })
+    const legacyTables = bundleDataTablesForSchema(SCHEMA_VERSION - 1)
+    const olderLedgerPath = join(older, 'ledger.json')
+    const olderPayload = JSON.parse(readFileSync(olderLedgerPath, 'utf8'))
+    olderPayload.schemaVersion = SCHEMA_VERSION - 1
+    for (const table of Object.keys(olderPayload.data)) if (!legacyTables.includes(table)) delete olderPayload.data[table]
+    writeFileSync(olderLedgerPath, JSON.stringify(olderPayload, null, 2) + NL)
     const manifestPath = join(older, BUNDLE_MANIFEST_FILE)
     const manifest = JSON.parse(readFileSync(manifestPath, 'utf8'))
     manifest.schemaVersion = SCHEMA_VERSION - 1
+    manifest.tables = [...legacyTables]
+    for (const table of Object.keys(manifest.counts)) if (!legacyTables.includes(table)) delete manifest.counts[table]
+    manifest.dataDigest = computeBundleDataDigest(olderPayload.data, { tables: legacyTables }).dataDigest
     writeFileSync(manifestPath, JSON.stringify(manifest, null, 2) + NL)
     resealManifestAndSums(older)
     const olderResult = verifyBundleDir(older)
     assert.equal(olderResult.ok, true, JSON.stringify(olderResult.errors))
     assert.match(olderResult.warnings.join(' '), /older than this CLI/)
+    assert.match(olderResult.warnings.join(' '), /predates v/)
   } finally { rmSync(root, { recursive: true, force: true }) }
 })
 

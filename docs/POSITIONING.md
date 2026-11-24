@@ -1,4 +1,4 @@
-# Positioning (2026-11-22, post-competitive round 2)
+# Positioning (2026-11-24, post-competitive round 2; 0.5.1 boundary)
 
 > Facts re-checked 2026-11-22 from the internal competitor round-2 notes. This page
 > states positioning and boundaries, not pricing or legal terms. Do not reuse
@@ -39,7 +39,7 @@ consultants — local ledgers, offline-verifiable receipts, portable by design.*
 结论：**入口、连接器、聚合、生成、记忆都只是及格线**。聚合能力要做（候选装配），
 但卖点必须是聚合之后的东西：可披露、可离线验、不可回灌、不授执行权、可退出。
 
-## 可防守的（0.5.0 必须能演示）
+## 可防守的（0.5.0 起必须能演示；0.5.1 增加只读邮件跟进）
 
 1. **可退出**：`export --bundle` -> `IMPORT.md`/`SHA256SUMS` -> 干净 home
    `import --bundle --verify` -> `dataDigest`/counts 相等；明文边界与排除项写在
@@ -111,7 +111,7 @@ advisers evidence verify <dir> --json                      # 离线 0/1
 MCP 目录、浏览器/常驻 agent、CRM 同步。规则：只做“证据 + 回执 + 可退出”的最后一公里；
 命中 watchlist 的功能请求必须写“为什么不投”并走 owner 决策。
 
-## 明确不做（0.5.0 不做清单）
+## 明确不做（产品非目标清单；0.5.1 口径）
 
 产品非目标（不是待办，不 roadmap）：
 
@@ -127,27 +127,36 @@ MCP 目录、浏览器/常驻 agent、CRM 同步。规则：只做“证据 + �
 - 不做默认加密的宣称；bundle 明文，加密是后续 opt-in。
 - 不做向量检索/记忆导入/第三方“第二大脑”式迁移。
 
-0.5.0 版本内不做（版本边界）：handoff/v23 迁移、mail followup、flow、draft-eml/notice/
-月报、OAuth/IMAP 写、发送/日历写回、CRM/门户、支付托管/e-sign、云目录/付费 MCP、
-插件市场、移动/daemon、AIGC、默认加密、向量检索。越界项必须有 owner 决策记录，
-发布说明对未做项写“未做/未验证”。
+0.5.1 版本内不做（版本边界）：handoff CLI、flow、draft-eml/notice/月报、OAuth/IMAP
+写、发送/日历写回、CRM/门户、支付托管/e-sign、云目录/付费 MCP、插件市场、
+移动/daemon、AIGC、默认加密、向量检索。**0.5.1 已交付 v23 单次迁移与只读 mail
+followup**（见 [CHANGELOG](../CHANGELOG.md) 与 [MAIL-FOLLOWUP.md](MAIL-FOLLOWUP.md)），
+不属于未做项。越界项必须有 owner 决策记录，发布说明对未做项写“未做/未验证”。
 
-## 0.5.0 能力边界（满足“主题不砍”）
+## 0.5.1 能力边界（满足“主题不砍”）
 
-- 零 DB schema（仍 v22）、零新出网、零新 runtime 依赖。
-- MCP 仍 8 工具 / 5 resources，DSH 仍 6 工具；0.5.0 只加披露元数据（additive）。
-- 质量只报“回归门 + 显式 null”，人类金标由 owner 决定（D2）；不写“准确率/优于竞品”。
+- **一次** DB schema 跳变（v22 -> v23，单次迁移）；零新出网、零新 runtime 依赖。
+- MCP 仍 8 工具 / 5 resources，DSH 仍 6 工具；0.5.0 只加披露元数据，0.5.1 只加
+  `advisers_pack_verify` 的 context-pack 目录校验分派（additive、无新数据面）。
+- 只读邮件跟进是“本地 header 证据”：不发信、不自动催收；未同步 Sent 邮箱时不得
+  当作“已发信”证据（见 [MAIL-FOLLOWUP.md](MAIL-FOLLOWUP.md)）。
+- 质量只报“回归门 + 显式 null”，并从 0.5.1 起把发布级报告作为 release asset；
+  人类金标仍由 owner 决定（D2，`unknowns.humanGold=null`）；不写“准确率/优于竞品”。
 - 分发只做“被宿主调用”（见 [AGENT-INTEROP.md](AGENT-INTEROP.md)）：DSH bundle、
   Claude Code/Cowork 本地插件、Cursor/Codex/Goose/OpenClaw 的 MCP 配置；不做自有平台。
+  **DSH 没有官方市场**（只有实验性 custom index）：catalog 是社区条目，0.5.1 只准备
+  提交素材，不宣称“已上架/已验证”。
 
 ## Pricing / channel（研究建议，不是承诺；owner D1 前只写“待开放”）
 
 PolyForm-NC core free for noncommercial use; commercial use requires a separate
 written commercial license; an optional local pro/support subscription at a personal
-price point is a research recommendation, not an offer. Channel: independent-consultant
-communities and the local agent hosts above; make receipts, context packs and an
-exported bundle the customer-visible artifacts. No purchase/invoice/refund promise may
-be written until owner D1/D8 are decided.
+price point is a research recommendation, not an offer. **The single pricing source of
+truth is [PRICING.md](PRICING.md)**; [COMMERCIAL.md](COMMERCIAL.md) and [FAQ.md](FAQ.md)
+hold the process/boundary text. In 0.5.1 pricing, evaluation terms and ordering are
+**not open yet** (owner D1/D8 pending): no price number, purchase, invoice or free-trial
+promise is made. Channel: independent-consultant communities and the local agent hosts
+above; make receipts, context packs and an exported bundle the customer-visible artifacts.
 
 ## 复核方式与边界
 

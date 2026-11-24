@@ -12,12 +12,13 @@ SQLite/FTS persistence lives in the `advisers` distribution; this package has no
 
 ## Status
 
-`0.5.0` was published on 2026-11-22 (npm `latest` = `0.5.0`; `next` is also `0.5.0`).
-0.5.0 is the current release (lockstep version): a feature release on the 0.4.3 tree whose
-additions (portable home bundle v1, context pack v1 + offline verify, additive MCP/DSH
-read disclosure, sync snapshot v2 with `sync.state.json` and conflict precheck, the
-setup/demo/help onboarding, fail-closed managed backups and the report-v2 quality gate)
-live in `advisers` and `dsh-advisers`. This package's public surface
+`0.5.1` was published on 2026-11-24 (npm `latest` = `0.5.1`; `next` is also `0.5.1`).
+0.5.1 is the current release (lockstep version): a follow-up patch on the 0.5.0 tree —
+one schema jump (v22 -> v23: facts claim/evidence columns, mail thread columns,
+`waiting_replies` and the handoff tables), read-only `mail followup`, bundle
+drill/`--expect-dataDigest`/`FORMAT.md`, `context_pack.create` audit + MCP
+`advisers_pack_verify` format dispatch, and the release-level quality evidence — all of
+which live in `advisers` and `dsh-advisers`. This package's public surface
 is unchanged from 0.3.2 — the 0.4/0.5 work (knowledge base, mail entry, interactive shell,
 receivables, policy/evidence subset, portable/disclosure formats) lives in `advisers` and `dsh-advisers`. 0.3.1 was a
 release-metadata patch for 0.3.0, and the 0.2.4 candidate superseded by the 0.3.0 line was

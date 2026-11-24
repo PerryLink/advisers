@@ -339,7 +339,7 @@ test('opening a database adds the secondary indexes without a schema bump from t
       // every pre-existing secondary index is still layout only and is not a
       // reason for a bump -- recreating one without a version change stays
       // supported (see test/schema-migrations.test.js).
-      assert.equal(SCHEMA_VERSION, 22, 'the schema bump is the entity layout, not a secondary index')
+      assert.equal(SCHEMA_VERSION, 23, 'the schema bump is the entity layout, not a secondary index')
       assert.ok(matter.id)
     } finally {
       reopened.close()

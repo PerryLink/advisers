@@ -1,9 +1,16 @@
 # Advisers architecture
 
-> Status: **0.5.0 release tree (schema v22)**. The repository package version is
-> `0.5.0`; `0.4.3` is the previous release, `0.4.2`/`0.4.1` the earlier same-day
-> follow-ups, `0.4.0` the published feature release and `0.3.2` the baseline before it.
-> 0.5.0 is a "portable, disclosable, verifiable" release (portable home bundle v1,
+> Status: **0.5.1 release tree (schema v23)**. The repository package version is
+> `0.5.1`; `0.5.0` is the previous release, `0.4.3` the patch before it, and
+> `0.4.2`/`0.4.1`/`0.4.0`/`0.3.2` the earlier line. 0.5.1 is a follow-up patch on the
+> 0.5.0 tree: **one** schema jump (v22 -> v23: facts claim/evidence columns, mail
+> thread columns, `waiting_replies` and the handoff tables; migration
+> `fact-claim-fields-and-handoffs`), read-only mail follow-up, bundle exit drill +
+> `--expect-dataDigest` + in-bundle `FORMAT.md`, `context_pack.create` audit + host-side
+> MCP `advisers_pack_verify` dispatch, and release-level quality evidence. No new
+> network path, no new runtime dependency, MCP 8 tools / 5 resources and DSH 6 tools
+> unchanged, legal texts still v2026.11.4.
+> The 0.5.0 release it follows is the "portable, disclosable, verifiable" release (portable home bundle v1,
 > context pack v1 + offline verify, additive MCP/DSH read disclosure, sync snapshot v2
 > with `sync.state.json`/conflict precheck, setup/demo/help onboarding, fail-closed
 > managed backups and the report-v2 quality gate) with **no schema change, no new
@@ -81,13 +88,13 @@
 ### 2.1 0.3.0 architecture invariants (reviewed per release)
 
 The 0.3.0 planning froze ten invariants for the read/model/contract surfaces. They are
-recorded here with an honest status on the 0.5.0 tree; "target" means the
+recorded here with an honest status on the 0.5.1 tree; "target" means the
 design is accepted but the code does **not** enforce it yet, and no release note may claim
 it.
 
 | # | Invariant | Status on the 0.3.0 tree |
 |---|---|---|
-| 1 | **One real ledger**: `~/.advisers/state.db` is authoritative; exports/receipts/projections are derivatives. | In place. JSON store is a degraded fallback, not a second truth (and has no v22 KB/mail/money tables). KB pages and evidence packs are explicitly derived. |
+| 1 | **One real ledger**: `~/.advisers/state.db` is authoritative; exports/receipts/projections are derivatives. | In place. JSON store is a degraded fallback, not a second truth (and has no KB/mail/money or mail-thread/follow-up tables). KB pages and evidence packs are explicitly derived. |
 | 2 | **Reads take no write lock; writes do not depend on the HOME lock** (post-0.3.2 target, still open in 0.4.0: the HOME lock becomes a maintenance lock). | Read side in place (lock-free read-only connection; `lib/ledger-read.js` never takes the HOME lock). Write commands still take the HOME instance lock in 0.4.0; downgrade remains a later target. |
 | 3 | **DSH zero-write**: the host adapter opens no write connection, writes no ledger audit, runs no migration, creates no HOME. | In place: the three read tools use the facade (`readOnly: true`, no DDL/migration, no HOME creation); per-tool audit goes to the host's audit sink, never to the ledger. |
 | 4 | **Decisions are pure functions**: `evaluate(facts)` deterministic, fail-closed; adapters only provide facts. | Partial (0.4.0 subset): `lib/policy/` ships a pure `evaluate(facts)` + rule table + one-shot decision token + egress registry + consent file for the **new 0.4 data surfaces**; pre-0.4 paths keep their legacy gates (active-matter egress/TOS/clearance). **Do not claim a unified/inescapable policy** — see §9 and `docs/SECURITY.md`. |
@@ -95,7 +102,7 @@ it.
 | 6 | **Evidence is resolvable**: every source is resolved / missing / unverifiable / not_checked; missing evidence is honest, never forged. | In place for the 0.4.0 subset: typed resolver (`verified|missing|unverifiable|not_checked`), source v2 read path (conversation/mail/calendar/transcript/KB/web/tool/manual), purged-retention honesty, evidence pack v2 with `byKind`/`notCheckedCount`/`verificationBasis`; `coverage/limitations/unknowns` remain post-0.4. |
 | 7 | **Read models never silently drop data**: list results carry `total`/`truncated`. | Partial: MCP list tools and DSH read payloads carry explicit caps + totals; CLI read models have per-command caps but not one universal envelope. |
 | 8 | **Contracts are additive**: CLI JSON / MCP / DSH only add optional fields inside 0.x. | In place for the shipped surfaces: `contracts/` v1 is frozen from `35a51c3`; MCP adds tools/resources/caps without renames; the DSH read payload keeps the 0.2.x field names and adds fields. |
-| 9 | **One migration per version, one registry**: no silent `SCHEMA_VERSION + 1`. | In place: 0.4.0 adds exactly one migration, **v22 (`kb-mail-payment-entities`: KB document/chunk/fact-link/page tables + KB FTS, mail accounts/messages/cursors/runs, receivables/payments)**. v21 (customer entities) was the 0.3.0 step. One-way upgrade: a 0.3.2 CLI opening v22 fails closed with `E_SCHEMA_NEWER`. |
+| 9 | **One migration per version, one registry**: no silent `SCHEMA_VERSION + 1`. | In place: 0.4.0 added exactly one migration, **v22 (`kb-mail-payment-entities`: KB document/chunk/fact-link/page tables + KB FTS, mail accounts/messages/cursors/runs, receivables/payments)**, and 0.5.1 adds exactly one, **v23 (`fact-claim-fields-and-handoffs`: facts claim/evidence columns, mail thread columns + index, `waiting_replies`, `handoffs`/`handoff_claims`)**. v21 (customer entities) was the 0.3.0 step. One-way upgrade: a 0.3.2 CLI opening v22 (or 0.5.0 opening v23) fails closed with `E_SCHEMA_NEWER`. |
 | 10 | **Failures are honest**: preview is marked, missing data is a structured `E_*`/`LEDGER_*` error, never empty data pretending "none". | In place for MCP, DSH, the ledger facade and the CLI read paths. |
 
 ## 3. Core services (target)
@@ -106,7 +113,7 @@ it.
 | `ctx.advisers.user` | preference ledger, scope, confidence, forgetting |
 | `ctx.advisers.commitments` | open/done/snoozed/dropped, evidence, nudges |
 | `ctx.advisers.routines` | routine proposals, diffs, versions, rollback |
-| `ctx.advisers.recall` | FTS5 first (trigram + seq indexes since v19/v20; v22 adds the independent KB FTS indexes; current schema v22, §11), vector optional (not in 0.4), 1–2 hop graph expansion |
+| `ctx.advisers.recall` | FTS5 first (trigram + seq indexes since v19/v20; v22 adds the independent KB FTS indexes; current schema v23, §11), vector optional (not in 0.4), 1–2 hop graph expansion |
 | `ctx.advisers.curator` | design target: nightly reconcile, dedupe, expiry, brief draft (not scheduled in 0.2) |
 | `ctx.advisers.redaction` | forget, pause, private session, export |
 
@@ -176,9 +183,9 @@ adding a `MatterLink` table after the fact is a migration, adding it now is free
 The earlier plan put routines at 1.0; that makes the product a commitment
 tracker for a year. Routines must appear by 0.2 to keep the "intern" promise.
 
-## 9. Current limits (0.5.0 release tree; schema v22; 0.4.3 was the previous release, 0.4.2/0.4.1 the same-day follow-up patches and 0.4.0 the published feature release)
+## 9. Current limits (0.5.1 release tree; schema v23; 0.5.0 was the previous release, 0.4.3 the patch before it)
 
-- Ledger persisted in SQLite (`advisers/lib/sqlite.js`); JSON mode is a fallback but loses turns/search/audit (and has no KB/mail/money tables: those commands answer `E_STORE`/`E_SCHEMA_STALE`). Physical schema is **v22** (`SCHEMA_VERSION = 22`): v21 was the customer-entity step, v22 adds the KB, mail and money tables plus the two KB FTS indexes in one `kb-mail-payment-entities` migration (backup -> migrate -> verify; one-way, 0.3.2 fails with `E_SCHEMA_NEWER`). Date windows still run in JS (no `due_ms` migration).
+- Ledger persisted in SQLite (`advisers/lib/sqlite.js`); JSON mode is a fallback but loses turns/search/audit (and has no KB/mail/money/follow-up tables: those commands answer `E_STORE`/`E_SCHEMA_STALE`). Physical schema is **v23** (`SCHEMA_VERSION = 23`): v21 was the customer-entity step, v22 added the KB, mail and money tables plus the two KB FTS indexes (`kb-mail-payment-entities`), and v23 adds the facts claim/evidence columns, mail thread columns + `idx_mail_thread`, `waiting_replies`, `handoffs`/`handoff_claims` in one `fact-claim-fields-and-handoffs` step (backup -> migrate -> verify; one-way, a 0.5.0 CLI fails with `E_SCHEMA_NEWER`). Date windows still run in JS (no `due_ms` migration). Handoff tables are schema-only in 0.5.1 (no CLI/read surface; the handoff work is 0.6).
 - **Default zero model / zero network.** CLI calls a model only for the pre-existing chat/capture/research/capture-imap paths when `ADVISERS_API_KEY` is set, and mail extraction uses local rules unless `mail extract --model` is explicit + consented. KB, the shell, urgency/morning, receivables, MCP/DSH reads and KB page rebuild are local-only; `mail sync` and `mail import` are the only new mail network/local-import entry points and always user-initiated. Without a key, record/search/build still work; natural-language replies that need a model fail honestly.
 - `dsh-advisers` implements six tools (`advisers_brief`, `advisers_office`, `advisers_today`, `advisers_who`, `advisers_evidence`, `advisers_clients`); it is a thin adapter, not a second product. In 0.3.0 the three ledger read tools read the **real local ledger** through the controlled `advisers/lib/ledger-read.js` facade (`docs/LEDGER-READ-API.md`): read-only, no HOME write lock, no migration, no HOME creation, no writes, TOS-gated and at clearance 0. A missing ledger, an unavailable facade (old `advisers` package / no `node:sqlite`) or `config.mode: "preview"` falls back to the marked preview (`preview: true`, `source: "preview-no-ledger"`, `note`, `[preview: no ledger]` prefix); every other gate failure (TOS/vault/schema/corruption/busy) is a structured `LEDGER_*` error, never empty data. The 0.2.0 npm packaging defect was fixed in 0.2.1 (explicit export + dependency). See CHANGELOG and `packages/dsh-advisers/README.md`.
 - `secrecy` is stored; hard retrieval gating is partial. Audience scoping is enforced for preferences.
@@ -302,7 +309,7 @@ ledger — see §12):
   CJK/short queries use `LIKE` and report `degraded`; snippets cap at 240
   characters and return offset highlights, never HTML.
 
-## 12. Persistence v2 (0.2.3; schema v22 in 0.4.0)
+## 12. Persistence v2 (0.2.3; schema v22 in 0.4.0, v23 in 0.5.1)
 
 0.2.3 changed how the SQLite ledger is migrated, read and written; 0.4.0 keeps the
 same machinery and bumps the physical schema to `meta.schema_version = 22` with one
@@ -335,6 +342,17 @@ plain tables, the two external-content KB FTS indexes (runtime tokenizer probe),
 mail four tables and the two money tables inside the migration transaction, and
 records one `schema_migrations` row. `state.db.before-migrate-v21-*` remains the
 supported manual rollback (restore it; there is no downgrade migration).
+
+0.5.1 keeps the same rules for v23 (`fact-claim-fields-and-handoffs`): one step adds
+the facts claim/evidence columns, the five mail thread columns plus `idx_mail_thread`,
+the `waiting_replies` sidecar, the `handoffs`/`handoff_claims` tables and five nullable
+0.6-reserved acceptance/payment-proof columns inside one
+`BEGIN IMMEDIATE` transaction with a pre-migration backup
+(`state.db.before-migrate-v22-*`). It does **not** backfill: pre-v23 mail rows keep
+`thread_root = NULL` (reported `unknown`), and the handoff tables stay empty because
+0.5.1 ships no handoff CLI. A v22 database opened by a 0.5.0 binary fails
+`E_SCHEMA_NEWER` only after the upgrade; a later downgrade means restoring that
+backup (there is no downgrade migration).
 
 ### 12.2 Lock-free read snapshot
 
@@ -415,7 +433,7 @@ the map, not a second source of truth.
 | Surface | Where | Contract / status |
 |---|---|---|
 | Read-only ledger facade | `packages/advisers/lib/ledger-read.js`, subpath `advisers/lib/ledger-read.js` | Versioned contract ([docs/LEDGER-READ-API.md](LEDGER-READ-API.md)): read-only, TOS-gated, no HOME lock, no migration, clearance 0, frozen `E_LEDGER_*` codes. |
-| Narrow read-model projections | `lib/sqlite.js` (`project*` methods) + `bin` read paths | The projections add no migration of their own (the 0.4.0 tree is schema v22 after the KB/mail/money step); view builders consume projected rows; `test/read-model-projections.test.js` pins row/column/order equivalence. |
+| Narrow read-model projections | `lib/sqlite.js` (`project*` methods) + `bin` read paths | The projections add no migration of their own (schema v22 after the 0.4.0 KB/mail/money step, v23 since 0.5.1); view builders consume projected rows; `test/read-model-projections.test.js` pins row/column/order equivalence. |
 | Customer entities (additive schema v21) | `lib/sqlite.js` (migration v20→v21), `packages/core/src/customer.ts`, `bin` `client`/`project` commands ([docs/CLIENTS.md](CLIENTS.md)) | 0.3.0 ships the minimal customer loop: clients/projects/client_notes tables, matter ownership, `commitments.created_at`, delivery lineage, `client add/list/show/timeline/archive/merge`, `project add/list/show/archive`, `matter add --client/--project`, the derived timeline and the opt-in `--clearance` gate. Receipt `--client` filtering, customer status packages and MCP/DSH customer tools remain out of 0.3.0. **Export/import parity**: `export --all` carries the new tables through the single store-owned `DATA_TABLES` list, and `import --replace` restores the ledger + customer tables in one transaction (dangling references abort atomically; the local audit chain is never replaced by an import). The JSON wire format (`LedgerSnapshot.version`) stays 1. |
 | MCP output caps + legacy negotiation | `lib/mcp-server.js` | Additive fields `total/truncated/limit/clearance/protectedExcluded`; supported legacy versions 2024-11-05 / 2025-06-18 / 2025-11-25, default 2024-11-05 ([docs/MCP.md](MCP.md)). |
 | CLI/MCP contracts + discovery field | `contracts/**`, `scripts/check-contracts.mjs`, `status --json` `contracts` field | Frozen v1 artifacts, additive-only inside 0.x ([docs/CONTRACTS.md](CONTRACTS.md)); the discovery field is wired in the 0.3.0 integration wave and asserted by `check-contracts --status`. |
@@ -423,6 +441,10 @@ the map, not a second source of truth.
 | Audit tail anchor | `lib/audit-anchor.js`; `audit --write-anchor`, `audit --expect-count N [--expect-head HEX]`; `privacy --prove` + `export --all` report the anchor | Local anchor + CLI verification (not a third-party timestamp). `audit` default prints `anchor: match/absent/grown/FAIL`; tail deletion becomes detectable only when an anchor exists. |
 | Backup/restore + doctor repair | `lib/backup.js`; `backup [path] / [--out F] [--tag] [--keep daily=7,...] [--dry-run] / [--apply]`, `backups ls` / `backups verify`, `restore <file> [--dry-run] [--yes] [--allow-anchor-behind] [--allow-broken-audit-chain]`, `doctor --repair [--dry-run] / [--yes] [--only lock,temp,wal,fts]`, `audit --rebuild-fts` | Rotation applies only to managed `$ADVISERS_HOME/backups` and only with `--apply` (otherwise it is a dry-run); `restore` is a plan unless `--yes`; repair defaults to dry-run and takes a safe backup before applying; `db.restore`/`doctor.repair` audit rows + anchor refresh on success; `backup` writes `.sha256`/`.anchor.json` sidecars aligned with the backup head (no audit row). Unknown flags fail with `E_USAGE`; `--dry-run`/`--apply` are mutually exclusive and `--apply` requires `--keep`. |
 | Deterministic eval + supply-chain gates | `scripts/eval-det.mjs`, `scripts/check-contracts.mjs`, `scripts/sbom.mjs`, `scripts/check-sbom.mjs`, `scripts/check-provenance.mjs` | CI gates; SBOM is a lockfile-derived gate artifact, not a build graph/vulnerability scan ([docs/SBOM.md](SBOM.md)). |
+| Mail follow-up (0.5.1, schema v23) | `lib/mail-followup.js`; `mail followup add\|ls\|check\|show\|dismiss\|mark-replied` | Header-only waiting-reply state as an ordinary commitment + `waiting_replies` row; local read-only, no send/network/body fetch; not exposed over MCP/DSH/receipts. See [MAIL-FOLLOWUP.md](MAIL-FOLLOWUP.md). |
+| Bundle format/drill (0.5.1) | `lib/bundle.js` (`FORMAT.md`, `expectDataDigest`, `compareBundleDirs`), `scripts/bundle-drill.mjs` | In-bundle self-describing format contract + one-command digest acceptance + the CI/release exit drill; bundle stays plaintext. See [PORTABILITY.md](PORTABILITY.md). |
+| Context-pack issuance audit (0.5.1) | `lib/context-pack.js` (`context_pack.create` audit), `lib/mcp-server.js` (`advisers_pack_verify` format dispatch) | Local ids-only issuance audit row; host can verify a context pack offline with the unchanged 8-tool surface. See [CONTEXT-PACK.md](CONTEXT-PACK.md). |
+| Release evidence (0.5.1) | release-evidence runner, `scripts/check-eval-report.mjs` (`--release`), `scripts/check-release.mjs` (`--eval-evidence`) | Clean-checkout quality report archived as CI artifact/release asset; a dirty or missing report blocks the release. See [QUALITY.md](QUALITY.md). |
 
 The 0.4.0 tree adds these surfaces (all additive on the 0.3.x tree):
 
@@ -510,7 +532,44 @@ path, zero new runtime dependency):
   `E_SYNC_CONFLICT`, `E_SYNC_STATE_INVALID`, `E_DEMO_STEP`); the generated registry and
   docs are regenerated at 211 CLI codes.
 
-## 14. 0.4.0 module map and default posture
+The 0.5.1 tree adds these surfaces (one schema jump; no new network path, no new
+runtime dependency, MCP 8/5 and DSH 6 unchanged):
+
+- **Schema v23** (`lib/sqlite.js`, migration `fact-claim-fields-and-handoffs`): facts
+  claim/evidence columns, mail thread columns (`in_reply_to`/`references`/`thread_root`/
+  `direction`/`auto_submitted`) + `idx_mail_thread`, `waiting_replies`, the schema-only
+  `handoffs`/`handoff_claims` tables, and five nullable reserved columns for the 0.6
+  customer-acceptance/payment-proof surfaces (`deliveries.accepted_*`,
+  `payments.proof_sha256`; no 0.5.1 command reads/writes them); all three new tables are
+  in `DATA_TABLES` (export/import/bundle/backup carry them) but not in the derived/local
+  exceptions.
+- `lib/mail-followup.js` + `mail followup add|ls|check|show|dismiss|mark-replied` —
+  header-only waiting-reply state stored as an ordinary commitment plus a
+  `waiting_replies` row; exact header matching only, automatic replies/foreign senders/
+  fuzzy subjects are ignored or recorded as `possibleReplies[]`; no send/network/body
+  fetch, no MCP/DSH/receipt exposure. Audit actions `followup.add|check|dismiss|
+  mark-replied`. See [docs/MAIL-FOLLOWUP.md](MAIL-FOLLOWUP.md).
+- `lib/bundle.js` additions: `FORMAT.md` (layout/column dictionary/`dataDigest`
+  algorithm/minimal-reader pseudocode, covered by `SHA256SUMS`),
+  `import --bundle --verify --expect-dataDigest <hex>` (`expectedDigest`/
+  `dataDigestMatch`, mismatch is `E_BUNDLE_TAMPERED`, zero writes) and
+  `compareBundleDirs()` behind `bundle compare`; new bundles are rejected by the 0.5.0
+  strict layout, old bundles stay readable by 0.5.1. `scripts/bundle-drill.mjs` is the
+  CI/release drill over the same paths.
+- `lib/context-pack.js` + `create`: one `context_pack.create` audit row (ids-only,
+  salted `recipientHash`) exposed additively in `--json`; `lib/mcp-server.js`
+  `advisers_pack_verify` dispatches on `manifest.format`
+  (`advisers-context-pack` -> the offline context-pack verifier) while the
+  evidence-pack/receipt path keeps its exact output; tool/resource counts and schemas
+  unchanged.
+- Quality evidence: `eval/evidence.mjs`/the release-evidence directory,
+  `check-eval-report --release`, `check-release --eval-evidence`, the independent
+  human-gold tooling under `eval/human-gold/` (agreement/adjudication; **no pilot has
+  been run**, so `humanGold` stays `null`) and [docs/QUALITY.md](QUALITY.md) — the
+  release report is built from a clean checkout, archived as a CI artifact/release
+  asset, and no dirty-tree report is accepted.
+
+## 14. Module map and default posture (0.4.0 baseline; 0.5.1 additions marked)
 
 | Module | Responsibility | Model/network by default |
 |---|---|---|

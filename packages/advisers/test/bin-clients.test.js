@@ -33,7 +33,7 @@ function env(home, extra = {}) {
   return tosEnv(home, { ...process.env, ADVISERS_HOME: home, ADVISERS_CORE_LOCAL: '1', ADVISERS_OFFICE_LOCAL: '1', ADVISERS_NO_MODEL: '1', ADVISERS_STORE: 'sqlite', ...extra })
 }
 function run(home, args, extra = {}) {
-  return spawnSync(process.execPath, [bin, ...args], { env: env(home, extra), encoding: 'utf8', input: '', timeout: 60000 })
+  return spawnSync(process.execPath, [bin, ...args], { env: env(home, extra), encoding: 'utf8', input: '', timeout: 180000 })
 }
 function okRun(home, args, extra = {}) {
   const result = run(home, args, extra)

@@ -6,8 +6,9 @@ Strict policy pack for Advisers. **Understanding** is always allowed;
 The core keeps only the floor/ports; policy packs live outside so enabling a
 future policy does not change core code.
 
-`0.5.0` is the current lockstep release (published 2026-11-22; a feature release on
-the 0.4.3 tree); this pack's policy surface is unchanged from 0.3.2.
+`0.5.1` is the current lockstep release (published 2026-11-24; a follow-up patch on
+the 0.5.0 tree: schema v23, read-only mail follow-up and release-level quality
+evidence); this pack's policy surface is unchanged from 0.3.2.
 
 ## License
 

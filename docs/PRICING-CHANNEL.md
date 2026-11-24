@@ -1,6 +1,11 @@
-# Pricing / channel / trust assets (E11, research recommendation)
+# Pricing / channel / trust assets (E11, historical research; not a price commitment)
 
-> Not a commitment. Based on the 2026-11-14 competitive/verification research.
+> **Historical research note (2026-11-14; kept for the decision record).** It is not
+> a price commitment and not the pricing source of truth. The single pricing source is
+> [PRICING.md](PRICING.md); process/boundary text is in [COMMERCIAL.md](COMMERCIAL.md)
+> and [FAQ.md](FAQ.md). In 0.5.1 pricing, evaluation terms and ordering are **not open
+> yet** (owner D1/D8 pending), so the numbers below are research hypotheses only — do
+> not quote them as an offer.
 
 ## Price positioning
 

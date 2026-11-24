@@ -1,11 +1,12 @@
 # Knowledge base (KB): deterministic compiled pages and local search
 
-> Status: **0.5.0, schema v22** (`SCHEMA_VERSION = 22`). The KB is a local,
+> Status: **0.5.1, schema v23** (`SCHEMA_VERSION = 23`). The KB is a local,
 > deterministic knowledge layer: it indexes extracted text from your own files,
 > builds compiled pages from the local ledger, and answers lexical searches. It is
 > **not** RAG, not a chatbot, not a vector store, and it does not call a model or
-> the network in 0.4.x/0.5.0. The modern-MCP/DSH surfaces do not expose KB content in
-> 0.4.x and 0.5.0 (see [MCP.md](MCP.md)); 0.5.0 adds no KB surface.
+> the network in 0.4.x/0.5.x. The modern-MCP/DSH surfaces do not expose KB content in
+> 0.4.x/0.5.x (see [MCP.md](MCP.md)); 0.5.0 and 0.5.1 add no KB command/surface (v23
+> adds the facts claim/evidence columns that the fact layer can populate later).
 
 ## 1. Product positioning: why this is not RAG and not a chat product
 
@@ -56,7 +57,7 @@ results, not a correctness gap. `sync`/`backup`/`vault` are whole-database
 operations and therefore include the KB; see
 [AUDIT-2026-11-22.md](AUDIT-2026-11-22.md).
 
-## 2. Data model (schema v22)
+## 2. Data model (schema v23 since 0.5.1; v22 introduced the KB tables)
 
 | Table / index | Contents | Exported by `export --all` |
 |---|---|---|

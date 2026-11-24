@@ -21,6 +21,10 @@
  */
 import { createHash, randomBytes } from 'node:crypto'
 import { mailError, MAIL_ERROR_CODES } from './mail-errors.js'
+import {
+  MAX_THREAD_REFERENCES, MAX_THREAD_REFERENCES_BYTES, MAX_THREAD_REFERENCE_CHARS,
+  normalizeAutoSubmitted, normalizeMessageIdToken,
+} from './mail-parse.js'
 
 export const MAIL_DEFAULT_RETENTION_DAYS = 30
 export const MAIL_MAX_RETENTION_DAYS = 3650
@@ -39,6 +43,14 @@ export const MAIL_LOCAL_MAILBOX = 'local'
 export const MAIL_MAX_ACCOUNT_NAME_CHARS = 120
 export const MAIL_MAX_SUBJECT_CHARS = 500
 export const MAIL_MAX_FROM_CHARS = 320
+/** Threading limits re-exported so tests/callers do not import mail-parse. */
+export const MAIL_MAX_THREAD_REFERENCES = MAX_THREAD_REFERENCES
+export const MAIL_MAX_THREAD_REFERENCE_CHARS = MAX_THREAD_REFERENCE_CHARS
+export const MAIL_MAX_THREAD_REFERENCES_BYTES = MAX_THREAD_REFERENCES_BYTES
+/** Mail direction values (0.5.1, plan 92 §4). */
+export const MAIL_DIRECTIONS = Object.freeze(['inbound', 'outbound', 'unknown'])
+/** Mailbox names that mean "this row was sent by me". */
+export const MAIL_SENT_MAILBOX_RE = /^(sent|sent items|已发送|已发送邮件)/i
 
 const REQUIRED_TABLES = ['mail_accounts', 'mail_cursors', 'mail_messages', 'mail_sync_runs']
 const DAY_MS = 86_400_000
@@ -89,6 +101,90 @@ function normalizeMessageId(value) {
   if (wrapped) text = wrapped[1].trim()
   if (!text || /\s/.test(text) || text.length > 512) return ''
   return text
+}
+
+
+/* ------------------------------------------------------------------ */
+/* Threading + direction (0.5.1, plan 92 §4)                          */
+/* ------------------------------------------------------------------ */
+
+/**
+ * Lower-case the address part of a From/To header. Returns '' when the value
+ * cannot be an address (the caller then stores direction 'unknown').
+ */
+export function mailAddressOf(value) {
+  const text = String(value == null ? '' : value).trim()
+  if (!text) return ''
+  const bracketed = /<([^<>]*)>/.exec(text)
+  let candidate = (bracketed ? bracketed[1] : text).trim().replace(/^["']+|["']+$/g, '')
+  candidate = candidate.replace(/[\u0000-\u001f\u007f]+/g, '').trim()
+  if (!candidate || /\s/.test(candidate)) return ''
+  const at = candidate.indexOf('@')
+  if (at <= 0 || at === candidate.length - 1) return ''
+  return candidate.toLowerCase()
+}
+
+/** Domain part of a normalised address ('' when absent). */
+export function mailDomainOf(address) {
+  const value = String(address == null ? '' : address).toLowerCase()
+  const at = value.lastIndexOf('@')
+  return at > 0 && at < value.length - 1 ? value.slice(at + 1) : ''
+}
+
+/**
+ * threadRoot = references[0] ?? inReplyTo ?? messageId (plan 92 §4). Null when
+ * the message has no usable id at all: the plan requires that a row without
+ * threading headers is reported as unknown instead of being given a fake root.
+ */
+export function computeMailThreadRoot({ inReplyTo = null, references = [], messageId = null } = {}) {
+  const list = Array.isArray(references) ? references : []
+  for (const entry of list) {
+    const id = normalizeMessageIdToken(entry)
+    if (id) return id
+  }
+  const parent = normalizeMessageIdToken(inReplyTo)
+  if (parent) return parent
+  const own = normalizeMessageId(messageId)
+  return own || null
+}
+
+/**
+ * Normalise a References list at the store boundary too: the parser already
+ * bounds it, but buildMailMessageRow is a public API and a caller may pass a
+ * raw array. Idempotent and bounded.
+ */
+export function normalizeMailReferences(references) {
+  const value = Array.isArray(references) ? references : []
+  const out = []
+  const seen = new Set()
+  let bytes = 0
+  for (const entry of value) {
+    const id = normalizeMessageIdToken(entry)
+    if (!id || seen.has(id)) continue
+    if (out.length >= MAX_THREAD_REFERENCES || bytes + Buffer.byteLength(id, 'utf8') + 1 > MAX_THREAD_REFERENCES_BYTES) break
+    seen.add(id)
+    out.push(id)
+    bytes += Buffer.byteLength(id, 'utf8') + 1
+  }
+  return out
+}
+
+/**
+ * inbound / outbound / unknown for one message (plan 92 §4):
+ * - a Sent/Sent Items/已发送/已发送邮件 mailbox is outbound;
+ * - From == the account username (case-insensitive) is outbound;
+ * - a known account username makes every other sender inbound;
+ * - without a usable username (e.g. the local .eml import account) the
+ *   direction is unknown — never guessed.
+ */
+export function computeMailDirection({ from = '', username = '', mailbox = '' } = {}) {
+  if (MAIL_SENT_MAILBOX_RE.test(String(mailbox == null ? '' : mailbox).trim())) return 'outbound'
+  const fromAddress = mailAddressOf(from)
+  if (!fromAddress) return 'unknown'
+  const userText = String(username == null ? '' : username).trim().toLowerCase()
+  const userAddress = mailAddressOf(userText) || (/^[^@\s]+@[^@\s]+$/.test(userText) ? userText : '')
+  if (!userAddress) return 'unknown'
+  return fromAddress === userAddress ? 'outbound' : 'inbound'
 }
 
 function canonicalText(value) {
@@ -393,6 +489,10 @@ export function buildMailMessageRow({
   accountId, mailbox = 'INBOX', uid = null, uidvalidity = null, sizeBytes = null,
   receivedAt, sentAt = null, from = '', subject = '', messageId = '', text = null,
   attachments = [], status = null, clientId = null, projectId = null, now,
+  // 0.5.1 (plan 92 §4): threading headers from parseMailMessage() plus the
+  // account username so direction can be derived. All optional/additive.
+  inReplyTo = null, references = [], autoSubmitted = null, accountUsername = '',
+  direction = null,
 } = {}) {
   if (typeof accountId !== 'string' || !accountId) throw mailError(MAIL_ERROR_CODES.CONFIG, 'mail message requires an account id')
   const received = normalizeIso(receivedAt, 'received-at')
@@ -401,6 +501,13 @@ export function buildMailMessageRow({
   const bodyText = text == null ? null : truncateUtf8(String(text), MAIL_MAX_BODY_BYTES)
   const retained = bodyText != null && bodyText.trim() !== ''
   const dedupeKey = mailDedupeKey({ accountId, mailbox, uidvalidity, uid, messageId, from, subject, date: sent ?? received, text: retained ? bodyText : '' })
+  const normalizedMessageId = normalizeMessageId(messageId) || null
+  const normalizedInReplyTo = normalizeMessageIdToken(inReplyTo) || null
+  const normalizedReferences = normalizeMailReferences(references)
+  const threadRoot = computeMailThreadRoot({ inReplyTo: normalizedInReplyTo, references: normalizedReferences, messageId: normalizedMessageId })
+  const resolvedDirection = MAIL_DIRECTIONS.includes(direction)
+    ? direction
+    : computeMailDirection({ from, username: accountUsername, mailbox })
   const at = isoOf(now)
   return {
     id: mailMessageRowId(accountId, dedupeKey),
@@ -408,7 +515,7 @@ export function buildMailMessageRow({
     mailbox,
     uid: Number.isInteger(uid) && uid > 0 ? uid : null,
     uidvalidity: uidvalidity == null ? null : String(uidvalidity),
-    messageId: normalizeMessageId(messageId) || null,
+    messageId: normalizedMessageId,
     dedupeKey,
     fromAddr: singleLine(from, MAIL_MAX_FROM_CHARS) || null,
     subject: singleLine(subject, MAIL_MAX_SUBJECT_CHARS) || null,
@@ -423,6 +530,11 @@ export function buildMailMessageRow({
     status: status ?? (retained ? 'new' : 'metadata'),
     candidateIds: [],
     purgedAt: null,
+    inReplyTo: normalizedInReplyTo,
+    references: normalizedReferences,
+    threadRoot,
+    direction: resolvedDirection,
+    autoSubmitted: normalizeAutoSubmitted(autoSubmitted),
     createdAt: at,
     updatedAt: at,
   }
@@ -440,10 +552,14 @@ export function findMailMessageDuplicate(store, accountId, row) {
 
 /** Transaction-internal: insert one row; returns false when a unique index rejected it. */
 export function insertMailMessage(store, row) {
+  // "references" is a SQLite keyword, so the column name is always quoted in
+  // DDL/DML (see the v23 migration). The JSON array is bounded by
+  // buildMailMessageRow; NULL is stored when the message has no references.
+  const references = Array.isArray(row.references) && row.references.length ? JSON.stringify(row.references) : null
   const info = store.db.prepare(
-    'INSERT OR IGNORE INTO mail_messages(id,account_id,mailbox,uid,uidvalidity,message_id,dedupe_key,from_addr,subject,sent_at,received_at,size_bytes,body_text,body_sha256,attachments,client_id,project_id,status,candidate_ids,purged_at,created_at,updated_at) ' +
-    'VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)',
-  ).run(row.id, row.accountId, row.mailbox, row.uid, row.uidvalidity, row.messageId, row.dedupeKey, row.fromAddr, row.subject, row.sentAt, row.receivedAt, row.sizeBytes, row.bodyText, row.bodySha256, JSON.stringify(row.attachments ?? []), row.clientId, row.projectId, row.status, JSON.stringify(row.candidateIds ?? []), row.purgedAt, row.createdAt, row.updatedAt)
+    'INSERT OR IGNORE INTO mail_messages(id,account_id,mailbox,uid,uidvalidity,message_id,dedupe_key,from_addr,subject,sent_at,received_at,size_bytes,body_text,body_sha256,attachments,client_id,project_id,status,candidate_ids,purged_at,in_reply_to,"references",thread_root,direction,auto_submitted,created_at,updated_at) ' +
+    'VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)',
+  ).run(row.id, row.accountId, row.mailbox, row.uid, row.uidvalidity, row.messageId, row.dedupeKey, row.fromAddr, row.subject, row.sentAt, row.receivedAt, row.sizeBytes, row.bodyText, row.bodySha256, JSON.stringify(row.attachments ?? []), row.clientId, row.projectId, row.status, JSON.stringify(row.candidateIds ?? []), row.purgedAt, row.inReplyTo ?? null, references, row.threadRoot ?? null, row.direction ?? 'unknown', row.autoSubmitted ?? null, row.createdAt, row.updatedAt)
   return Number(info.changes) > 0
 }
 
@@ -468,6 +584,12 @@ const mapMessageRow = (row, { includeBody = false } = {}) => ({
   projectId: row.project_id ?? undefined,
   status: row.status,
   candidateIds: parseJson(row.candidate_ids, []),
+  // 0.5.1 threading metadata (additive; old rows keep NULL/[]/unknown).
+  inReplyTo: row.in_reply_to ?? undefined,
+  references: parseJson(row.references, []),
+  threadRoot: row.thread_root ?? undefined,
+  direction: row.direction ?? 'unknown',
+  autoSubmitted: row.auto_submitted ?? undefined,
   createdAt: row.created_at,
   updatedAt: row.updated_at,
   ...(includeBody ? { bodyText: row.body_text ?? null } : {}),

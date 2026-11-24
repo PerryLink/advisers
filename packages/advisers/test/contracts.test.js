@@ -48,7 +48,7 @@ test('contracts: the error registry is structurally valid', () => {
   assert.equal(ERROR_CODES_RELEASE, '0.4.0')
   assert.equal(ERROR_CODES_BASELINE_COUNT, 50, 'the 0.2.4 committed baseline count is frozen')
   assert.match(ERROR_CODES_FROZEN_AT, /^\d{4}-\d{2}-\d{2}$/)
-  assert.deepEqual([...ERROR_CODES_ADDITIVE_RELEASES], ['0.3.0', '0.4.0', '0.4.3', '0.5.0'])
+  assert.deepEqual([...ERROR_CODES_ADDITIVE_RELEASES], ['0.3.0', '0.4.0', '0.4.3', '0.5.0', '0.5.1'])
   const baseline = ERROR_CODE_LIST.filter((code) => ERROR_CODES[code].since === '0.2.x')
   const additive = ERROR_CODE_LIST.filter((code) => ERROR_CODES_ADDITIVE_RELEASES.includes(ERROR_CODES[code].since))
   const sinceCount = (release) => ERROR_CODE_LIST.filter((code) => ERROR_CODES[code].since === release).length
@@ -57,6 +57,7 @@ test('contracts: the error registry is structurally valid', () => {
   assert.ok(sinceCount('0.4.0') >= 40, '0.4.0 additive codes (KB/mail/policy/receivables) are registered ahead of their module commit')
   assert.ok(sinceCount('0.4.3') >= 3, '0.4.3 additive codes (due/capture/inbox) are registered ahead of their module commit')
   assert.ok(sinceCount('0.5.0') >= 15, '0.5.0 additive codes (bundle/context-pack/sync/demo) are registered ahead of their module commit')
+  assert.ok(sinceCount('0.5.1') >= 3, '0.5.1 additive codes (mail followup) are registered ahead of their module commit')
   assert.equal(additive.length, ERROR_CODE_LIST.length - baseline.length, 'every non-baseline code declares a known additive layer')
   assert.deepEqual(ERROR_CODE_LIST, [...ERROR_CODE_LIST].sort(), 'ERROR_CODE_LIST must be sorted')
   assert.equal(ERROR_CODE_LIST.length, Object.keys(ERROR_CODES).length, 'the code list and object must agree')

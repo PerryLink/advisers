@@ -33,8 +33,8 @@ const check = await validateOffice(buffer, 'docx')
 ## CLI
 
 ```sh
-# stable channel: advisers@latest / advisers-office@latest (now 0.5.0, published 2026-11-22)
-# pre-release channel: advisers@next / advisers-office@next (also 0.5.0)
+# stable channel: advisers@latest / advisers-office@latest (now 0.5.1, published 2026-11-24)
+# pre-release channel: advisers@next / advisers-office@next (also 0.5.1)
 npm i -g advisers@latest advisers-office@latest
 advisers office docx spec.json out.docx
 advisers office xlsx spec.json out.xlsx
@@ -48,9 +48,10 @@ templates. CJK fonts default to Microsoft YaHei, with a system fallback.
 
 ## Status
 
-`0.5.0` was published on 2026-11-22 (npm `latest` = `0.5.0`; `next` is also `0.5.0`);
-0.5.0 is the current release (lockstep version), a feature release on the 0.4.3 tree,
-and this package's public surface is unchanged from 0.3.2. 0.3.1 was a release-metadata patch over 0.3.0 with no runtime,
+`0.5.1` was published on 2026-11-24 (npm `latest` = `0.5.1`; `next` is also `0.5.1`);
+0.5.1 is the current release (lockstep version), a follow-up patch on the 0.5.0 tree
+(schema v23, read-only mail follow-up, release-level quality evidence), and this
+package's public surface is unchanged from 0.3.2. 0.3.1 was a release-metadata patch over 0.3.0 with no runtime,
 CLI or interface changes; 0.3.2 added the customer/performance closeout in the `advisers`
 and `dsh-advisers` packages. The 0.2.4 candidate superseded by the 0.3.0 line was never published, and
 `0.2.2`/`0.2.1`/`0.2.0` remain installable by pinning. Builders: DOCX/XLSX/PPTX/Mermaid/draw.io/XMind; 7 templates; `readOffice`/`editOffice`/`verifyOffice`; the CLI adds deterministic quote/proposal templates on top of these builders. The recalculation subprocess (`ADVISERS_VERIFY_RECALC_CMD`) now runs with an explicit OS-basics environment allowlist. Structural verification only (no Word/WPS/LibreOffice application layer in this package).

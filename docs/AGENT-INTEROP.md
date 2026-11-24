@@ -1,6 +1,6 @@
 # Agent interop — calling Advisers from another agent host
 
-Status: **0.5.0, published 2026-11-22.** Distribution stance (plan 125 §C8):
+Status: **0.5.1, published 2026-11-24.** Distribution stance (plan 125 §C8):
 Advisers is **called by hosts** — it is a local ledger/verification backend, not an
 agent, not a connector platform and not a plugin marketplace. This page lists the
 supported channels, one config per host, and the read-only boundary every host gets.
@@ -49,15 +49,15 @@ means the row is closed/superseded/expired; `derived` is a projection (clients).
 
 ## 1. Host matrix
 
-| Host | Channel | Local stdio? | 0.5.0 status |
+| Host | Channel | Local stdio? | 0.5.1 status |
 |---|---|---|---|
 | Claude Code | MCP stdio; modern 2026-07-28 or legacy auto-negotiated | yes | config documented and exercised by the CLI tests |
-| Claude Cowork (Claude desktop) | plugin / local connector inside Claude | connector must run on the user's machine | **not shipped**: no Claude plugin bundle in 0.5.0; use Claude Code or the CLI on the same machine |
-| OpenAI Codex | MCP stdio (Codex CLI/desktop MCP config) | yes | config guidance only; **not verified in 0.5.0** |
+| Claude Cowork (Claude desktop) | plugin / local connector inside Claude | connector must run on the user's machine | **not shipped**: no Claude plugin bundle in 0.5.1; use Claude Code or the CLI on the same machine |
+| OpenAI Codex | MCP stdio (Codex CLI/desktop MCP config) | yes | config guidance only; **not verified in 0.5.1** |
 | Cursor | MCP stdio (`.cursor/mcp.json`) | yes | config documented; Cursor uses legacy negotiation (falls back from modern) |
-| Goose | MCP stdio extension (`config.yaml` `extensions`) | yes | config guidance only; **not verified in 0.5.0** |
-| OpenClaw | MCP client (`mcp.servers`, stdio) | yes | config guidance only; **not verified in 0.5.0**, no ClawHub skill shipped |
-| DSH (DeepSeek Harness) | first-party bundle `dsh-advisers` (six tools, not MCP) | n/a | ships with the 0.5.0 packages; `audited:false` |
+| Goose | MCP stdio extension (`config.yaml` `extensions`) | yes | config guidance only; **not verified in 0.5.1** |
+| OpenClaw | MCP client (`mcp.servers`, stdio) | yes | config guidance only; **not verified in 0.5.1**, no ClawHub skill shipped |
+| DSH (DeepSeek Harness) | first-party bundle `dsh-advisers` (six tools, not MCP) | n/a | ships with the 0.5.1 packages; `audited:false` |
 
 Not supported (do not claim): ChatGPT/Claude.ai **cloud** MCP directories require a
 remote URL/service; Advisers is local stdio and makes no service. Copilot Studio,
@@ -69,6 +69,11 @@ The Claude Code and Cursor snippets are the ones also documented in
 [MCP.md](MCP.md) and covered by the repo's stdio tests. Codex/Goose/OpenClaw
 entries describe the same stdio server; their config file/UI names change between
 host versions — re-check the host docs on install (facts re-checked 2026-11-22).
+
+The repo ships `scripts/host-smoke.mjs`: an offline static check of the Claude
+Code / DSH / Goose configuration and the DSH bundle manifest (§12). It installs
+nothing and needs no host binary; a PASS there is configuration-level evidence,
+not a real-host verification.
 
 ## 2. Claude Code
 
@@ -96,7 +101,7 @@ legacy only. Windows: if `advisers` is not on `PATH`, use
 
 Cowork runs the assistant in a cloud environment and supports plugins whose
 connectors run on the user's machine ("runs in each session"). A local stdio MCP
-connector is therefore the only compatible shape. **0.5.0 does not ship a Claude
+connector is therefore the only compatible shape. **0.5.1 does not ship a Claude
 plugin bundle**, so do not advertise Cowork support: run Claude Code or the CLI on
 the machine that holds the ledger. A future plugin package would wrap the same
 `advisers mcp --stdio` command plus a skill; it would not add new tools or
@@ -114,7 +119,7 @@ command = "advisers"
 args = ["mcp", "--stdio"]
 ```
 
-0.5.0 has **not** been exercised on a real Codex install; the command is the same
+0.5.1 has **not** been exercised on a real Codex install; the command is the same
 verified stdio server. `codex mcp add` (where available) is equivalent to the
 snippet.
 
@@ -149,7 +154,7 @@ extensions:
     timeout: 300
 ```
 
-0.5.0 has **not** been exercised on a real Goose install. Goose is also a natural
+0.5.1 has **not** been exercised on a real Goose install. Goose is also a natural
 host for the CLI channel if its MCP config changes.
 
 ## 7. OpenClaw
@@ -157,7 +162,7 @@ host for the CLI channel if its MCP config changes.
 OpenClaw is an MCP client: register the same stdio server in its `mcp.servers`
 config and point command/args at `advisers mcp --stdio`. Advisers is the
 ledger/evidence backend, not a channel: OpenClaw keeps its own agent loop and
-channels. 0.5.0 ships no ClawHub skill and has **not** been exercised on a real
+channels. 0.5.1 ships no ClawHub skill and has **not** been exercised on a real
 OpenClaw install; do not claim a verified integration.
 
 ## 8. DSH (DeepSeek Harness)
@@ -182,6 +187,23 @@ migration, no HOME creation, no ledger writes). If no ledger/facade is available
 the adapter returns the marked `preview` with `source:"preview-no-ledger"` instead
 of fake data; gate failures are structured errors, never empty data. DSH
 disclosures are `surface:"dsh"` and `audited:false`.
+
+Install, upgrade and rollback (non-official bundle):
+
+```sh
+dsh plugin --profile main add dsh-advisers advisers-core
+dsh --profile main --dump-config | grep -A4 dsh-advisers   # expect the dsh-advisers layer
+# upgrade / rollback (non-official entries have no host-side Update):
+dsh plugin --profile main remove dsh-advisers
+dsh plugin --profile main add dsh-advisers@<exact-version> advisers-core@<exact-version>
+```
+
+The bundle is a normal npm package; pin the same version for the bundled
+`advisers`/`advisers-core`/`advisers-office` dependencies when reproducing a host
+install. DSH 0.2.3-alpha.2 has **no official third-party marketplace** (only
+experimental custom plugin indexes), so an "official listing" must not be claimed.
+See [section 13](#13-dsh-discovery-and-catalog-2026-11-24) for the community
+catalog facts and the submission entry draft.
 
 ## 9. Tool catalogue (MCP, unchanged from 0.4.3)
 
@@ -229,7 +251,134 @@ decisions with their own consent/backup surfaces.
   `test/cli-mcp-json.test.js`, `test/mcp-modern*.test.js` for the MCP surface;
   `packages/dsh-advisers/test/` for the DSH adapter; `scripts/mcp-dev.mjs` for a
   two-process stdio smoke. No real third-party host integration test ships in
-  0.5.0; host-specific claims above are configuration guidance, not CI evidence.
+  0.5.1; host-specific claims above are configuration guidance, not CI evidence.
+
+## 12. Static host smoke (no host install)
+
+`scripts/host-smoke.mjs` is the offline contract check for the three
+first-wave hosts. It reads this repo only — no host binary, no network, no
+`~/.advisers` read/write — so it can run in CI and on a clean checkout.
+
+```sh
+node scripts/host-smoke.mjs --json                 # all checks, machine-readable
+node scripts/host-smoke.mjs --host claude          # one host: claude|goose|dsh
+node scripts/host-smoke.mjs --print-config goose   # paste-ready snippet
+node scripts/host-smoke.mjs --claude-config ~/.claude/.mcp.json   # optional live file
+node scripts/host-smoke.mjs --goose-config "$HOME/.config/goose/config.yaml"
+node scripts/host-smoke.mjs --dsh-version 0.2.3-alpha.2
+node scripts/host-smoke.mjs --self-test            # detector fixtures (offline)
+```
+
+What it checks: the `advisers` bin entry and `advisers mcp --stdio` dispatch; the
+documented Claude Code `.mcp.json`, Goose `config.yaml` and DSH install snippets
+(optionally against a real user file passed with `--claude-config` or
+`--goose-config`); the `dsh-advisers` manifest (`dsh.bundle.patch`, engines,
+lockstep version and dependency pins, tarball allowlist) and its six registered
+tools; the corrected DSH catalog facts and submission draft (§13). Exit codes:
+0 pass/skip, 1 fail, 2 usage.
+
+What it does **not** verify: a real installation, a real host version, an actual
+ledger read through a host, or any host-side permission prompt. Do not turn a
+PASS into "verified on Claude Code/Goose/DSH"; the only honest wording is
+"configuration-level static check passed on <date>", plus the host version if a
+real-machine run is actually attached.
+
+Host-smoke evidence record (one row per attempt; keep usernames/paths out of the
+repo):
+
+| Field | Value |
+|---|---|
+| host / host version | e.g. Claude Code <version>, DSH 0.2.3-alpha.2, Goose <version> |
+| OS / Node | e.g. Windows 11 24H2 / Node 22.16.0 |
+| date (Asia/Shanghai) | YYYY-MM-DD |
+| command | `node scripts/host-smoke.mjs --json` plus the host install command |
+| repo/version | git tag or `advisers --version` |
+| result | PASS/FAIL + failing check ids |
+| output digest | optional SHA-256 of the `--json` output |
+| evidence boundary | static only / real install (say which) |
+
+As of 2026-11-24 no real-machine install of the three first-wave hosts is
+recorded for this line: the hosts are configuration-level only until an owner
+clean-machine run is attached to release evidence. "The repo ships the config we
+document" and "a human installed it on a clean machine" are different claims and
+must be written as such.
+
+## 13. DSH discovery and catalog (2026-11-24)
+
+Facts re-checked 2026-11-24 against npm `dsh-plugin-catalog@2026.1124.26844`
+(CC0 community list, <https://github.com/awesome-dsh-plugin/awesome-dsh-plugin>):
+
+- The catalog's `index.json` — the file a DSH custom index source reads — contains
+  **6,808 plugins**; **159 entries** have a `PerryLink/*` title. (The npm package
+  description still advertises the larger raw `plugins.json` entry count; that is
+  not the index hit count.)
+- The publisher is already present: `dsh-famling` (PerryLink) is listed and its
+  description already references the read-only Advisers brief.
+- **`dsh-advisers` has no catalog entry yet** (0 matches in both files in the
+  2026-11-24 snapshot). The gap is one submission, not a new publisher.
+- DSH 0.2.3-alpha.2 does not ship an official third-party marketplace; it has
+  experimental custom plugin indexes only. "Submit to the official market" is not
+  an available action today; the community catalog is the actionable listing.
+
+Submission entry draft — the catalog takes one YAML file per plugin,
+`data/plugins/<owner>__<repo>.yml` (monorepo subpackage:
+`data/plugins/PerryLink__advisers--packages-dsh-advisers.yml`, `url` points at the
+subdirectory and `name` is `owner/repo#subname`):
+
+```yaml
+url: https://github.com/PerryLink/advisers/tree/main/packages/dsh-advisers
+name: PerryLink/advisers#dsh-advisers
+category: workflow
+description:
+  en: Local commitment, delivery and evidence ledger for independent consultants, exposed as six DSH tools (read-only today/who/evidence/clients views plus brief and workspace-confined Office file builders).
+  zh: 本地承诺、交付与证据账本，以六个 DSH 工具提供只读 today/who/evidence/clients 视图，以及 brief 与限定在工作区内的 Office 文件生成。
+```
+
+Category: `workflow` (the bundle is a commitment/delivery/evidence workflow, not a
+chat or memory UI; maintainers fix a near-miss category, they do not reject it).
+The description must stay code-accurate: six tools, read-only ledger views,
+`advisers_office` writes only inside `config.workspace`, no network and no model
+call. Do not add superlatives.
+
+PR draft (one file only; the generated READMEs are regenerated on merge):
+
+```text
+Title: Add PerryLink/advisers#dsh-advisers
+
+Body:
+This adds one catalog entry for dsh-advisers, the first-party DeepSeek Harness
+bundle in the Advisers monorepo (packages/dsh-advisers).
+
+- What it is: six DSH tools on a local ledger — advisers_brief, advisers_office,
+  and read-only advisers_today / advisers_who / advisers_evidence /
+  advisers_clients. advisers_office writes only inside the configured workspace;
+  the ledger views make no network call and never write the ledger.
+- Install: dsh plugin --profile main add dsh-advisers advisers-core
+  (Node >=22.16; bundle engines.dsh >=0.2.1-rc.5 <0.3.0).
+- Manifest: packages/dsh-advisers/package.json declares
+  "dsh": { "bundle": { "patch": "./cordis.patch.yml" } }; the patch is in the repo.
+- Evidence: node scripts/host-smoke.mjs --host dsh --json passes in the repo
+  (configuration-level static check only — not a real-host verification).
+- License: software is PolyForm Noncommercial 1.0.0 (source-available; commercial
+  use requires a separate written licence), docs are CC BY-NC-SA 4.0.
+- Related: dsh-famling already references the read-only Advisers brief.
+
+Entry file: data/plugins/PerryLink__advisers--packages-dsh-advisers.yml.
+```
+
+Submission checklist (from the catalog's contributing guide, 2026-11-24):
+
+- [ ] `dsh.bundle` manifest declared in the package (yes:
+  `packages/dsh-advisers/package.json`).
+- [ ] `cordis.patch.yml` present (yes).
+- [ ] repo at least one day old and actively maintained (yes).
+- [ ] GitHub topic `dsh-plugin` added to the repo (owner action; not verifiable
+  from the catalog snapshot).
+- [ ] description states only what the code does (draft above).
+- [ ] one entry file; no hand-edited README.
+
+Do not say: "official marketplace listing", "verified on DSH", "catalog 0 hits",
+"publisher starting from zero", or "the raw-entry count is the index count".
 
 ## Related
 
@@ -237,3 +386,6 @@ decisions with their own consent/backup surfaces.
 - [LEDGER-READ-API.md](LEDGER-READ-API.md) — the DSH read-only facade.
 - [POSITIONING.md](POSITIONING.md) — why distribution is "called by hosts".
 - [CONTEXT-PACK.md](CONTEXT-PACK.md) — the hand-off artifact for a human/agent recipient.
+- [PRICING.md](PRICING.md) — price-page skeleton; D1 has not decided prices (not an offer).
+- [COMMERCIAL.md](COMMERCIAL.md) — commercial-licensing process, private inquiry, evaluation summary, sales-pack inventory.
+- [FAQ.md](FAQ.md) — commercial-licensing FAQ (12 answers, pending items marked).

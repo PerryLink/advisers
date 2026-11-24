@@ -1,41 +1,48 @@
 # Quickstart (Windows + PowerShell)
 
-> Current status: **`0.5.0` was published on 2026-11-22** and is the npm `latest`
-> (`next` is also `0.5.0`). The repository is lockstep at package version `0.5.0`.
-> `0.5.0` is a "portable, disclosable, verifiable" feature release: portable home
-> **bundle v1** (`export --bundle` / `import --bundle --verify`, plaintext plus a
-> checksum manifest), the offline-verifiable **context pack v1** (`context-pack
-> create|verify`), additive **MCP/DSH disclosure** (`disclosure` + per-row `view`,
-> unchanged tool counts), **sync snapshot v2** with `sync.state.json`, a genuinely
-> read-only `sync push --dry-run` plus conflict precheck (`sync status --check`),
-> `setup`/`demo`/`help <topic>` onboarding, fail-closed managed backups before
-> destructive commands and the report-v2 quality gate; no schema change, no new
-> network path and no new runtime dependency.
-> The 0.4.0 feature surface is unchanged: the local knowledge base (KB) with
-> **schema v22** (one migration), TLS-only read-only IMAP mail entry (`mail ...`),
-> the interactive shell, proactive urgent-first briefs, the policy/evidence 2.0
-> subset (separate model-egress consent), receivables/payments plus client status
-> packs, MCP modern dual-era, Windows CI plus an offline portable ZIP, and the
-> **v2026.11.4 (2026-11-21)** legal revision. Defaults stay local: no new command
-> requires a model call, there is no background daemon, and `mail sync` is the one
-> new explicit network path (TLS-only, read-only, user-invoked). **Schema v22 is a
-> one-way migration**: the first command that opens an older ledger writes
-> `state.db.before-migrate-v*` and upgrades; a 0.3.2 binary opening a v22 database
-> fails with `E_SCHEMA_NEWER`, so going back means restoring that backup (or
-> `export` + fresh `import`). `0.4.3`, `0.4.2`, `0.4.1`, `0.4.0`, `0.3.2`, `0.3.1` and
-> `0.3.0` remain installable by pinning but are superseded. The earlier `0.2.4` was an
-> **unpublished release candidate** superseded by the 0.3.0 line (its `v0.2.4` tag
-> points at an older commit, there is no 0.2.4 tarball on npm, so do not try to
-> install it). Stable-channel install:
+> Current status: **`0.5.1` was published on 2026-11-24** and is the npm `latest`
+> (`next` is also `0.5.1`). The repository is lockstep at package version `0.5.1`.
+> `0.5.1` is a follow-up patch on the 0.5.0 tree: **one** database schema jump
+> (**v22 -> v23**: facts claim/evidence columns, mail thread columns, `waiting_replies`
+> and the handoff tables), read-only **mail follow-up** (`mail followup
+> add|ls|check|show|dismiss|mark-replied`, header-only, no send/network/MCP), a
+> **verifiable exit drill** (`scripts/bundle-drill.mjs`) with one-command acceptance
+> (`import --bundle --verify --expect-dataDigest <hex>`) and an in-bundle `FORMAT.md`,
+> **context-pack issuance audit** (`context_pack.create`) plus host-side MCP
+> `advisers_pack_verify` format dispatch, and **release-level quality evidence**
+> ([docs/QUALITY.md](QUALITY.md), `check-release --eval-evidence`). No new network
+> path and no new runtime dependency; MCP stays 8 tools / 5 resources and DSH 6 tools.
+> `0.5.0` was the "portable, disclosable, verifiable" release: portable home
+> **bundle v1**, the offline-verifiable **context pack v1**, additive **MCP/DSH
+> disclosure**, **sync snapshot v2** with `sync.state.json` and conflict precheck,
+> `setup`/`demo`/`help <topic>` onboarding, fail-closed managed backups and the
+> report-v2 quality gate.
+> The 0.4.0 feature surface is unchanged: the local knowledge base (KB), TLS-only
+> read-only IMAP mail entry (`mail ...`), the interactive shell, proactive
+> urgent-first briefs, the policy/evidence 2.0 subset (separate model-egress
+> consent), receivables/payments plus client status packs, MCP modern dual-era,
+> Windows CI plus an offline portable ZIP, and the **v2026.11.4 (2026-11-21)** legal
+> revision (v2026.11.5 is a separate legal decision and not part of 0.5.1). Defaults
+> stay local: no new command requires a model call, there is no background daemon,
+> and `mail sync` is the one explicit network path (TLS-only, read-only, user-invoked).
+> **Schema v23 is a one-way migration**: the first command that opens a v22 ledger
+> writes a `state.db.before-migrate-v22-*` backup and upgrades; a 0.5.0 binary opening
+> a v23 database fails with `E_SCHEMA_NEWER`, so going back means restoring that
+> backup (or `export --bundle` before upgrading). Old mail rows are not retrofitted
+> and are reported `unknown` by `mail followup`. `0.5.0`, `0.4.3`, `0.4.2`, `0.4.1`,
+> `0.4.0`, `0.3.2`, `0.3.1` and `0.3.0` remain installable by pinning but are
+> superseded. The earlier `0.2.4` was an **unpublished release candidate** superseded
+> by the 0.3.0 line (its `v0.2.4` tag points at an older commit, there is no 0.2.4
+> tarball on npm, so do not try to install it). Stable-channel install:
 > `npm i -g --registry=https://registry.npmjs.org advisers@latest advisers-office@latest`.
-> Release notes: <https://github.com/PerryLink/advisers/releases/tag/v0.5.0> (the
-> release carries the CycloneDX SBOM and `SHA256SUMS`; the Windows portable ZIP and
-> its `SHA256SUMS-0.5.0-portable.txt` are the offline channel and are attached by
-> the release operator — verify the ZIP hash/attestation before use, see
-> [docs/WINDOWS.md](WINDOWS.md) §3.4). The `0.5.0` tarballs are published from GitHub
-> Actions OIDC/Trusted Publishing with SLSA provenance; from a checkout (after
-> `corepack pnpm run sbom`),
-> `node scripts/verify-release.mjs --version 0.5.0 --tag latest --sbom artifacts/sbom.cdx.json --require-sbom`
+> Release notes: <https://github.com/PerryLink/advisers/releases/tag/v0.5.1> (the
+> release carries the CycloneDX SBOM, `SHA256SUMS` and the release-quality report;
+> the Windows portable ZIP and its `SHA256SUMS-0.5.1-portable.txt` are the offline
+> channel and are attached by the release operator — verify the ZIP hash/attestation
+> before use, see [docs/WINDOWS.md](WINDOWS.md) §3.4). The `0.5.1` tarballs are
+> published from GitHub Actions OIDC/Trusted Publishing with SLSA provenance; from a
+> checkout (after `corepack pnpm run sbom`),
+> `node scripts/verify-release.mjs --version 0.5.1 --tag latest --sbom artifacts/sbom.cdx.json --require-sbom`
 > verifies the registry release (that gate covers the npm tarballs, not the portable
 > ZIP). The checkout sections below remain the development path.
 
@@ -140,41 +147,46 @@ node $A memory candidates
 node $A chat "做一份 Q4 汇报 PPT，放到 out\q4.pptx"
 ```
 
-## B. Installed CLI (stable channel = 0.5.0, published 2026-11-22)
+## B. Installed CLI (stable channel = 0.5.1, published 2026-11-24)
 
 ```powershell
-# Stable channel: npm @latest resolves to 0.5.0 (published 2026-11-22).
+# Stable channel: npm @latest resolves to 0.5.1 (published 2026-11-24).
 npm i -g --registry=https://registry.npmjs.org advisers@latest advisers-office@latest
-# Pre-release channel: `next` also resolves to 0.5.0.
+# Pre-release channel: `next` also resolves to 0.5.1.
 # npm i -g --registry=https://registry.npmjs.org advisers@next advisers-office@next
-advisers --version    # expect 0.5.0
+advisers --version    # expect 0.5.1
 advisers status
 advisers soul init
 advisers template weekly weekly.json out\weekly.docx
 advisers verify out\weekly.docx
 ```
 
-### Upgrade from 0.3.x (schema v21 -> v22)
+### Upgrade (schema v22 -> v23 from 0.5.0; v21 -> v22 from the 0.4 line)
 
 ```powershell
 npm i -g --registry=https://registry.npmjs.org advisers@latest advisers-office@latest
-advisers --version            # expect 0.5.0
-advisers doctor               # first ledger open migrates v21 -> v22 after a verified backup
+advisers --version            # expect 0.5.1
+advisers doctor               # first ledger open migrates after a verified pre-migration backup
 advisers doctor --check-db    # full DB / FTS / WAL checks on the migrated database
 ```
 
-The v22 migration is one transaction and runs automatically on the first command that
-opens an existing v21 ledger (you do not run a migration command). It writes a
-pre-migration copy (`%ADVISERS_HOME%\state.db.before-migrate-v21-<ms>`) and verifies it
-before upgrading. **Downgrade is not supported**: an older binary opening a v22 database
-fails with `E_SCHEMA_NEWER`. Going back means restoring that pre-migration copy with a
-0.3.x binary (`advisers restore <backup> --dry-run` then `--yes`), or `advisers export
---all` before upgrading and `import` into a fresh 0.3.x home.
+0.5.1 upgrades a 0.5.0/v22 ledger to **v23** in one transaction on the first command
+that opens it (you do not run a migration command). It adds the facts claim/evidence
+columns, mail thread columns, `waiting_replies`, the handoff tables and five nullable
+reserved 0.6 acceptance/payment-proof columns, and writes a
+pre-migration copy (`%ADVISERS_HOME%\state.db.before-migrate-v22-<ms>`) that is verified
+before upgrading. The 0.4-line v21 -> v22 step is applied first when needed, one step at
+a time. **Downgrade is not supported**: a 0.5.0 binary opening a v23 database fails with
+`E_SCHEMA_NEWER`. Going back means restoring that pre-migration copy
+(`advisers restore <backup> --dry-run` then `--yes`), or `advisers export --bundle <dir>`
+before upgrading and `import --bundle --verify` into a fresh home on the old version.
+Mail rows synced before the upgrade keep no thread headers and `mail followup` reports
+them `unknown`; they are not back-filled.
 
-> `0.2.4` never reached npm and must not be presented as installable. `0.4.3`/`0.3.2`/
-> `0.3.1`/`0.3.0` are superseded by `0.5.0` and remain installable by pinning. The 0.5.0
-> release notes (<https://github.com/PerryLink/advisers/releases/tag/v0.5.0>) and
-> `scripts/verify-release.mjs` are the provenance record.
+> `0.2.4` never reached npm and must not be presented as installable. `0.5.0`/`0.4.3`/
+> `0.3.2`/`0.3.1`/`0.3.0` are superseded by `0.5.1` and remain installable by pinning.
+> The 0.5.1 release notes (<https://github.com/PerryLink/advisers/releases/tag/v0.5.1>)
+> and `scripts/verify-release.mjs` are the provenance record.
 
 If `advisers-office` is missing, install it explicitly (`advisers-office@latest`, or
 `@next` before promotion); the CLI does not pull it automatically.
@@ -404,7 +416,7 @@ node $A fact history <fact-id>
 node $A fact as-of 2026-11-01
 ```
 
-`kb add` stores the **extracted text** in the local ledger (schema v22) and does not copy
+`kb add` stores the **extracted text** in the local ledger (schema v23 since 0.5.1) and does not copy
 the source file. Nothing here calls a model or the network; a 1–2 character CJK query takes
 the degraded `LIKE` path and reports it, and image-only files are marked `needsOcr` instead
 of being silently indexed. See [docs/KB.md](KB.md).
@@ -489,3 +501,77 @@ implements the modern `2026-07-28` era behind per-request `_meta`:
 `ADVISERS_MCP_MODERN=off` is a one-restart rollback. The tool/resource catalogue is
 unchanged (8 tools / 5 resources). For offline Windows installs, see
 [docs/WINDOWS.md](WINDOWS.md) §3.4 (portable ZIP + its own SHA-256/attestation).
+## Q. 0.5.0/0.5.1 additions: bundle, context pack, sync v2, mail follow-up, releases
+
+### Portable home bundle (plaintext, importable)
+
+```powershell
+# Export the whole home (TOS-exempt read; choose an encrypted disk)
+node $A export --bundle C:\temp\home-bundle --json
+# Verify on the target machine without writing anything
+node $A import --bundle C:\temp\home-bundle --verify --dry-run `
+  --expect-dataDigest <64-hex dataDigest from the source export> --json
+# Import into a clean home (a populated target needs --replace)
+$env:ADVISERS_ACCEPT_TOS = "1"
+node $A import --bundle C:\temp\home-bundle --verify --json
+```
+
+A bundle is a **plaintext** directory (`manifest.json`, `ledger.json`, human-readable
+projections, `IMPORT.md`, `FORMAT.md` in 0.5.1+, `SHA256SUMS`); it contains no
+credentials/`audit.key`/soul/workspace. `--expect-dataDigest` turns the acceptance check
+into one pass/fail (mismatch = `E_BUNDLE_TAMPERED`, zero writes). A 0.5.1 bundle is not
+readable by the 0.5.0 CLI; 0.5.0 bundles are readable by 0.5.1. Store it on an encrypted
+disk and do not share it. See [docs/PORTABILITY.md](PORTABILITY.md).
+
+### Context pack (bounded, one-way disclosure)
+
+```powershell
+node $A context-pack create --subject client:cl_123 --json        # candidates only (read-only)
+node $A context-pack create --subject client:cl_123 --ids cm_1,fact_2 `
+  --recipient "Acme review" --purpose external-review --out C:\temp\pack --json
+node $A context-pack verify C:\temp\pack --json                   # offline, exit 0/1
+```
+
+0.5.1 records one local `context_pack.create` audit row per written pack (ids and a
+salted recipient hash only) and lets MCP `advisers_pack_verify` verify a received pack
+offline. Packs are not importable, never contain amounts/mail bodies/KB full text, and
+`confersReadAuthority`/`confersExecutionAuthority` are always false. See
+[docs/CONTEXT-PACK.md](CONTEXT-PACK.md).
+
+### Sync snapshot v2 (encrypted, optional)
+
+```powershell
+$env:ADVISERS_SYNC_PASSPHRASE = "at least 8 chars"
+node $A sync push --dir C:\Sync\advisers --device laptop --json
+node $A sync pull --dir C:\Sync\advisers --json
+node $A sync status --dir C:\Sync\advisers --check --json
+```
+
+Whole-database snapshots, AES-256-GCM, last-writer-wins with a refusal guard
+(`E_SYNC_CONFLICT` unless `--force`, which keeps a `.before-sync-*` backup); `--dry-run`
+writes nothing. See [docs/SYNC.md](SYNC.md).
+
+### Read-only mail follow-up (0.5.1)
+
+```powershell
+node $A mail followup add --mail <msg-id> --action "ask for the signed quote" --json
+node $A mail followup ls --json
+node $A mail followup check --dry-run --json
+node $A mail followup mark-replied <wr_id> --note "answered by phone" --json
+```
+
+Header-only, local, and never sends: a follow-up is an ordinary commitment plus a
+`waiting_replies` row; replies are only `replied` when stored `In-Reply-To`/`References`/
+`thread_root` prove it. Automatic replies, foreign senders and fuzzy subjects are
+ignored or put in `possibleReplies[]`. "No reply found" is local evidence, not an
+external fact, and an unsynced Sent mailbox is reported as a warning. See
+[docs/MAIL-FOLLOWUP.md](MAIL-FOLLOWUP.md).
+
+### Release-quality evidence (0.5.1)
+
+The deterministic gates run on a clean checkout into a frozen release-evidence
+directory; `node scripts/check-eval-report.mjs --release` and
+`node scripts/check-release.mjs --eval-evidence` are part of the pre-tag checklist, and
+the report ships as a release asset/CI artifact. Human gold is still `null`; see
+[docs/QUALITY.md](QUALITY.md) for commands, metrics, `n` and unknowns.
+

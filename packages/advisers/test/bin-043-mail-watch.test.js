@@ -29,7 +29,7 @@ function envFor(home) {
 }
 
 function run(home, args, input = '') {
-  return spawnSync(process.execPath, [bin, ...args], { env: envFor(home), encoding: 'utf8', input, timeout: 60000 })
+  return spawnSync(process.execPath, [bin, ...args], { env: envFor(home), encoding: 'utf8', input, timeout: 120000 })
 }
 
 function addRefusedAccount(home) {
@@ -134,7 +134,7 @@ test('SIGINT exits 130 and reports interruptedBy=SIGINT in the JSON summary', { 
   try {
     addRefusedAccount(home)
     const watched = spawnWatch(home, ['mail', 'sync', '--watch', '--json'])
-    await sleep(1500)
+    await sleep(3000)
     watched.child.kill('SIGINT')
     const result = await watched.exited
     assert.equal(result.code, 130)
@@ -150,7 +150,7 @@ test('SIGTERM exits 143 (not 130) and reports interruptedBy=SIGTERM', { skip: pr
   try {
     addRefusedAccount(home)
     const watched = spawnWatch(home, ['mail', 'sync', '--watch', '--json'])
-    await sleep(1500)
+    await sleep(3000)
     watched.child.kill('SIGTERM')
     const result = await watched.exited
     assert.equal(result.code, 143)

@@ -10,13 +10,20 @@ versions, how a release is built and published, what provenance exists today,
 and how to verify what you install. It describes the current state; "not yet
 implemented" is written as such.
 
-Status: 2026-11-22, covering the **0.5.0 line** (the repository is lockstep at package
-version `0.5.0`). **0.5.0 was published on 2026-11-22**: npm `latest` = `0.5.0` and
-`next` is also `0.5.0`. 0.5.0 is a "portable, disclosable, verifiable" feature release
-(portable home bundle v1, context pack v1 + offline verify, additive MCP/DSH read
-disclosure, sync snapshot v2 with `sync.state.json`/conflict precheck, setup/demo/help
-onboarding, fail-closed managed backups and the report-v2 quality gate) with **no schema
-change, no new network path and no new runtime dependency**; 0.4.3 was a patch on the 0.4.2
+Status: 2026-11-24, covering the **0.5.1 line** (the repository is lockstep at package
+version `0.5.1`). **0.5.1 was published on 2026-11-24**: npm `latest` = `0.5.1` and
+`next` is also `0.5.1`. 0.5.1 is a follow-up patch on the 0.5.0 tree: **one** database
+schema jump (v22 -> v23: facts claim/evidence columns, mail thread columns,
+`waiting_replies`, handoff tables), read-only `mail followup` (local header evidence;
+no send, no network, no MCP/DSH/receipt surface), bundle drill/`--expect-dataDigest`/
+in-bundle `FORMAT.md`, `context_pack.create` audit + host-side `advisers_pack_verify`
+dispatch, and release-level quality evidence. **No new network path and no new runtime
+dependency**; MCP stays 8 tools / 5 resources and DSH 6 tools. 0.5.0 was the
+"portable, disclosable, verifiable" release (portable home bundle v1, context pack v1 +
+offline verify, additive MCP/DSH read disclosure, sync snapshot v2 with
+`sync.state.json`/conflict precheck, setup/demo/help onboarding, fail-closed managed
+backups and the report-v2 quality gate) with no schema change, no new network path and no
+new runtime dependency; 0.4.3 was a patch on the 0.4.2
 tree (Chinese relative `--due`, local-rule capture plus the read-only inbox,
 explicit-null `doctor --report` / `privacy --prove --brief` / `profile`, the enhanced
 `remind --ics` export with a per-commitment notification cooldown, quote/proposal
@@ -30,10 +37,11 @@ documented-additive CLI contracts; the 0.4.0 feature surface is unchanged: the l
 knowledge base with **schema v22**, IMAP mail entry, interactive shell, policy/evidence 2.0
 subset, receivables/payments, MCP modern dual-era, Windows CI + portable ZIP. 0.4.0 was
 published from `refs/tags/v0.4.0`, 0.4.1 from `refs/tags/v0.4.1`, 0.4.2 from
-`refs/tags/v0.4.2`, 0.4.3 from `refs/tags/v0.4.3` and 0.5.0 from `refs/tags/v0.5.0`, all
-through CI Trusted Publishing with SLSA provenance.
-**Schema v22 is a one-way migration**: a 0.3.2 binary opening a v22 database fails with
-`E_SCHEMA_NEWER` and going back means restoring the pre-migration copy.
+`refs/tags/v0.4.2`, 0.4.3 from `refs/tags/v0.4.3`, 0.5.0 from `refs/tags/v0.5.0` and 0.5.1 from
+`refs/tags/v0.5.1`, all through CI Trusted Publishing with SLSA provenance.
+**Schema v23 is a one-way migration**: a 0.5.0 binary opening a v23 database fails with
+`E_SCHEMA_NEWER` (and a 0.3.2 binary opening a v22 one does too); going back means
+restoring the pre-migration copy (`state.db.before-migrate-v22-*`).
 `0.4.3`/`0.4.2`/`0.4.1`/`0.4.0`/`0.3.2`/`0.3.1`/`0.3.0` are superseded and remain
 installable by pinning; 0.3.0's published tarballs shipped release-candidate READMEs and
 its release surface could not be repaired in place (an npm tarball cannot be replaced, and
@@ -41,8 +49,10 @@ its release surface could not be repaired in place (an npm tarball cannot be rep
 0.2.4 was tagged but never published and the 0.3.0 line supersedes it (see sections 3–4).
 The legal texts are **TOS/PRIVACY/DISCLAIMER/SAFETY v2026.11.4 (2026-11-21)**, which
 cover the 0.4 data planes (mail bodies/credentials, KB text, receivables, shell,
-model-egress consent) — v2026.11.3 consent is not valid for v2026.11.4. 0.5.0 does
-not revise the legal texts.
+model-egress consent) — v2026.11.3 consent is not valid for v2026.11.4. Neither 0.5.0
+nor 0.5.1 revises the legal texts; the 0.5.1 mail-thread headers and
+`waiting_replies` rows are local email-metadata state with no new egress path, and a
+v2026.11.5 text revision remains a separate decision (D10b).
 
 ## 1. Reporting a vulnerability
 

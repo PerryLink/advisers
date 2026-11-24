@@ -7,7 +7,9 @@
  *   node scripts/check-eval-report.mjs --self-test
  *
  * With no paths it checks every `eval/results/<suite>/latest.json` produced by
- * the zero-model gates (det, kb-retrieval, mail-local, model-contract).
+ * the zero-model gates (det, kb-retrieval, mail-local, model-contract). A
+ * directory argument validates its latest.json, or — for a frozen release
+ * evidence directory with no latest.json — every *.json report inside it.
  *
  * Exit codes: 0 every report valid; 1 at least one invalid report; 2 usage /
  * no report found.
@@ -35,6 +37,7 @@ const USAGE = [
   '       node scripts/check-eval-report.mjs --self-test',
   '',
   '  --release   release evidence: require cli.commit and cli.dirty === false',
+  '              (a directory without latest.json checks every *.json report)',
   '  --json      print the verdict as one JSON document',
   '  --quiet     only print failures and the summary',
   '  --self-test validate built-in positive/negative reports and exit',
@@ -98,9 +101,17 @@ function expandTarget(target, cwd) {
     if (!existsSync(absolute)) throw new Error('report path does not exist: ' + target)
     const stat = statSync(absolute)
     if (stat.isDirectory()) {
+      // A suite directory normally holds latest.json plus per-run files; a
+      // release-evidence directory (eval/results/release-evidence) holds one
+      // frozen report per gate and no latest.json, so validate every *.json.
       const latest = join(absolute, 'latest.json')
-      if (!existsSync(latest)) throw new Error('directory has no latest.json: ' + target)
-      return [latest]
+      if (existsSync(latest)) return [latest]
+      const reports = readdirSync(absolute, { withFileTypes: true })
+        .filter((entry) => entry.isFile() && entry.name.endsWith('.json') && !entry.name.startsWith('.'))
+        .map((entry) => join(absolute, entry.name))
+        .sort()
+      if (!reports.length) throw new Error('directory has no latest.json or *.json report: ' + target)
+      return reports
     }
     return [absolute]
   }

@@ -143,7 +143,7 @@ test('legacy export --all / import <file> bytes are unchanged', () => {
     const payload = JSON.parse(readFileSync(exportFile, 'utf8'))
     assert.equal(typeof payload.ledger, 'object')
     assert.equal(typeof payload.data, 'object')
-    assert.equal(payload.schemaVersion, 22)
+    assert.equal(payload.schemaVersion, 23)
     const imported = ok(run(h2, ['import', exportFile, '--replace'], { ADVISERS_ACCEPT_TOS: '1' }), 'legacy import')
     assert.match(imported.stdout, /imported 1 matters/)
     // A bundle/context-pack directory is refused by the legacy verb with a hint.

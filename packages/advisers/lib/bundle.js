@@ -11,6 +11,9 @@
  *   kb/<id>.md      human-readable projection of kb_documents/kb_chunks
  *   pages/<id>.md   human-readable projection of the derived kb_pages table
  *   IMPORT.md       fixed human instructions (what this is, how to import/verify)
+ *   FORMAT.md       format contract: layout, table/column dictionary, dataDigest
+ *                   algorithm and minimal reader pseudocode (0.5.1; covered by
+ *                   SHA256SUMS but OPTIONAL so 0.5.0 bundles stay readable)
  *   SHA256SUMS      coreutils-style sha256 of every other file in the directory
  *
  * dataDigest v1 (the portability acceptance metric):
@@ -76,12 +79,17 @@ export const BUNDLE_VERIFICATION_BASIS = 'local-checksums-only'
 export const BUNDLE_MANIFEST_FILE = 'manifest.json'
 export const BUNDLE_LEDGER_FILE = 'ledger.json'
 export const BUNDLE_IMPORT_FILE = 'IMPORT.md'
+export const BUNDLE_FORMAT_FILE = 'FORMAT.md'
 export const BUNDLE_SHA256SUMS_FILE = 'SHA256SUMS'
 export const BUNDLE_FACTS_FILE = 'facts.md'
 export const BUNDLE_KB_DIR = 'kb'
 export const BUNDLE_PAGES_DIR = 'pages'
 
-/** Files every bundle v1 must contain (SHA256SUMS is implied by the layout). */
+/**
+ * Files every bundle v1 must contain (SHA256SUMS is implied by the layout).
+ * FORMAT.md is deliberately not required: it was added in 0.5.1 and a 0.5.0
+ * bundle without it must keep verifying/importing (backward compatibility).
+ */
 export const BUNDLE_REQUIRED_FILES = Object.freeze([
   BUNDLE_MANIFEST_FILE, BUNDLE_LEDGER_FILE, BUNDLE_IMPORT_FILE, BUNDLE_FACTS_FILE,
 ])
@@ -95,6 +103,7 @@ export const BUNDLE_LIMIT_CODE = 'E_BUNDLE_LIMIT'
 export const BUNDLE_ERROR_CODES = Object.freeze({
   INVALID: 'E_BUNDLE_INVALID',
   TAMPERED: 'E_BUNDLE_TAMPERED',
+  DIGEST_MISMATCH: 'E_BUNDLE_TAMPERED',
   LIMIT: BUNDLE_LIMIT_CODE,
   PASSPHRASE: 'E_BUNDLE_PASSPHRASE',
   TARGET: 'E_BUNDLE_TARGET',
@@ -104,7 +113,7 @@ export const BUNDLE_ERROR_CODES = Object.freeze({
 
 export const BUNDLE_ERROR_HINTS = Object.freeze({
   E_BUNDLE_INVALID: 'the directory is not a well-formed Advisers bundle v1; nothing was imported',
-  E_BUNDLE_TAMPERED: 'the bundle does not match its own SHA256SUMS/dataDigest; re-export it from the source home instead of editing it',
+  E_BUNDLE_TAMPERED: 'the bundle does not match its own SHA256SUMS/dataDigest, or it is not the bundle you expected (expectDataDigest mismatch); re-export it from the source home and compare digests instead of editing it',
   E_BUNDLE_LIMIT: 'the bundle exceeds a v1 resource limit; refusing to read a directory that could exhaust memory or time',
   E_BUNDLE_PASSPHRASE: 'bundle v1 is plaintext-only in 0.5.0; encrypted bundles (B3) are a later-version opt-in',
   E_BUNDLE_TARGET: 'the target directory or local database is not safe for this operation; nothing was changed',
@@ -126,6 +135,33 @@ export const BUNDLE_EXCLUDED_TABLES = Object.freeze(['audit', 'kb_pages'])
 export const BUNDLE_DATA_TABLES = Object.freeze(
   DATA_TABLES.filter((table) => !BUNDLE_EXCLUDED_TABLES.includes(table)).slice().sort(),
 )
+
+/**
+ * Tables added to the bundle dataDigest domain by a later schema version.
+ * Key = schema version that introduced the table(s), value = the table names.
+ *
+ * A 0.5.0 bundle was written by schema v22 (20 data tables); v23 adds the three
+ * handoff/waiting tables. Accepting a v22 bundle into a v23 home must not
+ * weaken the CURRENT domain: the legacy bundle has to list exactly the legacy
+ * domain for its own schemaVersion, and its dataDigest is computed over that
+ * domain. Unknown/older versions are handled by removing every addition newer
+ * than the recorded schemaVersion (no bundle v1 shipped before v22).
+ */
+export const BUNDLE_TABLE_ADDITIONS = Object.freeze({
+  23: Object.freeze(['handoff_claims', 'handoffs', 'waiting_replies']),
+})
+
+/** The exact dataDigest domain a bundle with this schemaVersion must carry. */
+export function bundleDataTablesForSchema(schemaVersion) {
+  if (!Number.isInteger(schemaVersion)) return [...BUNDLE_DATA_TABLES]
+  const tables = new Set(BUNDLE_DATA_TABLES)
+  for (const [versionText, added] of Object.entries(BUNDLE_TABLE_ADDITIONS)) {
+    if (Number(versionText) > schemaVersion) {
+      for (const table of added) tables.delete(table)
+    }
+  }
+  return [...tables].sort()
+}
 
 /** What deliberately does not travel with a bundle (advisory, into the manifest). */
 export const BUNDLE_EXCLUDED = Object.freeze([
@@ -157,6 +193,7 @@ export const BUNDLE_LIMIT_DEFAULTS = Object.freeze({
   maxManifestBytes: 1024 * 1024,
   maxLedgerBytes: 512 * 1024 * 1024,
   maxImportBytes: 1024 * 1024,
+  maxFormatBytes: 1024 * 1024,
   maxFactsBytes: 8 * 1024 * 1024,
 })
 
@@ -169,6 +206,7 @@ const LIMIT_LABELS = Object.freeze({
   maxManifestBytes: 'manifest.json size',
   maxLedgerBytes: 'ledger.json size',
   maxImportBytes: 'IMPORT.md size',
+  maxFormatBytes: 'FORMAT.md size',
   maxFactsBytes: 'facts.md size',
 })
 
@@ -179,7 +217,7 @@ const WINDOWS_RESERVED_NAMES = new Set([
 ])
 
 const BUNDLE_LAYOUT_TOP_LEVEL = new Set([
-  BUNDLE_MANIFEST_FILE, BUNDLE_LEDGER_FILE, BUNDLE_IMPORT_FILE, BUNDLE_SHA256SUMS_FILE, BUNDLE_FACTS_FILE,
+  BUNDLE_MANIFEST_FILE, BUNDLE_LEDGER_FILE, BUNDLE_IMPORT_FILE, BUNDLE_FORMAT_FILE, BUNDLE_SHA256SUMS_FILE, BUNDLE_FACTS_FILE,
 ])
 
 const MAX_BUNDLE_PATH_CHARS = 120
@@ -524,6 +562,7 @@ function importMarkdownBodyLines() {
     '--------',
     'manifest.json   format/version/schemaVersion/counts/dataDigest/tables/files',
     'ledger.json     AUTHORITATIVE data: ledger snapshot + data tables (JSON)',
+    'FORMAT.md       format contract: layout, table/column dictionary, dataDigest algorithm, reader pseudocode',
     'facts.md        human-readable fact projection (never imported)',
     'kb/*.md         human-readable KB document projections (never imported)',
     'pages/*.md      human-readable KB page projections (never imported; pages are rebuilt on import)',
@@ -595,10 +634,11 @@ function importMarkdownBoundaryLines() {
     'If Advisers is discontinued',
     '---------------------------',
     'ledger.json is a documented JSON document (Advisers ledger snapshot v1 plus',
-    'raw data tables). It contains no executable scripts; the table schema is',
-    'described by docs/ARCHITECTURE.md and the migration history in the source',
-    'tree. A future reader needs only JSON and documented field names to',
-    'recover the data.',
+    'raw data tables). It contains no executable scripts; FORMAT.md in this',
+    'directory describes the layout, every table and column, the dataDigest',
+    'algorithm and a minimal reader pseudocode, so a future reader needs only a',
+    'JSON parser to recover the data. (FORMAT.md was added in 0.5.1; a 0.5.0',
+    'bundle has no FORMAT.md but stays readable by newer readers.)',
   ]
 }
 
@@ -616,6 +656,227 @@ function renderImportMarkdown({ version, generatedAt, schemaVersion, counts, dat
     ...importMarkdownRulesLines(),
     ...importMarkdownBoundaryLines(),
   ].join(LF) + LF
+}
+
+/* -------------------------------------------------------------------------- */
+/* FORMAT.md (in-bundle format contract; added in 0.5.1)                       */
+/* -------------------------------------------------------------------------- */
+
+/**
+ * Table/column dictionary for FORMAT.md. PRAGMA table_info is the schema source
+ * when the build store can answer it; a row-derived union is the fallback so a
+ * format document is always emitted (it never throws over metadata).
+ */
+function describeBundleTables(store, data) {
+  const tables = []
+  for (const table of BUNDLE_DATA_TABLES) {
+    const rows = Array.isArray(data[table]) ? data[table] : []
+    let columns = null
+    try {
+      if (store?.db && typeof store.db.prepare === 'function') columns = bundleTableColumns(store, table)
+    } catch { columns = null }
+    if (!Array.isArray(columns) || columns.length === 0) {
+      const names = new Set()
+      for (const row of rows) {
+        if (!isPlainObject(row)) continue
+        for (const key of Object.keys(row)) names.add(key)
+      }
+      columns = [...names].sort().map((name) => ({ name, type: null, notnull: null, hasDefault: null, pk: null }))
+    }
+    tables.push({ name: table, rows: rows.length, columns })
+  }
+  return tables
+}
+
+function formatColumnLine(column) {
+  const flags = []
+  if (typeof column.type === 'string' && column.type) flags.push(column.type)
+  if (column.pk === true) flags.push('primary key')
+  if (column.notnull === true) flags.push('not null')
+  if (column.hasDefault === true) flags.push('has default')
+  return '  - ' + String(column.name) + (flags.length ? ' (' + flags.join(', ') + ')' : '')
+}
+
+/** LedgerSnapshot v1 entity field dictionary: union of the keys present in this export. */
+function describeLedgerEntities(ledger) {
+  const entities = ['matters', 'facts', 'commitments', 'preferences', 'links', 'updates', 'routines', 'routinePatches']
+  const described = []
+  for (const name of entities) {
+    const rows = Array.isArray(ledger?.[name]) ? ledger[name] : []
+    const fields = new Set()
+    for (const row of rows) {
+      if (!isPlainObject(row)) continue
+      for (const key of Object.keys(row)) fields.add(key)
+    }
+    described.push({ name: name, rows: rows.length, fields: [...fields].sort() })
+  }
+  const routes = isPlainObject(ledger?.routes) ? Object.keys(ledger.routes).sort() : []
+  return { entities: described, routes }
+}
+
+/**
+ * Render FORMAT.md: the self-describing contract carried inside the bundle.
+ *
+ * It is a pure function of the schema/data/version inputs (no time field), so
+ * two exports of the same home with the same generator version produce byte-
+ * identical FORMAT.md - the acceptance metric stays dataDigest, not file bytes.
+ * Nothing here is executable code.
+ */
+function renderFormatMarkdown({ version, schemaVersion, dataDigest, tables, counts, excluded, ledger }) {
+  const lines = [
+    '# Advisers portable home bundle - FORMAT v1',
+    '',
+    '> This file is the self-describing format contract of this directory. It is',
+    '> covered by SHA256SUMS like every other file: editing it breaks verification.',
+    '> The authoritative data is ledger.json; this document adds no fields.',
+    '',
+    'Generator:     advisers ' + String(version ?? 'unknown'),
+    'Schema:        v' + String(schemaVersion),
+    'dataDigest:    ' + String(dataDigest),
+    'Verification:  ' + BUNDLE_VERIFICATION_BASIS,
+    '',
+    '## 1. Layout (bundle v1)',
+    '',
+    '| path | contents | imported? |',
+    '| --- | --- | --- |',
+    '| manifest.json | format/version/scope/schemaVersion/counts/tables/dataDigest/files | metadata |',
+    '| ledger.json | LedgerSnapshot v1 + raw data tables (JSON) | yes (authoritative) |',
+    '| FORMAT.md | this format contract | no |',
+    '| IMPORT.md | fixed human import/verify instructions | no |',
+    '| facts.md | human-readable fact projection | no |',
+    '| kb/<id>.md | one projection per kb_documents row | no |',
+    '| pages/<id>.md | derived kb_pages projections (rebuilt on import) | no |',
+    '| SHA256SUMS | sha256 of every other file (coreutils format) | verification only |',
+    '',
+    'The v1 layout is closed: any other file or subdirectory is refused. FORMAT.md',
+    'is OPTIONAL in v1 because bundles written by Advisers 0.5.0 do not carry it; a',
+    '0.5.0 reader does not know FORMAT.md and refuses a directory that has it.',
+    '',
+    '## 2. manifest.json (bundle v1)',
+    '',
+    '- format: "advisers-bundle"',
+    '- version: 1',
+    '- scope: "local-all" (one whole home; no per-subject selection)',
+    '- subject: null',
+    '- verificationBasis: "local-checksums-only"',
+    '- generatedAt: ISO-8601 time field (NOT part of dataDigest)',
+    '- generator: {advisersVersion, nodeVersion, command}',
+    '- schemaVersion: source ledger schema number (see section 6)',
+    '- counts: {table: rowCount} for exactly the tables listed in tables',
+    '- tables: sorted dataDigest-domain table names (section 3)',
+    '- dataDigest: 64 lowercase hex (section 3)',
+    '- files: [{path, size, sha256}] every file except manifest.json and SHA256SUMS',
+    '- fileCount: files.length; checksumCount: files.length + 1',
+    '- excluded: tables/state that never travel with a bundle',
+    '- disclaimer: true',
+    '',
+    '## 3. dataDigest v1',
+    '',
+    'The dataDigest domain is manifest.tables: the ledger data tables (DATA_TABLES',
+    'minus the machine-local audit table and the derived kb_pages table), sorted.',
+    '',
+    '    payload = {',
+    '      "version": 1,',
+    '      "tables": [ { "name": <table>, "rows": <rowCount>, "data": [<row>, ...] } ... sorted by name ]',
+    '    }',
+    '    dataDigest = sha256(JSON.stringify(canonicalize(payload)))',
+    '',
+    'canonicalize() recursively sorts object keys; array order is preserved. Each',
+    'data array keeps the SQLite rowid order of the source home; generatedAt and',
+    'exportedAt are NOT inputs. counts per table are authoritative next to the',
+    'digest. audit travels only as sourceAudit{count, headHash} (it is keyed by the',
+    'source home audit.key); kb_pages is rebuilt on import and never digested.',
+    '',
+    '## 4. ledger.json',
+    '',
+    '    {',
+    '      "version": <generator version string>,',
+    '      "schemaVersion": <number>,',
+    '      "exportedAt": <ISO-8601>,',
+    '      "ledger": <LedgerSnapshot v1>,',
+    '      "data": { <table>: [<raw snake_case row>, ...] },',
+    '      "auditAnchor": null,',
+    '      "sourceAudit": { "count": <number|null>, "headHash": <64 hex|null> }',
+    '    }',
+    '',
+    'LedgerSnapshot v1 arrays: matters, facts, commitments, preferences, links,',
+    'updates, routines, routinePatches; plus a routes object. The data tables are',
+    'raw rows in source rowid order. sourceAudit describes the SOURCE home audit',
+    'chain only; it is never imported into the target chain.',
+    '',
+  ]
+  const ledgerDictionary = describeLedgerEntities(ledger)
+  lines.push('LedgerSnapshot v1 field dictionary (union of keys present in this export):')
+  lines.push('')
+  for (const entity of ledgerDictionary.entities) {
+    lines.push('- ' + entity.name + ' (' + entity.rows + ' row' + (entity.rows === 1 ? '' : 's') + ')')
+    lines.push('  - fields: ' + (entity.fields.length ? entity.fields.join(', ') : '(none in this bundle)'))
+  }
+  lines.push('- routes')
+  lines.push('  - fields: ' + (ledgerDictionary.routes.length ? ledgerDictionary.routes.join(', ') : '(none in this bundle)'))
+  lines.push('')
+  lines.push('## 5. Tables and columns (schema v' + String(schemaVersion) + ')')
+  lines.push('')
+  for (const table of tables) {
+    lines.push('- ' + table.name + ' (' + table.rows + ' row' + (table.rows === 1 ? '' : 's') + ')')
+    for (const column of table.columns) lines.push(formatColumnLine(column))
+    lines.push('')
+  }
+  lines.push(
+    'Row counts recorded in manifest.counts must equal the array lengths above.',
+    'The column list is generated from PRAGMA table_info at export time; an import',
+    'refuses a row with a column this reader does not know (a newer schema must not',
+    'be applied silently) and fills columns missing from an older row with defaults.',
+    '',
+    '## 6. Version and forward policy',
+    '',
+    '- Bundle format v1 is frozen: a reader that knows v1 accepts every v1 bundle',
+    '  (with or without FORMAT.md).',
+    '- A reader MUST refuse schemaVersion newer than the schema it supports.',
+    '- A reader SHOULD accept an older schemaVersion by taking column defaults for',
+    '  missing columns (an older bundle is a migration input, not a new format).',
+    '- A bundle declares its own dataDigest domain in manifest.tables for the',
+    '  schemaVersion it was written with: a 0.5.0 (v22) bundle has 20 data tables;',
+    '  v23 adds handoff_claims/handoffs/waiting_replies. Tables added after a',
+    '  bundle\'s schemaVersion are imported EMPTY, and two bundles of different',
+    '  schemas can be compared on the shared older table set.',
+    '- An importer MUST refuse unknown columns in a data row instead of guessing.',
+    '- Unknown extra files/directories are refused: the v1 layout is closed.',
+    '- Checksums are local-checksums-only: they prove internal consistency, not',
+    '  authorship, a trusted timestamp or notarization.',
+    '',
+    '## 7. Minimal reader pseudocode (not executable code)',
+    '',
+    '    manifest = parse_json(read("manifest.json"))',
+    '    assert manifest.format == "advisers-bundle" and manifest.version == 1',
+    '    for line in split_lines(read("SHA256SUMS")):',
+    '        (digest, path) = parse_coreutils_line(line)',
+    '        assert sha256(read(path)) == digest',
+    '    assert set(manifest.files.path) == set(all files except manifest/SHA256SUMS)',
+    '    payload = parse_json(read("ledger.json"))',
+    '    assert payload.schemaVersion <= reader.supportedSchemaVersion',
+    '    for table in manifest.tables:',
+    '        rows = payload.data[table]',
+    '        assert len(rows) == manifest.counts[table]',
+    '    recompute dataDigest exactly as section 3',
+    '    assert recomputed == manifest.dataDigest',
+    '    import payload.ledger and payload.data tables (FORMAT.md/IMPORT.md/',
+    '      facts.md/kb/*.md/pages/*.md are informational and never imported)',
+    '',
+    '## 8. Boundary',
+    '',
+    '- This directory is PLAINTEXT: it contains customer records, mail bodies and',
+    '  money amounts from the source home. Store it on an encrypted disk and delete',
+    '  copies you no longer need. Encryption is not part of bundle v1.',
+    '- SHA-256 proves the directory is internally consistent and was not edited',
+    '  after generation. It is NOT a signature, NOT a trusted timestamp and NOT',
+    '  notarization: whoever can rewrite the whole directory can recompute it.',
+    '- Nothing in this directory is executable. A reader needs only a JSON parser',
+    '  and SHA-256.',
+    '',
+    'Never-travel list (excluded from every bundle): ' + excluded.join(', ') + '.',
+  )
+  return lines.join(LF) + LF
 }
 
 /* -------------------------------------------------------------------------- */
@@ -694,6 +955,9 @@ function buildSums(fileContents) {
  * @param {{advisersVersion?: string}} [options.env] generator version override.
  * @param {boolean} [options.includeProjections=true] write kb/*.md and pages/*.md
  *        human projections (facts.md is always written: it is part of the layout).
+ * @param {boolean} [options.includeFormat=true] write FORMAT.md (the in-bundle
+ *        format contract). Readers treat it as optional so legacy 0.5.0 bundles
+ *        stay verifiable; tests may pass false to model that legacy layout.
  * @returns {{ok:boolean, code:string|null, files:Map<string,Buffer>|null,
  *   manifest:object|null, manifestText?:string, manifestDigest?:string,
  *   summary?:object, errors:string[], warnings:string[]}}
@@ -745,8 +1009,18 @@ export function buildBundle(options = {}) {
       for (const [name, buffer] of buildPagesProjections(store)) fileContents.set(name, buffer)
     }
     enforceBuildLimits(fileContents, limits)
-    const fileCount = fileContents.size + 1
+    // 0.5.1: FORMAT.md carries the format contract inside the bundle. It is
+    // optional on read (0.5.0 bundles have none) but written by default; tests
+    // that need to model a legacy 0.5.0 layout pass includeFormat:false.
+    const includeFormat = options.includeFormat !== false
+    const fileCount = fileContents.size + (includeFormat ? 2 : 1)
     const checksumCount = fileCount + 1
+    if (includeFormat) {
+      fileContents.set(BUNDLE_FORMAT_FILE, Buffer.from(renderFormatMarkdown({
+        version, schemaVersion, dataDigest: digest.dataDigest, counts: digest.counts, ledger,
+        tables: describeBundleTables(store, data), excluded: [...BUNDLE_EXCLUDED],
+      }), 'utf8'))
+    }
     fileContents.set(BUNDLE_IMPORT_FILE, Buffer.from(renderImportMarkdown({
       version, generatedAt, schemaVersion, counts: digest.counts, dataDigest: digest.dataDigest,
       fileCount, checksumCount, sourceAudit: audit.sourceAudit,
@@ -920,7 +1194,7 @@ function validateLedgerPayload(payload, manifest, limits, flags) {
   if (!isNonNegativeInteger(payload.schemaVersion)) errors.push('ledger.schemaVersion must be a non-negative integer')
   else if (payload.schemaVersion > SCHEMA_VERSION) errors.push('ledger.schemaVersion ' + payload.schemaVersion + ' is newer than this CLI (v' + SCHEMA_VERSION + '); upgrade advisers before importing this bundle')
   else if (payload.schemaVersion !== manifest.schemaVersion) errors.push('ledger.schemaVersion disagrees with manifest.schemaVersion')
-  else if (payload.schemaVersion < SCHEMA_VERSION) warnings.push('bundle schema v' + payload.schemaVersion + ' is older than this CLI (v' + SCHEMA_VERSION + '); missing columns take their defaults on import')
+  else if (payload.schemaVersion < SCHEMA_VERSION) warnings.push('bundle schema v' + payload.schemaVersion + ' is older than this CLI (v' + SCHEMA_VERSION + '); missing columns take their defaults on import and tables added by a later schema are imported empty')
   if (!isDateText(payload.exportedAt)) errors.push('ledger.exportedAt must be an ISO date-time')
   if (payload.auditAnchor !== null) errors.push('ledger.auditAnchor must be null: the source audit chain is machine-local and only sourceAudit travels')
   if (!isPlainObject(payload.sourceAudit)) {
@@ -939,11 +1213,14 @@ function validateLedgerPayload(payload, manifest, limits, flags) {
     return { errors, warnings, data: null }
   }
   const keys = Object.keys(data).sort()
-  const expected = [...BUNDLE_DATA_TABLES]
+  // The digest domain is the bundle's own schema domain: a v22 (0.5.0) bundle
+  // legitimately has no v23 handoff/waiting tables, so validate against the
+  // domain its manifest.schemaVersion declares (bundleDataTablesForSchema).
+  const expected = bundleDataTablesForSchema(manifest?.schemaVersion)
   if (keys.length !== expected.length || keys.some((key, index) => key !== expected[index])) {
-    errors.push('ledger.data must contain exactly the bundle data tables (' + expected.join(', ') + ')')
+    errors.push('ledger.data must contain exactly the bundle data tables for schema v' + String(manifest?.schemaVersion) + ' (' + expected.join(', ') + ')')
   }
-  for (const table of BUNDLE_DATA_TABLES) {
+  for (const table of expected) {
     if (!Array.isArray(data[table])) { errors.push('ledger.data.' + table + ' must be an array'); continue }
     if (isNonNegativeInteger(manifest?.counts?.[table]) && manifest.counts[table] !== data[table].length) {
       errors.push('manifest.counts.' + table + ' is ' + manifest.counts[table] + ' but ledger.data.' + table + ' has ' + data[table].length + ' row(s)')
@@ -958,7 +1235,7 @@ function validateLedgerPayload(payload, manifest, limits, flags) {
   }
   if (errors.length === 0) {
     try {
-      const digest = computeBundleDataDigest(data)
+      const digest = computeBundleDataDigest(data, { tables: expected })
       flags.computedDataDigest = digest.dataDigest
       if (digest.dataDigest !== manifest.dataDigest) {
         flags.tampered = true
@@ -990,9 +1267,14 @@ function validateManifest(manifest, parsedEntries, fileSet, result, limits, flag
   }
   if (!isNonNegativeInteger(manifest.schemaVersion)) fail('manifest.schemaVersion must be a non-negative integer')
   else if (manifest.schemaVersion > SCHEMA_VERSION) fail('manifest.schemaVersion ' + manifest.schemaVersion + ' is newer than this CLI (v' + SCHEMA_VERSION + '); upgrade advisers before reading this bundle')
-  const tables = [...BUNDLE_DATA_TABLES]
+  // A bundle declares its own data table set (sorted) for the schemaVersion it
+  // was written with: v22 bundles have 20 tables, v23 adds 3 more.
+  const tables = bundleDataTablesForSchema(manifest.schemaVersion)
   if (!validateStringArray(manifest.tables) || manifest.tables.length !== tables.length || manifest.tables.some((table, index) => table !== tables[index])) {
-    fail('manifest.tables must list the bundle data tables in sorted order (' + tables.join(', ') + ')')
+    fail('manifest.tables must list the bundle data tables for schema v' + String(manifest.schemaVersion) + ' in sorted order (' + tables.join(', ') + ')')
+  }
+  if (isNonNegativeInteger(manifest.schemaVersion) && manifest.schemaVersion < SCHEMA_VERSION && tables.length < BUNDLE_DATA_TABLES.length) {
+    warnings.push('bundle schema v' + manifest.schemaVersion + ' predates v' + SCHEMA_VERSION + ': its dataDigest domain has ' + tables.length + ' of ' + BUNDLE_DATA_TABLES.length + ' tables; tables added by a later schema are imported empty')
   }
   if (!isPlainObject(manifest.counts)) fail('manifest.counts must be an object')
   else {
@@ -1056,11 +1338,27 @@ function validateManifest(manifest, parsedEntries, fileSet, result, limits, flag
 }
 
 /**
+ * Normalize an --expect-dataDigest value: undefined/empty -> null (no
+ * expectation), otherwise lowercase 64-hex. Returns { value, error } and never
+ * throws (bad input becomes a verification error).
+ */
+function normalizeExpectedDataDigest(value) {
+  if (value === undefined || value === null || value === '') return { value: null, error: null }
+  const text = String(value).trim().toLowerCase()
+  if (!isHexLower(text)) return { value: text, error: 'expectDataDigest must be 64 lowercase hex characters' }
+  return { value: text, error: null }
+}
+
+/**
  * Verify a bundle directory offline: zero writes, no HOME creation, no ledger
  * access. Returns a machine-readable result instead of throwing on bad input.
  *
  * @param {string} dir bundle directory produced by exportBundle/buildBundle
- * @param {{limits?:object, includePayload?:boolean}} [options]
+ * @param {{limits?:object, includePayload?:boolean, expectDataDigest?:string}} [options]
+ *   expectDataDigest (0.5.1 acceptance UX): when supplied, the recomputed
+ *   dataDigest must equal it; the result carries expectedDigest and
+ *   dataDigestMatch and a mismatch fails verification with
+ *   E_BUNDLE_TAMPERED (the directory may be valid but is not the expected one).
  * @returns {object} see docs/PORTABILITY.md; `payload` is only filled when
  *   includePayload is true (internal import re-use; never serialize it).
  */
@@ -1068,7 +1366,7 @@ export function verifyBundleDir(dir, options = {}) {
   const errors = []
   const warnings = []
   const limits = normalizeLimits(options?.limits)
-  const flags = { tampered: false, computedDataDigest: null }
+  const flags = { tampered: false, expectMismatch: false, computedDataDigest: null }
   const result = {
     ok: false,
     code: null,
@@ -1084,6 +1382,8 @@ export function verifyBundleDir(dir, options = {}) {
     tables: [],
     dataDigest: null,
     computedDataDigest: null,
+    expectedDigest: null,
+    dataDigestMatch: null,
     manifestDigest: null,
     fileCount: 0,
     checksumCount: 0,
@@ -1095,6 +1395,12 @@ export function verifyBundleDir(dir, options = {}) {
     limitViolation: null,
     errors,
     warnings,
+  }
+  const expected = normalizeExpectedDataDigest(options?.expectDataDigest)
+  result.expectedDigest = expected.value
+  if (expected.error) {
+    addError(errors, expected.error)
+    result.dataDigestMatch = false
   }
   if (typeof dir !== 'string' || !dir.trim()) { addError(errors, 'a bundle directory is required'); result.code = result.code ?? BUNDLE_ERROR_CODES.INVALID; return result }
   let root
@@ -1212,6 +1518,17 @@ export function verifyBundleDir(dir, options = {}) {
       }
     } catch (error) { addError(errors, 'ledger.json is not valid JSON: ' + (error.message || error)) }
   }
+  // 0.5.1 acceptance UX: compare the recomputed digest with the expected one.
+  // A bundle can be internally valid yet not the bundle the receiver expected,
+  // so a mismatch fails verification (E_BUNDLE_TAMPERED: no new error code).
+  if (expected.value !== null) {
+    const actual = typeof result.computedDataDigest === 'string' ? result.computedDataDigest : result.dataDigest
+    result.dataDigestMatch = typeof actual === 'string' && actual === expected.value
+    if (!result.dataDigestMatch) {
+      flags.expectMismatch = true
+      addError(errors, 'dataDigest does not match the expected digest: expected ' + expected.value + ', computed ' + String(actual ?? 'unavailable'))
+    }
+  }
   if (fileSet.has(BUNDLE_IMPORT_FILE)) {
     try {
       const read = readBoundedFile(join(root, BUNDLE_IMPORT_FILE), limits.maxImportBytes, 'maxImportBytes', BUNDLE_IMPORT_FILE)
@@ -1222,9 +1539,27 @@ export function verifyBundleDir(dir, options = {}) {
       else if (!read.text.toLowerCase().includes('not a signature')) warnings.push('IMPORT.md does not state that the checksums are not a signature')
     } catch (error) { addError(errors, 'cannot read IMPORT.md: ' + (error.code || error.message)) }
   }
+  // FORMAT.md is optional (0.5.0 bundles have none) but, when present, it is a
+  // checksum-covered part of the layout and must be a readable LF Markdown file.
+  if (fileSet.has(BUNDLE_FORMAT_FILE)) {
+    try {
+      const read = readBoundedFile(join(root, BUNDLE_FORMAT_FILE), limits.maxFormatBytes, 'maxFormatBytes', BUNDLE_FORMAT_FILE)
+      if (read.violation) { result.code = BUNDLE_LIMIT_CODE; result.limitViolation = read.violation; addError(errors, limitMessage(read.violation)) }
+      else if (read.error) addError(errors, read.error)
+      else if (read.text.includes(CR)) addError(errors, 'FORMAT.md must use LF line endings (no CR)')
+      else if (!read.text.trim()) addError(errors, 'FORMAT.md is empty')
+      else if (!read.text.includes(BUNDLE_LEDGER_FILE)) warnings.push('FORMAT.md does not mention ' + BUNDLE_LEDGER_FILE)
+    } catch (error) { addError(errors, 'cannot read FORMAT.md: ' + (error.code || error.message)) }
+  } else {
+    warnings.push('bundle has no ' + BUNDLE_FORMAT_FILE + ' (legacy Advisers 0.5.0 layout); the v1 layout and dataDigest algorithm are documented in docs/PORTABILITY.md')
+  }
   warnings.push('verification basis is ' + BUNDLE_VERIFICATION_BASIS + ': SHA-256 proves bundle internal consistency only, not authorship or generation time')
   result.ok = errors.length === 0
-  result.code = result.ok ? null : (result.limitViolation ? BUNDLE_LIMIT_CODE : (flags.tampered ? BUNDLE_ERROR_CODES.TAMPERED : BUNDLE_ERROR_CODES.INVALID))
+  result.code = result.ok
+    ? null
+    : (result.limitViolation
+      ? BUNDLE_LIMIT_CODE
+      : ((flags.tampered || flags.expectMismatch) ? BUNDLE_ERROR_CODES.TAMPERED : BUNDLE_ERROR_CODES.INVALID))
   return result
 }
 
@@ -1538,7 +1873,8 @@ function replaceBundleTable(store, table, rows) {
       if (!Object.prototype.hasOwnProperty.call(row, name)) throw bundleError(BUNDLE_ERROR_CODES.INVALID, 'bundle data.' + table + '[' + index + '] is missing the required column ' + name)
     }
     if (!names.length) throw bundleError(BUNDLE_ERROR_CODES.INVALID, 'bundle data.' + table + '[' + index + '] has no columns')
-    store.db.prepare('INSERT INTO ' + table + ' (' + names.join(',') + ') VALUES (' + names.map(() => '?').join(',') + ')')
+    // Quote every identifier: v23 mail_messages."references" is a SQLite keyword.
+    store.db.prepare('INSERT INTO ' + table + ' (' + names.map((name) => '"' + name + '"').join(',') + ') VALUES (' + names.map(() => '?').join(',') + ')')
       .run(...names.map((name) => row[name] === undefined ? null : row[name]))
   }
   return rows.length
@@ -1552,7 +1888,11 @@ function replaceBundleTable(store, table, rows) {
  */
 function restoreBundleData(store, data) {
   const report = { tables: {}, reconciled: { deliveries: 0, kbDocuments: 0, kbFactLinks: 0, kbPagesCleared: 0 }, ftsRebuilt: false }
-  for (const table of BUNDLE_DATA_TABLES) report.tables[table] = replaceBundleTable(store, table, data[table])
+  for (const table of BUNDLE_DATA_TABLES) {
+    // A bundle written by an older schema (0.5.0 = v22) has no v23 tables yet;
+    // they are additive and therefore imported as empty rather than undefined.
+    report.tables[table] = replaceBundleTable(store, table, Array.isArray(data[table]) ? data[table] : [])
+  }
   const clientIds = new Set(store.db.prepare('SELECT id FROM clients').all().map((row) => row.id))
   const projectRows = new Map(store.db.prepare('SELECT id, client_id FROM projects').all().map((row) => [row.id, row]))
   const matterRows = new Map(store.db.prepare('SELECT id, client_id, project_id FROM matters').all().map((row) => [row.id, row]))
@@ -1654,6 +1994,8 @@ function importFailure(code, message, extra = {}) {
     rolledBack: extra.rolledBack === true,
     dataDigest: extra.dataDigest ?? null,
     computedDataDigest: extra.computedDataDigest ?? null,
+    expectedDigest: extra.expectedDigest ?? null,
+    dataDigestMatch: extra.dataDigestMatch ?? null,
     counts: extra.counts ?? {},
     tables: extra.tables ?? [],
     restored: extra.restored ?? null,
@@ -1685,6 +2027,9 @@ function importFailure(code, message, extra = {}) {
  * @param {boolean} [options.replace=false] required when the local DB has data
  * @param {boolean} [options.dryRun=false] verify + plan only, zero writes
  * @param {boolean} [options.verify=true] verification is mandatory; false is refused
+ * @param {string} [options.expectDataDigest] 0.5.1 acceptance: fail closed when
+ *        the bundle dataDigest differs (E_BUNDLE_TAMPERED, zero writes) and
+ *        report expectedDigest/dataDigestMatch in the JSON result
  * @param {boolean} [options.rebuildPages=true] rebuild kb_pages after import
  * @param {boolean} [options.backup=true] pre-import managed backup when a DB exists
  * @returns {object} JSON-safe result (see docs/PORTABILITY.md)
@@ -1701,26 +2046,33 @@ export function importBundle(options = {}) {
   if (options.verify === false) {
     return importFailure(BUNDLE_ERROR_CODES.INVALID, 'refusing to import without verification: bundle import always verifies the directory first (drop verify:false)', { dryRun, bundleDir })
   }
-  const verification = verifyBundleDir(bundleDir, { limits, includePayload: !dryRun })
+  const verification = verifyBundleDir(bundleDir, {
+    limits,
+    includePayload: !dryRun,
+    ...(options.expectDataDigest === undefined ? {} : { expectDataDigest: options.expectDataDigest }),
+  })
   if (!verification.ok) {
     return importFailure(verification.code ?? BUNDLE_ERROR_CODES.INVALID, 'bundle verification failed; nothing was imported', {
       dryRun, bundleDir: verification.dir, verification, warnings, errors: verification.errors.length ? verification.errors : ['bundle verification failed'],
+      expectedDigest: verification.expectedDigest, dataDigestMatch: verification.dataDigestMatch,
     })
   }
   const manifest = verification.manifest
+  /** 0.5.1 acceptance fields, carried by every import result (null when not requested). */
+  const accept = { expectedDigest: verification.expectedDigest, dataDigestMatch: verification.dataDigestMatch }
   let store = options.store ?? null
   let ownedStore = null
   const home = options.home ? resolve(String(options.home)) : (store?.path ? dirname(resolve(store.path)) : (options.dbPath ? dirname(resolve(String(options.dbPath))) : null))
   const dbPath = options.dbPath ? resolve(String(options.dbPath)) : (store?.path ? resolve(store.path) : (home ? join(home, 'state.db') : null))
   if (!dbPath) {
-    return importFailure(BUNDLE_ERROR_CODES.SQLITE_REQUIRED, 'bundle import needs { home }, { dbPath } or { store } pointing at the SQLite database', { dryRun, bundleDir: verification.dir, verification })
+    return importFailure(BUNDLE_ERROR_CODES.SQLITE_REQUIRED, 'bundle import needs { home }, { dbPath } or { store } pointing at the SQLite database', { dryRun, bundleDir: verification.dir, verification, ...accept })
   }
   if (!store && !options.dbPath && home && existsSync(join(home, 'state.json')) && !existsSync(dbPath)) {
-    return importFailure(BUNDLE_ERROR_CODES.SQLITE_REQUIRED, 'the target home uses the JSON store (state.json); bundle import requires the SQLite store (ADVISERS_STORE=sqlite)', { dryRun, bundleDir: verification.dir, verification, warnings })
+    return importFailure(BUNDLE_ERROR_CODES.SQLITE_REQUIRED, 'the target home uses the JSON store (state.json); bundle import requires the SQLite store (ADVISERS_STORE=sqlite)', { dryRun, bundleDir: verification.dir, verification, warnings, ...accept })
   }
   /** local target state, read-only */
   const target = inspectImportTarget(dbPath, store)
-  const bridge = { dryRun, bundleDir: verification.dir, bootstrap: !target.exists || target.empty, verification, warnings }
+  const bridge = { dryRun, bundleDir: verification.dir, bootstrap: !target.exists || target.empty, verification, warnings, ...accept }
   if (target.error) {
     return importFailure(BUNDLE_ERROR_CODES.TARGET, 'cannot inspect the local database before importing (' + target.error + '); nothing was changed', { ...bridge, errors: ['cannot inspect the local database: ' + target.error] })
   }
@@ -1733,6 +2085,8 @@ export function importBundle(options = {}) {
       backupPlanned: target.exists,
       dataDigest: manifest.dataDigest,
       computedDataDigest: verification.computedDataDigest,
+      expectedDigest: verification.expectedDigest,
+      dataDigestMatch: verification.dataDigestMatch,
       counts: manifest.counts,
       tables: manifest.tables,
       schemaVersion: manifest.schemaVersion,
@@ -1814,6 +2168,8 @@ export function importBundle(options = {}) {
       rolledBack: false,
       dataDigest: manifest.dataDigest,
       computedDataDigest: verification.computedDataDigest,
+      expectedDigest: verification.expectedDigest,
+      dataDigestMatch: verification.dataDigestMatch,
       counts: manifest.counts,
       tables: manifest.tables,
       schemaVersion: manifest.schemaVersion,
@@ -1830,6 +2186,111 @@ export function importBundle(options = {}) {
   }
 }
 
+/**
+ * 0.5.1 acceptance helper (plan 201): compare two bundle directories without
+ * trusting either of them. Each directory is verified offline first; `match` is
+ * true only when BOTH verify and their recomputed dataDigest is equal (counts
+ * differences are listed for diagnosis).
+ *
+ * Schema-version aware: when the two bundles were written by different schemas
+ * (a 0.5.0 v22 bundle vs a v23 re-export) their dataDigest domains legitimately
+ * differ, so the comparison happens on the OLDER bundle's table set and the
+ * result reports schemaVersionAdjusted/comparedTables. This is the "did a v22
+ * bundle survive the v23 migration" acceptance check.
+ *
+ * This is the lib side of "bundle compare A B" and of the "did the migration
+ * carry the same data?" drill step; it never opens a HOME and never writes.
+ *
+ * @param {string} dirA first bundle directory
+ * @param {string} dirB second bundle directory
+ * @param {{limits?:object}} [options]
+ * @returns {{ok:boolean, code:string|null, match:boolean,
+ *   a:object, b:object, differences:Array<{field:string,a:any,b:any}>,
+ *   errors:string[], warnings:string[]}}
+ */
+export function compareBundleDirs(dirA, dirB, options = {}) {
+  const limits = normalizeLimits(options?.limits)
+  const a = verifyBundleDir(dirA, { limits })
+  const b = verifyBundleDir(dirB, { limits })
+  const errors = []
+  const differences = []
+  if (!a.ok) addError(errors, 'bundle A is not a valid bundle (' + String(a.code ?? 'unknown') + ')')
+  if (!b.ok) addError(errors, 'bundle B is not a valid bundle (' + String(b.code ?? 'unknown') + ')')
+  const bothValid = a.ok && b.ok
+  let match = false
+  let domainAdjusted = false
+  let comparedTables = null
+  let aDomainDigest = null
+  let bDomainDigest = null
+  if (bothValid) {
+    if (a.schemaVersion === b.schemaVersion) {
+      comparedTables = [...a.tables]
+      aDomainDigest = a.dataDigest
+      bDomainDigest = b.dataDigest
+    } else {
+      // Schema upgrade/downgrade (e.g. a 0.5.0 v22 bundle vs a v23 re-export):
+      // the dataDigest domains legitimately differ, so the two bundles are
+      // compared on the OLDER bundle's table set. This is the "did the v22
+      // bundle survive the v23 migration?" acceptance question.
+      const older = (a.schemaVersion ?? 0) <= (b.schemaVersion ?? 0) ? a : b
+      comparedTables = [...older.tables]
+      domainAdjusted = true
+      const aPayload = a.payload ?? verifyBundleDir(dirA, { limits, includePayload: true }).payload
+      const bPayload = b.payload ?? verifyBundleDir(dirB, { limits, includePayload: true }).payload
+      try {
+        aDomainDigest = isPlainObject(aPayload?.data) ? computeBundleDataDigest(aPayload.data, { tables: comparedTables }).dataDigest : null
+        bDomainDigest = isPlainObject(bPayload?.data) ? computeBundleDataDigest(bPayload.data, { tables: comparedTables }).dataDigest : null
+      } catch (error) {
+        addError(errors, 'cannot recompute the shared dataDigest domain: ' + String(error?.message ?? error).slice(0, 200))
+      }
+    }
+    match = typeof aDomainDigest === 'string' && aDomainDigest === bDomainDigest
+    const tablesToCompare = domainAdjusted ? comparedTables : [...new Set([...Object.keys(a.counts ?? {}), ...Object.keys(b.counts ?? {})])].sort()
+    for (const table of tablesToCompare) {
+      const left = a.counts?.[table] ?? null
+      const right = b.counts?.[table] ?? null
+      if (left !== right) differences.push({ field: 'counts.' + table, a: left, b: right })
+    }
+    if (!domainAdjusted) {
+      if (a.dataDigest !== b.dataDigest) differences.push({ field: 'dataDigest', a: a.dataDigest, b: b.dataDigest })
+      if (JSON.stringify(a.tables) !== JSON.stringify(b.tables)) differences.push({ field: 'tables', a: a.tables, b: b.tables })
+    }
+    if (!match) {
+      differences.unshift({
+        field: domainAdjusted ? 'dataDigest(domain v' + String((a.schemaVersion ?? 0) <= (b.schemaVersion ?? 0) ? a.schemaVersion : b.schemaVersion) + ')' : 'dataDigest',
+        a: aDomainDigest,
+        b: bDomainDigest,
+      })
+      addError(errors, domainAdjusted
+        ? 'bundle dataDigest differs on the shared ' + comparedTables.length + '-table domain: A ' + String(aDomainDigest ?? 'unavailable') + ', B ' + String(bDomainDigest ?? 'unavailable')
+        : 'bundle dataDigest differs: A ' + String(a.dataDigest ?? 'unavailable') + ', B ' + String(b.dataDigest ?? 'unavailable'))
+    }
+  }
+  const code = !a.ok
+    ? (a.code ?? BUNDLE_ERROR_CODES.INVALID)
+    : (!b.ok ? (b.code ?? BUNDLE_ERROR_CODES.INVALID) : (match ? null : BUNDLE_ERROR_CODES.TAMPERED))
+  const summarize = (result, domainDigest) => ({
+    dir: result.dir, ok: result.ok, code: result.code, format: result.format,
+    version: result.version, scope: result.scope, schemaVersion: result.schemaVersion,
+    dataDigest: result.dataDigest, computedDataDigest: result.computedDataDigest,
+    domainDigest: domainDigest ?? result.dataDigest,
+    manifestDigest: result.manifestDigest, counts: result.counts, tables: result.tables,
+    fileCount: result.fileCount, checksumCount: result.checksumCount,
+  })
+  return {
+    ok: Boolean(bothValid && match),
+    code,
+    match: Boolean(match),
+    schemaVersionAdjusted: Boolean(domainAdjusted),
+    comparedTables: comparedTables ? [...comparedTables] : null,
+    a: summarize(a, aDomainDigest),
+    b: summarize(b, bDomainDigest),
+    differences,
+    errors,
+    warnings: [...new Set([...(a.warnings ?? []), ...(b.warnings ?? [])])],
+  }
+}
+
 export default Object.freeze({
   BUNDLE_MANIFEST_FORMAT,
   BUNDLE_MANIFEST_VERSION,
@@ -1838,6 +2299,7 @@ export default Object.freeze({
   BUNDLE_MANIFEST_FILE,
   BUNDLE_LEDGER_FILE,
   BUNDLE_IMPORT_FILE,
+  BUNDLE_FORMAT_FILE,
   BUNDLE_SHA256SUMS_FILE,
   BUNDLE_FACTS_FILE,
   BUNDLE_KB_DIR,
@@ -1852,6 +2314,8 @@ export default Object.freeze({
   BUNDLE_EXCLUDED_TABLES,
   BUNDLE_EXCLUDED,
   BUNDLE_DATA_TABLES,
+  BUNDLE_TABLE_ADDITIONS,
+  bundleDataTablesForSchema,
   describeBundleCode,
   isUnsafeBundlePath,
   isBundleLayoutPath,
@@ -1864,4 +2328,5 @@ export default Object.freeze({
   verifyBundle,
   readBundleManifestHeader,
   importBundle,
+  compareBundleDirs,
 })

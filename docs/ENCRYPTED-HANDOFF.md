@@ -1,5 +1,11 @@
 # Encrypted handoff package (P2)
 
+> Status: **not shipped as a command in 0.5.1.** Schema v23 adds the `handoffs`/
+> `handoff_claims` tables, but 0.5.1 ships no handoff CLI/read surface (the handoff
+> work is a 0.6 item). This page documents the older encrypted whole-home export
+> (`export --all --encrypted`), which is unrelated to that future feature and is
+> still the shipped encrypted file export.
+
 ```sh
 ADVISERS_EXPORT_PASSPHRASE='at least 8 chars' \
   advisers export --all --encrypted --out handoff.enc.json

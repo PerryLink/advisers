@@ -1,8 +1,13 @@
 # Performance
 
-> Status: `0.5.0` (published 2026-11-22) is the current npm `latest` (`next` is also
-> `0.5.0`) and the repository is at package version `0.5.0`. `0.5.0` is a feature release
-> on the 0.4.3 tree with **no hot-path change** for the default read/write commands: its
+> Status: `0.5.1` (published 2026-11-24) is the current npm `latest` (`next` is also
+> `0.5.1`) and the repository is at package version `0.5.1`. 0.5.1 is a follow-up patch
+> on the 0.5.0 tree with **no hot-path change** for the default read/write commands: the
+> schema v23 migration is a one-time upgrade, `mail followup` reads local rows on
+> explicit commands, and the bundle/context-pack changes are one-shot filesystem
+> operations. No 0.5.1 number on this page is a release-time measurement; the
+> 0.4.0 measurements and limits below still apply. `0.5.0` was a feature release
+> on the 0.4.3 tree with no hot-path change for the default read/write commands: its
 > new commands are explicit one-shot filesystem operations (bundle export/import,
 > context-pack create/verify, `sync status --check`, setup/demo/help), and the additive
 > MCP/DSH `disclosure`/`view` metadata only adds bounded work to the read payloads. `0.4.3`

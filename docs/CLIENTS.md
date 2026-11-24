@@ -10,10 +10,12 @@ dimension: a **receivables/payments money sidecar** (§11), an offline-verifiabl
 **client status pack v2** (§9.2) and **mail-to-client hints** that are shown but
 never bound automatically (§12).
 
-- Status: **0.5.0, schema v22** (`SCHEMA_VERSION = 22`). The customer tables are
-  still the three v21 tables (`clients`/`projects`/`client_notes`); v22 adds the
-  money sidecar (`receivables`/`payments`) plus the KB/mail tables, and 0.5.0 adds no
-  customer-table change (its bundle/context-pack surfaces reuse these rows).
+- Status: **0.5.1, schema v23** (`SCHEMA_VERSION = 23`). The customer tables are
+  still the three v21 tables (`clients`/`projects`/`client_notes`); v22 added the
+  money sidecar (`receivables`/`payments`) plus the KB/mail tables, and neither 0.5.0
+  nor 0.5.1 changes the customer tables (v23 adds facts claim/evidence columns, mail
+  thread columns, `waiting_replies` and the handoff tables; bundle/context-pack
+  surfaces reuse the customer rows).
 - Store: SQLite only. The legacy `ADVISERS_STORE=json` store has no customer
   tables, so every `client`/`project` command fails with `E_STORE` there.
 - Wire format: `LedgerSnapshot.version` stays **1**. Customer rows are

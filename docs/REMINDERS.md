@@ -430,6 +430,22 @@ source data). 0.4.0 adds two additive views and one explicit write path:
   not restore the schedule or the brief archive. See [SYNC.md](SYNC.md).
 - See [AUDIT-2026-11-22.md](AUDIT-2026-11-22.md) for the verified list.
 
+## Mail follow-up reminders (0.5.1)
+
+A `mail followup` is **not** a new reminder type: `mail followup add` creates an
+ordinary commitment (`debtor: third`, `capability: none`) whose due date defaults to
+the anchor message time + 3 days at 18:00 Asia/Shanghai, plus a `waiting_replies`
+row. Therefore:
+
+- `remind`, `today`, `who`, `--remind-offsets`, quiet hours, the notification
+  cooldown and `--force-notify` all work unchanged (waiting replies already appear
+  in the `waiting` group);
+- the reminder text is the commitment action, never the mail body or the reply
+  state; `mail followup check` is local-only and does not deliver anything;
+- "no reply found" is local header evidence, not proof that the other side did not
+  reply, and a follow-up is never evidence that mail was sent (see
+  [MAIL-FOLLOWUP.md](MAIL-FOLLOWUP.md) §5).
+
 ## Design constraints
 
 - **No background daemon by default.** `remind install` writes user-level

@@ -25,6 +25,10 @@
  *       run 'advisers memory accept <id>' afterwards.
  *     advisers_pack_verify        -> read-only verification of an evidence-pack
  *       receipt directory (manifest.json / README.txt / SHA256SUMS [+ receipt.docx]).
+ *       Since 0.5.1 it dispatches on manifest.format: a context-pack disclosure
+ *       directory (format 'advisers-context-pack') is verified by the context-pack
+ *       offline verifier instead. Same tool, same count, read-only, and the
+ *       evidence-pack result stays byte-compatible.
  * - 4 read-only resources: today / commitments / who / evidence (JSON).
  *
  * Invariants:
@@ -265,6 +269,32 @@ const CAPTURE_TOOL = Object.freeze({
   annotations: WRITE_ANNOTATIONS,
   write: true,
 })
+
+/**
+ * Format dispatch for advisers_pack_verify (0.5.1 M8 P0-A).
+ *
+ * The tool has always verified an evidence-pack receipt directory; a context
+ * pack is a different, independently frozen format with its own offline
+ * verifier. Only manifest.json is read here (bounded) to pick the verifier;
+ * anything that is not a context pack keeps the legacy evidence-pack path
+ * byte-for-byte. Tool name/schema/count never change.
+ */
+const CONTEXT_PACK_MANIFEST_FORMAT = 'advisers-context-pack'
+const PACK_HEADER_MAX_BYTES = 64 * 1024
+
+/** manifest.format of a pack directory, or null when unreadable/not a pack. */
+function readPackManifestFormat(dir) {
+  try {
+    const manifestPath = join(dir, 'manifest.json')
+    const info = statSync(manifestPath)
+    if (!info.isFile() || info.size > PACK_HEADER_MAX_BYTES) return null
+    const parsed = JSON.parse(readFileSync(manifestPath, 'utf8'))
+    if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) return null
+    return typeof parsed.format === 'string' ? parsed.format : null
+  } catch {
+    return null
+  }
+}
 
 const PACK_VERIFY_TOOL = Object.freeze({
   name: 'advisers_pack_verify',
@@ -1198,10 +1228,51 @@ export function createMcpServer({ store, ledger, loadLedger, loadStore, loadComm
     }
   }
 
+  /**
+   * Context-pack branch of advisers_pack_verify (0.5.1): offline verification
+   * with the same zero-write contract. The payload is additive for a format
+   * that never returned here before; the evidence-pack payload is unchanged.
+   */
+  async function verifyContextPackTool(dir) {
+    let lib
+    try {
+      lib = await import('./context-pack.js')
+    } catch {
+      throw new ToolError('pack directory is unreadable')
+    }
+    let result
+    try {
+      result = lib.verifyContextPackDir(dir)
+    } catch {
+      throw new ToolError('pack directory is unreadable')
+    }
+    if (!result || typeof result !== 'object' || Array.isArray(result)) throw new ToolError('pack directory is unreadable')
+    return {
+      ok: result.ok === true,
+      format: typeof result.format === 'string' ? result.format : CONTEXT_PACK_MANIFEST_FORMAT,
+      version: Number.isInteger(result.version) ? result.version : null,
+      errors: (Array.isArray(result.errors) ? result.errors : []).slice(0, 50),
+      warnings: (Array.isArray(result.warnings) ? result.warnings : []).slice(0, 50),
+      files: (Array.isArray(result.files) ? result.files : []).slice(0, 32),
+      fileCount: Number.isInteger(result.fileCount) ? result.fileCount : 0,
+      checksumCount: Number.isInteger(result.checksumCount) ? result.checksumCount : 0,
+      manifestDigest: typeof result.manifestDigest === 'string' ? result.manifestDigest : null,
+      verificationBasis: typeof result.verificationBasis === 'string' ? result.verificationBasis : null,
+      expiresAt: typeof result.expiresAt === 'string' ? result.expiresAt : null,
+      expired: typeof result.expired === 'boolean' ? result.expired : null,
+      verifiedAt: new Date().toISOString(),
+    }
+  }
+
   async function verifyReceipt(args) {
     assertAllowedKeys(args, ['dir'])
     const dir = requireString(args, 'dir', { min: 1, max: 4096 })
     if (/[\u0000-\u001f\u007f]/.test(dir)) throw invalidParams('dir is invalid')
+    // 0.5.1 format dispatch. The injected readPack seam (tests/embedders) keeps
+    // the legacy evidence-pack path so its contract is untouched.
+    if (typeof readPack !== 'function' && readPackManifestFormat(dir) === CONTEXT_PACK_MANIFEST_FORMAT) {
+      return verifyContextPackTool(dir)
+    }
     const reader = typeof readPack === 'function' ? readPack : readReceiptDirectory
     let pack
     try {

@@ -54,8 +54,22 @@ jobs:
         run: pnpm eval:kb-retrieval
       - name: Model contract gate (fake transport, 0 sockets)
         run: pnpm eval:model-contract
-      - name: Quality report schema gate
-        run: pnpm eval:check-report
+      # CI checks out a clean tree, so the reports it just wrote record a git
+      # commit with cli.dirty:false. Gate them in the same release mode the
+      # release evidence uses; a default-mode check would accept the dirty
+      # worktree reports that made 0.5.0's published quality numbers unverifiable.
+      - name: Quality report schema gate (release mode)
+        run: node scripts/check-eval-report.mjs --release
+      # Keep the machine-readable quality reports as a CI artifact so the
+      # numbers can be re-inspected after the run and attached to a release
+      # (eval/results/ is gitignored; this is the only durable copy in CI).
+      - name: Upload quality reports (eval/results)
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: quality-reports-node-${{ matrix.node }}
+          path: eval/results
+          if-no-files-found: error
+          retention-days: 30
       - name: Interface contracts gate
         run: node scripts/check-contracts.mjs
       - name: SBOM generate and check
@@ -83,6 +97,13 @@ jobs:
       - name: Restore drill (temporary ADVISERS_HOME)
         if: matrix.node == '22.16'
         run: node scripts/restore-drill.mjs
+      # 0.5.1 portable bundle drill: export -> verify -> import into a clean home
+      # -> compare dataDigest/counts, plus the tamper/refuse matrix. Runs on the
+      # minimum supported Node like the restore drill, on Linux only (the
+      # Windows jobs keep the library-level bundle tests).
+      - name: Bundle drill (temporary ADVISERS_HOME)
+        if: matrix.node == '22.16'
+        run: node scripts/bundle-drill.mjs
       # Fault-injection suite: SIGKILL mid-transaction, WAL corruption, FTS
       # desync, migration rollback, ENOSPC. Linux-only cases SKIP cleanly on
       # other platforms (see docs/FAULT-INJECTION.md). Runs once, on the

@@ -107,7 +107,7 @@ claude mcp add advisers -- advisers mcp --stdio
 | `advisers_remind` | 只读 | 当前到期提醒（不投递、不联网） |
 | `advisers_clients` | 只读 | 客户只读投影：`{action:"list"}` 客户行 / `{action:"show", id}` 单个客户（项目、计数、未完成、时间线）；无备注正文、无对话原文 |
 | `advisers_capture_candidate` | 白名单写 | **只产生 pending 记忆候选**，绝不自动 accept、绝不写账本 |
-| `advisers_pack_verify` | 只读校验 | 校验证据包/回执目录（`manifest.json`/`README.txt`/`SHA256SUMS`[+`receipt.docx`]） |
+| `advisers_pack_verify` | 只读校验 | 校验证据包/回执目录（`manifest.json`/`README.txt`/`SHA256SUMS`[+`receipt.docx`]）；0.5.1 起按 `manifest.format` 追加分派 context pack（`advisers-context-pack`）离线校验 |
 
 ### 3.1 输出上限、截断与 clearance 字段（0.3.0）
 
@@ -161,6 +161,8 @@ claude mcp add advisers -- advisers mcp --stdio
 ```
 
 只读：不修改目录，只读 `SHA256SUMS`、`manifest.json`、`README.txt` 及 `SHA256SUMS` 列出的安全文件名；`receipt.docx` 只报告存在性，不解析。返回 `{ok, errors[], files[], fileCount, receiptPresent, extraFileCount, verifiedAt}`。目录/文件错误只返回通用文案，不回显绝对路径。审计行：`mcp.pack.verify`。
+
+**0.5.1 格式分派（additive）**：先读 `manifest.json` 的 `format`。`advisers-context-pack` 表示一个 context pack v1 披露目录，由 context-pack 的离线 verifier 校验，返回追加字段 `format/version/manifestDigest/fileCount/checksumCount/verificationBasis/expiresAt/expired/warnings`（仍以 `verified` + `errors[]` 表达 0/1）；其余/缺失 format（evidence-pack/回执）走原逻辑，**名字、参数、schema、输出字节不变**。工具数仍 8、resources 仍 5，无新增数据面。
 
 ### 3.4 客户只读投影（0.3.2）
 
@@ -292,7 +294,7 @@ modern（`2026-07-28`，无状态；`contracts/mcp/versions-v2.json` 是唯一�
 - 不做 MCP client / 上游会议或邮件 ingest / OAuth / 订阅（`resources/subscribe`、`subscriptions/listen`）。
 - 不提供 HTTP/SSE 传输，不做多租户或远程暴露；只有 stdio。
 - modern 面只做 §5.1 的 5 个方法：不做 `prompts/*`、`resources/templates/list`、分页（不发 `nextCursor`，带 cursor 即 `-32602`）、多轮请求（`resultType` 只有 `complete`，没有 `input_required`）、sampling/elicitation/roots、logging。
-- **0.5.0 仍不向 MCP/DSH 暴露 KB、邮件、金额、bundle 与 context pack**：工具仍是 8 个、resources 仍是 5 个（DSH 仍 6 个）；0.5.0 只给五个读工具/五个 resources 加了 disclosure 元数据（§3.5），没有新增数据面。KB 正文、邮件正文/标题与金额只存在于本地账本/CLI；context pack 与 bundle 只在 CLI 文件系统路径上，MCP `advisers_pack_verify` **不**校验 context pack（仍是 evidence-pack v1 目录）。暴露 KB/邮件需要 opt-in + clearance 0 + untrusted 边界 + 法务文本，不在 0.5.0。
+- **0.5.1 仍不向 MCP/DSH 暴露 KB、邮件、金额、bundle 与 context-pack 内容**：工具仍是 8 个、resources 仍是 5 个（DSH 仍 6 个）；0.5.0 只给五个读工具/五个 resources 加了 disclosure 元数据（§3.5），0.5.1 只加了 `advisers_pack_verify` 的 context-pack 目录校验分派（§3.3），没有新增读取数据面。KB 正文、邮件正文/标题、邮件跟进（`mail followup`）与金额只存在于本地账本/CLI；context pack 与 bundle 只在 CLI 文件系统路径上。暴露 KB/邮件需要 opt-in + clearance 0 + untrusted 边界 + 法务文本，不在 0.5.1。
 - 不新增 MCP 写工具、不做 `handoff`/`handoff_claim`、不做自动 accept/自动发送/日历写回；MCP 没有业务动作面。
 - 不捆绑 `--tools=readonly|standard` profile：那不是 MCP 协议特性（规范只有 `annotations.readOnlyHint`），是 Advisers 自订信任边界，另立项。
 

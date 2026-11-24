@@ -1,9 +1,11 @@
 # Portability: portable home bundle v1
 
-Status: **shipped in 0.5.0** (published 2026-11-22; `export --bundle` / `import --bundle`,
-plan 121/126 WF1). This page documents the format,
-the clean-home acceptance test and the privacy boundary of a bundle. The database
-schema stays v22: a bundle is an export format, not a migration.
+Status: **the bundle format shipped in 0.5.0; 0.5.1 adds the self-describing contract
+and one-command acceptance** (`FORMAT.md`, `import --bundle --verify
+--expect-dataDigest`, `scripts/bundle-drill.mjs`; plan 121/126 WF1 and 201 A2/A4/A5).
+This page documents the format, the clean-home acceptance test and the privacy
+boundary of a bundle. A bundle is an export format, not a migration; the local
+ledger is schema **v23** in 0.5.1.
 
 A bundle is a **plaintext directory that carries one whole local Advisers home** so
 it can be moved to another machine, opened after a lost device, or kept if the
@@ -17,6 +19,10 @@ advisers export --bundle /tmp/advisers-bundle --json
 
 # Verify first on the target machine (offline; TOS-exempt; writes nothing)
 advisers import --bundle /tmp/advisers-bundle --verify --dry-run --json
+
+# One-command acceptance: the dataDigest from the source export must match
+advisers import --bundle /tmp/advisers-bundle --verify --dry-run \
+  --expect-dataDigest <64-hex digest from the source manifest> --json
 
 # Import into a clean home (bootstrap); a populated target needs --replace
 ADVISERS_ACCEPT_TOS=1 advisers import --bundle /tmp/advisers-bundle --verify --json
@@ -44,6 +50,7 @@ terms.
 | `kb/<id>.md` | human-readable projection of `kb_documents` + `kb_chunks` | never |
 | `pages/<id>.md` | human-readable projection of the derived `kb_pages` table | never (pages are rebuilt) |
 | `IMPORT.md` | fixed instructions (contents, clean-machine steps, rules, boundary) | never |
+| `FORMAT.md` | in-bundle format contract (layout, table/column dictionary, `dataDigest` algorithm, minimal-reader pseudocode); added in 0.5.1, covered by `SHA256SUMS` | never (a 0.5.0 bundle has none and stays readable) |
 | `SHA256SUMS` | coreutils-format sha256 of every other file in the directory (including `manifest.json`) | used to verify |
 
 Directory mode `0700`, file mode `0600`. All paths are POSIX-style relative paths,
@@ -222,12 +229,20 @@ why the manifest carries the field but does not claim a verified history.
 2. `cd <dir> && sha256sum -c SHA256SUMS` (Windows: compare `Get-FileHash` values).
 3. Keep at least one copy off the machine, on an encrypted disk (the bundle is
    plaintext; there is no v1 encryption).
-4. On a clean machine, install Advisers 0.5.0 or newer while it is still
-   available and run `import --bundle <dir> --verify`; compare `dataDigest`/`counts`.
+4. On a clean machine, install Advisers 0.5.1 or newer while it is still
+   available and run `import --bundle <dir> --verify`; pass
+   `--expect-dataDigest <hex>` to get a one-command pass/fail, and compare
+   `dataDigest`/`counts` yourself. The same round trip is automated by
+   `node scripts/bundle-drill.mjs` in CI and in the release evidence, including a
+   v22 bundle -> v23 home case and a separate `ledger.json` semantic-parity
+   assertion. `dataDigest` covers `DATA_TABLES` (not the ledger-snapshot tables) —
+   the snapshot is protected by `SHA256SUMS`, so never quote `dataDigest` alone as
+   "every ledger row is identical".
 5. Last resort: `ledger.json` is documented JSON (ledger snapshot v1 + raw data
-   tables) with no executable content. The table schema and migration history are
-   in `docs/ARCHITECTURE.md` and the source tree, so a future reader needs only a
-   JSON parser and the field names.
+   tables) with no executable content, and `FORMAT.md` inside a 0.5.1+ bundle
+   carries the layout/table dictionary and minimal-reader pseudocode, so a future
+   reader needs only a JSON parser and the field names. 0.5.0 bundles have no
+   `FORMAT.md`; use the repository docs and source tree for those.
 
 ## 10. Windows notes
 
@@ -240,9 +255,9 @@ why the manifest carries the field but does not claim a verified history.
 - The POSIX directory/file modes are advisory on Windows; NTFS ACLs still apply.
 - Requires Node >= 22.16 (the `node:sqlite` floor).
 
-## 11. Known limits / not in 0.5.0
+## 11. Known limits / not in 0.5.1
 
-- **No encryption** (`--encrypted` is planned as an opt-in, not shipped in 0.5.0).
+- **No encryption** (`--encrypted` is a 0.6 item; bundle v1 remains plaintext).
 - **No signature / trusted timestamp / notarization**; checksums are local only.
 - **No selective or redacted bundle**: scope is the whole home (`local-all`).
 - **No merge**: import is a whole-home bootstrap or replace, not a multi-writer merge.
@@ -251,7 +266,11 @@ why the manifest carries the field but does not claim a verified history.
 - **No JSON-store bundle**: SQLite only.
 - **Schema gate**: export requires a database already migrated to the current CLI
   schema; import of an older bundle is accepted with a warning (missing columns
-  take defaults), a newer bundle is refused.
+  take defaults), a newer bundle is refused. 0.5.1 verifies/imports a 0.5.0 bundle
+  (no `FORMAT.md`, warning) but a 0.5.1 bundle is **not** readable by the 0.5.0 CLI
+  (the strict v1 layout does not know `FORMAT.md`).
+- **Expect-digest is offline and additive**: `--expect-dataDigest` compares the
+  recomputed `dataDigest` with the value you were given; it is not a signature.
 - **No bundle exchange over MCP/DSH/receipts**: bundles stay on the local
   filesystem; the CLI is the only entry point.
 
@@ -260,4 +279,6 @@ why the manifest carries the field but does not claim a verified history.
 - [CLI-JSON.md](CLI-JSON.md) — `export --bundle` / `import --bundle` JSON shapes.
 - [SYNC.md](SYNC.md) — the separate encrypted snapshot sync (not a bundle).
 - [PRIVACY.md](PRIVACY.md) — the full data-flow notice (legal text, unchanged).
+- [QUALITY.md](QUALITY.md) — where the release-time bundle drill result is recorded.
+- [REACH.md](REACH.md) — what can reach the local home (MCP/DSH/bridge).
 - [CONTEXT-PACK.md](CONTEXT-PACK.md) — the bounded disclosure counterpart.

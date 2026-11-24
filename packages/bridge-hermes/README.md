@@ -7,8 +7,9 @@ Hermes owns the platform adapters (Telegram, Feishu, WeCom, Slack, Discord,
 Email, …), allowlists/pairing, slash commands, threads, approvals and delivery
 ledger. Advisers only exchanges JSON files.
 
-`0.5.0` is the current lockstep release (published 2026-11-22; a feature release on
-the 0.4.3 tree); the bridge JSON-file contract is unchanged from 0.3.2.
+`0.5.1` is the current lockstep release (published 2026-11-24; a follow-up patch on
+the 0.5.0 tree: schema v23, read-only mail follow-up and release-level quality
+evidence); the bridge JSON-file contract is unchanged from 0.3.2.
 
 ```
 Hermes gateway  <->  bridge-adapter  <->  inbox/outbox JSON  <->  advisers bridge

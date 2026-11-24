@@ -10,16 +10,19 @@ DSH bundle for **Advisers**. It registers:
 - `advisers_evidence` — read-only **real-ledger** evidence lookup (stored quotes/refs/sources) for a `cm_…`, `fact_…`, or `pref_…` id;
 - `advisers_clients` — read-only **real-ledger** customer projection: `{action:"list"}` client rows or `{action:"show", id}` one client (projects, exact counts, open buckets, a delivery/commitment timeline). No note bodies, no conversation text.
 
-`0.5.0` is the current lockstep release (published 2026-11-22; a feature release on the
-0.4.3 tree). This adapter's six-tool surface and its read-only scope are unchanged from
-0.3.2; 0.5.0 adds only the additive read-disclosure metadata (`disclosure{surface:"dsh",
+`0.5.1` is the current lockstep release (published 2026-11-24; a follow-up patch on the
+0.5.0 tree). This adapter's six-tool surface and its read-only scope are unchanged from
+0.3.2; 0.5.0 added only the additive read-disclosure metadata (`disclosure{surface:"dsh",
 …,audited:false}` plus per-row `view`) to the read results, because the adapter never
-writes the `advisers` audit chain. The new capability of the 0.4/0.5 lines (knowledge
+writes the `advisers` audit chain. 0.5.1 adds no DSH tool/resource and no host-write
+surface: the schema v23 migration, read-only mail follow-up, bundle drill/expect-digest,
+context-pack issuance audit and the release-level quality evidence live in the
+`advisers` package. The earlier 0.4/0.5 capability (knowledge
 base, mail entry, interactive shell, receivables, policy/evidence subset, KB/mail review
 links, manual fact entry, Chinese relative dates, local capture/inbox, trust outputs,
 payment channels, receivable CSV, restore drill, portable bundle v1, context pack v1,
-sync snapshot v2, setup/demo/help) lives in the `advisers`
-package, and this adapter keeps its read-only scope.
+sync snapshot v2, setup/demo/help) also lives in `advisers`, and this adapter keeps its
+read-only scope.
 
 0.3.0 wires the three ledger read tools to the real local ledger through the
 controlled `advisers/lib/ledger-read.js` facade (see

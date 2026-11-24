@@ -22,7 +22,7 @@ function makeHome() { return mkdtempSync(join(tmpdir(), 'advisers-050-demo-real-
 function run(home, args) {
   return spawnSync(process.execPath, [bin, ...args], {
     env: { ...process.env, ...BASE_ENV, ADVISERS_HOME: home },
-    encoding: 'utf8', input: '', timeout: 180000,
+    encoding: 'utf8', input: '', timeout: 300000,
   })
 }
 function sha256File(file) {

@@ -1,13 +1,15 @@
 # File-based E2EE snapshot sync (snapshot v2, conflict precheck)
 
-Status: **0.5.0, published 2026-11-22** (snapshot payload v2 + `sync.state.json` +
-conflict precheck; plan 121 §3 / 126 WF2 050-S2). This is still the same P2
-prototype: no sync server, no cloud account, no daemon. Advisers writes encrypted
-whole-database snapshots into a directory that your existing tool (OneDrive,
-Dropbox, Syncthing, rsync, a NAS) already replicates.
+Status: **0.5.1, published 2026-11-24** (snapshot payload v2 + `sync.state.json` +
+conflict precheck introduced in 0.5.0; plan 121 §3 / 126 WF2 050-S2). This is still
+the same P2 prototype: no sync server, no cloud account, no daemon. Advisers writes
+encrypted whole-database snapshots into a directory that your existing tool (OneDrive,
+Dropbox, Syncthing, rsync, a NAS) already replicates. 0.5.1 changes no sync code
+path or payload byte; the local database it snapshots is schema v23 instead of v22
+and the new `waiting_replies`/handoff tables travel with the whole database.
 
 **The transfer semantics are still last-writer-wins on the whole database.** 0.5.0
-adds a *refusal guard* (a proven stale overwrite is rejected unless `--force`),
+added a *refusal guard* (a proven stale overwrite is rejected unless `--force`),
 not a merge and not multi-writer conflict resolution.
 
 ```sh

@@ -1,8 +1,10 @@
 # Context pack v1 — offline-verifiable disclosure for another agent
 
-Status: **shipped in 0.5.0** (published 2026-11-22; `context-pack create` /
-`context-pack verify`; plan 122/126 WF3). The database schema stays v22 and no new
-MCP/DSH tool is added.
+Status: **shipped in 0.5.0; issuance audit + host verification added in 0.5.1**
+(`context-pack create` / `context-pack verify`; plan 122/126 WF3 and 202 A4/A5).
+0.5.1 adds one local `context_pack.create` audit row on create and lets MCP
+`advisers_pack_verify` dispatch on `manifest.format`, so a host agent can verify a
+received context pack offline; no new tool/resource is added (8/5, DSH 6).
 
 A context pack is a small, bounded, **one-way disclosure directory**: an operator
 selects a few current rows from one client/matter, labels who receives it and
@@ -24,13 +26,13 @@ advisers context-pack verify /tmp/pack --json
 
 ## 1. Naming and surfaces
 
-| Surface | Status in 0.5.0 |
+| Surface | Status in 0.5.1 |
 |---|---|
 | `advisers context-pack create\|verify` | the only name; there is no `pack context`/`pack verify` alias |
-| `advisers evidence verify <dir>` | the single format-dispatch entry: context pack -> client status pack -> delivery receipt |
+| `advisers evidence verify <dir>` | the single CLI format-dispatch entry: context pack -> client status pack -> delivery receipt |
 | `advisers deliveries --pack` / `--receipt` | unchanged (separate frozen formats) |
-| MCP `advisers_pack_verify` | unchanged; still verifies evidence-pack v1 only — it does not accept a context pack |
-| MCP/DSH tools and resources | unchanged (8 tools / 5 resources; DSH 6 tools); context packs are CLI-only |
+| MCP `advisers_pack_verify` | 0.5.1 dispatches on `manifest.format`; a context pack (`advisers-context-pack`) is verified by the same offline verifier, the evidence-pack/receipt path keeps its exact previous output |
+| MCP/DSH tools and resources | unchanged (8 tools / 5 resources; DSH 6 tools); context packs are CLI-only to create, host-verifiable read-only via `advisers_pack_verify` |
 
 ## 2. Pack layout (manifest v1)
 
@@ -179,8 +181,12 @@ standalone verifier for an **untrusted directory**:
   `E_CONTEXT_PACK_DIGEST_MISMATCH`.
 
 The report includes `format`, `version`, `fileCount`, `checksumCount`, `bytes`,
-`files`, `manifestDigest`, `verificationBasis` and warnings. The same check runs
-inside `evidence verify` after format dispatch.
+`files`, `manifestDigest`, `verificationBasis` and warnings; since 0.5.1 it also
+reports `expiresAt`/`expired` additively — an expired pack only adds a warning and
+does **not** change the 0/1 `ok` result (expiry is a disclosure hint, not a
+checksum failure). The same check runs inside `evidence verify` after format
+dispatch, and the MCP `advisers_pack_verify` context-pack path uses the same
+verifier.
 
 `README.txt` states the boundary in plain language (selected items only, no
 amounts/bodies/full text, no read/execution authority, no import path, checksums
@@ -226,6 +232,16 @@ through MCP/DSH. Deleting a pack does not modify the local ledger.
 - non-current rows (stale facts/commitments/preferences) and archived matters;
 - rows above the clearance (counted only as `excluded.byReason.secrecy`).
 
+## 10.1 Issuance audit (0.5.1)
+
+`context-pack create` now appends one local audit row **after** the pack is written
+and self-verified: action `context_pack.create`, actor `local`, allowed `true`,
+reason `subject=<kind>:<id> purpose=<purpose> items=<n> manifestDigest=<64hex>
+recipientHash=<64hex>` (a salted hash; no recipient name/email, no item text, no
+values). `create --json` exposes it additively as
+`audit: {ok, action, reason}`. The audit chain is local; this is a record of what
+this home issued, not a recipient acknowledgement, signature or revocation.
+
 ## 11. Verification boundary
 
 `verificationBasis: "local-checksums-only"` — SHA-256 proves pack internal
@@ -252,4 +268,5 @@ generated it, or access control.
 - [CLI-JSON.md](CLI-JSON.md) — JSON shapes for candidates, create and verify.
 - [PORTABILITY.md](PORTABILITY.md) — the whole-home bundle (the importable export).
 - [DELIVERY-RECEIPT.md](DELIVERY-RECEIPT.md) — the separate delivery receipt pack.
-- [PRIVACY.md](PRIVACY.md) — the legal data-flow notice (unchanged by 0.5.0).
+- [PRIVACY.md](PRIVACY.md) — the legal data-flow notice (unchanged by 0.5.0/0.5.1).
+- [MAIL-FOLLOWUP.md](MAIL-FOLLOWUP.md) — the 0.5.1 read-only follow-up engine (not pack content).

@@ -16,8 +16,12 @@ follow-up patch and followed the identical order; its §13 record is complete.
 order and its §13 record is complete. **0.4.3 (published 2026-11-22)** is the follow-up patch
 and follows the identical order; its §13 record is complete. **0.5.0 (published
 2026-11-22)** is a feature release that follows the identical order; its §13 record
-starts with `TBD` placeholders for the tag object, publish run, verification and asset
-hashes, filled in once the owner completes the publish. One runbook
+was completed after the publish. **0.5.1 (published 2026-11-24)** is the follow-up
+patch on the 0.5.0 tree (schema v23 single jump, read-only mail follow-up,
+release-level quality evidence, bundle exit drill/digest expectation and
+context-pack issuance audit); its §13 record starts with `TBD` placeholders for the
+tag object, publish run, verification and asset hashes, filled in once the owner
+completes the publish. One runbook
 detail is easy to get wrong: the portable ZIP is assembled **after** the npm publish
 from the published tarballs, because
 `pack-portable.mjs` installs `advisers@<version>` and `advisers-office@<version>`
@@ -122,7 +126,7 @@ node scripts/fault-injection.mjs
 node scripts/pack-smoke.mjs
 node scripts/check-docs.mjs
 node scripts/check-docs.mjs --self-test
-node scripts/check-release.mjs --stable
+node scripts/check-release.mjs          # lockstep/pins; tag checks run after tagging (§4)
 node scripts/check-licenses.mjs
 node scripts/check-tos.mjs --release
 node scripts/check-deps.mjs
@@ -132,6 +136,9 @@ node scripts/check-provenance.mjs --self-test
 node scripts/portable-zip.mjs --self-test
 node scripts/pack-portable.mjs --self-test
 pnpm eval:det
+node eval/evidence.mjs                 # release-grade evidence on this pre-tag commit; see QUALITY.md §4
+node scripts/check-eval-report.mjs --release eval/results/release-evidence
+node scripts/check-release.mjs --eval-evidence eval/results/release-evidence
 pnpm run sbom && pnpm run check:sbom
 ```
 
@@ -157,7 +164,8 @@ git push github-direct main        # origin/gitee/gitcode mirrors as configured
 git tag -a vX.Y.Z -m "Advisers X.Y.Z"
 git rev-parse vX.Y.Z               # tag object SHA: record it
 git rev-parse vX.Y.Z^{commit}      # release commit SHA: record it
-node scripts/check-release.mjs --stable --require-tag   # tag == HEAD, tag is annotated
+node scripts/check-release.mjs --stable --require-tag --eval-evidence eval/results/release-evidence
+                                                       # tag == HEAD, annotated, evidence commit == HEAD
 git push github-direct vX.Y.Z      # then the gitee/gitcode mirrors
 ```
 
@@ -369,6 +377,48 @@ body or a log. CI publishing uses GitHub OIDC only.
 
 A short factual record per release; keep it terse and do not turn it into a
 changelog copy.
+
+### 0.5.1 (2026-11-24)
+
+- **Published:** npm `latest` = 0.5.1, `next` = 0.5.1; all eight workspace packages
+  lockstep at 0.5.1 (six published). Tag: `v0.5.1`, annotated object `TBD` (fill after
+  tag creation) -> commit `TBD` (fill after tagging); published from `refs/tags/v0.5.1`
+  (publish run `TBD`, fill after dispatch).
+- **Release shape:** follow-up patch on the 0.5.0 tree — **one** schema jump
+  v22 -> v23 (migration `fact-claim-fields-and-handoffs`: facts claim/evidence
+  columns, mail thread headers, `waiting_replies`, handoff/handoff-claim tables);
+  read-only `mail followup` (header-only waiting-reply state, no send/network/MCP);
+  `scripts/bundle-drill.mjs` + `import --bundle --verify --expect-dataDigest` +
+  bundle `FORMAT.md`; `context_pack.create` audit + MCP `advisers_pack_verify`
+  format dispatch (tool count unchanged); release-level quality evidence
+  (`docs/QUALITY.md`, clean-checkout report, `check-release --eval-evidence`).
+  MCP stays 8 tools / 5 resources and DSH 6 tools; no new network path and no new
+  runtime dependency; legal texts stay v2026.11.4 (v2026.11.5 deferred, D10b).
+- **Contracts:** additive CLI surfaces (`mail followup`, `--expect-dataDigest`,
+  `audit` on `context-pack create`, `--eval-evidence`) and
+  the new 0.5.1 error codes; MCP tool names/descriptions/schemas unchanged. Record
+  the `check-contracts` check count on this release tree; do not reuse 0.5.0's 90.
+- **Artifacts:** TBD — CycloneDX SBOM, six-tarball `SHA256SUMS`, Windows portable ZIP
+  and portable checksums, plus the release-quality report (the new release asset;
+  record its sha256). Do not copy hashes from another release.
+- **Verification:** TBD — `verify-release --version 0.5.1 --tag latest --sbom
+  artifacts/sbom.cdx.json --require-sbom` -> `TBD` checks PASS (fill after publish);
+  CI on the release commit `TBD` (fill after push; Linux Node 22.16/24,
+  `windows-smoke` and blocking `windows-full`). Local pre-tag evidence on this
+  release tree: `check-docs`/`check-release`/`check-licenses` pass,
+  `check-contracts` PASS, `check-tos --release` PASS, the targeted 0.5.1 test files
+  and the v22 -> v23 migration drills pass, and `check-eval-report --release` +
+  `check-release --eval-evidence` pass on the clean release checkout; the release
+  operator records the exact commands/outputs on the release commit and attaches
+  the report. Replaying evidence from a post-tag tree needs
+  `--eval-commit <tag-sha>` (and `--eval-version <version>` when the tree version
+  is ahead), per [QUALITY.md](QUALITY.md). The quality report is a release asset
+  and a CI artifact (`quality-reports-node-*`, 30 days); commands/slots/unknowns
+  are in [QUALITY.md](QUALITY.md).
+- **Release notes / assets:** <https://github.com/PerryLink/advisers/releases/tag/v0.5.1>
+  (created `TBD` with the SBOM, six-tarball `SHA256SUMS`, portable ZIP and its
+  checksums, and the release-quality report). The `TBD` placeholders are filled by
+  the release operator after the publish completes.
 
 ### 0.5.0 (2026-11-22)
 

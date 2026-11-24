@@ -1,6 +1,6 @@
 # Windows support
 
-> Status: **0.5.0, 2026-11-22.** Windows is the primary target platform (the product
+> Status: **0.5.1, 2026-11-24.** Windows is the primary target platform (the product
 > and its docs are Windows-first), but "supported" is a claim this page scopes
 > precisely: Windows 11 25H2/26H2 x64 only, npm as the official channel, and the
 > portable ZIP as the offline channel. The 0.4 line has two kinds of evidence: a
@@ -176,6 +176,15 @@ mail and receivables tables plus FTS indexes). The migration is one-way: after
 0.4.0 has opened the database, do **not** point 0.3.x at it. To roll back, first
 restore a backup created before the upgrade (advisers restore or
 import --replace) on a fresh home, or keep using 0.4.x.
+
+**0.5.1 schema migration:** 0.5.1 migrates the ledger once from v22 to v23 (facts
+claim/evidence columns, mail thread columns, `waiting_replies` and the handoff
+tables) and writes a managed `state.db.before-migrate-v22-*` backup first. It is
+one-way too: after 0.5.1 has opened the database, a 0.5.0 binary fails with
+`E_SCHEMA_NEWER` — roll back by restoring that backup (or `export --bundle` on the
+old version before upgrading, then `import --bundle --verify` after). The migration
+can be slow on a large home: keep free disk space for the pre-migration backup and
+do not interrupt the first command.
 
 ### Portable ZIP
 

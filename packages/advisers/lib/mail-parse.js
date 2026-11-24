@@ -16,6 +16,16 @@ export const MAX_ATTACHMENTS = 50
 export const MAX_ATTACHMENT_NAME_CHARS = 120
 const MAX_MIME_DEPTH = 10
 
+/**
+ * Threading-header bounds (0.5.1, plan 92 §4). References is a JSON array in
+ * the ledger, so a hostile message must never be able to bloat a row: every
+ * limit is enforced here and reported through parseMailMessage().warnings.
+ */
+export const MAX_THREAD_REFERENCES = 20
+export const MAX_THREAD_REFERENCE_CHARS = 512
+export const MAX_THREAD_REFERENCES_BYTES = 8 * 1024
+export const MAX_AUTO_SUBMITTED_CHARS = 120
+
 function normalizeNewlines(value) {
   return String(value == null ? '' : value).replace(/^\uFEFF/, '').replace(/\r\n/g, '\n').replace(/\r/g, '\n')
 }
@@ -190,10 +200,114 @@ function cleanHeader(value) {
   return String(value == null ? '' : value).replace(/[\u0000-\u001f\u007f]+/g, ' ').replace(/\s+/g, ' ').trim()
 }
 
+/* ------------------------------------------------------------------ */
+/* Threading headers (0.5.1, plan 92 §4)                              */
+/* ------------------------------------------------------------------ */
+
+/**
+ * Normalise one Message-ID token. Accepts the RFC form `<id@host>` and the
+ * bracket-less form some clients emit. Returns '' when the token cannot be a
+ * Message-ID (whitespace, control characters, over-long) so callers can count
+ * it as invalid instead of storing half-parsed provenance.
+ */
+export function normalizeMessageIdToken(token) {
+  let value = String(token == null ? '' : token).trim()
+  if (value.startsWith('<') && value.endsWith('>')) value = value.slice(1, -1).trim()
+  if (!value || value.length > MAX_THREAD_REFERENCE_CHARS) return ''
+  if (/[\u0000-\u001f\u007f\s]/.test(value)) return ''
+  if (!value.includes('@')) return ''
+  if ((value.match(/@/g) || []).length !== 1) return ''
+  return value
+}
+
+/**
+ * Parse an In-Reply-To / References header into a bounded, ordered id list.
+ * The ledger stores it as a JSON array, so this is the single enforcement
+ * point for MAX_THREAD_REFERENCES / MAX_THREAD_REFERENCE_CHARS /
+ * MAX_THREAD_REFERENCES_BYTES. Never throws.
+ * @returns {{ ids: string[], truncated: boolean, invalid: boolean }}
+ */
+export function normalizeThreadIds(raw) {
+  const text = cleanHeader(raw)
+  if (!text) return { ids: [], truncated: false, invalid: false }
+  const bracketed = []
+  let rest = text
+  for (const match of text.matchAll(/<([^<>]*)>/g)) {
+    const id = normalizeMessageIdToken(match[1])
+    if (id) bracketed.push(id)
+    rest = rest.replace(match[0], ' ')
+  }
+  const plain = []
+  for (const token of rest.split(/[\s,;]+/)) {
+    const id = normalizeMessageIdToken(token)
+    if (id) plain.push(id)
+  }
+  const all = [...bracketed, ...plain]
+  const seen = new Set()
+  const ids = []
+  let truncated = false
+  let bytes = 0
+  for (const id of all) {
+    if (seen.has(id)) continue
+    if (ids.length >= MAX_THREAD_REFERENCES || bytes + Buffer.byteLength(id, 'utf8') + 1 > MAX_THREAD_REFERENCES_BYTES) {
+      truncated = true
+      break
+    }
+    seen.add(id)
+    ids.push(id)
+    bytes += Buffer.byteLength(id, 'utf8') + 1
+  }
+  return { ids, truncated, invalid: all.length === 0 }
+}
+
+/**
+ * Normalise an Auto-Submitted header into the lower-case token the followup
+ * rules compare, or null when absent.
+ */
+export function normalizeAutoSubmitted(raw) {
+  const text = cleanHeader(raw).toLowerCase()
+  if (!text) return null
+  return text.length > MAX_AUTO_SUBMITTED_CHARS ? text.slice(0, MAX_AUTO_SUBMITTED_CHARS) : text
+}
+
+/** True when an Auto-Submitted value marks machine-generated mail. */
+export function isAutoSubmittedValue(value) {
+  const text = String(value == null ? '' : value).trim().toLowerCase()
+  if (!text) return false
+  return text === 'auto-generated' || text === 'auto-replied' ||
+    text.startsWith('auto-generated;') || text.startsWith('auto-replied;') ||
+    text.startsWith('auto-generated ') || text.startsWith('auto-replied ')
+}
+
+function threadingFields(source) {
+  const { head } = splitHeadBody(source)
+  const headers = parseHeaders(head)
+  const references = normalizeThreadIds(headers['references'])
+  const inReplyTo = normalizeThreadIds(headers['in-reply-to'])
+  const warnings = []
+  if (references.truncated) warnings.push('references-truncated')
+  if (references.invalid) warnings.push('references-invalid')
+  if (inReplyTo.truncated) warnings.push('in-reply-to-truncated')
+  if (inReplyTo.invalid) warnings.push('in-reply-to-invalid')
+  return {
+    inReplyTo: inReplyTo.ids.length ? inReplyTo.ids[inReplyTo.ids.length - 1] : null,
+    references: references.ids,
+    autoSubmitted: normalizeAutoSubmitted(headers['auto-submitted']),
+    warnings,
+  }
+}
+
 /**
  * Parse one RFC 822 message into the row fields the mail store needs.
+ *
+ * 0.5.1 adds the read-only threading headers (plan 92 §4):
+ * `inReplyTo` is the immediate parent id or null, `references` is the bounded
+ * JSON-array list (see normalizeThreadIds) and `autoSubmitted` is the
+ * Auto-Submitted token or null. The mail store derives thread_root/direction
+ * from these; nothing here is written to disk by the parser.
  * @returns {{ from: string, to: string, subject: string, date: string,
  *   messageId: string, text: string, attachments: Array<{name,size,mime}>,
+ *   inReplyTo: string|null, references: string[], autoSubmitted: string|null,
  *   warnings: string[], sizeBytes: number }}
  */
 export function parseMailMessage(raw) {
@@ -209,6 +323,10 @@ export function parseMailMessage(raw) {
   for (const warning of Array.isArray(parsed.warnings) ? parsed.warnings : []) {
     if (!warnings.includes(warning)) warnings.push(warning)
   }
+  const threading = threadingFields(source)
+  for (const warning of threading.warnings) {
+    if (!warnings.includes(warning)) warnings.push(warning)
+  }
   return {
     from: cleanHeader(parsed.from),
     to: cleanHeader(parsed.to),
@@ -217,6 +335,9 @@ export function parseMailMessage(raw) {
     messageId: cleanHeader(parsed.messageId),
     text: typeof parsed.text === 'string' ? parsed.text : '',
     attachments: scanAttachments(source),
+    inReplyTo: threading.inReplyTo,
+    references: threading.references,
+    autoSubmitted: threading.autoSubmitted,
     warnings,
     sizeBytes: Buffer.byteLength(source),
   }

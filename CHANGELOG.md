@@ -1,6 +1,170 @@
 # Changelog
 
+## 0.5.1 (2026-11-24)
+
+"Follow-up workflow and release evidence" patch release on the 0.5.0 tree. **One
+database schema jump (v22 -> v23)**, no new network path, no new runtime
+dependency; MCP stays 8 tools / 5 resources and DSH stays 6 tools; packaged and
+public legal texts stay **v2026.11.4** (a v2026.11.5 revision is deferred to the
+separate legal decision D10b and is not part of this release).
+
+Status: **published 2026-11-24.** npm `latest` = `0.5.1`, and `next` also points
+at `0.5.1` after this release advanced it. The eight workspace packages are
+lockstep at `0.5.1`: the six published packages (`advisers`, `advisers-core`,
+`advisers-office`, `advisers-policy-strict`, `advisers-bridge-hermes`,
+`dsh-advisers`) and the two private `advisers-link-*` packages held at the same
+version. The eight internal workspace pins, the three version constants and
+`pnpm-lock.yaml` follow; the six per-package `THIRD-PARTY-NOTICES.md` files are
+regenerated (version line only; the dependency closure is unchanged from 0.5.0),
+and the six tarballs are published from GitHub Actions OIDC/Trusted Publishing
+with SLSA provenance naming the release tag ref; verify with
+`node scripts/verify-release.mjs --version 0.5.1 --tag latest --sbom artifacts/sbom.cdx.json --require-sbom`.
+Release notes, the CycloneDX SBOM and `SHA256SUMS` are attached to
+<https://github.com/PerryLink/advisers/releases/tag/v0.5.1>; the tag object,
+publish run, `verify-release` count and asset hashes are recorded in
+[docs/RELEASING.md](docs/RELEASING.md) §13 once the publish completes.
+
+### Features
+
+- **Read-only mail follow-up** (`mail followup add|ls|check|show|dismiss|mark-replied`):
+  a local, header-only state engine over the existing read-only IMAP mail store.
+  It creates an ordinary commitment (`debtor: third`, `capability: none`, verbatim
+  subject quote) plus a `waiting_replies` row, so `remind`/`today`/`who`/`morning`
+  see the pending reply without any new reminder logic. Replies are detected only
+  from `In-Reply-To`/`References`/`thread_root` headers with exact ids; automatic
+  replies (`Auto-Submitted`, out-of-office subjects, mailer-daemon/postmaster/
+  no-reply senders), foreign senders and fuzzy subject matches are recorded as
+  ignored/warnings/`possibleReplies[]` and never flip the state. It **never sends
+  mail, opens no connection, fetches no body and adds no egress path**; it is not
+  exposed over MCP, DSH, receipt packs or Pet Brief. Default due is the anchor
+  message time + 3 days at 18:00 Asia/Shanghai (`dueBasis: waiting-default`).
+  See [docs/MAIL-FOLLOWUP.md](docs/MAIL-FOLLOWUP.md).
+- **Schema v23, one single jump from v22** (migration step
+  `fact-claim-fields-and-handoffs`; there is no second schema version in 0.5.1):
+  `facts` gains the nine claim/evidence columns (`conditions`, `polarity`,
+  `modality`, `revision_intent`, `valid_time_unknown`, `quote_source_kind`,
+  `quote_source_id`, `quote_char_start`, `quote_char_end` — all nullable, the
+  `valid_time_unknown` default `0`), `mail_messages` gains the thread headers
+  (`in_reply_to`, `references`, `thread_root`, `direction`, `auto_submitted`, plus
+  `idx_mail_thread`), three tables are added — `waiting_replies` (follow-up state,
+  16 columns), `handoffs` and `handoff_claims` (the handoff *schema* only — 0.5.1
+  ships no handoff CLI/read surface, the tables stay empty) — and five nullable
+  reserved columns are added for the 0.6 customer-acceptance/payment-proof work
+  (`deliveries.accepted_at/accepted_by/accept_method/accept_evidence_ref`,
+  `payments.proof_sha256`; DDL only, no 0.5.1 command reads or writes them). All
+  three tables join `DATA_TABLES` so export/import/bundle/backup carry them. The step is
+  idempotent, writes the existing
+  `state.db.before-migrate-v22-<ts>` managed backup before changing anything,
+  rolls back as a unit and can be retried; reopening a migrated home does not
+  create a second backup. The migration does **not** backfill history: mail
+  synced before the upgrade has no stored headers and is reported as
+  `unknown`/`no-threading-headers` instead of being guessed. A 0.5.0 binary opens
+  a v23 database with `E_SCHEMA_NEWER`; downgrading means restoring the backup.
+- **Verifiable exit drill and one-command digest expectation**: new
+  `scripts/bundle-drill.mjs` runs source home -> `export --bundle` -> clean home ->
+  `import --bundle --verify` -> re-export and asserts `dataDigest`/counts/table
+  parity, plus tamper/extra-file/non-empty-home/no-credential/zero-network
+  negatives plus a **v22 bundle -> v23 home** compatibility case; it is wired as a
+  CI step (Node 22.16, after the restore drill) and as release evidence. Note the
+  bundle `dataDigest` covers `DATA_TABLES` only — the ledger snapshot is protected by
+  `SHA256SUMS` and asserted separately by the drill, so do not read `dataDigest` as
+  "every ledger row is identical".
+  `import --bundle --verify --expect-dataDigest <64hex>` turns the acceptance check
+  into one pass/fail command (`--json` adds `expectedDigest`/`dataDigestMatch`; a
+  mismatch is `E_BUNDLE_TAMPERED`, exit 1, zero writes to the target home).
+  Bundles now carry a `FORMAT.md` (layout, table/field dictionary, `dataDigest`
+  algorithm, minimal-reader pseudocode) covered by `SHA256SUMS`; bundles written by
+  0.5.1 are **not** readable by the 0.5.0 CLI (strict layout), while 0.5.0 bundles
+  remain verifiable/importable by 0.5.1 with a warning.
+- **Disclosure issuance audit and host verification**: `context-pack create` now
+  writes one local `context_pack.create` audit row (subject kind/id, purpose, item
+  count, `manifestDigest`, salted `recipientHash`; never the recipient name) and
+  `create --json` exposes it additively. MCP `advisers_pack_verify` dispatches on
+  `manifest.format` so a host agent can verify a received context pack offline;
+  the evidence-pack/receipt path keeps its exact previous output and the tool
+  count stays 8 tools / 5 resources (tool names, descriptions and input schemas
+  unchanged).
+- **Release-level quality evidence**: [docs/QUALITY.md](docs/QUALITY.md) records
+  every gate with its command, metric, `n` and unknowns; the release gate runs
+  `check-eval-report --release` (a dirty tree or a failed gate fails the release)
+  and `check-release --eval-evidence` consumes the five-slot release-evidence directory
+  instead of trusting a stale local run; the report is uploaded as the
+  `quality-reports-node-*` CI artifact and attached to the release by the operator.
+  The independent human-gold tooling (`compute-agreement.mjs`/`adjudicate.mjs`) is
+  included for review packets, but **no independent human gold has been run**, so
+  `unknowns.humanGold` stays `null`. The deterministic baseline keeps its frozen
+  bytes (recorded from the 0.4.3 tree); [docs/QUALITY.md](docs/QUALITY.md) states that
+  provenance instead of silently re-recording it.
+- **Docs**: new [docs/MAIL-FOLLOWUP.md](docs/MAIL-FOLLOWUP.md),
+  [docs/QUALITY.md](docs/QUALITY.md) and
+  [docs/ERRATA-0.5.0.md](docs/ERRATA-0.5.0.md); docs/PRICING.md,
+  docs/COMMERCIAL.md and docs/FAQ.md skeleton pages state that pricing, evaluation
+  terms and ordering are **not open yet** (owner decision D1/D8 pending), with the
+  private enquiry channel; `docs/AGENT-INTEROP.md` records the corrected DSH
+  catalog facts (no official DSH marketplace; the community catalog lists 6,808
+  entries with 159 `PerryLink/*` entries and no `dsh-advisers` entry yet) and the
+  host smoke table. 0.5.0 release-note corrections are collected in the errata page.
+
+### Behaviour changes
+
+- The v23 migration is **one-way** and runs once, with a managed
+  `state.db.before-migrate-v22-*` backup before the step; there is no v22/v23
+  dual-write, no lazy per-table migration and no second jump in this release. The
+  upgrade suite covers fresh/upgrade/backup/rollback/idempotent-reopen and the
+  v22-bundle-to-v23-home case; a real 0.5.0 binary opening a v23 database and a
+  real Windows/200k-row upgrade were not exercised on a real install in this
+  release (the `E_SCHEMA_NEWER` path is covered by the suite).
+- `mail sync` now parses and stores `In-Reply-To`/`References`/`Auto-Submitted`.
+  Mail already in the ledger keeps `thread_root = NULL` (reported as `unknown`);
+  replies that arrive after the upgrade are detectable without a full re-sync.
+- `import --bundle` accepts an optional `--expect-dataDigest`; the flag is
+  additive and offline. Bundles written by 0.5.1 carry `FORMAT.md` and are not
+  readable by 0.5.0 (old bundles remain readable by 0.5.1).
+- `context-pack create` now appends an audit row (new audit action
+  `context_pack.create`) and prints it in `--json`; the pack itself and its
+  disclosure fields are unchanged.
+- MCP `advisers_pack_verify` now accepts both the evidence-pack (unchanged
+  output) and a context pack (`manifest.format: advisers-context-pack`); the tool
+  count, resource count and schemas are unchanged (additive dispatch only).
+- The release checklist consumes a release-quality report: `check-eval-report
+  --release` and `check-release --eval-evidence` are now part of the pre-tag
+  gate, and a missing/dirty report blocks the release.
+
+### Known limits / not done
+
+- **Read-only by design.** Mail follow-up never sends, never drafts, has no
+  OAuth/Gmail/Microsoft 365, no IMAP write, no inbox IDLE and no daemon; the
+  only network path is still an explicit `mail sync`. `possibleReplies[]` is a
+  human review queue, not an automated answer detector. Mail/follow-up data is
+  not exposed over MCP, DSH, receipt packs or Pet Brief, and `mail purge` leaves
+  the follow-up rows readable (headers only).
+- **Historical mail is not back-filled.** Old rows stay `unknown`; there is no
+  `--full` re-fetch in 0.5.1.
+- **Bundle v1 is still plaintext** (`--encrypted` remains a 0.6 item); new
+  bundles are not downward-compatible with the 0.5.0 CLI. Context packs remain
+  local checksum consistency, not a signature/trusted timestamp, and there is no
+  recipient acknowledgement or revocation.
+- **Quality gates are synthetic deterministic regression gates, not accuracy**
+  claims: `unknowns.humanGold` stays `null`, no live-model report is shipped and
+  there is no nightly CI run; reports are produced at release time (manual,
+  recorded as such).
+- **Legal texts are unchanged (v2026.11.4).** The new mail-thread header and
+  follow-up state are local email metadata, not a new egress; the v2026.11.5
+  revision (bundle/context pack/sync data rows) stays a separate decision (D10b)
+  and no legal or privacy claim is made here.
+- **Distribution**: the DSH community catalog has no `dsh-advisers` entry yet;
+  the host smoke is recorded as configuration guidance, not as a verified
+  third-party host matrix. Windows CI is Windows Server 2025; a real Windows 11
+  client is still not covered.
+- **Not in 0.5.1**: handoff/session brief, the memory read-side, encrypted
+  bundle, `flow`, migration CSV import, AIGC labelling, portal/CRM/invoicing/
+  sending, cloud MCP directories and paid marketplaces.
+- Release mechanics (tag, publish, `verify-release` count, SBOM/asset hashes)
+  are recorded in `docs/RELEASING.md` section 13; that record starts with `TBD`
+  placeholders that the release operator fills in once the publish completes.
+
 ## 0.5.0 (2026-11-22)
+
 
 "Portable, disclosable, verifiable" release. 0.5.0 adds no new AI capability
 line; it turns the 0.4.x assets into artifacts a customer, another agent or a
@@ -74,8 +238,10 @@ publish run, `verify-release` count and asset hashes are recorded in
   model/network; the CLI's TOS gate still applies; `--clean` only removes a
   directory this run created under the OS temp root), `help <topic>` /
   `help --list` (10 task topics with Chinese
-  aliases whose pages are byte-identical) and a unified Chinese error-hint
-  surface.
+  aliases whose pages are byte-identical) and Chinese help pages. The planned
+  193-code Chinese error-hint layer (`lib/error-hints.zh-CN.js`) did **not** ship
+  in 0.5.0; that claim is narrowed — see
+  [docs/ERRATA-0.5.0.md](docs/ERRATA-0.5.0.md).
 - **Data safety**: fail-closed managed backup before destructive commands
   (purge/kb purge/mail purge/client merge/`import --replace`); `doctor
   --check-db --json` gains an additive `backup{status,managedCount,
@@ -143,6 +309,11 @@ publish run, `verify-release` count and asset hashes are recorded in
 - Release mechanics (tag, publish, `verify-release` count, SBOM/asset hashes)
   are recorded in `docs/RELEASING.md` section 13; that record starts with `TBD`
   placeholders that the release operator fills in once the publish completes.
+- **Errata:** see [docs/ERRATA-0.5.0.md](docs/ERRATA-0.5.0.md) for the
+  corrections to the 0.5.0 release notes that are not in this tag tree
+  (`REACH.md`/`UX-TESTING.md` not shipped, the narrowed Chinese error-hint claim,
+  and the memory `decay` example not being part of the deterministic suite).
+
 ## 0.4.3 (2026-11-22)
 
 Patch release on the 0.4.2 tree. **No schema migration, no new runtime

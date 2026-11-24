@@ -44,6 +44,40 @@ const V22_INDEXES = [
   'idx_payments_commitment',
 ]
 
+// v23 (0.5.1 memory-trust + mail threading): everything the v23 migration adds
+// on top of v22. The reserved-word column mail_messages."references" is a plain
+// TEXT column; DROP COLUMN takes the bare name.
+const V23_TABLES = ['handoffs', 'handoff_claims', 'waiting_replies']
+const V23_INDEXES = ['idx_mail_thread', 'idx_handoffs_status_expires', 'idx_waiting_replies_state']
+const V23_COLUMNS = [
+  ['facts', 'conditions'], ['facts', 'polarity'], ['facts', 'modality'],
+  ['facts', 'revision_intent'], ['facts', 'valid_time_unknown'],
+  ['facts', 'quote_source_kind'], ['facts', 'quote_source_id'],
+  ['facts', 'quote_char_start'], ['facts', 'quote_char_end'],
+  ['mail_messages', 'in_reply_to'], ['mail_messages', 'references'],
+  ['mail_messages', 'thread_root'], ['mail_messages', 'direction'],
+  ['mail_messages', 'auto_submitted'],
+  // 207 A10 reserved columns (owner ruling 2026-11-24; DDL only in 0.5.1).
+  ['deliveries', 'accepted_at'], ['deliveries', 'accepted_by'],
+  ['deliveries', 'accept_method'], ['deliveries', 'accept_evidence_ref'],
+  ['payments', 'proof_sha256'],
+]
+const V23_FACTS_COLUMNS = ['conditions', 'polarity', 'modality', 'revision_intent', 'valid_time_unknown', 'quote_source_kind', 'quote_source_id', 'quote_char_start', 'quote_char_end']
+const V23_MAIL_COLUMNS = ['in_reply_to', 'references', 'thread_root', 'direction', 'auto_submitted']
+const V23_DELIVERIES_COLUMNS = ['accepted_at', 'accepted_by', 'accept_method', 'accept_evidence_ref']
+const V23_PAYMENTS_COLUMNS = ['proof_sha256']
+const V23_WAITING_REPLIES_COLUMNS = [
+  'id', 'commitment_id', 'account_id', 'anchor_row_id', 'anchor_message_id', 'thread_root',
+  'counterparty', 'anchor_at', 'state', 'replied_row_id', 'replied_at', 'basis',
+  'checked_at', 'dismiss_reason', 'created_at', 'updated_at',
+]
+const V23_HANDOFFS_COLUMNS = [
+  'id', 'created_at', 'expires_at', 'status', 'summary',
+  'completed', 'open_tasks', 'decisions', 'failed_attempts', 'constraints', 'next_steps',
+  'matter_id', 'secrecy', 'payload_sha256', 'deleted_at',
+]
+const V23_HANDOFF_CLAIMS_COLUMNS = ['handoff_id', 'claim_id', 'claimed_at', 'claimant', 'request_id', 'receipt_sha256']
+
 const V21_INDEXES = [
   'idx_clients_name_norm_active',
   'idx_clients_status',
@@ -75,6 +109,22 @@ const META_KEYS = ['schema_migrated_from', 'schema_migrated_at', 'schema_migrate
 /** Name of the v22 step, pinned here so the migration expectations agree. */
 export const V22_MIGRATION_NAME = 'kb-mail-payment-entities'
 
+/** Name of the v23 step (0.5.1), pinned here so the migration expectations agree. */
+export const V23_MIGRATION_NAME = 'fact-claim-fields-and-handoffs'
+
+/** Columns/tables/indexes asserted by the v22 -> v23 migration test. */
+export const V23_LAYOUT = Object.freeze({
+  tables: V23_TABLES.slice(),
+  indexes: V23_INDEXES.slice(),
+  factsColumns: V23_FACTS_COLUMNS.slice(),
+  mailColumns: V23_MAIL_COLUMNS.slice(),
+  deliveriesColumns: V23_DELIVERIES_COLUMNS.slice(),
+  paymentsColumns: V23_PAYMENTS_COLUMNS.slice(),
+  waitingRepliesColumns: V23_WAITING_REPLIES_COLUMNS.slice(),
+  handoffsColumns: V23_HANDOFFS_COLUMNS.slice(),
+  handoffClaimsColumns: V23_HANDOFF_CLAIMS_COLUMNS.slice(),
+})
+
 /** Tables/indexes asserted by the v21 -> v22 migration test. */
 export const V22_LAYOUT = Object.freeze({
   tables: V22_TABLES.slice(),
@@ -93,6 +143,9 @@ function columnNames(raw, table) {
 
 /** Remove every schema-v22 artifact and stamp the database as genuine v21. */
 export function dropV22Artifacts(raw) {
+  // The v23 objects/columns live on top of v22, so they must go first: a v21
+  // fixture must not inherit a v23 table/column from the current layout.
+  dropV23Artifacts(raw)
   for (const trigger of V22_FTS_TRIGGERS) raw.exec('DROP TRIGGER IF EXISTS ' + trigger)
   for (const table of V22_FTS_TABLES) raw.exec('DROP TABLE IF EXISTS ' + table)
   for (const index of V22_INDEXES) raw.exec('DROP INDEX IF EXISTS ' + index)
@@ -101,6 +154,28 @@ export function dropV22Artifacts(raw) {
   }
   if (hasTable(raw, 'schema_migrations')) raw.prepare('DELETE FROM schema_migrations WHERE version = 22').run()
   raw.prepare("UPDATE meta SET value = '21' WHERE key = 'schema_version'").run()
+}
+
+/** Remove every schema-v23 artifact and stamp the database as genuine v22. */
+export function dropV23Artifacts(raw) {
+  for (const index of V23_INDEXES) raw.exec('DROP INDEX IF EXISTS ' + index)
+  // Child first: handoff_claims references handoffs, and DROP TABLE runs an
+  // implicit DELETE that a foreign-key check may reject while the child exists.
+  for (const table of [...V23_TABLES].reverse()) {
+    if (hasTable(raw, table)) raw.exec('DROP TABLE ' + table)
+  }
+  for (const [table, column] of V23_COLUMNS) {
+    // Quote every identifier: mail_messages."references" is a SQLite keyword.
+    if (columnNames(raw, table).includes(column)) raw.exec('ALTER TABLE ' + table + ' DROP COLUMN "' + column + '"')
+  }
+  if (hasTable(raw, 'schema_migrations')) raw.prepare('DELETE FROM schema_migrations WHERE version = 23').run()
+  raw.prepare("UPDATE meta SET value = '22' WHERE key = 'schema_version'").run()
+}
+
+/** Turn a current (v23) database into a genuine v22 one. */
+export function downgradeToV22(dbPath) {
+  const raw = new DatabaseSync(dbPath)
+  try { dropV23Artifacts(raw) } finally { raw.close() }
 }
 
 /** Remove every schema-v21 artifact and stamp the database as genuine v20. */

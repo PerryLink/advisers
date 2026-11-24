@@ -7,12 +7,12 @@ routines.
 ## Install
 
 ```sh
-# 0.5.0 was published on 2026-11-22; npm @latest is now 0.5.0:
+# 0.5.1 was published on 2026-11-24; npm @latest is now 0.5.1:
 #   npm i -g --registry=https://registry.npmjs.org advisers@latest advisers-office@latest
 # From checkout:
 #   corepack pnpm install && corepack pnpm -r build
 #   ADVISERS_OFFICE_LOCAL=1 node packages/advisers/bin/advisers.js status
-# The `next` channel also points at 0.5.0:
+# The `next` channel also points at 0.5.1:
 #   npm i -g --registry=https://registry.npmjs.org advisers@next advisers-office@next
 advisers soul init
 advisers brief "做一份 Q4 预算 Excel，周五前给老板"
@@ -43,40 +43,45 @@ turn natural language into commitments or artifacts.
 
 ## Status
 
-`0.5.0` was published on 2026-11-22 (npm `latest` = `0.5.0`; `next` is also `0.5.0`). It
-is a "portable, disclosable, verifiable" release: portable home bundle v1
-(`export --bundle` / `import --bundle --verify`, plaintext and checksum-only), the
-offline-verifiable context pack v1 (`context-pack create|verify`, human-selected, no
-import path, no read/execution authority), additive MCP/DSH disclosure (`disclosure` +
-per-row `view` with unchanged tool counts), sync snapshot v2 with `sync.state.json`, a
-genuinely read-only `sync push --dry-run`, conflict precheck (`sync status --check`,
-`E_SYNC_CONFLICT`) on top of last-writer-wins, `setup`/`demo`/`help <topic>` onboarding,
-fail-closed managed backups before destructive commands, and the report-v2 quality gate.
-Zero schema change (still v22), zero new network path, zero new runtime dependency. The
-0.4.0 feature surface is unchanged: the local knowledge base (schema v22), TLS-only IMAP
-mail entry, the interactive shell, proactive urgent-first briefs, the policy/evidence 2.0
-subset, receivables/payments with client pack v2, MCP modern dual-era, Windows CI plus a
-portable ZIP, and the v2026.11.4 legal revision. No new command requires a model call,
-there is no background daemon, and `mail sync` remains the one explicit network path
-(TLS-only, read-only, user-invoked).
-**Schema v22 is a one-way migration**: the CLI writes `state.db.before-migrate-v*`
-before upgrading, a 0.3.2 binary opening a v22 database fails with `E_SCHEMA_NEWER`,
-and downgrading means restoring that backup.
-`0.4.3`/`0.4.2`/`0.4.1`/`0.4.0`/`0.3.2`/`0.3.1`/`0.3.0` remain installable by pinning but are
+`0.5.1` was published on 2026-11-24 (npm `latest` = `0.5.1`; `next` is also `0.5.1`). It
+is a follow-up patch on the 0.5.0 tree: one database schema jump (**v22 -> v23**, a
+single migration step) for mail thread metadata, `waiting_replies` and the handoff
+schema; read-only **mail follow-up** (`mail followup add|ls|check|show|dismiss|
+mark-replied` — header-only, never sends, never opens a connection, not exposed over
+MCP/DSH/receipts); a **verifiable exit drill** (`scripts/bundle-drill.mjs`) with
+one-command acceptance (`import --bundle --verify --expect-dataDigest <hex>`) and a
+`FORMAT.md` inside new bundles; a **disclosure issuance audit** (`context_pack.create`)
+with host-side `advisers_pack_verify` format dispatch (tool counts unchanged); and
+**release-level quality evidence** (`docs/QUALITY.md`, clean-checkout report,
+`check-release --eval-evidence`). The 0.5.0 feature surface is unchanged: portable home
+bundle v1, context pack v1, additive MCP/DSH disclosure, sync snapshot v2,
+`setup`/`demo`/`help <topic>` onboarding, fail-closed managed backups and the report-v2
+quality gate. The 0.4.0 feature surface is unchanged: the local knowledge base,
+TLS-only IMAP mail entry, the interactive shell, proactive urgent-first briefs, the
+policy/evidence 2.0 subset, receivables/payments with client pack v2, MCP modern
+dual-era, Windows CI plus a portable ZIP, and the v2026.11.4 legal revision (v2026.11.5
+is a separate legal decision and not part of 0.5.1). No new command requires a model
+call, there is no background daemon, and `mail sync` remains the one explicit network
+path (TLS-only, read-only, user-invoked). Zero new network path, zero new runtime
+dependency; MCP stays 8 tools / 5 resources and DSH 6 tools.
+**Schema v23 is a one-way migration**: the CLI writes
+`state.db.before-migrate-v22-*` before upgrading, a 0.5.0 binary opening a v23 database
+fails with `E_SCHEMA_NEWER`, and downgrading means restoring that backup.
+`0.5.0`/`0.4.3`/`0.4.2`/`0.4.1`/`0.4.0`/`0.3.2`/`0.3.1`/`0.3.0` remain installable by pinning but are
 superseded.
 The runtime baseline remains the
 "trustworthy delivery" line: per-item secrecy clearance on every egress surface, a local
 audit tail anchor, backup rotation/verified restore and `doctor --repair`, 200k-row read
 paths, MCP output caps plus legacy protocol negotiation, a read-only ledger facade, machine
-readable contracts, a deterministic no-key eval suite and an SBOM gate. The `0.5.0` tarballs
+readable contracts, a deterministic no-key eval suite and an SBOM gate. The `0.5.1` tarballs
 are published from GitHub Actions OIDC/Trusted Publishing with SLSA provenance; verify with
-`scripts/verify-release.mjs --version 0.5.0 --tag latest --sbom artifacts/sbom.cdx.json
+`scripts/verify-release.mjs --version 0.5.1 --tag latest --sbom artifacts/sbom.cdx.json
 --require-sbom` (the SBOM is generated by `pnpm run sbom`).
-Release notes: <https://github.com/PerryLink/advisers/releases/tag/v0.5.0>. Model-backed KB
+Release notes: <https://github.com/PerryLink/advisers/releases/tag/v0.5.1>. Model-backed KB
 compile/ask, embeddings, the full PolicyGrant/exit 4–6 and DSH writes remain future work;
 see the repository CHANGELOG for the full not-delivered list.
 
-- SQLite ledger at `~/.advisers/state.db` (JSON fallback with `ADVISERS_STORE=json`; schema v22 — one 0.4.0 migration adds the KB/mail/receivable/payment objects — lock-free read snapshot, incremental writes);
+- SQLite ledger at `~/.advisers/state.db` (JSON fallback with `ADVISERS_STORE=json`; schema v23 — 0.4.0 added the KB/mail/receivable/payment objects, 0.5.1 added the mail-thread/follow-up and handoff tables — lock-free read snapshot, incremental writes);
 - soul at `~/.advisers/soul.md`, human-owned;
 - local REPL, `chat`, `office`, `template`, `routine`, `link`, `bridge`, `soul`, `ls`, `why`, `forget`, `export`;
 - IntentBrief + clarification policy + readback;
@@ -98,6 +103,7 @@ see the repository CHANGELOG for the full not-delivered list.
 - **0.4.0 receivables**: `receivable add|ls|show|edit|void` + `payment add|ls|void` (integer minor units, CNY/USD/EUR/HKD, partial/over/void, auto-complete the linked commitment), per-currency totals and aging, `client export --pack` status packs with `SHA256SUMS` and an offline verifier; amounts stay out of receipt packs, MCP, DSH and Pet Brief;
 - **0.4.0 MCP modern dual-era**: `server/discover`, modern method allowlist and `resultType`/`ttlMs`/`cacheScope` envelopes with byte-identical legacy responses and `ADVISERS_MCP_MODERN=off` rollback; 8 tools / 5 resources, DSH 6 tools;
 - **0.4.0 Windows/legal**: `windows-full` CI and a portable-ZIP builder/verifier (npm stays the official channel; `docs/WINDOWS.md` scopes support), and TOS/PRIVACY/SAFETY/DISCLAIMER v2026.11.4 for the new data planes.
+- **0.5.1 follow-up**: read-only `mail followup` (header-only waiting-reply state, no send/network/MCP), schema v23 single jump, `scripts/bundle-drill.mjs` + `import --bundle --verify --expect-dataDigest` + bundle `FORMAT.md`, `context_pack.create` audit + host-side `advisers_pack_verify` format dispatch, and the release-level quality evidence (`docs/QUALITY.md`, `check-release --eval-evidence`). 0.5.0 release-note corrections are in `docs/ERRATA-0.5.0.md`.
 
 Shared core and architecture:
 

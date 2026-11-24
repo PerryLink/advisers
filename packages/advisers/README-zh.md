@@ -5,12 +5,12 @@
 ## 安装
 
 ```sh
-# 0.5.0 已于 2026-11-22 发布；npm @latest 现为 0.5.0（稳定渠道 = 默认 `latest`）：
+# 0.5.1 已于 2026-11-24 发布；npm @latest 现为 0.5.1（稳定渠道 = 默认 `latest`）：
 #   npm i -g --registry=https://registry.npmjs.org advisers@latest advisers-office@latest
 # 从 checkout 运行：
 #   corepack pnpm install && corepack pnpm -r build
 #   ADVISERS_OFFICE_LOCAL=1 node packages/advisers/bin/advisers.js status
-# `next` 渠道也指向 0.5.0：
+# `next` 渠道也指向 0.5.1：
 #   npm i -g --registry=https://registry.npmjs.org advisers@next advisers-office@next
 advisers soul init
 advisers brief "做一份 Q4 预算 Excel，周五前给老板"
@@ -36,9 +36,9 @@ CLI 是**本地秘书运行时**：一个 REPL、用户账/承诺账/流程账�
 
 ## 状态
 
-`0.5.0` 已于 2026-11-22 发布（npm `latest` = `0.5.0`；`next` 也为 `0.5.0`）。0.5.0 是「可携带、可披露、可验收」发布：可携带 home **bundle v1**（`export --bundle` / `import --bundle --verify`，明文 + 校验清单）、离线可验的 **context pack v1**（`context-pack create|verify`，人工选定、无回灌路径、不授读取/执行权）、additive 的 **MCP/DSH 披露**（`disclosure` + 逐行 `view`，工具数量不变）、**sync 快照 v2** 与 `sync.state.json`、真正只读的 `sync push --dry-run`、冲突预检（`sync status --check`、`E_SYNC_CONFLICT`，传输语义仍是整库 last-writer-wins）、`setup`/`demo`/`help <topic>` 上手、破坏性命令前的托管备份 fail-closed，以及报告 v2 质量门；零 schema 变更（仍 v22）、零新增出网、零新增运行时依赖。0.4.0 的功能面不变：本地知识库（schema v22）、TLS-only IMAP 邮件入口、交互式壳、可解释的主动式晨报、Policy/Evidence 2.0 子集、回款/对账与客户状态包 v2、MCP modern dual-era、Windows CI 与便携 ZIP，以及 v2026.11.4 法务修订。所有新命令都不需要模型调用，也没有后台常驻进程，`mail sync` 仍是唯一显式网络路径（TLS-only、只读、用户主动触发）。**schema v22 是单向迁移**：升级前 CLI 会写 `state.db.before-migrate-v*` 备份，0.3.2 打开 v22 数据库会报 `E_SCHEMA_NEWER`，降级需要恢复该备份。`0.4.3`/`0.4.2`/`0.4.1`/`0.4.0`/`0.3.2`/`0.3.1`/`0.3.0` 仍可按版本号安装但已被取代。运行时基线仍是「可信交付」feature line：所有出网面逐 item secrecy clearance、本地审计尾锚、备份轮换/可验证恢复与 `doctor --repair`、200k 读路径、MCP 输出上限 + legacy 协议协商、DSH 只读账本门面、机器可读契约、无 key 的确定性评测套件与 SBOM 门禁。`0.5.0` tarball 由 GitHub Actions OIDC/Trusted Publishing 发布，带 SLSA provenance；可用 `scripts/verify-release.mjs --version 0.5.0 --tag latest --sbom artifacts/sbom.cdx.json --require-sbom` 校验（SBOM 由 `pnpm run sbom` 生成）。Release notes：<https://github.com/PerryLink/advisers/releases/tag/v0.5.0>。模型化 `kb compile`/`kb ask`、embedding、完整 PolicyGrant/exit 4–6 与 DSH 写账本仍属后续版本；未交付清单见仓库 CHANGELOG。
+`0.5.1` 已于 2026-11-24 发布（npm `latest` = `0.5.1`；`next` 也为 `0.5.1`）。0.5.1 是 0.5.0 树上的跟进补丁：一次数据库 schema 跳变（**v22 -> v23**，单次迁移）用于邮件线程元数据、`waiting_replies` 与 handoff 表结构；新增只读**邮件跟进**（`mail followup add|ls|check|show|dismiss|mark-replied`：只读本地 header、不发信、不联网、不进 MCP/DSH/回执）、**可验证退出演练**（`scripts/bundle-drill.mjs`）与一条命令验收（`import --bundle --verify --expect-dataDigest <hex>`，新 bundle 内含 `FORMAT.md`）、**披露签发审计**（`context_pack.create`）与宿主侧 `advisers_pack_verify` 格式分派（工具数不变），以及**发布级质量证据**（`docs/QUALITY.md`、干净 checkout 报告、`check-release --eval-evidence`）。0.5.0 的功能面不变：可携带 home **bundle v1**、离线可验 **context pack v1**、additive **MCP/DSH 披露**、**sync 快照 v2** 与冲突预检、`setup`/`demo`/`help <topic>` 上手、破坏性命令前托管备份 fail-closed，以及报告 v2 质量门。0.4.0 的功能面同样不变：本地知识库、TLS-only IMAP 邮件入口、交互式壳、可解释的主动式晨报、Policy/Evidence 2.0 子集、回款/对账与客户状态包 v2、MCP modern dual-era、Windows CI 与便携 ZIP，以及 v2026.11.4 法务修订（v2026.11.5 属独立法务决策）。所有新命令都不需要模型调用，也没有后台常驻进程，`mail sync` 仍是唯一显式网络路径（TLS-only、只读、用户主动触发）。零新增出网、零新增运行时依赖；MCP 仍 8 tools / 5 resources，DSH 仍 6 tools。**schema v23 是单向迁移**：升级前 CLI 会写 `state.db.before-migrate-v22-*` 备份，0.5.0 打开 v23 数据库会报 `E_SCHEMA_NEWER`，降级需要恢复该备份。`0.5.0`/`0.4.3`/`0.4.2`/`0.4.1`/`0.4.0`/`0.3.2`/`0.3.1`/`0.3.0` 仍可按版本号安装但已被取代。运行时基线仍是「可信交付」feature line：所有出网面逐 item secrecy clearance、本地审计尾锚、备份轮换/可验证恢复与 `doctor --repair`、200k 读路径、MCP 输出上限 + legacy 协议协商、DSH 只读账本门面、机器可读契约、无 key 的确定性评测套件与 SBOM 门禁。`0.5.1` tarball 由 GitHub Actions OIDC/Trusted Publishing 发布，带 SLSA provenance；可用 `scripts/verify-release.mjs --version 0.5.1 --tag latest --sbom artifacts/sbom.cdx.json --require-sbom` 校验（SBOM 由 `pnpm run sbom` 生成）。Release notes：<https://github.com/PerryLink/advisers/releases/tag/v0.5.1>。模型化 `kb compile`/`kb ask`、embedding、完整 PolicyGrant/exit 4–6 与 DSH 写账本仍属后续版本；未交付清单见仓库 CHANGELOG 与 [0.5.0 勘误](docs/ERRATA-0.5.0.md)。
 
-- SQLite 账本 `~/.advisers/state.db`（JSON fallback；schema v22 —— 0.4.0 一次迁移加入 KB/邮件/回款对象、无锁只读快照、增量写）；
+- SQLite 账本 `~/.advisers/state.db`（JSON fallback；schema v23 —— 0.4.0 一次迁移加入 KB/邮件/回款对象，0.5.1 一次迁移加入邮件线程/跟进与 handoff 表；无锁只读快照、增量写）；
 - soul 位于 `~/.advisers/soul.md`，人类独占；
 - turns + 摘要 + FTS 检索；开场协议；`/resume`；
 - 承诺账 + `commit add/ls/done`、`tick`、`snooze`、nudge outcome；
@@ -56,6 +56,7 @@ CLI 是**本地秘书运行时**：一个 REPL、用户账/承诺账/流程账�
 - **0.4.0 回款**：`receivable add|ls|show|edit|void` + `payment add|ls|void`（整数分、四币种、部分/多笔/超额/void、同事务自动完成承诺）、逐币种合计与账龄、`client export --pack`（manifest + `SHA256SUMS` + 离线校验器）；金额不进回执、MCP、DSH 与 Pet Brief；
 - **0.4.0 MCP modern dual-era**：`server/discover`、modern 方法 allowlist 与 `resultType`/`ttlMs`/`cacheScope` envelope；legacy 响应逐字节不变，`ADVISERS_MCP_MODERN=off` 可回退；8 tools / 5 resources，DSH 6 tools；
 - **0.4.0 Windows/法务**：`windows-full` CI 与便携 ZIP 构建/校验（npm 仍是正式渠道，`docs/WINDOWS.md` 限定支持范围）；TOS/PRIVACY/SAFETY/DISCLAIMER 升级到 v2026.11.4。
+- **0.5.1 收尾**：只读 `mail followup`（只读本地 header 的等待回复状态，不发信/不联网/不进 MCP）、schema v23 单次跳变、`scripts/bundle-drill.mjs` + `import --bundle --verify --expect-dataDigest` + bundle `FORMAT.md`、`context_pack.create` 审计 + 宿主侧 `advisers_pack_verify` 格式分派，以及发布级质量证据（`docs/QUALITY.md`、`check-release --eval-evidence`）。0.5.0 发布说明的更正见 `docs/ERRATA-0.5.0.md`。
 
 核心与架构：
 

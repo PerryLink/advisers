@@ -1,17 +1,18 @@
 # Software Bill of Materials (SBOM)
 
-> Status: **0.5.0** was published on 2026-11-22 as the current release (npm `latest`;
-> `next` is also `0.5.0`); it is a feature release on the 0.4.3 tree, and the
-> release tree stays schema **v22** (one
-> `kb-mail-payment-entities` migration). The workspace version is whatever
+> Status: **0.5.1** was published on 2026-11-24 as the current release (npm `latest`;
+> `next` is also `0.5.1`); it is a follow-up patch on the 0.5.0 tree whose local
+> database schema is **v23** (one
+> `fact-claim-fields-and-handoffs` migration). The workspace version is whatever
 > `packages/advisers/package.json` records. This page documents a release-gate artifact,
 > not a claim that the build is reproducible — it describes the dependency set and says
 > nothing about the database schema. Provenance status lives in
-> [SECURITY.md](SECURITY.md). The 0.5.0 GitHub Release carries the generated CycloneDX
-> SBOM (`sbom.cdx.json`) and a `SHA256SUMS` file for the six tarballs; the post-publish
-> `node scripts/verify-release.mjs --version 0.5.0 --tag latest --sbom artifacts/sbom.cdx.json --require-sbom`
-> check verifies the SBOM. 0.5.0 adds no runtime dependency: the lockfile diff from
-> 0.4.3 is the workspace version pins, so the component set has the same shape. Each
+> [SECURITY.md](SECURITY.md). The 0.5.1 GitHub Release carries the generated CycloneDX
+> SBOM (`sbom.cdx.json`), a `SHA256SUMS` file for the six tarballs and the release
+> quality report; the post-publish
+> `node scripts/verify-release.mjs --version 0.5.1 --tag latest --sbom artifacts/sbom.cdx.json --require-sbom`
+> check verifies the SBOM. 0.5.1 adds no runtime dependency: the lockfile diff from
+> 0.5.0 is the workspace version pins, so the component set has the same shape. Each
 > release records its own `verify-release` check count instead of inheriting an older
 > figure; the 0.3.0 run passed 222 checks (historical record:
 > <https://github.com/PerryLink/advisers/releases/tag/v0.3.0>).

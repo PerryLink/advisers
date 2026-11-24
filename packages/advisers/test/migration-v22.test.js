@@ -6,17 +6,20 @@ import { join } from 'node:path'
 import test from 'node:test'
 import { DatabaseSync } from 'node:sqlite'
 import { DATA_TABLES, openReadStore, SCHEMA_VERSION, SqliteStore } from '../lib/sqlite.js'
-import { V22_LAYOUT, V22_MIGRATION_NAME, downgradeToV21 } from './schema-fixtures.js'
+import { V22_LAYOUT, V22_MIGRATION_NAME, V23_LAYOUT, V23_MIGRATION_NAME, downgradeToV21 } from './schema-fixtures.js'
 
 /**
- * 0.4.0 schema v22 (KB / mail / money entities) migration contract.
+ * 0.4.0 schema v22 (KB / mail / money entities) migration contract, updated
+ * for the v23 single hop that follows it.
  *
  * The v20 and v21 steps stay pinned in migration-v20.test.js; this file pins the
- * v22 step and the new objects it owns:
- *  - a fresh database is v22, records exactly the 20/21/22 steps and installs
- *    the ten plain tables, their indexes and the two KB FTS5 indexes;
- *  - a genuine v21 fixture (current database with every v22 artifact removed)
- *    upgrades to v22, keeps every row, and leaves a verified v21 backup;
+ * v22 step and the new objects it owns on the current (v23) chain:
+ *  - a fresh database is v23, records exactly the 20/21/22/23 steps and installs
+ *    the ten v22 plain tables + the three v23 sidecars, their indexes and the
+ *    two KB FTS5 indexes;
+ *  - a genuine v21 fixture (current database with every v22+v23 artifact
+ *    removed) upgrades through v22 to v23, keeps every row, and leaves a
+ *    verified v21 backup;
  *  - a failing v22 step rolls back atomically (no table, no FTS, no ledger row,
  *    no version bump) and the v21 database stays retryable;
  *  - reopening is idempotent: no new migration row, no second backup and no
@@ -24,7 +27,7 @@ import { V22_LAYOUT, V22_MIGRATION_NAME, downgradeToV21 } from './schema-fixture
  *  - verifyFtsIntegrity() covers the two KB indexes and _setupKbFts() is a real
  *    repair path; both tokenizer degradations keep the database openable;
  *  - DATA_TABLES carries the data rows (never the FTS tables or mail_cursors)
- *    and a raw export can be re-inserted into a fresh v22 database.
+ *    and a raw export can be re-inserted into a fresh database.
  *
  * Every database lives in a mkdtemp HOME; the real ~/.advisers is never opened.
  */
@@ -33,6 +36,7 @@ const NOW = '2026-11-01T00:00:00.000Z'
 const STEP20 = 'incremental-writes-readonly-reads'
 const STEP21 = 'client-project-entities-delivery-lineage'
 const STEP22 = V22_MIGRATION_NAME
+const STEP23 = V23_MIGRATION_NAME
 
 const KB_TABLES = ['kb_documents', 'kb_chunks', 'kb_fact_links', 'kb_pages']
 const MAIL_TABLES = ['mail_accounts', 'mail_cursors', 'mail_messages', 'mail_sync_runs']
@@ -102,9 +106,12 @@ function fileHash(path) {
 
 /** Insert one raw row (used to seed the new tables without the 0.4 modules). */
 function insertRow(store, table, row) {
+  // Quote every identifier so export->import round-trips survive the reserved
+  // word column mail_messages."references" (v23).
   const columns = Object.keys(row)
+  const names = columns.map((column) => '"' + column + '"')
   store.db.prepare(
-    'INSERT INTO ' + table + ' (' + columns.join(',') + ') VALUES (' + columns.map(() => '?').join(',') + ')',
+    'INSERT INTO ' + table + ' (' + names.join(',') + ') VALUES (' + columns.map(() => '?').join(',') + ')',
   ).run(...columns.map((column) => row[column]))
 }
 
@@ -173,35 +180,40 @@ function createSeed(dbPath) {
 function assertNoV22Artifacts(dbPath) {
   const tables = tableNames(dbPath)
   for (const table of V22_LAYOUT.tables) assert.equal(tables.has(table), false, 'v21 fixture must not have ' + table)
+  for (const table of V23_LAYOUT.tables) assert.equal(tables.has(table), false, 'v21 fixture must not have v23 table ' + table)
   for (const table of V22_LAYOUT.ftsTables) assert.equal(tables.has(table), false, 'v21 fixture must not have ' + table)
   const indexes = new Set(indexNames(dbPath))
   for (const index of V22_LAYOUT.indexes) assert.equal(indexes.has(index), false, 'v21 fixture must not have ' + index)
+  for (const index of V23_LAYOUT.indexes) assert.equal(indexes.has(index), false, 'v21 fixture must not have v23 index ' + index)
   const triggers = new Set(triggerNames(dbPath))
   for (const trigger of V22_LAYOUT.ftsTriggers) assert.equal(triggers.has(trigger), false, 'v21 fixture must not have ' + trigger)
   assert.equal(metaValue(dbPath, 'schema_version'), '21', 'v21 fixture stamps version 21')
 }
 
-test('fresh database: schema 22, ten new tables, their indexes, both KB FTS indexes and the migration ledger', () => {
+test('fresh database: schema 23, ten v22 + three v23 tables, their indexes, both KB FTS indexes and the migration ledger', () => {
   const { root, db } = setup()
   try {
     const store = new SqliteStore(db)
     try {
-      assert.equal(SCHEMA_VERSION, 22)
-      assert.equal(store.getMeta('schema_version'), '22')
-      assert.equal(store.schemaVersion(), 22)
+      assert.equal(SCHEMA_VERSION, 23)
+      assert.equal(store.getMeta('schema_version'), '23')
+      assert.equal(store.schemaVersion(), 23)
 
       const rows = migrationRows(store)
-      assert.deepEqual(rows.map((row) => row.version), [20, 21, 22], 'fresh databases record every version step')
-      assert.deepEqual(rows.map((row) => row.name), [STEP20, STEP21, STEP22])
+      assert.deepEqual(rows.map((row) => row.version), [20, 21, 22, 23], 'fresh databases record every version step')
+      assert.deepEqual(rows.map((row) => row.name), [STEP20, STEP21, STEP22, STEP23])
       assert.equal(rows[2].backup_path, null, 'a fresh database needs no migration backup')
+      assert.equal(rows[3].backup_path, null, 'the v23 step needs no second backup')
       assert.equal(store.getMeta('schema_migrated_from'), '0')
 
       const tables = tableNames(db)
       for (const table of [...KB_TABLES, ...MAIL_TABLES, ...MONEY_TABLES]) {
         assert.ok(tables.has(table), 'missing table ' + table)
       }
+      for (const table of V23_LAYOUT.tables) assert.ok(tables.has(table), 'missing v23 table ' + table)
       const indexes = new Set(indexNames(db))
       for (const index of V22_LAYOUT.indexes) assert.ok(indexes.has(index), 'missing index ' + index)
+      for (const index of V23_LAYOUT.indexes) assert.ok(indexes.has(index), 'missing v23 index ' + index)
       for (const table of V22_LAYOUT.ftsTables) assert.ok(tables.has(table), 'missing FTS table ' + table)
       const triggers = new Set(triggerNames(db))
       for (const trigger of V22_LAYOUT.ftsTriggers) assert.ok(triggers.has(trigger), 'missing FTS trigger ' + trigger)
@@ -230,6 +242,16 @@ test('fresh database: schema 22, ten new tables, their indexes, both KB FTS inde
       for (const column of ['account_id', 'mailbox', 'uidvalidity', 'last_uid', 'uidnext', 'status']) {
         assert.ok(columnNames(db, 'mail_cursors').includes(column), 'mail_cursors.' + column)
       }
+      // v23 layout (91 §4.1 + 92 §4 + the 207 A10 reserved columns).
+      assert.deepEqual(columnNames(db, 'facts').slice(-V23_LAYOUT.factsColumns.length), V23_LAYOUT.factsColumns)
+      assert.deepEqual(columnNames(db, 'mail_messages').slice(-V23_LAYOUT.mailColumns.length), V23_LAYOUT.mailColumns)
+      assert.deepEqual(columnNames(db, 'waiting_replies'), V23_LAYOUT.waitingRepliesColumns)
+      assert.deepEqual(columnNames(db, 'handoffs'), V23_LAYOUT.handoffsColumns)
+      assert.deepEqual(columnNames(db, 'handoff_claims'), V23_LAYOUT.handoffClaimsColumns)
+      for (const column of V23_LAYOUT.deliveriesColumns) assert.ok(columnNames(db, 'deliveries').includes(column), 'deliveries.' + column)
+      for (const column of V23_LAYOUT.paymentsColumns) assert.ok(columnNames(db, 'payments').includes(column), 'payments.' + column)
+      // The reserved-word column keeps its quoted DDL but is reported bare.
+      assert.ok(columnNames(db, 'mail_messages').includes('references'))
 
       // FTS wiring is live: the triggers feed both KB indexes.
       insertRow(store, 'kb_documents', {
@@ -299,7 +321,7 @@ test('v22 tables carry the frozen constraints (money CHECK/UNIQUE, mail dedupe/u
   } finally { rmSync(root, { recursive: true, force: true }) }
 })
 
-test('v21 fixture -> v22: verified v21 backup, unchanged rows, new layout and working FTS', () => {
+test('v21 fixture -> v23: verified v21 backup, unchanged rows, new v22/v23 layout and working FTS', () => {
   const { root, db } = setup('advisers-migration-v22-upgrade-')
   try {
     const beforeCounts = createSeed(db)
@@ -315,19 +337,23 @@ test('v21 fixture -> v22: verified v21 backup, unchanged rows, new layout and wo
 
     const store = new SqliteStore(db)
     try {
-      assert.equal(store.getMeta('schema_version'), '22')
+      assert.equal(store.getMeta('schema_version'), '23')
       assert.equal(store.getMeta('schema_migrated_from'), '21')
       const rows = migrationRows(store)
-      assert.deepEqual(rows.map((row) => row.version), [20, 21, 22], 'exactly the v22 step is appended')
+      assert.deepEqual(rows.map((row) => row.version), [20, 21, 22, 23], 'exactly the v22+v23 steps are appended')
       assert.equal(rows[2].name, STEP22)
+      assert.equal(rows[3].name, STEP23)
       assert.match(rows[2].backup_path, /state\.db\.before-migrate-v21-\d+$/)
+      assert.equal(rows[3].backup_path, rows[2].backup_path, 'the v23 step reuses the v21 backup of the same run')
       assert.equal(store.getMeta('schema_migration_backup'), rows[2].backup_path)
       assert.ok(Number.isInteger(rows[2].duration_ms) && rows[2].duration_ms >= 0)
       assert.match(rows[2].applied_at, /^\d{4}-\d{2}-\d{2}T/)
 
       for (const table of V22_LAYOUT.tables) assert.ok(tableNames(db).has(table), 'missing table ' + table)
+      for (const table of V23_LAYOUT.tables) assert.ok(tableNames(db).has(table), 'missing v23 table ' + table)
       const indexes = new Set(indexNames(db))
       for (const index of V22_LAYOUT.indexes) assert.ok(indexes.has(index), 'missing index ' + index)
+      for (const index of V23_LAYOUT.indexes) assert.ok(indexes.has(index), 'missing v23 index ' + index)
       assert.equal(store.kbFtsTokenizer, 'trigram')
       const report = store.verifyFtsIntegrity()
       assert.equal(report.ok, true, JSON.stringify(report.errors))
@@ -345,6 +371,7 @@ test('v21 fixture -> v22: verified v21 backup, unchanged rows, new layout and wo
       // migration itself creates.
       assert.equal(countRows(db, 'kb_documents'), 0)
       assert.equal(countRows(db, 'receivables'), 0)
+      for (const table of V23_LAYOUT.tables) assert.equal(countRows(db, table), 0, 'the new v23 table starts empty: ' + table)
     } finally { store.close() }
 
     const backups = backupsIn(root)
@@ -385,16 +412,19 @@ test('a failed v22 step rolls back atomically and leaves the v21 database retrya
     assert.equal(metaValue(db, 'schema_version'), '21', 'DDL, FTS and the version stamp roll back together')
     const tables = tableNames(db)
     for (const table of V22_LAYOUT.tables) assert.equal(tables.has(table), false, 'no half-created table may survive: ' + table)
+    for (const table of V23_LAYOUT.tables) assert.equal(tables.has(table), false, 'no half-created v23 table may survive: ' + table)
     for (const table of V22_LAYOUT.ftsTables) assert.equal(tables.has(table), false, 'no half-created FTS table may survive: ' + table)
+    for (const column of V23_LAYOUT.factsColumns) assert.equal(columnNames(db, 'facts').includes(column), false, 'no half-added facts.' + column)
     assert.equal(Number(readRawCount(db, 'schema_migrations', 'version', 22)), 0, 'the v22 ledger row rolls back')
     assert.equal(backupsIn(root).length, 1, 'the verified backup is kept after a failed step')
     for (const table of SAMPLE_TABLES) assert.equal(countRows(db, table), beforeCounts[table])
 
     const retry = new SqliteStore(db)
     try {
-      assert.equal(retry.getMeta('schema_version'), '22')
-      assert.deepEqual(migrationRows(retry).map((row) => row.version), [20, 21, 22])
+      assert.equal(retry.getMeta('schema_version'), '23')
+      assert.deepEqual(migrationRows(retry).map((row) => row.version), [20, 21, 22, 23])
       for (const table of V22_LAYOUT.tables) assert.ok(tableNames(db).has(table), 'missing table ' + table)
+      for (const table of V23_LAYOUT.tables) assert.ok(tableNames(db).has(table), 'missing v23 table ' + table)
       assert.equal(retry.verifyFtsIntegrity().ok, true)
     } finally { retry.close() }
   } finally { rmSync(root, { recursive: true, force: true }) }
@@ -425,7 +455,7 @@ test('reopening is idempotent: no migration row, no second backup, no duplicated
     const second = new SqliteStore(db)
     try {
       assert.deepEqual(migrationRows(second), firstRows, 'a plain reopen must not add a migration row')
-      assert.equal(second.getMeta('schema_version'), '22')
+      assert.equal(second.getMeta('schema_version'), '23')
       assert.equal(backupsIn(root).length, backupCount, 'a plain reopen must not take another backup')
       insertRow(second, 'kb_chunks', { id: 'chk2', doc_id: 'kb1', seq: 2, text: '预算总额四百二十万', char_count: 9 })
       assert.equal(Number(second.db.prepare('SELECT COUNT(*) AS n FROM kb_fts_docsize').get().n), 1, 'trigger indexing is not duplicated')
@@ -446,7 +476,7 @@ test('reopening is idempotent: no migration row, no second backup, no duplicated
       const reopened = new SqliteStore(fresh.db)
       try {
         assert.deepEqual(migrationRows(reopened), createdRows)
-        assert.equal(reopened.getMeta('schema_version'), '22')
+        assert.equal(reopened.getMeta('schema_version'), '23')
       } finally { reopened.close() }
       assert.deepEqual(backupsIn(fresh.root), [], 'fresh databases never need a migration backup')
     } finally { rmSync(fresh.root, { recursive: true, force: true }) }
@@ -553,7 +583,7 @@ test('KB FTS degrades like the v19 indexes: trigram -> unicode61 -> LIKE-only, o
       SqliteStore.prototype._createKbFts = originalKbCreate
     }
     try {
-      assert.equal(store.getMeta('schema_version'), '22', 'the version advances even without FTS5')
+      assert.equal(store.getMeta('schema_version'), '23', 'the version advances even without FTS5')
       assert.equal(store.ftsTokenizer, null)
       assert.equal(store.kbFtsTokenizer, null)
       assert.match(store.ftsWarning, /FTS5 is unavailable/i)
@@ -591,7 +621,7 @@ test('KB FTS degrades like the v19 indexes: trigram -> unicode61 -> LIKE-only, o
   }
 })
 
-test('openReadStore: a v21 database is E_SCHEMA_STALE, a migrated v22 database reads lock-free', () => {
+test('openReadStore: a v21 database is E_SCHEMA_STALE, a migrated v23 database reads lock-free', () => {
   const { root, db } = setup('advisers-v22-read-path-')
   try {
     const seed = new SqliteStore(db)
@@ -604,11 +634,11 @@ test('openReadStore: a v21 database is E_SCHEMA_STALE, a migrated v22 database r
       return true
     })
     const migrated = new SqliteStore(db)
-    try { assert.equal(migrated.getMeta('schema_version'), '22') } finally { migrated.close() }
+    try { assert.equal(migrated.getMeta('schema_version'), '23') } finally { migrated.close() }
     const reader = openReadStore(db)
     try {
-      assert.equal(reader.schemaVersion(), 22)
-      assert.equal(reader.searchTurns('报价单').length, 1, 'the lock-free read path sees the v22 data')
+      assert.equal(reader.schemaVersion(), 23)
+      assert.equal(reader.searchTurns('报价单').length, 1, 'the lock-free read path sees the v23 data')
       assert.equal(reader.kbFtsTokenizer, 'trigram', 'the read-only open discovers the KB index shape')
       // FTS 'integrity-check' writes an internal row, so it is a maintenance
       // (writable) connection concern; a read-only open only reports the shape.
@@ -617,7 +647,7 @@ test('openReadStore: a v21 database is E_SCHEMA_STALE, a migrated v22 database r
 
     // A future schema is refused and never touched by a read open.
     const raw = new DatabaseSync(db)
-    raw.prepare("UPDATE meta SET value = '23' WHERE key = 'schema_version'").run()
+    raw.prepare("UPDATE meta SET value = '24' WHERE key = 'schema_version'").run()
     raw.close()
     const before = fileHash(db)
     assert.throws(() => openReadStore(db), (error) => error.code === 'E_SCHEMA_NEWER')
@@ -642,8 +672,21 @@ test('DATA_TABLES export/import parity: the data rows round-trip, FTS and mail_c
       insertRow(from, 'mail_sync_runs', { id: 'run1', account_id: 'acc1', mailbox: 'INBOX', started_at: NOW, status: 'ok' })
       insertRow(from, 'receivables', { id: 'rcv1', commitment_id: 'cm1', client_id: 'cl1', amount_minor: 100, currency: 'CNY', created_at: NOW, updated_at: NOW })
       insertRow(from, 'payments', { id: 'pay1', client_id: 'cl1', amount_minor: 100, currency: 'CNY', paid_at: NOW, method: 'bank', created_at: NOW, updated_at: NOW })
+      insertRow(from, 'waiting_replies', {
+        id: 'wr_1', commitment_id: 'cm1', account_id: 'acc1', anchor_row_id: 'msg1',
+        anchor_message_id: 'mid1@example.com', thread_root: 'root@example.com', counterparty: 'client@example.com',
+        anchor_at: NOW, state: 'waiting', basis: JSON.stringify({ method: 'headers' }), created_at: NOW, updated_at: NOW,
+      })
+      insertRow(from, 'handoffs', {
+        id: 'hd_1', created_at: NOW, expires_at: NOW, status: 'active', summary: '交接摘要',
+        payload_sha256: 'a'.repeat(64),
+      })
+      insertRow(from, 'handoff_claims', {
+        handoff_id: 'hd_1', claim_id: 'clm_1', claimed_at: NOW, receipt_sha256: 'b'.repeat(64),
+      })
 
       assert.ok(DATA_TABLES.includes('kb_pages'), 'kb_pages is a data table and must be exportable')
+      for (const table of V23_LAYOUT.tables) assert.ok(DATA_TABLES.includes(table), 'v23 table ' + table + ' must be exportable')
       for (const table of ['mail_cursors', 'kb_fts', 'kb_pages_fts']) {
         assert.equal(DATA_TABLES.includes(table), false, table + ' must never be exported')
         assert.throws(() => from.exportDataTables([table]), /unknown export table/, table + ' must not be exportable directly')
@@ -652,6 +695,7 @@ test('DATA_TABLES export/import parity: the data rows round-trip, FTS and mail_c
       exported = from.exportDataTables([
         'kb_documents', 'kb_chunks', 'kb_fact_links', 'kb_pages',
         'mail_accounts', 'mail_messages', 'mail_sync_runs', 'receivables', 'payments',
+        'handoffs', 'handoff_claims', 'waiting_replies',
       ])
       for (const table of Object.keys(exported)) assert.equal(exported[table].length, 1, 'export ' + table)
       assert.equal('mail_cursors' in exported, false)
@@ -682,7 +726,7 @@ test('load() stays the nine-table wire ledger: no KB/mail/money table leaks into
       seedLedger(store)
       const snapshot = store.load()
       assert.deepEqual(Object.keys(snapshot).sort(), ['commitments', 'facts', 'links', 'matters', 'preferences', 'routinePatches', 'routines', 'routes', 'updates', 'version'].sort())
-      for (const table of [...KB_TABLES, ...MAIL_TABLES, ...MONEY_TABLES]) {
+      for (const table of [...KB_TABLES, ...MAIL_TABLES, ...MONEY_TABLES, ...V23_LAYOUT.tables]) {
         assert.equal(table in snapshot, false, table + ' must not be part of the wire snapshot')
       }
     } finally { store.close() }

@@ -37,7 +37,7 @@ export const ERROR_CODES_SOURCE_VERSION = '0.2.4'
 export const ERROR_CODES_RELEASE = '0.4.0'
 export const ERROR_CODES_BASELINE_COUNT = 50
 /** Additive layers after the frozen baseline, oldest first (a code's `since`). */
-export const ERROR_CODES_ADDITIVE_RELEASES = Object.freeze(['0.3.0', '0.4.0', '0.4.3', '0.5.0'])
+export const ERROR_CODES_ADDITIVE_RELEASES = Object.freeze(['0.3.0', '0.4.0', '0.4.3', '0.5.0', '0.5.1'])
 
 /** Category vocabulary used by the registry, docs and contracts. */
 export const ERROR_CATEGORIES = Object.freeze([
@@ -2014,6 +2014,33 @@ const REGISTRY = [
     since: '0.4.0',
     stable: true,
     remedy: "A non-interactive consent grant needs an explicit --yes (or ADVISERS_CONSENT_<SURFACE>=1). Read advisers tos show and docs/PRIVACY.md first; this is a separate model-egress consent, not TOS acceptance.",
+  },
+  {
+    code: 'E_FOLLOWUP_EXISTS',
+    category: 'state',
+    exit: 1,
+    surfaces: Object.freeze(['cli', 'lib']),
+    since: '0.5.1',
+    stable: true,
+    remedy: "An active mail followup already tracks this message and counterparty. Run advisers mail followup ls and use that row instead of adding a duplicate.",
+  },
+  {
+    code: 'E_FOLLOWUP_INVALID',
+    category: 'usage',
+    exit: 1,
+    surfaces: Object.freeze(['cli', 'lib']),
+    since: '0.5.1',
+    stable: true,
+    remedy: "Mail followup arguments or state transition are invalid (pass exactly one of --mail/--thread, a known dismiss reason, or a legal state change). Check advisers mail followup --help.",
+  },
+  {
+    code: 'E_FOLLOWUP_NOT_FOUND',
+    category: 'state',
+    exit: 1,
+    surfaces: Object.freeze(['cli', 'lib']),
+    since: '0.5.1',
+    stable: true,
+    remedy: "Unknown mail followup id. Run advisers mail followup ls --all and use an existing wr_ id.",
   },
 ]
 

@@ -1,19 +1,27 @@
 # Deterministic eval suite (`pnpm eval:det`)
 
-> Status: introduced in the 0.3.0 line; this tree is the **published 0.5.0** release
-> (2026-11-22) on top of `advisers@0.4.3`. 0.4.3 added no det case (the `exit` group's missing-key
-> probe now runs `capture --model`, and the restore drill is a separate
-> `scripts/restore-drill.mjs` end-to-end test). **0.5.0 WF4 adds the quality-evidence
+> Status: introduced in the 0.3.0 line; this tree is the **published 0.5.1** release
+> (2026-11-24) on top of `advisers@0.5.0`. **0.5.0 WF4 added the quality-evidence
 > layer**: the shared schema-v2 quality report (all zero-model gates write it),
 > `scripts/check-eval-report.mjs`, the `memory` group (12 `fact as-of` cases) and the
 > `projection` group (5 CLI/MCP/DSH parity cases), plus two new fail-closed `policy`
-> cases and the separate `eval/model-contract` gate (12 fake-transport cases). The
-> current default run is 49 cases / 367 checks (run `pnpm eval:det --json` for the
-> live count; the number is evidence, not a promise). The suite is a release gate
-> for the deterministic contract, not a claim about model quality; see
-> [Quality gates (0.5.0 WF4)](#quality-gates-050-wf4) for the report contract and
-> the other zero-model gates (`eval:kb-retrieval`, `eval:mail-local`,
-> `eval:model-contract`).
+> cases and the separate `eval/model-contract` gate (12 fake-transport cases). **0.5.1
+> changes no deterministic case; it makes the report release-grade**: the gates are run
+> from a clean checkout into a frozen release-evidence directory,
+> `check-eval-report --release` rejects a dirty/missing report,
+> `check-release --eval-evidence` consumes the five release slots at pre-tag time, and
+> the report is archived as a CI artifact/release asset (see
+> [QUALITY.md](QUALITY.md)). The default run is 49 cases / 367 checks on the 0.5.0
+> baseline (run `pnpm eval:det --json` for the live count; the number is evidence, not
+> a promise). The suite is a release gate for the deterministic contract, not a claim
+> about model quality; see [Quality gates (0.5.0 WF4)](#quality-gates-050-wf4) and
+> [QUALITY.md](QUALITY.md) for the report contract and the other zero-model gates
+> (`eval:kb-retrieval`, `eval:mail-local`, `eval:model-contract`). **Release-grade
+> evidence: see [QUALITY.md](QUALITY.md)** — `check-eval-report --release` is a
+> release gate (a dirty tree or failed gate blocks the release), the CI test job
+> runs it in `--release` mode and uploads `eval/results` as the
+> `quality-reports-node-*` artifact, and `check-release --eval-evidence` consumes
+> the frozen five-slot release-evidence directory.
 
 `eval/` also contains the older **manual, real-model** runners
 (`eval/run-*.mjs`, see [eval/README.md](../eval/README.md)). Those need a

@@ -100,8 +100,8 @@ test('fresh v22 databases install the v19 trigram FTS5 indexes', () => {
   try {
     const store = new SqliteStore(db)
     try {
-      assert.equal(SCHEMA_VERSION, 22)
-      assert.equal(store.getMeta('schema_version'), '22')
+      assert.equal(SCHEMA_VERSION, 23)
+      assert.equal(store.getMeta('schema_version'), '23')
       assert.equal(store.ftsTokenizer, 'trigram', 'trigram tokenizer is the default')
       assert.equal(store.ftsWarning, null)
       const ddl = (name) => store.db.prepare('SELECT sql FROM sqlite_master WHERE name = ?').get(name)?.sql ?? ''
@@ -439,7 +439,7 @@ test('future schema versions are still refused', () => {
     const store = new SqliteStore(db)
     store.close()
     const raw = new DatabaseSync(db)
-    raw.prepare("INSERT OR REPLACE INTO meta(key,value) VALUES('schema_version','23')").run()
+    raw.prepare("INSERT OR REPLACE INTO meta(key,value) VALUES('schema_version',?)").run(String(SCHEMA_VERSION + 1))
     raw.close()
     assert.throws(() => new SqliteStore(db), /newer than this CLI/)
   } finally {

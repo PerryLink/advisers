@@ -74,6 +74,12 @@ export const CONTEXT_PACK_INVALID_CODE = 'E_CONTEXT_PACK_INVALID'
 export const CONTEXT_PACK_IMPORT_UNSUPPORTED_CODE = 'E_CONTEXT_PACK_IMPORT_UNSUPPORTED'
 /** Stable error code for an --expect-manifest-sha256 mismatch. */
 export const CONTEXT_PACK_DIGEST_MISMATCH_CODE = 'E_CONTEXT_PACK_DIGEST_MISMATCH'
+/**
+ * Audit action of one successful context-pack disclosure (0.5.1 M8 P0-B): the
+ * minimal "I disclosed what to whom" receipt. Ids and hashes only - never the
+ * subject name, recipient name or recipient email.
+ */
+export const CONTEXT_PACK_AUDIT_ACTION = 'context_pack.create'
 /** Item kind order used by manifest rendering (fixed for reproducibility). */
 export const CONTEXT_PACK_ITEM_KINDS = Object.freeze(['commitment', 'fact', 'preference', 'delivery'])
 /** Closed purpose vocabulary: a disclosure label, never an authorization. */
@@ -200,6 +206,28 @@ function canonicalize(value) {
 
 function byteLength(text) {
   return Buffer.byteLength(text, 'utf8')
+}
+
+/** One-way recipient fingerprint used by the audit row (never the raw name/email). */
+export function contextPackRecipientHash(recipient) {
+  const name = typeof recipient?.name === 'string' ? recipient.name : ''
+  const email = typeof recipient?.email === 'string' ? recipient.email : null
+  return sha256Hex(JSON.stringify({ email, name }))
+}
+
+/**
+ * Audit row for one written context pack (append it through store.appendAudit).
+ * Reason format (single line, ids/hashes only):
+ *   subject=<kind>:<id> purpose=<purpose> items=<n> manifestDigest=<64hex> recipientHash=<64hex>
+ */
+export function contextPackAuditRow({ subject, purpose, itemCount, manifestDigest, recipient }) {
+  const recipientHash = contextPackRecipientHash(recipient)
+  const reason = 'subject=' + String(subject?.kind ?? '') + ':' + String(subject?.id ?? '')
+    + ' purpose=' + String(purpose ?? '')
+    + ' items=' + String(itemCount ?? 0)
+    + ' manifestDigest=' + String(manifestDigest ?? '')
+    + ' recipientHash=' + recipientHash
+  return { actor: 'local', action: CONTEXT_PACK_AUDIT_ACTION, allowed: true, reason: reason.slice(0, 300), recipientHash }
 }
 
 function isHexLower(value) {
@@ -919,6 +947,11 @@ function normalizeSelectionIds(value) {
  * current rows inside the subject scope, and a pack is written only after the
  * operator explicitly selected (--ids) or confirmed (--yes) the candidates.
  *
+ * Write path (ids/yes) requires a WRITABLE store: after the pack is written and
+ * self-verified a `context_pack.create` audit row (ids/hashes only) is appended;
+ * if that audit row cannot be written the pack is removed again (fail closed).
+ * Candidate mode only reads and works with a read-only store.
+ *
  * @param {object} options {store, subject, ids?, yes?, recipient?, purpose?,
  *   expires?, out?, force?, includeQuotes?, since?, now?, clearance?,
  *   candidateLimit?}
@@ -1006,6 +1039,41 @@ export function createContextPack(options = {}) {
   const written = writeContextPackDir(options.out, built, { overwrite: options.force === true })
   const verification = verifyContextPackDir(written.outDir)
   if (!verification.ok) throw invalid('the written context pack failed self-verification: ' + verification.errors.slice(0, 3).join(' | '))
+  // 0.5.1 M8 P0-B: a disclosure pack without a local audit row is an unaudited
+  // disclosure. The row carries ids/hashes only (never the subject name or the
+  // recipient name/email). If the audit cannot be written the just-written pack
+  // is removed again (fail closed): the command never reports a disclosure it
+  // did not record.
+  const auditRow = contextPackAuditRow({
+    subject: built.summary.subject,
+    purpose: built.summary.purpose,
+    itemCount: items.length,
+    manifestDigest: built.summary.manifestDigest,
+    recipient: built.summary.recipient,
+  })
+  let audit
+  try {
+    if (!options.store || typeof options.store.appendAudit !== 'function') {
+      throw new Error('a writable SQLite store with appendAudit() is required')
+    }
+    options.store.appendAudit(auditRow)
+    audit = {
+      ok: true,
+      action: auditRow.action,
+      reason: auditRow.reason,
+      subject: { kind: built.summary.subject.kind, id: built.summary.subject.id },
+      purpose: built.summary.purpose,
+      items: items.length,
+      manifestDigest: built.summary.manifestDigest,
+      recipientHash: auditRow.recipientHash,
+    }
+  } catch (error) {
+    try { rmSync(written.outDir, { recursive: true, force: true }) } catch {}
+    const note = written.replaced ? ' (the previous pack is preserved at ' + written.replaced + ')' : ''
+    throw entityError(CONTEXT_PACK_INVALID_CODE,
+      'the context pack was written but the ' + CONTEXT_PACK_AUDIT_ACTION + ' audit row failed; the pack was removed (fail closed): ' + String(error?.message ?? error).slice(0, 200) + note,
+      'context-pack create needs a writable SQLite store: the audit row is the disclosure receipt')
+  }
   return {
     ok: true,
     command: 'context-pack create',
@@ -1021,6 +1089,7 @@ export function createContextPack(options = {}) {
     expiresAt: built.summary.expiresAt,
     generatedAt: built.summary.generatedAt,
     disclosure: built.summary.disclosure,
+    audit,
     fileCount: 3,
     checksumCount: 2,
     bytes: built.summary.bytes,
@@ -1271,6 +1340,8 @@ export function verifyContextPackDir(dir, options = {}) {
     files: [],
     manifestDigest: null,
     verificationBasis: null,
+    expiresAt: null,
+    expired: null,
     expectedSha256: null,
     matchesExpected: null,
     limits: { ...limits },
@@ -1364,6 +1435,19 @@ export function verifyContextPackDir(dir, options = {}) {
   }
   const violation = validateManifest(manifest, { limits, errors, warnings })
   if (violation) return applyLimitResult(result, violation, errors)
+  // 0.5.1 (202 A4/P2): expiry is a disclosure record, not access control. An
+  // expired pack still verifies (0/1 semantics unchanged); it only warns so a
+  // receiver/agent can notice the disclosure window has passed.
+  result.expiresAt = typeof manifest.expiresAt === 'string' ? manifest.expiresAt : null
+  if (result.expiresAt !== null) {
+    const expiresMs = Date.parse(result.expiresAt)
+    if (Number.isFinite(expiresMs)) {
+      result.expired = expiresMs < Date.now()
+      if (result.expired) {
+        warnings.push('the context pack expired at ' + result.expiresAt + ': expiry is a disclosure record only, not access control; it does not block verification or prove who received the pack')
+      }
+    }
+  }
   if (fileSet.has('README.txt')) {
     try {
       const read = readBoundedText(join(root, 'README.txt'), limits)
@@ -1453,12 +1537,15 @@ export default Object.freeze({
   CONTEXT_PACK_INVALID_CODE,
   CONTEXT_PACK_IMPORT_UNSUPPORTED_CODE,
   CONTEXT_PACK_DIGEST_MISMATCH_CODE,
+  CONTEXT_PACK_AUDIT_ACTION,
   CONTEXT_PACK_ITEM_KINDS,
   CONTEXT_PACK_PURPOSES,
   CONTEXT_PACK_ITEM_VIEWS,
   CONTEXT_PACK_LIMIT_DEFAULTS,
   CONTEXT_PACK_PAYLOAD_FIELDS,
   isUnsafeContextPackPath,
+  contextPackRecipientHash,
+  contextPackAuditRow,
   suggestContextPackOutDir,
   resolveContextPackExpiresAt,
   buildContextPack,

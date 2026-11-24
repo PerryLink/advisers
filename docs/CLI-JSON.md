@@ -1,13 +1,13 @@
-# CLI JSON contract v1 (E6-T1 + 0.2.0 data plane; 0.4.0/0.5.0 additive surfaces)
+# CLI JSON contract v1 (E6-T1 + 0.2.0 data plane; 0.4.0/0.5.0/0.5.1 additive surfaces)
 
 Advisers is CLI-first. Scripts should be able to consume every read-only view without
 parsing human text. JSON mode never mixes human prose into stdout; diagnostics go to
 stderr and `--json` must not require a TTY. Shapes are additive: new optional keys may
 appear, existing keys keep their meaning.
 
-> Status: **0.5.0 (schema v22)**, published 2026-11-22 (npm `latest` = `0.5.0`;
-> `next` is also `0.5.0`; the repository is lockstep at package version `0.5.0`).
-> Every 0.4.x and 0.5.0 change in this document is additive inside the v1 contract: new
+> Status: **0.5.1 (schema v23)**, published 2026-11-24 (npm `latest` = `0.5.1`;
+> `next` is also `0.5.1`; the repository is lockstep at package version `0.5.1`).
+> Every 0.4.x, 0.5.0 and 0.5.1 change in this document is additive inside the v1 contract: new
 > commands, new optional fields and new `--scope` values. Existing commands, keys,
 > ordering and exit codes are unchanged, so a 0.3.2 consumer keeps working without
 > modification — with the deliberate exceptions scripts must handle: keyless
@@ -700,6 +700,76 @@ third-party attestation (`verificationBasis: "local-checksums-only"`).
 - `status --json`: additive 0.4.0 counts `receivables` and `payments` (row counts,
   never amounts); existing v1 keys keep their meaning. Treat any further new key as
   additive.
+
+## 0.5.1 additive surfaces (2026-11-24)
+
+No frozen v1 shape is removed; the new commands are documented-additive and the
+database schema is v23. New in 0.5.1:
+
+- **`mail followup` subcommand family** (local, header-only; see
+  [MAIL-FOLLOWUP.md](MAIL-FOLLOWUP.md)). Every subcommand returns
+  `{ok, command, …}` and exits 0 on success / 1 on a domain failure:
+  - `mail followup add (--mail <row-id|message-id> | --thread <message-id>)
+    [--action <text>] [--counterparty <addr>] [--due <expr|ISO>]
+    [--remind-offsets -3d,-1d] [--matter <id>] [--json]` ->
+    `{ok, command, followup:{…}, commitment:{id,action,dueAt,debtor,creditor,
+    capability}, dueBasis:"waiting-default"|"explicit"}`.
+  - `mail followup ls [--state waiting|replied|unknown|dismissed|all] [--all]
+    [--stale 7d] [--limit 1..500] [--offset N] [--json]` ->
+    `{ok, command, coverage, items[], total, truncated}` (`--all` is the `--state all`
+    alias).
+  - `mail followup show <wr_id> [--json]` -> `{ok, command, followup, coverage}`.
+  - `mail followup check [--dry-run] [--json]` ->
+    `{ok, command, dryRun, checked, changed|wouldChange[], coverage}`; `--dry-run`
+    writes nothing (no state, no audit row), a real run updates only changed rows and
+    always writes one `followup.check` audit row.
+  - `mail followup dismiss <wr_id> --reason replied-elsewhere|no-follow-up|
+    wrong-thread|other [--note] [--json]` and `mail followup mark-replied <wr_id>
+    [--note] [--json]` -> `{ok, command, followup}`.
+  - `followup` item: `{id, commitmentId, accountId, anchorRowId, anchorMessageId,
+    threadRoot, counterparty, subject, anchorAt, dueAt, state, daysWaiting, replies[],
+    ignoredReplies[], possibleReplies[], warnings[], lastCheckedAt, createdAt,
+    updatedAt}` plus additive `repliedAt`/`repliedRowId`/`dismissReason`/
+    `dismissNote`/`note` when present; `replies[]`/`ignoredReplies[]`/
+    `possibleReplies[]` entries carry `rowId`, `messageId?`, `receivedAt`, `from`
+    and (for ignored/possible) `reason`/`basis`. `coverage`: `{syncedMailboxes,
+    sentMailboxSeen, basis:"headers", warnings[]}`. `dismiss`/`mark-replied` add
+    `alreadyDismissed:true`/`alreadyReplied:true` on an idempotent repeat.
+  New 0.5.1 error codes: `E_FOLLOWUP_EXISTS`, `E_FOLLOWUP_INVALID`,
+  `E_FOLLOWUP_NOT_FOUND` (all exit 1; an unknown anchor is
+  `E_MAIL_MESSAGE_NOT_FOUND`, a bad `--due` is `E_DUE_UNRESOLVED`/`E_DUE_CONFLICT`).
+- **`mail ls` / `mail show` messages gain additive threading fields**: `inReplyTo`,
+  `references[]`, `threadRoot`, `direction` (`inbound|outbound|unknown`, always
+  present) and `autoSubmitted` (when the header exists); the rest of the message
+  shape is unchanged (documented-additive).
+- **`import --bundle … --expect-dataDigest <64hex>`** (offline, additive): when the
+  flag is present the JSON adds top-level `expectedDigest` (string) and
+  `dataDigestMatch` (boolean); a mismatch fails `ok:false` with `E_BUNDLE_TAMPERED`,
+  exit 1, and writes nothing to the target home (also in `--dry-run`). Without the
+  flag the 0.5.0 output is unchanged. 0.5.1 bundles also carry a `FORMAT.md` inside
+  the directory (see [PORTABILITY.md](PORTABILITY.md)); `export --bundle` keeps its
+  previous JSON shape.
+- **`context-pack verify --json`** gains additive `expiresAt`/`expired`; an expired
+  pack only adds a warning and does not change the 0/1 `ok` result.
+- **`context-pack create --json`** gains an additive
+  `audit:{ok:true, action:"context_pack.create", reason:"subject=… purpose=…
+  items=… manifestDigest=… recipientHash=…", subject:{kind,id}, purpose, items,
+  manifestDigest, recipientHash}` block after the pack is written and self-verified
+  (ids/hashes only, never the recipient name or item text); if the audit row cannot
+  be written the new pack is removed and create fails closed. The rest of the
+  create/verify shapes are unchanged.
+- **MCP** (not CLI JSON, listed for completeness): `advisers_pack_verify` now
+  dispatches on `manifest.format` — `advisers-context-pack` is verified by the
+  context-pack offline verifier (additive fields `format/version/manifestDigest/
+  fileCount/checksumCount/verificationBasis/expiresAt/expired/warnings`), while the
+  evidence-pack/receipt payload keeps its exact previous shape. Tool count stays 8
+  and resources 5.
+
+0.5.1 behaviour a script may notice: `mail followup check --dry-run` writes nothing
+(no state change, no audit, no `updated_at`); a bundle written by 0.5.1 is **not**
+readable by the 0.5.0 CLI (strict v1 layout does not know `FORMAT.md`), while a
+0.5.0 bundle stays readable/importable by 0.5.1; the schema v23 migration is one
+way (`E_SCHEMA_NEWER` for a 0.5.0 binary).
 
 ## 0.5.0 additive surfaces (2026-11-22)
 

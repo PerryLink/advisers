@@ -1176,6 +1176,42 @@
       "remedy": "Unknown or deleted fact at this clearance. Run `advisers fact ls` (or pass --include-deleted to inspect a tombstone) and use an existing fact id."
     },
     {
+      "code": "E_FOLLOWUP_EXISTS",
+      "category": "state",
+      "exit": 1,
+      "surfaces": [
+        "cli",
+        "lib"
+      ],
+      "since": "0.5.1",
+      "stable": true,
+      "remedy": "An active mail followup already tracks this message and counterparty. Run advisers mail followup ls and use that row instead of adding a duplicate."
+    },
+    {
+      "code": "E_FOLLOWUP_INVALID",
+      "category": "usage",
+      "exit": 1,
+      "surfaces": [
+        "cli",
+        "lib"
+      ],
+      "since": "0.5.1",
+      "stable": true,
+      "remedy": "Mail followup arguments or state transition are invalid (pass exactly one of --mail/--thread, a known dismiss reason, or a legal state change). Check advisers mail followup --help."
+    },
+    {
+      "code": "E_FOLLOWUP_NOT_FOUND",
+      "category": "state",
+      "exit": 1,
+      "surfaces": [
+        "cli",
+        "lib"
+      ],
+      "since": "0.5.1",
+      "stable": true,
+      "remedy": "Unknown mail followup id. Run advisers mail followup ls --all and use an existing wr_ id."
+    },
+    {
       "code": "E_FORBIDDEN_FIELD",
       "category": "schema",
       "exit": 1,
