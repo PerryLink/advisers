@@ -381,9 +381,10 @@ changelog copy.
 ### 0.5.1 (2026-11-24)
 
 - **Published:** npm `latest` = 0.5.1, `next` = 0.5.1; all eight workspace packages
-  lockstep at 0.5.1 (six published). Tag: `v0.5.1`, annotated object `TBD` (fill after
-  tag creation) -> commit `TBD` (fill after tagging); published from `refs/tags/v0.5.1`
-  (publish run `TBD`, fill after dispatch).
+  lockstep at 0.5.1 (six published). Tag: `v0.5.1`, annotated object
+  `c5bcfc74ab15c9b696c81ecc87fe8cba82dd8ffe` -> commit
+  `4f9e99a39920c17e867314df740ec77614755b89`; published from `refs/tags/v0.5.1`
+  (publish run 45439065673).
 - **Release shape:** follow-up patch on the 0.5.0 tree — **one** schema jump
   v22 -> v23 (migration `fact-claim-fields-and-handoffs`: facts claim/evidence
   columns, mail thread headers, `waiting_replies`, handoff/handoff-claim tables);
@@ -398,27 +399,37 @@ changelog copy.
   `audit` on `context-pack create`, `--eval-evidence`) and
   the new 0.5.1 error codes; MCP tool names/descriptions/schemas unchanged. Record
   the `check-contracts` check count on this release tree; do not reuse 0.5.0's 90.
-- **Artifacts:** TBD — CycloneDX SBOM, six-tarball `SHA256SUMS`, Windows portable ZIP
-  and portable checksums, plus the release-quality report (the new release asset;
-  record its sha256). Do not copy hashes from another release.
-- **Verification:** TBD — `verify-release --version 0.5.1 --tag latest --sbom
-  artifacts/sbom.cdx.json --require-sbom` -> `TBD` checks PASS (fill after publish);
-  CI on the release commit `TBD` (fill after push; Linux Node 22.16/24,
-  `windows-smoke` and blocking `windows-full`). Local pre-tag evidence on this
+- **Artifacts:** CycloneDX SBOM `sbom-0.5.1.cdx.json`
+  (`8212fff2878b28850c18517524895a533a815551db3df9ee507b35b5f1e24ba6`, 248,838 B);
+  six-tarball `SHA256SUMS-0.5.1.txt`
+  (`e832320fac2ab02218f33d47f694049d0a0a094566018c5b563e9b1a85bcf438`, 554 B);
+  Windows portable ZIP `advisers-0.5.1-win-x64.zip`
+  (`21090a79f02089d8484edf255cfd47b853633a61542e8239830be7974fd31e65`, 51,966,899 B);
+  `SHA256SUMS-0.5.1-portable.txt`
+  (`d24088e89ff8e92f6a25b85dc667a45f9960ddfa899a2ed031f7ac078908d23f`, 93 B);
+  release-quality report `quality-evidence-0.5.1.tar.gz`
+  (`eda98aeeebfcc0f5c1b4e26d9da752d006340231bdb29ad8580524c9272a1d02`, 25,253 B).
+- **Verification:** `verify-release --version 0.5.1 --tag latest --sbom
+  artifacts/sbom.cdx.json --require-sbom` -> **228 checks PASS**; CI on the release
+  commit 45437351974 (success; Linux Node 22.16/24, `windows-smoke` and blocking
+  `windows-full`). `check-contracts` PASS (90 checks) on the release tree. Local
+  pre-tag evidence on this
   release tree: `check-docs`/`check-release`/`check-licenses` pass,
-  `check-contracts` PASS, `check-tos --release` PASS, the targeted 0.5.1 test files
-  and the v22 -> v23 migration drills pass, and `check-eval-report --release` +
-  `check-release --eval-evidence` pass on the clean release checkout; the release
-  operator records the exact commands/outputs on the release commit and attaches
-  the report. Replaying evidence from a post-tag tree needs
+  `check-tos --release` PASS, the targeted 0.5.1 test files and the v22 -> v23
+  migration drills pass; full `pnpm -r test` exit 0; `eval:det` 49/49 (367
+  checks), KB retrieval P@5 .9773/MRR .9682, mail dev 90 + held-out 30, model
+  contract 12/12 (0 sockets), fault-injection 9 PASS, pack-smoke PASS, bundle
+  drill PASS, restore drill PASS; `check-eval-report --release` and
+  `check-release --eval-evidence --eval-commit 4f9e99a` pass on the clean release
+  checkout; the report is attached to the Release. Replaying evidence from a post-tag tree needs
   `--eval-commit <tag-sha>` (and `--eval-version <version>` when the tree version
   is ahead), per [QUALITY.md](QUALITY.md). The quality report is a release asset
   and a CI artifact (`quality-reports-node-*`, 30 days); commands/slots/unknowns
   are in [QUALITY.md](QUALITY.md).
 - **Release notes / assets:** <https://github.com/PerryLink/advisers/releases/tag/v0.5.1>
-  (created `TBD` with the SBOM, six-tarball `SHA256SUMS`, portable ZIP and its
-  checksums, and the release-quality report). The `TBD` placeholders are filled by
-  the release operator after the publish completes.
+  (created 2026-11-24T17:05:02Z with the SBOM, six-tarball `SHA256SUMS`, portable ZIP
+  and its checksums, and the release-quality report). 0.5.0 is deprecated on npm
+  with a pointer to 0.5.1.
 
 ### 0.5.0 (2026-11-22)
 
