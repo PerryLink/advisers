@@ -12,7 +12,7 @@
       "suiteVersion": 1,
       "mode": "det",
       "baselineFile": "eval/det/baseline.json",
-      "baselineSha256": "d7047e91781fbcd0aa17e08b279f93897be403168c1bc000b9d6e362fbfe7a2f",
+      "baselineSha256": "bb560b9f5aacac0ca53ccc89e4dae4ba5871258a3fe220bc7adb5840dbee885a",
       "thresholds": {
         "cases.failed": 0,
         "checks.failed": 0,

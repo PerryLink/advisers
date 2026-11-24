@@ -1,5 +1,5 @@
 import assert from 'node:assert/strict'
-import { spawnSync } from 'node:child_process'
+import { execFileSync, spawnSync } from 'node:child_process'
 import { copyFileSync, mkdirSync, mkdtempSync, readFileSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
@@ -21,7 +21,7 @@ const CHECK_RELEASE = join(REPO_ROOT, 'scripts', 'check-release.mjs')
 const BASELINE_PATH = join(REPO_ROOT, 'eval', 'quality', 'baselines-v1.json')
 const DET_BASELINE_PATH = join(REPO_ROOT, 'eval', 'det', 'baseline.json')
 const baselines = JSON.parse(readFileSync(BASELINE_PATH, 'utf8'))
-const COMMIT = 'a73c380'
+const COMMIT = execFileSync('git', ['rev-parse', 'HEAD'], { cwd: REPO_ROOT, encoding: 'utf8' }).trim()
 
 function run(script, args) {
   return spawnSync(process.execPath, [script, ...args], { cwd: REPO_ROOT, encoding: 'utf8', timeout: 120_000 })
@@ -127,7 +127,7 @@ test('check-release --eval-evidence consumes a frozen evidence directory', () =>
   for (const slot of ['det', 'kb-retrieval', 'mail-local-gold:dev', 'mail-local-gold:heldout', 'model-contract']) {
     assert.match(result.stdout, new RegExp('PASS eval evidence has exactly one ' + slot.replace(/[.*+?^${}()|[\]\\]/g, '\\$&') + ' report'))
   }
-  assert.match(result.stdout, /PASS eval evidence commit a73c380 matches expected a73c380/)
+  assert.ok(result.stdout.includes('PASS eval evidence commit ' + COMMIT + ' matches expected ' + COMMIT.slice(0, 12)), result.stdout)
   assert.match(result.stdout, /PASS release consistency \(0\.5\.1\)/)
 })
 
