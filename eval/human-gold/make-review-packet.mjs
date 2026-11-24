@@ -20,7 +20,7 @@
 import { createHash } from 'node:crypto'
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
-import { dirname, join, relative as relativePath, resolve } from 'node:path'
+import { dirname, isAbsolute, join, relative as relativePath, resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
 
 import { ADJUDICATION_HEADER, LABEL_HEADER, sha256File } from './agreement-lib.mjs'
@@ -46,7 +46,7 @@ if (!existsSync(corpusPath)) fail('corpus not found: ' + corpusPath)
 if (!reviewers.length) fail('--reviewers needs at least one reviewer id')
 if (limit !== null && (!Number.isInteger(limit) || limit < 1)) fail('--limit must be a positive integer')
 const outRelative = relativePath(REPO_ROOT, out).replaceAll('\\', '/')
-if (outRelative !== '..' && !outRelative.startsWith('../')) fail('--out must be outside the repository (' + REPO_ROOT + '); packets/reviewer labels are not committed')
+if (outRelative !== '..' && !outRelative.startsWith('../') && !isAbsolute(outRelative)) fail('--out must be outside the repository (' + REPO_ROOT + '); packets/reviewer labels are not committed')
 
 const corpusBytes = readFileSync(corpusPath)
 const corpusSha256 = createHash('sha256').update(corpusBytes).digest('hex')
